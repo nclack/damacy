@@ -24,8 +24,6 @@ extern "C"
 {
 #endif
 
-#define DAMACY_MAX_RANK 8
-
   struct zarr_reader;
 
   struct zarr_reader_config

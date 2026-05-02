@@ -4,6 +4,7 @@
 //   - pread(fd, dst, len, offset) — required to be thread-safe per POSIX
 //   - stat to recover file size
 //   - close
+//   - whole-file mmap for read-only consumers (metadata)
 #pragma once
 
 #include <stddef.h>
@@ -36,6 +37,25 @@ extern "C"
 
   // Stat-by-path convenience. Returns 0 on success, non-zero on error.
   int platform_path_size(const char* path, uint64_t* out);
+
+  // Read-only view into a mapped file. `data`/`len` are public; `opaque`
+  // is backend-private (POSIX: unused; Win32 will stash the file mapping
+  // handle here).
+  struct platform_file_view
+  {
+    const void* data;
+    size_t len;
+    void* opaque;
+  };
+
+  // mmap `path` read-only over its full extent. Returns 0 on success and
+  // populates *out. The view is independent of any open fd cache; the
+  // mapping holds the file alive until platform_file_unmap.
+  int platform_file_map_path(const char* path, struct platform_file_view* out);
+
+  // Tear down a view returned by platform_file_map_path. Safe to call on
+  // a zeroed view.
+  void platform_file_unmap(struct platform_file_view* view);
 
 #ifdef __cplusplus
 }

@@ -130,7 +130,6 @@ main(int argc, char** argv)
   struct store_fs_config sc = {
     .root = args.store_root,
     .nthreads = args.io_threads,
-    .use_o_direct = 0,
   };
   struct store* store = store_fs_create(&sc);
   if (!store) {

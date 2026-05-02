@@ -47,3 +47,19 @@ store_stat(struct store* s, const char* key, uint64_t* out)
     return 1;
   return s->vt->stat(s, key, out);
 }
+
+int
+store_map(struct store* s, const char* key, struct store_view* out)
+{
+  if (!s || !s->vt || !s->vt->map || !key || !out)
+    return 1;
+  return s->vt->map(s, key, out);
+}
+
+void
+store_unmap(struct store* s, struct store_view* view)
+{
+  if (!s || !s->vt || !s->vt->unmap || !view)
+    return;
+  s->vt->unmap(s, view);
+}

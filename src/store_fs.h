@@ -10,7 +10,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// vtable for backend dispatch. store_destroy and the future stat/submit
+// vtable for backend dispatch. store_destroy and the stat/submit/map
 // dispatchers go through this.
 struct store_vtable
 {
@@ -20,6 +20,8 @@ struct store_vtable
                                const struct store_read* reads,
                                size_t n);
   void (*event_wait)(struct store* s, struct store_event ev);
+  int (*map)(struct store* s, const char* key, struct store_view* out);
+  void (*unmap)(struct store* s, struct store_view* view);
 };
 
 struct store
@@ -38,7 +40,6 @@ struct store_fs
 {
   struct store base;
   char* root; // owned
-  int use_o_direct;
   struct io_queue* q;
 
   // Open-file cache. Linear scan; small until we find we need better.

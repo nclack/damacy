@@ -2,8 +2,8 @@
 #pragma once
 
 #include "dtype.h"
+#include "limits.h"
 #include "types.codec.h"
-#include "zarr.h" // for DAMACY_MAX_RANK
 
 #include <stdint.h>
 

@@ -3,8 +3,14 @@
 // Users create a store (filesystem now; S3 etc later), pass it to the zarr
 // reader, and the reader uses it to fetch compressed chunk bytes.
 //
-// The store is opaque. Internally, store_fs owns an io_queue with
-// configurable concurrency for parallel positional reads.
+// Two access patterns:
+//   - store_read_submit / store_event_wait: positional reads for
+//     compressed chunk bytes. Runs on the store's io_queue with
+//     configurable concurrency. Internally the FS backend may use
+//     O_DIRECT and page-aligned coalescing; callers see only the logical
+//     reads they submitted.
+//   - store_map / store_unmap: whole-resource read-only view, intended
+//     for metadata (zarr.json) where a parser wants a contiguous buffer.
 #pragma once
 
 #include <stddef.h>
@@ -21,7 +27,6 @@ extern "C"
   {
     const char* root; // root directory for keys; not owned
     int nthreads;     // io_queue worker count (0 = synchronous)
-    int use_o_direct; // O_DIRECT for compressed reads (advisory)
   };
 
   // Create a filesystem-backed store. Returns NULL on failure.
@@ -67,6 +72,24 @@ extern "C"
   // Recover the size in bytes of the resource named by `key`. Returns 0 on
   // success and writes *out. Used by zarr_reader to find a shard footer.
   int store_stat(struct store* s, const char* key, uint64_t* out);
+
+  // Read-only view of a whole resource. `data`/`len` are public; the
+  // remaining fields are backend-private — treat them as opaque.
+  struct store_view
+  {
+    const void* data;
+    size_t len;
+    void* backend; // backend cookie (e.g. mmap bookkeeping)
+  };
+
+  // Map a resource read-only over its full extent. Returns 0 on success
+  // and populates *out. Intended for metadata: the buffer must outlive
+  // the parser's pointers into it, but parsed POD structs should not
+  // retain any references — call store_unmap as soon as parsing is done.
+  int store_map(struct store* s, const char* key, struct store_view* out);
+
+  // Release a view returned by store_map. Safe to call on a zeroed view.
+  void store_unmap(struct store* s, struct store_view* view);
 
 #ifdef __cplusplus
 }

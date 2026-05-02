@@ -1,6 +1,7 @@
 #include "zarr.h"
 
 #include "dimension.h"
+#include "limits.h"
 #include "store.h"
 #include "util/strbuf.h"
 #include "zarr_metadata.h"
@@ -98,32 +99,6 @@ build_shard_key(struct strbuf* sb,
     if (strbuf_appendf(sb, "/%llu", (unsigned long long)shard_coord[d]))
       return 1;
   }
-  return 0;
-}
-
-// Read the entire contents of a key into a heap buffer; caller frees.
-static int
-load_blob(struct store* s, const char* key, void** out, size_t* out_len)
-{
-  *out = NULL;
-  *out_len = 0;
-  uint64_t sz = 0;
-  if (store_stat(s, key, &sz))
-    return 1;
-  if (sz == 0)
-    return 1;
-  void* buf = malloc((size_t)sz);
-  if (!buf)
-    return 1;
-  struct store_read r = {
-    .key = key, .dst = buf, .offset = 0, .len = (size_t)sz
-  };
-  if (store_read_many(s, &r, 1)) {
-    free(buf);
-    return 1;
-  }
-  *out = buf;
-  *out_len = (size_t)sz;
   return 0;
 }
 
@@ -283,15 +258,14 @@ zarr_reader_open(const struct zarr_reader_config* cfg)
     strbuf_free(&key);
     goto fail;
   }
-  void* buf = NULL;
-  size_t buf_len = 0;
-  int rc = load_blob(cfg->store, strbuf_cstr(&key), &buf, &buf_len);
+  struct store_view view = { 0 };
+  int rc = store_map(cfg->store, strbuf_cstr(&key), &view);
   strbuf_free(&key);
   if (rc)
     goto fail;
 
-  rc = zarr_metadata_parse((const char*)buf, buf_len, &r->meta);
-  free(buf);
+  rc = zarr_metadata_parse((const char*)view.data, view.len, &r->meta);
+  store_unmap(cfg->store, &view);
   if (rc)
     goto fail;
   if (!r->meta.sharded || r->meta.inner_codec.id != CODEC_ZSTD)

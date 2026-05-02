@@ -1,5 +1,6 @@
 #include "pipeline.h"
 
+#include "limits.h"
 #include "store.h"
 #include "zarr.h"
 

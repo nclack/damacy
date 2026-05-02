@@ -57,8 +57,7 @@ fs_get_file(struct store_fs* fs, const char* key)
     strbuf_free(&path);
     return NULL;
   }
-  platform_file* f =
-    platform_file_open_read(strbuf_cstr(&path), fs->use_o_direct);
+  platform_file* f = platform_file_open_read(strbuf_cstr(&path), 0);
   strbuf_free(&path);
   if (!f)
     return NULL;
@@ -183,6 +182,47 @@ fs_stat(struct store* s, const char* key, uint64_t* out)
   return rc;
 }
 
+static int
+fs_map(struct store* s, const char* key, struct store_view* out)
+{
+  struct store_fs* fs = (struct store_fs*)s;
+  struct strbuf path = { 0 };
+  if (join_path(&path, fs->root, key)) {
+    strbuf_free(&path);
+    return 1;
+  }
+  struct platform_file_view* pv =
+    (struct platform_file_view*)calloc(1, sizeof(*pv));
+  if (!pv) {
+    strbuf_free(&path);
+    return 1;
+  }
+  int rc = platform_file_map_path(strbuf_cstr(&path), pv);
+  strbuf_free(&path);
+  if (rc) {
+    free(pv);
+    return rc;
+  }
+  out->data = pv->data;
+  out->len = pv->len;
+  out->backend = pv;
+  return 0;
+}
+
+static void
+fs_unmap(struct store* s, struct store_view* view)
+{
+  (void)s;
+  if (!view || !view->backend)
+    return;
+  struct platform_file_view* pv = (struct platform_file_view*)view->backend;
+  platform_file_unmap(pv);
+  free(pv);
+  view->data = NULL;
+  view->len = 0;
+  view->backend = NULL;
+}
+
 static void
 fs_destroy(struct store* s)
 {
@@ -209,6 +249,8 @@ static const struct store_vtable fs_vtable = {
   .stat = fs_stat,
   .submit = fs_submit,
   .event_wait = fs_event_wait,
+  .map = fs_map,
+  .unmap = fs_unmap,
 };
 
 struct store*
@@ -223,7 +265,6 @@ store_fs_create(const struct store_fs_config* cfg)
   fs->root = str_dup(cfg->root);
   if (!fs->root)
     goto fail;
-  fs->use_o_direct = cfg->use_o_direct;
   pthread_mutex_init(&fs->cache_mu, NULL);
   fs->q = io_queue_create(cfg->nthreads);
   if (!fs->q)

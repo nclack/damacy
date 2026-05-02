@@ -3,6 +3,8 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -101,4 +103,53 @@ platform_path_size(const char* path, uint64_t* out)
     return 1;
   *out = (uint64_t)st.st_size;
   return 0;
+}
+
+int
+platform_file_map_path(const char* path, struct platform_file_view* out)
+{
+  if (!path || !out)
+    return 1;
+  memset(out, 0, sizeof(*out));
+
+  int flags = O_RDONLY;
+#ifdef O_CLOEXEC
+  flags |= O_CLOEXEC;
+#endif
+  int fd = open(path, flags);
+  if (fd < 0)
+    return 1;
+
+  struct stat st;
+  if (fstat(fd, &st) != 0) {
+    close(fd);
+    return 1;
+  }
+  size_t len = (size_t)st.st_size;
+  if (len == 0) {
+    close(fd);
+    return 1;
+  }
+
+  void* p = mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, 0);
+  // The mapping keeps its own reference to the file; the fd can be closed.
+  close(fd);
+  if (p == MAP_FAILED)
+    return 1;
+
+  out->data = p;
+  out->len = len;
+  out->opaque = NULL;
+  return 0;
+}
+
+void
+platform_file_unmap(struct platform_file_view* view)
+{
+  if (!view || !view->data || view->len == 0)
+    return;
+  munmap((void*)view->data, view->len);
+  view->data = NULL;
+  view->len = 0;
+  view->opaque = NULL;
 }

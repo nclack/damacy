@@ -8,6 +8,15 @@ Using ngff-zarr to generate data. Might switch to chucky at some point if
 speed/memory become a thing. I also want to dogfood a little. Could probably
 work on integrating via flake which would be fun.
 
+Revised the json interface to (a) use a query structure and (b) parse the
+string from scratch, more or less, to satisfy a query. This way it's
+zero-copy zero-alloc. If it's slow, then later we could probably cache by
+query prefix.
+
+Setting up the file io so that it's mmap for metadata and direct (unbuffered)
+io for reads. This means that we'll need a layer that coalesces chunks by
+page and then produces the right chunk pointers later.
+
 ## 2026-05-01
 
 Spun up a basic example.
