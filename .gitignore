@@ -1,0 +1,6 @@
+flake.lock
+build
+.cache
+.clangd
+.claude
+.envrc

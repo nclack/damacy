@@ -1,0 +1,58 @@
+# add_src_lib(TARGET SOURCES src... [LINKS lib...])
+#   Static library + warnings + src/ as the public include root.
+set(_SRC_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
+function(add_src_lib TARGET)
+    cmake_parse_arguments(ARG "" "" "SOURCES;LINKS" ${ARGN})
+    add_library(${TARGET} STATIC ${ARG_SOURCES})
+    target_include_directories(${TARGET} PUBLIC ${_SRC_INCLUDE_DIR})
+    target_link_libraries(${TARGET} PRIVATE warnings)
+    if(ARG_LINKS)
+        target_link_libraries(${TARGET} PUBLIC ${ARG_LINKS})
+    endif()
+endfunction()
+
+# Foundational types
+add_src_lib(dtype       SOURCES dtype.c dtype.h)
+add_src_lib(dimension   SOURCES dimension.c dimension.h)
+add_src_lib(codec_types SOURCES types.codec.c types.codec.h)
+
+# Utilities
+add_src_lib(slice  SOURCES util/slice.c  util/slice.h)
+add_src_lib(strbuf SOURCES util/strbuf.c util/strbuf.h)
+add_src_lib(json   SOURCES util/json.c   util/json.h LINKS slice)
+add_src_lib(crc32c SOURCES util/crc32c.c util/crc32c.h)
+
+# Platform abstraction (posix-only for now; chucky-style platform-split lives here)
+add_src_lib(platform    SOURCES platform/platform.h    LINKS Threads::Threads)
+add_platform_sources(platform platform/platform)
+
+add_src_lib(platform_io SOURCES platform/platform_io.h LINKS platform)
+add_platform_sources(platform_io platform/platform_io)
+
+# Concurrency primitives
+add_src_lib(threadpool SOURCES threadpool/threadpool.c threadpool/threadpool.h
+    LINKS platform
+)
+
+add_src_lib(io_queue SOURCES io_queue/io_queue.h LINKS platform_io)
+add_platform_sources(io_queue io_queue/io_queue)
+
+# Read-side store
+add_src_lib(store SOURCES store.h store.c store_fs.h store_fs.c
+    LINKS io_queue platform_io strbuf
+)
+
+# Sharded zarr v3 reader
+add_src_lib(zarr SOURCES zarr.h zarr_reader.c zarr_metadata.h zarr_metadata.c
+    zarr_shard_index.h zarr_shard_index.c
+    LINKS store dimension dtype codec_types json strbuf crc32c
+)
+
+# GPU pieces
+add_src_lib(decoder SOURCES decoder.h decoder.c
+    LINKS CUDA::cudart_static nvcomp::nvcomp
+)
+
+add_src_lib(pipeline SOURCES pipeline.h pipeline.c
+    LINKS zarr decoder threadpool CUDA::cudart_static
+)
