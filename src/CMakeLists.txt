@@ -10,6 +10,8 @@ add_src_lib(slice  SOURCES util/slice.c  util/slice.h)
 add_src_lib(strbuf SOURCES util/strbuf.c util/strbuf.h)
 add_src_lib(json   SOURCES util/json.c   util/json.h LINKS slice)
 add_src_lib(crc32c SOURCES util/crc32c.c util/crc32c.h)
+add_src_lib(lru    SOURCES util/lru.c   util/lru.h)
+# util/hash.h is header-only; no library target.
 
 # Platform abstraction (posix-only for now; chucky-style platform-split lives here)
 add_src_lib(platform    SOURCES platform/platform.h    LINKS Threads::Threads)
