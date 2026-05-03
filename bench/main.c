@@ -1,20 +1,15 @@
-// Throughput bench driver. Walks the pipeline for `--batches` batches and
-// prints read GB/s, decode GB/s, and end-to-end GB/s.
+// damacy_bench — exercises the public damacy API.
 //
-//   ./damacy_bench --store <path>
-//                  [--batch-size N=8]
-//                  [--prefetch D=2]
-//                  [--chunks-per-sample C=8]
-//                  [--batches N=200]
-//                  [--pattern sequential|random]
-//                  [--io-threads T=8]
-//                  [--device 0]
-#include "decoder.h"
-#include "pipeline.h"
-#include "store.h"
-#include "zarr.h"
-
-#include <cuda_runtime.h>
+// Step 1 (current): stubs only. damacy_push always succeeds (no-op),
+// damacy_pop returns DAMACY_AGAIN (no real batches yet). The bench
+// measures call overhead and verifies the API shape compiles/links and
+// behaves as documented. Real throughput numbers come back as the
+// streaming pipeline lands (build-order steps 2–6).
+//
+//   ./damacy_bench [--batches N=200] [--batch-size N=8]
+//                  [--lookahead N=4] [--io-threads N=8]
+//                  [--host-buffer-mb N=256] [--device-buffer-mb N=512]
+#include "damacy.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -30,92 +25,62 @@ now_seconds(void)
   return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
 }
 
+struct bench_args
+{
+  uint32_t n_batches;
+  uint32_t batch_size;
+  uint32_t lookahead_batches;
+  uint32_t n_io_threads;
+  uint64_t host_buffer_bytes;
+  uint64_t device_buffer_bytes;
+};
+
 static void
 usage(const char* argv0)
 {
-  fprintf(
-    stderr,
-    "usage: %s --store <path> [opts]\n"
-    "  --store <path>             root of the zarr store (required)\n"
-    "  --array <prefix>           array prefix within the store (default "
-    "\"\")\n"
-    "  --batch-size N             samples per batch (default 8)\n"
-    "  --prefetch D               batches in flight (default 2)\n"
-    "  --chunks-per-sample C      contiguous chunks per sample (default 8)\n"
-    "  --batches N                number of batches (default 200)\n"
-    "  --pattern P                sequential | random (default sequential)\n"
-    "  --io-threads T             store io_queue threads (default 8)\n"
-    "  --device D                 CUDA device id (default 0)\n",
-    argv0);
+  fprintf(stderr,
+          "usage: %s [opts]\n"
+          "  --batches N           total batches to attempt (default 200)\n"
+          "  --batch-size N        samples per batch (default 8)\n"
+          "  --lookahead N         lookahead batches (default 4)\n"
+          "  --io-threads N        io_queue worker threads (default 8)\n"
+          "  --host-buffer-mb N    pinned staging total MB (default 256)\n"
+          "  --device-buffer-mb N  device decompress total MB (default 512)\n",
+          argv0);
 }
-
-struct bench_args
-{
-  const char* store_root;
-  const char* array_prefix;
-  int batch_size;
-  int prefetch;
-  int chunks_per_sample;
-  int n_batches;
-  int io_threads;
-  int device_id;
-  enum pipeline_pattern pattern;
-};
 
 static int
 parse_args(int argc, char** argv, struct bench_args* out)
 {
   *out = (struct bench_args){
-    .store_root = NULL,
-    .array_prefix = "",
-    .batch_size = 8,
-    .prefetch = 2,
-    .chunks_per_sample = 8,
     .n_batches = 200,
-    .io_threads = 8,
-    .device_id = 0,
-    .pattern = PIPELINE_PATTERN_SEQUENTIAL,
+    .batch_size = 8,
+    .lookahead_batches = 4,
+    .n_io_threads = 8,
+    .host_buffer_bytes = 256ull << 20,
+    .device_buffer_bytes = 512ull << 20,
   };
-
   for (int i = 1; i < argc; ++i) {
     const char* a = argv[i];
 #define NEXT()                                                                 \
   ((++i < argc) ? argv[i] : (usage(argv[0]), exit(1), (const char*)NULL))
-    if (strcmp(a, "--store") == 0)
-      out->store_root = NEXT();
-    else if (strcmp(a, "--array") == 0)
-      out->array_prefix = NEXT();
+    if (strcmp(a, "--batches") == 0)
+      out->n_batches = (uint32_t)atoi(NEXT());
     else if (strcmp(a, "--batch-size") == 0)
-      out->batch_size = atoi(NEXT());
-    else if (strcmp(a, "--prefetch") == 0)
-      out->prefetch = atoi(NEXT());
-    else if (strcmp(a, "--chunks-per-sample") == 0)
-      out->chunks_per_sample = atoi(NEXT());
-    else if (strcmp(a, "--batches") == 0)
-      out->n_batches = atoi(NEXT());
+      out->batch_size = (uint32_t)atoi(NEXT());
+    else if (strcmp(a, "--lookahead") == 0)
+      out->lookahead_batches = (uint32_t)atoi(NEXT());
     else if (strcmp(a, "--io-threads") == 0)
-      out->io_threads = atoi(NEXT());
-    else if (strcmp(a, "--device") == 0)
-      out->device_id = atoi(NEXT());
-    else if (strcmp(a, "--pattern") == 0) {
-      const char* v = NEXT();
-      if (strcmp(v, "random") == 0)
-        out->pattern = PIPELINE_PATTERN_RANDOM;
-      else if (strcmp(v, "sequential") == 0)
-        out->pattern = PIPELINE_PATTERN_SEQUENTIAL;
-      else {
-        usage(argv[0]);
-        return -1;
-      }
-    } else {
+      out->n_io_threads = (uint32_t)atoi(NEXT());
+    else if (strcmp(a, "--host-buffer-mb") == 0)
+      out->host_buffer_bytes = (uint64_t)atoll(NEXT()) << 20;
+    else if (strcmp(a, "--device-buffer-mb") == 0)
+      out->device_buffer_bytes = (uint64_t)atoll(NEXT()) << 20;
+    else {
       usage(argv[0]);
       return -1;
     }
 #undef NEXT
-  }
-  if (!out->store_root) {
-    usage(argv[0]);
-    return -1;
   }
   return 0;
 }
@@ -127,124 +92,93 @@ main(int argc, char** argv)
   if (parse_args(argc, argv, &args) != 0)
     return 1;
 
-  struct store_fs_config sc = {
-    .root = args.store_root,
-    .nthreads = args.io_threads,
-  };
-  struct store* store = store_fs_create(&sc);
-  if (!store) {
-    fprintf(stderr, "store_fs_create failed\n");
-    return 1;
-  }
-
-  struct zarr_reader_config rc = { .store = store,
-                                   .prefix = args.array_prefix };
-  struct zarr_reader* reader = zarr_reader_open(&rc);
-  if (!reader) {
-    fprintf(stderr,
-            "zarr_reader_open failed (check that %s/%szarr.json exists "
-            "and the array uses sharded zstd)\n",
-            args.store_root,
-            args.array_prefix[0] ? args.array_prefix : "");
-    store_destroy(store);
-    return 1;
-  }
-
-  const struct zarr_array_info* info = zarr_reader_info(reader);
-  size_t inner_uncompressed = zarr_reader_chunk_uncompressed_bytes(reader);
-  fprintf(stderr,
-          "array: rank=%u dtype=%d inner_uncompressed=%zu bytes\n",
-          info->rank,
-          (int)info->dtype,
-          inner_uncompressed);
-  for (uint8_t d = 0; d < info->rank; ++d) {
-    fprintf(stderr,
-            "  dim[%u]: size=%llu chunk_size=%llu chunks_per_shard=%llu\n",
-            d,
-            (unsigned long long)info->dims[d].size,
-            (unsigned long long)info->dims[d].chunk_size,
-            (unsigned long long)info->dims[d].chunks_per_shard);
-  }
-
-  int chunks_per_batch = args.batch_size * args.chunks_per_sample;
-  size_t max_compressed = inner_uncompressed * 2;
-
-  struct decoder* dec = decoder_create(
-    args.device_id, (size_t)chunks_per_batch, inner_uncompressed);
-  if (!dec) {
-    fprintf(stderr, "decoder_create failed\n");
-    zarr_reader_close(reader);
-    store_destroy(store);
-    return 1;
-  }
-
-  struct pipeline_config pc = {
-    .store = store,
-    .reader = reader,
-    .decoder = dec,
+  struct damacy_config cfg = {
     .batch_size = args.batch_size,
-    .chunks_per_sample = args.chunks_per_sample,
-    .prefetch_depth = args.prefetch,
-    .device_id = args.device_id,
-    .pattern = args.pattern,
-    .seed = 0xC0FFEEull,
-    .max_compressed_chunk_bytes = max_compressed,
+    .lookahead_batches = args.lookahead_batches,
+    .n_io_threads = args.n_io_threads,
+    .host_buffer_bytes = args.host_buffer_bytes,
+    .device_buffer_bytes = args.device_buffer_bytes,
+    .n_zarrs_meta_cache = 4096,
+    .n_shards_meta_cache = 16384,
+    .dtype = DAMACY_U16,
   };
-  struct pipeline* p = pipeline_create(&pc);
-  if (!p) {
-    fprintf(stderr, "pipeline_create failed\n");
-    decoder_destroy(dec);
-    zarr_reader_close(reader);
-    store_destroy(store);
+
+  struct damacy* d = NULL;
+  enum damacy_status s = damacy_create(&cfg, &d);
+  if (s != DAMACY_OK) {
+    fprintf(stderr, "damacy_create: %s\n", damacy_status_str(s));
     return 1;
   }
 
-  // Warm-up batch (not counted) to load shard indices and prime caches.
-  {
-    struct pipeline_batch wb;
-    if (pipeline_next(p, &wb) == 0)
-      pipeline_release(p, wb.batch_id);
+  // Synthetic samples — the stub doesn't actually open them.
+  const uint32_t n_samples = args.n_batches * args.batch_size;
+  struct damacy_sample* samples =
+    (struct damacy_sample*)calloc(n_samples, sizeof(*samples));
+  if (!samples) {
+    fprintf(stderr, "alloc samples failed\n");
+    damacy_destroy(d);
+    return 1;
+  }
+  for (uint32_t i = 0; i < n_samples; ++i) {
+    samples[i].uri = "synthetic://stub";
+    samples[i].aabb.rank = 5;
+    for (uint8_t a = 0; a < 5; ++a)
+      samples[i].aabb.dims[a] = (struct damacy_interval){ .beg = 0, .end = 1 };
   }
 
   double t0 = now_seconds();
-  for (int i = 0; i < args.n_batches; ++i) {
-    struct pipeline_batch b;
-    if (pipeline_next(p, &b)) {
-      fprintf(stderr, "pipeline_next failed at batch %d\n", i);
+
+  // Push everything in one slice; with stubs this consumes immediately.
+  struct damacy_sample_slice slice = { .beg = samples,
+                                       .end = samples + n_samples };
+  struct damacy_push_result pr = damacy_push(d, slice);
+  if (pr.status != DAMACY_OK) {
+    fprintf(stderr,
+            "damacy_push: %s (consumed %zu of %u)\n",
+            damacy_status_str(pr.status),
+            (size_t)(pr.unconsumed.beg - samples),
+            n_samples);
+    free(samples);
+    damacy_destroy(d);
+    return 1;
+  }
+
+  // Pop attempts. Stub returns AGAIN forever; we just count attempts.
+  uint64_t pop_again = 0, pop_ok = 0;
+  for (uint32_t i = 0; i < args.n_batches; ++i) {
+    struct damacy_batch* b = NULL;
+    enum damacy_status ps = damacy_pop(d, &b);
+    if (ps == DAMACY_AGAIN) {
+      ++pop_again;
+    } else if (ps == DAMACY_OK) {
+      ++pop_ok;
+      damacy_release(d, b);
+    } else {
+      fprintf(stderr, "damacy_pop: %s\n", damacy_status_str(ps));
       break;
     }
-    pipeline_release(p, b.batch_id);
   }
+
+  enum damacy_status fs = damacy_flush(d);
+  if (fs != DAMACY_OK)
+    fprintf(stderr, "damacy_flush: %s\n", damacy_status_str(fs));
+
   double t1 = now_seconds();
-  double wall = t1 - t0;
 
-  struct pipeline_stats s;
-  pipeline_stats_get(p, &s);
-  // Subtract the warm-up batch from cumulative counters.
-  // (Stats include the warm-up; correct for it.)
-  uint64_t batches_for_stats = s.n_batches > 0 ? s.n_batches - 1 : 0;
-  uint64_t comp_bytes = s.bytes_read_compressed;
-  uint64_t dec_bytes = s.bytes_decompressed;
-  // Estimate the warm-up's share by averaging.
-  if (batches_for_stats > 0 && s.n_batches > 0) {
-    comp_bytes -= comp_bytes / s.n_batches;
-    dec_bytes -= dec_bytes / s.n_batches;
-  }
+  struct damacy_stats stats;
+  damacy_stats_get(d, &stats);
 
-  double comp_gbps = (comp_bytes / 1e9) / wall;
-  double dec_gbps = (dec_bytes / 1e9) / wall;
+  printf("samples pushed:         %u\n", n_samples);
+  printf("pop attempts:           %u\n", args.n_batches);
+  printf("pop OK:                 %llu\n", (unsigned long long)pop_ok);
+  printf("pop AGAIN:              %llu\n", (unsigned long long)pop_again);
+  printf("wall:                   %.3f s\n", t1 - t0);
+  printf("batches_emitted:        %llu\n",
+         (unsigned long long)stats.batches_emitted);
+  printf("waves_emitted:          %llu\n",
+         (unsigned long long)stats.waves_emitted);
 
-  printf("batches:                %llu\n",
-         (unsigned long long)batches_for_stats);
-  printf("wall:                   %.3f s\n", wall);
-  printf("compressed bytes read:  %.3f GB\n", comp_bytes / 1e9);
-  printf("decompressed bytes:     %.3f GB\n", dec_bytes / 1e9);
-  printf("compressed read:        %.3f GB/s\n", comp_gbps);
-  printf("decompressed throughput:%.3f GB/s\n", dec_gbps);
-
-  pipeline_destroy(p);
-  decoder_destroy(dec);
-  zarr_reader_close(reader);
-  store_destroy(store);
+  free(samples);
+  damacy_destroy(d);
   return 0;
 }

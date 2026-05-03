@@ -45,3 +45,10 @@ add_cuda_lib(decoder SOURCES decoder.h decoder.c
 add_cuda_lib(pipeline SOURCES pipeline.h pipeline.c
     LINKS zarr decoder threadpool CUDA::cudart_static
 )
+
+# Public damacy surface — stubs for now (build-order step 1).
+# add_cuda_lib so eventual nvCOMP/CUDA dependencies have a place to land,
+# and so the bench (which requires CUDA already) can link it uniformly.
+add_cuda_lib(damacy SOURCES damacy.h damacy.c damacy_status.c
+    LINKS platform
+)

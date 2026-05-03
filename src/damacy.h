@@ -1,0 +1,204 @@
+// damacy public C API — high-throughput streaming loader for batches
+// assembled from many sharded NGFF zarr stores.
+//
+// See docs/api-design-surface-draft.md for the rationale and discussion;
+// docs/api-design-internals-draft.md describes the implementation shape.
+//
+// Threading model: a single user thread should own a `damacy*` instance
+// and drive push/pop/flush on it. damacy_release is safe to call from
+// another thread holding a damacy_batch* (a typical PyTorch-DataLoader
+// shape: dataloader thread pops, training thread releases).
+#pragma once
+
+#include "limits.h"
+
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+
+  enum damacy_dtype
+  {
+    DAMACY_U8,
+    DAMACY_U16,
+    DAMACY_I16,
+    DAMACY_U32,
+    DAMACY_F16,
+    DAMACY_F32,
+  };
+
+  enum damacy_status
+  {
+    DAMACY_OK = 0,
+    DAMACY_AGAIN,    // non-blocking call would block (queue full)
+    DAMACY_INVAL,    // bad arguments
+    DAMACY_NOTFOUND, // uri unresolvable / not a zarr
+    DAMACY_DTYPE,    // zarr dtype != configured dtype
+    DAMACY_RANK,     // sample rank incompatible with zarr rank
+    DAMACY_IO,       // read/open failure on a shard file
+    DAMACY_DECODE,   // codec parse / decompression failure
+    DAMACY_CUDA,     // driver/runtime call failed
+    DAMACY_OOM,      // would exceed a configured cap
+    DAMACY_SHUTDOWN, // pipeline destroyed or in failed state
+  };
+
+  // Human-readable name for a status code; safe for log/error messages.
+  const char* damacy_status_str(enum damacy_status s);
+
+  // Half-open [beg, end) interval along one axis, in level-0 voxel indices.
+  struct damacy_interval
+  {
+    int64_t beg, end;
+  };
+
+  // Variable-rank AABB. Only dims[0..rank) are read; axis order matches
+  // the zarr's stored axis order. rank <= DAMACY_MAX_RANK.
+  struct damacy_aabb
+  {
+    struct damacy_interval dims[DAMACY_MAX_RANK];
+    uint8_t rank;
+  };
+
+  // One sample request.
+  struct damacy_sample
+  {
+    const char* uri; // null-terminated; copied internally
+    struct damacy_aabb aabb;
+  };
+
+  // Caller-owned slice of samples to push.
+  struct damacy_sample_slice
+  {
+    const struct damacy_sample* beg;
+    const struct damacy_sample* end;
+  };
+
+  // All resource caps fixed at create-time. Nothing grows after this.
+  // Device is captured from the current CUcontext at damacy_create.
+  // Output batches are double-buffered (B=2); waves are double-buffered
+  // internally. Neither is configurable.
+  struct damacy_config
+  {
+    // Batch geometry
+    uint32_t batch_size;        // samples per batch
+    uint32_t lookahead_batches; // user-push queue depth (>= 2)
+    uint32_t n_io_threads;
+
+    // Streaming buffers (split in half across two wave slots internally)
+    uint64_t host_buffer_bytes;   // pinned staging; sized for IO bw
+    uint64_t device_buffer_bytes; // device decompress scratch
+
+    // LRU caps (no FD cache; FDs are open/close per read_op)
+    uint32_t n_zarrs_meta_cache;
+    uint32_t n_shards_meta_cache;
+
+    // Output dtype expected from all pushed samples; mismatched zarrs error.
+    enum damacy_dtype dtype;
+  };
+
+  struct damacy;
+  struct damacy_batch;
+
+  // Create a damacy instance. The current CUcontext is captured and
+  // bound for the instance's lifetime; the calling thread is expected
+  // to keep that context current across subsequent calls.
+  enum damacy_status damacy_create(const struct damacy_config* cfg,
+                                   struct damacy** out);
+
+  // Tear down. Does NOT flush in-flight work; the io_queue is asked to
+  // shut down and pending CUDA streams are synchronized before buffers
+  // are released. Pending damacy_pop callers (from another thread) wake
+  // with DAMACY_SHUTDOWN.
+  void damacy_destroy(struct damacy* d);
+
+  struct damacy_push_result
+  {
+    struct damacy_sample_slice unconsumed;
+    enum damacy_status status;
+  };
+
+  // Push as many samples as fit. The return value is the unconsumed
+  // suffix of the input slice plus a status:
+  //   OK        all samples were consumed
+  //   AGAIN     the lookahead queue filled mid-slice; caller should pop
+  //             a batch (or wait) and retry with the returned suffix
+  //   INVAL     bad arguments (samples.beg > samples.end, null d, etc.)
+  //   NOTFOUND  could not resolve a uri; result.unconsumed.beg points at it
+  //   DTYPE     zarr dtype mismatch; result.unconsumed.beg points at the sample
+  //   RANK      sample rank incompatible with the resolved zarr's rank
+  //   SHUTDOWN  instance is in a failed state or being destroyed
+  // On any non-AGAIN error, the offending sample is at
+  // result.unconsumed.beg and was NOT consumed.
+  struct damacy_push_result damacy_push(struct damacy* d,
+                                        struct damacy_sample_slice samples);
+
+  // Block until the next batch is on-device-ready, in push-FIFO order.
+  // *out is owned by damacy until damacy_release.
+  enum damacy_status damacy_pop(struct damacy* d, struct damacy_batch** out);
+
+  // Return the batch's slot to the pool. Thread-safe; may be called from
+  // a thread other than the one that called damacy_pop.
+  void damacy_release(struct damacy* d, struct damacy_batch* b);
+
+  // Drain anything currently planned/in-flight, finalize any partial last
+  // batch (truncated to the number of complete samples) and ready it for
+  // pop. Idempotent. Stream is resumable after flush; subsequent push
+  // starts a fresh batch.
+  enum damacy_status damacy_flush(struct damacy* d);
+
+  struct damacy_batch_info
+  {
+    void* device_ptr;                   // dtype-typed, contiguous
+    int64_t shape[DAMACY_MAX_RANK + 1]; // [N, ...zarr axes]
+    uint8_t rank;                       // includes leading N axis
+    enum damacy_dtype dtype;
+    void* ready_stream; // CUstream
+    uint64_t batch_id;  // monotonic
+  };
+  // device ordinal is derivable from device_ptr via
+  // cuPointerGetAttribute(..., CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL, ...)
+  // or from ready_stream via cuStreamGetCtx → cuCtxGetDevice.
+
+  void damacy_batch_info(const struct damacy_batch* b,
+                         struct damacy_batch_info* out);
+
+  // Cumulative metrics. All counters are stage-cumulative; reset with
+  // damacy_stats_reset.
+  struct damacy_metric
+  {
+    const char* name;
+    float ms;            // cumulative
+    float best_ms;       // best single observation (1e30f = none)
+    double input_bytes;  // cumulative bytes consumed by stage
+    double output_bytes; // cumulative bytes produced by stage
+    uint64_t count;
+  };
+
+  struct damacy_stats
+  {
+    struct damacy_metric plan;
+    struct damacy_metric io;
+    struct damacy_metric h2d;
+    struct damacy_metric decompress;
+    struct damacy_metric assemble;
+    struct damacy_metric pop_wait_io;
+    struct damacy_metric pop_wait_compute;
+    struct damacy_metric push_backpressure;
+    struct damacy_metric flush_wait;
+
+    uint64_t zarr_meta_hits, zarr_meta_misses;
+    uint64_t shard_idx_hits, shard_idx_misses;
+    uint64_t batches_emitted;
+    uint64_t batches_truncated;
+    uint64_t waves_emitted;
+  };
+
+  void damacy_stats_get(const struct damacy* d, struct damacy_stats* out);
+  void damacy_stats_reset(struct damacy* d);
+
+#ifdef __cplusplus
+}
+#endif
