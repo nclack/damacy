@@ -39,6 +39,13 @@ add_src_lib(zarr SOURCES zarr.h zarr_reader.c zarr_metadata.h zarr_metadata.c
     LINKS store dimension dtype codec_types json strbuf crc32c
 )
 
+# damacy-side metadata cache (LRU around zarr_metadata_parse).
+# damacy.h is header-included for the damacy_status enum; no link needed
+# (no symbols referenced).
+add_src_lib(zarr_meta_cache SOURCES zarr_meta_cache.h zarr_meta_cache.c
+    LINKS zarr lru store strbuf
+)
+
 # GPU pieces — add_cuda_lib is a no-op under DAMACY_FUZZ.
 add_cuda_lib(decoder SOURCES decoder.h decoder.c
     LINKS CUDA::cudart_static nvcomp::nvcomp

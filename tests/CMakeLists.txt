@@ -7,6 +7,7 @@ endif()
 # code. add_damacy_test lives in cmake/Helpers.cmake.
 add_damacy_test(test_json json)
 add_damacy_test(test_lru lru)
+add_damacy_test(test_zarr_meta_cache zarr_meta_cache zarr store)
 
 if(DAMACY_FUZZ)
     add_subdirectory(fuzz)
