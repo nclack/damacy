@@ -1,5 +1,10 @@
 # Helpers (add_src_lib, add_platform_sources) live in cmake/Helpers.cmake.
 
+# Logging — internal log_* macros + stderr sink. util/prelude.h's CHECK
+# macros lower onto log_error, so any module that uses prelude must
+# transitively link this target.
+add_src_lib(log SOURCES log/log.h log/log.c)
+
 # Foundational types
 add_src_lib(dtype       SOURCES dtype.c dtype.h)
 add_src_lib(dimension   SOURCES dimension.c dimension.h)
