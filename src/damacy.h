@@ -84,6 +84,12 @@ extern "C"
   // internally. Neither is configurable.
   struct damacy_config
   {
+    // Filesystem root that resolves sample.uri (sample.uri is interpreted
+    // as a path relative to this root). v1 supports a single fs-backed
+    // store; later configurations will allow multiple/heterogeneous
+    // backends behind the same handle.
+    const char* store_root;
+
     // Batch geometry
     uint32_t batch_size;        // samples per batch
     uint32_t lookahead_batches; // user-push queue depth (>= 2)

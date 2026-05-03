@@ -27,10 +27,21 @@
   `src/planner.{h,c}`, `tests/test_planner.c`. `struct read_op` and
   `struct chunk_plan` shapes defined here; wave-scheduler fields
   (`dst_buf_offset`, `dev_decompressed_offset`) reserved but zeroed.
-- [ ] **4. Naive end-to-end (single wave per batch).** Pulls in CUDA +
-  `io_queue` + the assemble kernel. Single wave slot, single batch
-  slot, no overlap. First measurable build of the streaming pipeline.
-  Reuses existing `src/decoder.{h,c}` for nvCOMP zstd decompress.
+- [x] **4. Naive end-to-end (single wave per batch).** Synchronous
+  push → plan → store_read → cuMemcpyHtoDAsync → nvCOMP zstd
+  decompress → assemble kernel → cudaStreamSynchronize. Validated
+  byte-for-byte against zarr-python on a `gen_dataset.py` fixture.
+  Files: `src/assemble.{h,cu}`, rewritten `src/damacy.c`,
+  `bench/main.c` driving real samples. New: `damacy_config.store_root`
+  (resolves sample.uri against a single fs-backed store; multi-store
+  resolution lands later). v1 caps inside damacy.c:
+  `DAMACY_MAX_CHUNKS_PER_BATCH = 256`,
+  `DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES = 1 MB` — the product gates
+  nvCOMP's temp scratch via `cudaMalloc`, so they can't be raised
+  casually. Output tensor is allocated once at the first batch from
+  the first sample's AABB; subsequent samples must match the same
+  per-axis shape. Single batch slot, no overlap; double-buffering
+  lands in step 5.
 - [ ] **5. Wave scheduler + double buffering (W=2, B=2).** Append-only
   plan queue + chunk-granular scheduler in `damacy_pop`; cuEvents +
   io_events for sync; main-thread orchestration with poll-sleep waits.
@@ -195,3 +206,17 @@ pattern worth calling out:
 - **`src/util/lru.c` size**. ~500 LOC of carefully-factored code; could
   split helpers (list / freelist / index) into separate `.c` files if
   it grows again.
+- **`store_root` config field.** v1 binds an instance to one filesystem
+  root. The surface design wants per-uri resolution (`s3://...`,
+  multiple roots, etc.); revisit once the wave scheduler is in and a
+  multi-backend story is needed.
+- **No on-disk smoke test yet.** End-to-end is exercised via
+  `bench/main.c --root <gen_dataset.py output> --peek` (manually
+  validated against zarr-python). A self-contained test requires
+  real zstd-compressed payloads in the test fixture (libzstd in the
+  flake); deferred.
+- **`DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES = 1 MB` cap.** Tight enough
+  to fit nvCOMP's scratch on a 8GB-class laptop GPU; will bite as
+  soon as someone configures larger inner chunks. Move it (and
+  `DAMACY_MAX_CHUNKS_PER_BATCH`) onto `damacy_config` once we know
+  the right knob shape.

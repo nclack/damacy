@@ -66,9 +66,15 @@ add_cuda_lib(decoder SOURCES decoder.h decoder.c
     LINKS CUDA::cudart_static nvcomp::nvcomp
 )
 
-# Public damacy surface — stubs for now (build-order step 1).
-# add_cuda_lib so eventual nvCOMP/CUDA dependencies have a place to land,
-# and so the bench (which requires CUDA already) can link it uniformly.
+# Bytewise gather kernel: chunk windows → output batch tensor.
+add_cuda_lib(assemble SOURCES assemble.h assemble.cu
+    LINKS CUDA::cudart_static
+)
+
+# Public damacy surface. Step 4: end-to-end pipeline (single wave per
+# batch, no overlap). Wave scheduling + double-buffering land in step 5.
 add_cuda_lib(damacy SOURCES damacy.h damacy.c damacy_status.c
-    LINKS platform
+    LINKS platform planner zarr_meta_cache zarr_shard_cache zarr store
+          decoder assemble dtype log strbuf
+          CUDA::cudart_static
 )
