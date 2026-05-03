@@ -256,6 +256,43 @@ test_backshift_keeps_lookup_terminating(void)
   return 0;
 }
 
+// Robin-hood should keep probe distances tight under realistic
+// (well-distributed) hash inputs. Insert N entries with FNV-1a hashes
+// of distinct strings; with load factor 50% (idx_size = 2 * capacity)
+// the observed max probe should stay well under log2(capacity) + a
+// small safety constant.
+static int
+test_robin_hood_redistributes(void)
+{
+  destroy_count = 0;
+  struct lru* l = lru_create(64, 16, &SVAL_OPS);
+  EXPECT(l);
+
+  for (int i = 0; i < 64; ++i) {
+    char buf[16];
+    snprintf(buf, sizeof buf, "key-%d", i);
+    EXPECT(lru_put(l, hash_fnv1a_str(buf), buf, sval_new(buf)) != NULL);
+  }
+
+  struct lru_stats st;
+  lru_stats_get(l, &st);
+  EXPECT(st.size == 64);
+  // 64 entries in idx_size 128 (50% load) + good hash distribution:
+  // robin-hood worst-case probe should stay small. Empirical bound for
+  // FNV-1a on these strings is well under 8; assert < 12 for headroom.
+  EXPECT(st.max_probe_observed < 12);
+
+  // Every insert is still retrievable.
+  for (int i = 0; i < 64; ++i) {
+    char buf[16];
+    snprintf(buf, sizeof buf, "key-%d", i);
+    EXPECT(lru_get(l, hash_fnv1a_str(buf), buf) != NULL);
+  }
+
+  lru_destroy(l);
+  return 0;
+}
+
 #define RUN(t)                                                                 \
   do {                                                                         \
     int r = t();                                                               \
@@ -276,6 +313,7 @@ main(void)
   RUN(test_pinning_all_pinned_returns_null);
   RUN(test_collision_chain);
   RUN(test_backshift_keeps_lookup_terminating);
+  RUN(test_robin_hood_redistributes);
   printf("all tests passed\n");
   return 0;
 }
