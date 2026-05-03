@@ -420,79 +420,26 @@ void damacy_stats_reset(struct damacy* d);
 
 ## Build order
 
-Status (`git log --oneline` is authoritative):
-
-- [x] **1.** `0779aec stubbed public api` — `src/damacy.h`, `src/damacy.c`,
-  `src/damacy_status.c`; `bench/main.c` ported to the new push/pop loop.
-- [x] **2.** Three commits:
-  - `f3a5401 log: stderr logger + prelude check macros` — `src/log/`,
-    `src/util/prelude.h` (`CHECK` / `CHECK_SILENT` / `countof` / etc.).
-  - `0b41ff2 lru: pinned cache + hash helpers` (initial) →
-    `c4ad8ba lru: robin-hood + factored structs` (rewrite) — generic
-    LRU at `src/util/lru.{h,c}`, FNV-1a helpers at `src/util/hash.h`.
-  - `fab4801 zarr: meta cache (lru-backed)` and
-    `9e380c2 zarr: shard index cache` — `src/zarr_meta_cache.{h,c}`
-    and `src/zarr_shard_cache.{h,c}`.
-- [x] **3.** `7f4fc5c planner: page-aligned chunk plans` — `src/planner.{h,c}`,
-  `tests/test_planner.c`. `struct read_op` + `struct chunk_plan` shapes
-  defined here; wave-scheduler fields (`dst_buf_offset`,
-  `dev_decompressed_offset`) reserved but zeroed.
-- [ ] **4.** Naive end-to-end (single wave per batch). Pulls in CUDA +
-  io_queue + the assemble kernel. First measurable build.
-- [ ] **5.** Wave scheduler + double buffering (W=2, B=2).
-- [ ] **6.** `damacy_flush` + `damacy_stats`.
-- [ ] **7.** Coalescing in the planner / scheduler.
-- [ ] **8.** IO thread tuning.
-
-### Implementation conventions landed in steps 2–3
-
-These are concrete decisions that aren't visible from the type-level
-"premises" section above. New code should follow them.
-
-- **Logging + checks.** `.c` files include `util/prelude.h` for
-  `CHECK(label, expr)` / `CHECK_SILENT(label, expr)` / `log_*` macros.
-  Errors funnel through a single `error:` label that frees partial
-  state and returns the right `damacy_status`. `prelude.h` is private
-  — never include from a header.
-- **Designated initializers.** `*p = (struct foo){ .a = ..., .b = ... }`
-  instead of field-by-field assignment chains. Omitted fields are
-  zero-initialized (so we don't have to spell out `= 0` for every
-  trailing field).
-- **Factored sub-structs.** Top-level structs are grouped by
-  responsibility (e.g. `struct lru` contains `lru_index`, `lru_list`,
-  `lru_freelist`, `lru_counters`) so helpers can take the whole parent
-  but the field grouping is visible at a glance.
-- **Fixed-width types.** `uint32_t` / `uint64_t` / `int64_t` everywhere
-  in headers and storage. `size_t` only for `<string.h>`-style locals.
-- **LRU API & semantics.** `struct lru_entry*` is the public handle
-  (returned by `lru_get` / `lru_put`); pointer is stable for the entry's
-  lifetime. `lru_get(l, hash, probe_key)` and
-  `lru_put(l, hash, probe_key, value)` both take an explicit
-  `probe_key` (the LRU never interprets keys; collisions are
-  disambiguated via the caller's `ops.eq`). Pinned entries (refcount > 0)
-  are immovable: the robin-hood walk skips them, replacement on
-  pinned-key returns NULL+`put_failures`, and backshift on evict skips
-  pinned (gaps may persist past pinned cells). Lookup walks the full
-  `max_probe` (no early-terminate on EMPTY) because pin-aware insertion
-  can leave gaps.
-- **Cache value lifetime.** `zarr_meta_cache_get` /
-  `zarr_shard_cache_get` return pointers owned by the cache, valid
-  until the entry is evicted. v1 has *no pinning at the cache layer*:
-  callers must not retain pointers across other cache calls. Adding
-  acquire/release wrappers is straightforward when the planner / wave
-  scheduler need it.
-- **Planner ownership.** `planner_plan` writes into caller-supplied
-  buffers (`struct planner_output`). Returns `DAMACY_OOM` if either
-  buffer fills mid-plan. `read_op.shard_path` strings are
-  planner-owned, valid until the next `planner_plan` call. Empty
-  chunks (sentinel offset/nbytes) are silently skipped — callers must
-  zero-initialize the output tensor.
-- **Test fixture pattern.** Cache and planner integration tests build
-  a tmpdir with a synthetic sharded-zstd `zarr.json` (small `MINIMAL_ZARR_JSON`
-  literal) and either real or synthetic shard footers. `rm -rf` via
-  `system()` for cleanup; mkdtemp for the root.
-
-### Build order context
+1. **Public C API surface.** Header + opaque `damacy*` + stubs that
+   return `DAMACY_OK` / `DAMACY_AGAIN` skeletally. Lets `bench/main.c`
+   switch to the real interface immediately.
+2. **Generic LRU** (`lru_table`) + zarr metadata cache + shard index
+   cache. Pure CPU; testable.
+3. **Planner**: samples → `chunk_plan[]`. Page-aligned `read_op`s; *no*
+   coalescing, *no* waves. One read per chunk, padded to page boundary.
+   Unit-testable on synthetic AABBs.
+4. **Naive end-to-end (single wave per batch).** Single wave slot,
+   single batch slot, no overlap; io_queue + cuda streams used but each
+   stage runs to completion before the next. Real assemble kernel
+   writing to the output tensor. Correct, measurable.
+5. **Wave scheduler + double buffering (W=2, B=2).** Pull-prefix from
+   plan queue; orchestration state machine in `damacy_pop`; cuEvents +
+   io_events for sync.
+6. **`damacy_flush` + `damacy_stats`.** Flush marker, idempotent
+   semantics, metrics collection.
+7. **Coalescing in the planner / scheduler** (merge adjacent
+   `read_op`s that cover the same page-aligned region within a wave).
+8. **IO thread tuning.** `io_queue` size; backpressure on the queue.
 
 Steps 1–4 produce a correct, slow, simple end-to-end system you can
 profile. Step 5 adds the overlap. Step 6 adds the user-visible drain
