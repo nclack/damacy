@@ -1,10 +1,9 @@
 #include "zarr_metadata.h"
 
 #include "util/json.h"
+#include "util/prelude.h"
 
 #include <string.h>
-
-#define countof(arr) (sizeof(arr) / sizeof((arr)[0]))
 
 // Read a JSON array of unsigned integers into out[0..max_rank). Sets
 // *out_rank to the number of elements. Returns 0 on success.
@@ -233,5 +232,29 @@ zarr_metadata_parse(const char* src, size_t src_len, struct zarr_metadata* out)
       return 1;
   }
 
+  return 0;
+}
+
+int
+zarr_metadata_inner_per_shard(const struct zarr_metadata* meta,
+                              uint64_t* out_per_dim,
+                              uint64_t* out_total)
+{
+  if (!meta)
+    return 1;
+  uint64_t total = 1;
+  for (uint8_t d = 0; d < meta->rank; ++d) {
+    if (meta->inner_chunk_shape[d] == 0 ||
+        meta->shard_shape[d] % meta->inner_chunk_shape[d] != 0)
+      return 1;
+    uint64_t per = meta->shard_shape[d] / meta->inner_chunk_shape[d];
+    if (per != 0 && total > UINT64_MAX / per)
+      return 1; // overflow
+    total *= per;
+    if (out_per_dim)
+      out_per_dim[d] = per;
+  }
+  if (out_total)
+    *out_total = total;
   return 0;
 }

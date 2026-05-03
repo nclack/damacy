@@ -22,3 +22,15 @@ struct zarr_metadata
 // Parse src into out. Returns 0 on success.
 int
 zarr_metadata_parse(const char* src, size_t src_len, struct zarr_metadata* out);
+
+// Inner-chunks-per-shard along each dim, and the product across all
+// dims. Either output array may be NULL if not needed; out_per_dim, when
+// provided, must point to storage for at least meta->rank u64s.
+//
+// Returns 0 on success; non-zero if shard_shape isn't a clean multiple
+// of inner_chunk_shape on some dim, or if the per-dim ratios overflow
+// when accumulated into out_total.
+int
+zarr_metadata_inner_per_shard(const struct zarr_metadata* meta,
+                              uint64_t* out_per_dim,
+                              uint64_t* out_total);

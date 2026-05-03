@@ -1,18 +1,10 @@
+#include "expect.h"
 #include "util/hash.h"
 #include "util/lru.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#define EXPECT(cond)                                                           \
-  do {                                                                         \
-    if (!(cond)) {                                                             \
-      fprintf(                                                                 \
-        stderr, "  expect failed at %s:%d: %s\n", __FILE__, __LINE__, #cond);  \
-      return 1;                                                                \
-    }                                                                          \
-  } while (0)
 
 // Test value: a heap-allocated string. eq compares string equality.
 struct sval
@@ -76,11 +68,11 @@ test_basic_put_get(void)
 
   struct lru_stats st;
   lru_stats_get(l, &st);
-  EXPECT(st.hits == 1);
-  EXPECT(st.misses == 1);
-  EXPECT(st.insertions == 2);
+  EXPECT(st.counters.hits == 1);
+  EXPECT(st.counters.misses == 1);
+  EXPECT(st.counters.insertions == 2);
   EXPECT(st.size == 2);
-  EXPECT(st.evictions == 0);
+  EXPECT(st.counters.evictions == 0);
 
   lru_destroy(l);
   EXPECT(destroy_count == 2);
@@ -103,8 +95,8 @@ test_replace_same_key(void)
   struct lru_stats st;
   lru_stats_get(l, &st);
   EXPECT(st.size == 1);
-  EXPECT(st.replacements == 1);
-  EXPECT(st.insertions == 1); // only the first put counted as insert
+  EXPECT(st.counters.replacements == 1);
+  EXPECT(st.counters.insertions == 1); // only the first put counted as insert
 
   lru_destroy(l);
   EXPECT(destroy_count == 2);
@@ -137,7 +129,7 @@ test_eviction_oldest_first(void)
   struct lru_stats st;
   lru_stats_get(l, &st);
   EXPECT(st.size == 4);
-  EXPECT(st.evictions == 1);
+  EXPECT(st.counters.evictions == 1);
 
   lru_destroy(l);
   return 0;
@@ -193,7 +185,7 @@ test_pinning_all_pinned_returns_null(void)
 
   struct lru_stats st;
   lru_stats_get(l, &st);
-  EXPECT(st.put_failures == 1);
+  EXPECT(st.counters.put_failures == 1);
   EXPECT(st.size == 2);
 
   lru_entry_release(ea);
@@ -293,16 +285,6 @@ test_robin_hood_redistributes(void)
   return 0;
 }
 
-#define RUN(t)                                                                 \
-  do {                                                                         \
-    int r = t();                                                               \
-    if (r != 0) {                                                              \
-      fprintf(stderr, "FAIL %s\n", #t);                                        \
-      return r;                                                                \
-    }                                                                          \
-    printf("ok   %s\n", #t);                                                   \
-  } while (0)
-
 int
 main(void)
 {
@@ -314,6 +296,6 @@ main(void)
   RUN(test_collision_chain);
   RUN(test_backshift_keeps_lookup_terminating);
   RUN(test_robin_hood_redistributes);
-  printf("all tests passed\n");
+  log_info("all tests passed");
   return 0;
 }

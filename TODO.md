@@ -3,6 +3,7 @@
 ## To triage
 
 - [ ] support for bf16 fp16
+- [ ] testing the hashmap/lru
 
 ## Fuzzing
 

@@ -1,8 +1,15 @@
 #include "zarr_shard_index.h"
 
 #include "util/crc32c.h"
+#include "util/strbuf.h"
 
 #include <string.h>
+
+size_t
+zarr_shard_index_size(size_t n_entries)
+{
+  return n_entries * 16u + 4u;
+}
 
 static uint64_t
 load_le_u64(const uint8_t* p)
@@ -42,6 +49,21 @@ zarr_shard_index_parse(const void* buf,
   for (size_t i = 0; i < n_entries; ++i) {
     entries[i].offset = load_le_u64(p + i * 16u);
     entries[i].nbytes = load_le_u64(p + i * 16u + 8u);
+  }
+  return 0;
+}
+
+int
+zarr_shard_path_build(struct strbuf* sb,
+                      const char* prefix,
+                      const uint64_t* shard_coord,
+                      uint8_t rank)
+{
+  if (strbuf_join_path(sb, prefix, "c"))
+    return 1;
+  for (uint8_t d = 0; d < rank; ++d) {
+    if (strbuf_appendf(sb, "/%llu", (unsigned long long)shard_coord[d]))
+      return 1;
   }
   return 0;
 }

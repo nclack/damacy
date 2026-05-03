@@ -70,7 +70,8 @@ extern "C"
                       size_t n);
 
   // Recover the size in bytes of the resource named by `key`. Returns 0 on
-  // success and writes *out. Used by zarr_reader to find a shard footer.
+  // success and writes *out. Used by the shard-index cache to find a
+  // shard footer.
   int store_stat(struct store* s, const char* key, uint64_t* out);
 
   // Read-only view of a whole resource. `data`/`len` are public; the

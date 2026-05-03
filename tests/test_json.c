@@ -1,18 +1,10 @@
+#include "expect.h"
 #include "util/json.h"
+#include "util/prelude.h"
 
-#include <stdio.h>
 #include <string.h>
 
-#define countof(arr) (sizeof(arr) / sizeof((arr)[0]))
 #define SRC(s) ((struct cslice){ .beg = (s), .end = (s) + sizeof(s) - 1 })
-#define EXPECT(cond)                                                           \
-  do {                                                                         \
-    if (!(cond)) {                                                             \
-      fprintf(                                                                 \
-        stderr, "  expect failed at %s:%d: %s\n", __FILE__, __LINE__, #cond);  \
-      return 1;                                                                \
-    }                                                                          \
-  } while (0)
 
 static int
 test_lex_int(void)
@@ -332,47 +324,26 @@ test_err_offset_set(void)
   return 0;
 }
 
-struct test_entry
-{
-  const char* name;
-  int (*fn)(void);
-};
-
-#define TEST(name) { #name, name }
-
 int
 main(void)
 {
-  static const struct test_entry tests[] = {
-    TEST(test_lex_int),
-    TEST(test_lex_float),
-    TEST(test_lex_string_plain),
-    TEST(test_lex_string_escaped),
-    TEST(test_lex_bool_null),
-    TEST(test_object_key_descent),
-    TEST(test_object_key_skip),
-    TEST(test_array_index),
-    TEST(test_iter_basic),
-    TEST(test_where_resolve_first),
-    TEST(test_where_iter_filtered),
-    TEST(test_negative_not_found),
-    TEST(test_negative_type),
-    TEST(test_negative_parse),
-    TEST(test_primitive_conversions),
-    TEST(test_null_args),
-    TEST(test_err_offset_set),
-  };
-  int failed = 0;
-  for (size_t i = 0; i < sizeof tests / sizeof tests[0]; ++i) {
-    int rc = tests[i].fn();
-    if (rc) {
-      printf("FAIL %s\n", tests[i].name);
-      failed++;
-    } else {
-      printf("OK   %s\n", tests[i].name);
-    }
-  }
-  if (failed)
-    printf("%d test(s) failed\n", failed);
-  return failed ? 1 : 0;
+  RUN(test_lex_int);
+  RUN(test_lex_float);
+  RUN(test_lex_string_plain);
+  RUN(test_lex_string_escaped);
+  RUN(test_lex_bool_null);
+  RUN(test_object_key_descent);
+  RUN(test_object_key_skip);
+  RUN(test_array_index);
+  RUN(test_iter_basic);
+  RUN(test_where_resolve_first);
+  RUN(test_where_iter_filtered);
+  RUN(test_negative_not_found);
+  RUN(test_negative_type);
+  RUN(test_negative_parse);
+  RUN(test_primitive_conversions);
+  RUN(test_null_args);
+  RUN(test_err_offset_set);
+  log_info("all tests passed");
+  return 0;
 }

@@ -43,6 +43,13 @@ extern "C"
   size_t strbuf_len(const struct strbuf* sb);
   const char* strbuf_cstr(const struct strbuf* sb);
 
+  // Reset sb and write "<prefix>/<suffix>" (or just "<suffix>" if prefix
+  // is NULL/empty). Inserts a separator only if prefix doesn't already
+  // end with '/'. Returns 0 on success, non-zero on alloc failure.
+  int strbuf_join_path(struct strbuf* sb,
+                       const char* prefix,
+                       const char* suffix);
+
 #ifdef __cplusplus
 }
 #endif

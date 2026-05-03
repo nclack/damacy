@@ -1,5 +1,6 @@
 #include "lru.h"
 
+#include "log/log.h"
 #include "util/prelude.h"
 
 #include <stdlib.h>
@@ -7,57 +8,39 @@
 
 #define LRU_NIL UINT32_MAX
 
-// Per-slot data — the public lru_entry pointer is just &slots[i].
-// Slots are stable (never moved); the index reorders references to
-// them. lru_prev/lru_next double as the free-list link when the slot
-// is unused (free_next is stored in lru_next).
+// Doubly-linked list primitive. Same shape used as both:
+//   - the per-entry link (embedded in struct lru_entry as `link`)
+//   - the list anchor (a sentinel node owned by struct lru; the list is
+//     empty when sentinel.next == &sentinel).
+// Using a sentinel removes head/tail special cases from list_*; pointer
+// updates are unconditional.
+struct lru_list
+{
+  struct lru_list* prev;
+  struct lru_list* next;
+};
+
+// Per-slot data — the public lru_entry pointer is just &slots[slot_idx].
+// Slots are stable (never moved); the index reorders references to them.
+// `link` is in the LRU-order list when the slot is in use, and in the
+// freelist when the slot is free.
 struct lru_entry
 {
   uint64_t hash;
   void* value;
   uint32_t refcount;
-  uint32_t lru_prev; // toward MRU; LRU_NIL if head
-  uint32_t lru_next; // toward LRU; LRU_NIL if tail (or free-list link)
+  struct lru_list link;
 };
 
-// Index entry: a slot index (or LRU_NIL for empty).
-struct lru_idx_cell
-{
-  uint32_t slot;
-};
-
-// Robin-hood hash index over slot indices.
+// Robin-hood hash index over slot indices. Each cell stores a slot
+// index into the slots array, or LRU_NIL when empty.
 struct lru_index
 {
-  struct lru_idx_cell* cells; // idx_size entries
-  uint32_t idx_size;          // power of two
-  uint32_t mask;              // idx_size - 1
+  uint32_t* cells;  // n_cells entries; LRU_NIL = empty
+  uint32_t n_cells; // power of two
+  uint32_t mask;    // n_cells - 1
   uint32_t max_probe;
   uint32_t max_probe_observed;
-};
-
-// Doubly-linked list of slot indices (intrusive in struct lru_entry).
-struct lru_list
-{
-  uint32_t head; // MRU end; LRU_NIL when empty
-  uint32_t tail; // LRU end; LRU_NIL when empty
-};
-
-// Singly-linked freelist of slot indices (intrusive in slot.lru_next).
-struct lru_freelist
-{
-  uint32_t head; // LRU_NIL when empty
-};
-
-// Internal counters; copied into the public lru_stats on stats_get.
-struct lru_counters
-{
-  uint64_t hits;
-  uint64_t misses;
-  uint64_t insertions;
-  uint64_t evictions;
-  uint64_t replacements;
-  uint64_t put_failures;
 };
 
 struct lru
@@ -67,10 +50,76 @@ struct lru
   uint32_t capacity;
   uint32_t size;
   struct lru_index index;
-  struct lru_list list;
-  struct lru_freelist freelist;
+  struct lru_list lru_order; // sentinel; .next = MRU, .prev = LRU
+  struct lru_list freelist;  // sentinel; pop/push at .next
   struct lru_counters counters;
 };
+
+// --- list primitive (operates on struct lru_list only) -------------------
+
+static void
+list_init(struct lru_list* node)
+{
+  node->prev = node;
+  node->next = node;
+}
+
+static int
+list_empty(const struct lru_list* sentinel)
+{
+  return sentinel->next == sentinel;
+}
+
+// Detach `node` from whatever list it's in. Self-loops the node so a
+// second unlink is a no-op (and a subsequent push works).
+static void
+list_unlink(struct lru_list* node)
+{
+  node->prev->next = node->next;
+  node->next->prev = node->prev;
+  node->prev = node;
+  node->next = node;
+}
+
+// Insert `node` at the front of the list anchored by `sentinel`.
+static void
+list_push_front(struct lru_list* sentinel, struct lru_list* node)
+{
+  node->prev = sentinel;
+  node->next = sentinel->next;
+  sentinel->next->prev = node;
+  sentinel->next = node;
+}
+
+// Move `node` to the front of `sentinel`'s list. No-op if already front.
+static void
+list_promote(struct lru_list* sentinel, struct lru_list* node)
+{
+  if (sentinel->next == node)
+    return;
+  list_unlink(node);
+  list_push_front(sentinel, node);
+}
+
+// --- link <-> slot helpers -----------------------------------------------
+
+static struct lru_entry*
+link_to_entry(struct lru_list* link)
+{
+  return container_of(link, struct lru_entry, link);
+}
+
+static const struct lru_entry*
+link_to_entry_const(const struct lru_list* link)
+{
+  return container_of(link, const struct lru_entry, link);
+}
+
+static uint32_t
+entry_to_slot_idx(const struct lru* self, const struct lru_entry* entry)
+{
+  return (uint32_t)(entry - self->slots);
+}
 
 // --- small helpers --------------------------------------------------------
 
@@ -88,73 +137,46 @@ next_pow2_ge(uint32_t v)
   return v + 1;
 }
 
-static inline uint32_t
-ideal_pos(const struct lru* l, uint64_t hash)
+static uint32_t
+ideal_cell(const struct lru* self, uint64_t hash)
 {
-  return (uint32_t)(hash & l->index.mask);
+  return (uint32_t)(hash & self->index.mask);
 }
 
-static inline uint32_t
-probe_dist(const struct lru* l, uint32_t pos, uint32_t ideal)
+static uint32_t
+probe_dist(const struct lru* self, uint32_t cell_idx, uint32_t ideal)
 {
-  return (pos - ideal) & l->index.mask;
-}
-
-// --- LRU list helpers (intrusive doubly-linked) ---------------------------
-
-static void
-list_push_front(struct lru* l, uint32_t s)
-{
-  l->slots[s].lru_prev = LRU_NIL;
-  l->slots[s].lru_next = l->list.head;
-  if (l->list.head != LRU_NIL)
-    l->slots[l->list.head].lru_prev = s;
-  l->list.head = s;
-  if (l->list.tail == LRU_NIL)
-    l->list.tail = s;
-}
-
-static void
-list_unlink(struct lru* l, uint32_t s)
-{
-  uint32_t prev = l->slots[s].lru_prev;
-  uint32_t next = l->slots[s].lru_next;
-  if (prev != LRU_NIL)
-    l->slots[prev].lru_next = next;
-  else
-    l->list.head = next;
-  if (next != LRU_NIL)
-    l->slots[next].lru_prev = prev;
-  else
-    l->list.tail = prev;
-}
-
-static void
-list_promote(struct lru* l, uint32_t s)
-{
-  if (l->list.head == s)
-    return;
-  list_unlink(l, s);
-  list_push_front(l, s);
+  return (cell_idx - ideal) & self->index.mask;
 }
 
 // --- free-list helpers ---------------------------------------------------
 
+// Pop the front slot off the freelist. Returns LRU_NIL if empty.
 static uint32_t
-freelist_pop(struct lru* l)
+freelist_pop(struct lru* self)
 {
-  if (l->freelist.head == LRU_NIL)
+  if (list_empty(&self->freelist))
     return LRU_NIL;
-  uint32_t s = l->freelist.head;
-  l->freelist.head = l->slots[s].lru_next;
-  return s;
+  struct lru_list* node = self->freelist.next;
+  list_unlink(node);
+  return entry_to_slot_idx(self, link_to_entry(node));
 }
 
 static void
-freelist_push(struct lru* l, uint32_t s)
+freelist_push(struct lru* self, uint32_t slot_idx)
 {
-  l->slots[s].lru_next = l->freelist.head;
-  l->freelist.head = s;
+  list_push_front(&self->freelist, &self->slots[slot_idx].link);
+}
+
+// Reset the slot's payload to a "free" state. Caller is responsible for
+// the link's list membership (unlink first; push to freelist after).
+static void
+slot_clear(struct lru* self, uint32_t slot_idx)
+{
+  struct lru_list saved_link = self->slots[slot_idx].link;
+  self->slots[slot_idx] = (struct lru_entry){
+    .link = saved_link,
+  };
 }
 
 // --- index helpers -------------------------------------------------------
@@ -164,75 +186,75 @@ freelist_push(struct lru* l, uint32_t s)
 // success, or the index of the orphaned slot on cap-exceed. The orphan
 // is guaranteed to have refcount == 0 (we never displace pinned).
 static uint32_t
-index_insert_robin(struct lru* l, uint32_t s_in)
+index_insert_robin(struct lru* self, uint32_t slot_to_insert)
 {
-  uint32_t s = s_in;
-  uint32_t pos = ideal_pos(l, l->slots[s].hash);
-  for (uint32_t p = 0; p <= l->index.max_probe; ++p) {
-    uint32_t cur = l->index.cells[pos].slot;
-    if (cur == LRU_NIL) {
-      l->index.cells[pos].slot = s;
-      if (p > l->index.max_probe_observed)
-        l->index.max_probe_observed = p;
+  uint32_t carry_slot = slot_to_insert;
+  uint32_t cell_idx = ideal_cell(self, self->slots[carry_slot].hash);
+  for (uint32_t probe = 0; probe <= self->index.max_probe; ++probe) {
+    uint32_t incumbent = self->index.cells[cell_idx];
+    if (incumbent == LRU_NIL) {
+      self->index.cells[cell_idx] = carry_slot;
+      if (probe > self->index.max_probe_observed)
+        self->index.max_probe_observed = probe;
       return LRU_NIL;
     }
     // Pinned entries are immovable; never swap with them.
-    if (l->slots[cur].refcount == 0) {
-      uint32_t cur_ideal = ideal_pos(l, l->slots[cur].hash);
-      uint32_t cur_probe = probe_dist(l, pos, cur_ideal);
-      if (p > cur_probe) {
-        l->index.cells[pos].slot = s;
-        if (p > l->index.max_probe_observed)
-          l->index.max_probe_observed = p;
-        s = cur;
-        p = cur_probe;
+    if (self->slots[incumbent].refcount == 0) {
+      uint32_t incumbent_ideal = ideal_cell(self, self->slots[incumbent].hash);
+      uint32_t incumbent_probe = probe_dist(self, cell_idx, incumbent_ideal);
+      if (probe > incumbent_probe) {
+        self->index.cells[cell_idx] = carry_slot;
+        if (probe > self->index.max_probe_observed)
+          self->index.max_probe_observed = probe;
+        carry_slot = incumbent;
+        probe = incumbent_probe;
       }
     }
-    pos = (pos + 1u) & l->index.mask;
+    cell_idx = (cell_idx + 1u) & self->index.mask;
   }
-  return s;
+  return carry_slot;
 }
 
-// Backshift-delete the cell at `pos`. Walks forward shifting unpinned
+// Backshift-delete the cell at `cell_idx`. Walks forward shifting unpinned
 // entries with probe > 0 backward by one until we hit an empty cell, a
 // pinned entry, or an entry with probe == 0. Pinned entries cannot be
 // shifted, so a pinned entry adjacent to the deleted cell leaves a gap.
 static void
-index_erase(struct lru* l, uint32_t pos)
+index_erase(struct lru* self, uint32_t cell_idx)
 {
   for (;;) {
-    uint32_t next = (pos + 1u) & l->index.mask;
-    uint32_t s = l->index.cells[next].slot;
-    if (s == LRU_NIL) {
-      l->index.cells[pos].slot = LRU_NIL;
+    uint32_t next_cell = (cell_idx + 1u) & self->index.mask;
+    uint32_t next_slot = self->index.cells[next_cell];
+    if (next_slot == LRU_NIL) {
+      self->index.cells[cell_idx] = LRU_NIL;
       return;
     }
-    if (l->slots[s].refcount > 0) {
-      // Pinned entries don't move; leave a gap at `pos`.
-      l->index.cells[pos].slot = LRU_NIL;
+    if (self->slots[next_slot].refcount > 0) {
+      // Pinned entries don't move; leave a gap at `cell_idx`.
+      self->index.cells[cell_idx] = LRU_NIL;
       return;
     }
-    uint32_t ideal = ideal_pos(l, l->slots[s].hash);
-    if (probe_dist(l, next, ideal) == 0) {
-      l->index.cells[pos].slot = LRU_NIL;
+    uint32_t ideal = ideal_cell(self, self->slots[next_slot].hash);
+    if (probe_dist(self, next_cell, ideal) == 0) {
+      self->index.cells[cell_idx] = LRU_NIL;
       return;
     }
-    l->index.cells[pos] = l->index.cells[next];
-    pos = next;
+    self->index.cells[cell_idx] = self->index.cells[next_cell];
+    cell_idx = next_cell;
   }
 }
 
-// Look up `s`'s current index position (re-probing from its ideal).
-// Returns the position or LRU_NIL if not found (shouldn't happen for
-// live entries).
+// Look up `slot_idx`'s current cell position (re-probing from its ideal).
+// Returns the cell or LRU_NIL if not found (shouldn't happen for live
+// entries).
 static uint32_t
-index_locate(const struct lru* l, uint32_t s)
+index_locate(const struct lru* self, uint32_t slot_idx)
 {
-  uint32_t pos = ideal_pos(l, l->slots[s].hash);
-  for (uint32_t p = 0; p <= l->index.max_probe; ++p) {
-    if (l->index.cells[pos].slot == s)
-      return pos;
-    pos = (pos + 1u) & l->index.mask;
+  uint32_t cell_idx = ideal_cell(self, self->slots[slot_idx].hash);
+  for (uint32_t probe = 0; probe <= self->index.max_probe; ++probe) {
+    if (self->index.cells[cell_idx] == slot_idx)
+      return cell_idx;
+    cell_idx = (cell_idx + 1u) & self->index.mask;
   }
   return LRU_NIL;
 }
@@ -241,58 +263,56 @@ index_locate(const struct lru* l, uint32_t s)
 // the full probe range — pin-aware insertion can leave gaps in chains,
 // so empty cells do not terminate the search.
 static uint32_t
-index_lookup(const struct lru* l, uint64_t hash, const void* probe_key)
+index_lookup(const struct lru* self, uint64_t hash, const void* probe_key)
 {
-  uint32_t pos = ideal_pos(l, hash);
-  for (uint32_t p = 0; p <= l->index.max_probe; ++p) {
-    uint32_t s = l->index.cells[pos].slot;
-    if (s != LRU_NIL && l->slots[s].hash == hash &&
-        l->ops.eq(l->slots[s].value, probe_key, l->ops.user))
-      return pos;
-    pos = (pos + 1u) & l->index.mask;
+  uint32_t cell_idx = ideal_cell(self, hash);
+  for (uint32_t probe = 0; probe <= self->index.max_probe; ++probe) {
+    uint32_t slot_idx = self->index.cells[cell_idx];
+    if (slot_idx != LRU_NIL && self->slots[slot_idx].hash == hash &&
+        self->ops.eq(self->slots[slot_idx].value, probe_key, self->ops.user))
+      return cell_idx;
+    cell_idx = (cell_idx + 1u) & self->index.mask;
   }
   return LRU_NIL;
 }
 
 // --- eviction -------------------------------------------------------------
 
-// Free slot `s`'s entry: erase from index, unlink from LRU, return slot
-// to the free list, destroy the value. Caller must ensure refcount == 0.
+// Free slot `slot_idx`'s entry: erase from index, unlink from LRU, return
+// slot to the free list, destroy the value. Caller must ensure
+// refcount == 0.
 static void
-evict_slot(struct lru* l, uint32_t s)
+evict_slot(struct lru* self, uint32_t slot_idx)
 {
-  uint32_t pos = index_locate(l, s);
-  if (pos != LRU_NIL)
-    index_erase(l, pos);
+  uint32_t cell_idx = index_locate(self, slot_idx);
+  if (cell_idx != LRU_NIL)
+    index_erase(self, cell_idx);
 
-  void* val = l->slots[s].value;
-  list_unlink(l, s);
-  l->slots[s] = (struct lru_entry){
-    .hash = 0,
-    .value = NULL,
-    .refcount = 0,
-    .lru_prev = LRU_NIL,
-    .lru_next = LRU_NIL,
-  };
-  freelist_push(l, s);
-  l->size--;
-  l->counters.evictions++;
-  l->ops.destroy(val, l->ops.user);
+  struct lru_entry* entry = &self->slots[slot_idx];
+  void* evicted_value = entry->value;
+  list_unlink(&entry->link);
+  slot_clear(self, slot_idx);
+  freelist_push(self, slot_idx);
+  self->size--;
+  self->counters.evictions++;
+  self->ops.destroy(evicted_value, self->ops.user);
 }
 
-// Walk the LRU list from tail forward looking for an unpinned entry.
+// Walk the LRU list from tail toward MRU looking for an unpinned entry.
 // Returns 0 on success (one entry evicted), -1 if every live entry is
 // pinned.
 static int
-evict_lru_tail(struct lru* l)
+evict_lru_tail(struct lru* self)
 {
-  uint32_t s = l->list.tail;
-  while (s != LRU_NIL && l->slots[s].refcount > 0)
-    s = l->slots[s].lru_prev;
-  if (s == LRU_NIL)
-    return -1;
-  evict_slot(l, s);
-  return 0;
+  for (struct lru_list* node = self->lru_order.prev; node != &self->lru_order;
+       node = node->prev) {
+    struct lru_entry* entry = link_to_entry(node);
+    if (entry->refcount == 0) {
+      evict_slot(self, entry_to_slot_idx(self, entry));
+      return 0;
+    }
+  }
+  return -1;
 }
 
 // --- public API -----------------------------------------------------------
@@ -300,236 +320,210 @@ evict_lru_tail(struct lru* l)
 struct lru*
 lru_create(uint32_t capacity, uint32_t max_probe, const struct lru_ops* ops)
 {
-  struct lru* l = NULL;
+  struct lru* self = NULL;
   CHECK_SILENT(error, capacity > 0);
   CHECK_SILENT(error, max_probe > 0);
   CHECK_SILENT(error, ops && ops->eq && ops->destroy);
 
-  l = (struct lru*)calloc(1, sizeof(*l));
-  CHECK(error, l);
+  self = (struct lru*)calloc(1, sizeof(*self));
+  CHECK(error, self);
 
-  uint32_t idx_size = next_pow2_ge(2u * capacity);
+  uint32_t n_cells = next_pow2_ge(2u * capacity);
 
-  *l = (struct lru){
+  *self = (struct lru){
     .ops = *ops,
     .capacity = capacity,
-    .size = 0,
     .index = {
-      .cells = NULL,
-      .idx_size = idx_size,
-      .mask = idx_size - 1u,
+      .n_cells = n_cells,
+      .mask = n_cells - 1u,
       .max_probe = max_probe,
-      .max_probe_observed = 0,
     },
-    .list = { .head = LRU_NIL, .tail = LRU_NIL },
-    .freelist = { .head = LRU_NIL },
-    .counters = { 0 },
   };
+  list_init(&self->lru_order);
+  list_init(&self->freelist);
 
-  l->slots = (struct lru_entry*)calloc(capacity, sizeof(*l->slots));
-  CHECK(error, l->slots);
-  l->index.cells =
-    (struct lru_idx_cell*)malloc(idx_size * sizeof(*l->index.cells));
-  CHECK(error, l->index.cells);
+  self->slots = (struct lru_entry*)calloc(capacity, sizeof(*self->slots));
+  CHECK(error, self->slots);
+  self->index.cells = (uint32_t*)malloc(n_cells * sizeof(*self->index.cells));
+  CHECK(error, self->index.cells);
 
-  for (uint32_t i = 0; i < idx_size; ++i)
-    l->index.cells[i] = (struct lru_idx_cell){ .slot = LRU_NIL };
+  for (uint32_t i = 0; i < n_cells; ++i)
+    self->index.cells[i] = LRU_NIL;
 
-  // Build the freelist: slot[0] -> slot[1] -> ... -> slot[capacity-1].
-  for (uint32_t i = 0; i + 1 < capacity; ++i)
-    l->slots[i].lru_next = i + 1;
-  l->slots[capacity - 1].lru_next = LRU_NIL;
-  l->freelist.head = 0;
+  // Seed the freelist with every slot. Push order doesn't matter — the
+  // freelist is unordered.
+  for (uint32_t i = 0; i < capacity; ++i) {
+    list_init(&self->slots[i].link);
+    list_push_front(&self->freelist, &self->slots[i].link);
+  }
 
-  return l;
+  return self;
 
 error:
-  if (l) {
-    free(l->slots);
-    free(l->index.cells);
-    free(l);
+  if (self) {
+    free(self->slots);
+    free(self->index.cells);
+    free(self);
   }
   return NULL;
 }
 
 void
-lru_destroy(struct lru* l)
+lru_destroy(struct lru* self)
 {
-  if (!l)
+  if (!self)
     return;
-  for (uint32_t s = l->list.head; s != LRU_NIL; s = l->slots[s].lru_next)
-    l->ops.destroy(l->slots[s].value, l->ops.user);
-  free(l->slots);
-  free(l->index.cells);
-  free(l);
+  for (struct lru_list* node = self->lru_order.next; node != &self->lru_order;
+       node = node->next) {
+    self->ops.destroy(link_to_entry(node)->value, self->ops.user);
+  }
+  free(self->slots);
+  free(self->index.cells);
+  free(self);
 }
 
 struct lru_entry*
-lru_get(struct lru* l, uint64_t hash, const void* probe_key)
+lru_get(struct lru* self, uint64_t hash, const void* probe_key)
 {
-  if (!l)
-    return NULL;
-  uint32_t pos = index_lookup(l, hash, probe_key);
-  if (pos == LRU_NIL) {
-    l->counters.misses++;
-    return NULL;
-  }
-  uint32_t s = l->index.cells[pos].slot;
-  list_promote(l, s);
-  l->counters.hits++;
-  return &l->slots[s];
+  CHECK_SILENT(miss, self);
+  uint32_t cell_idx = index_lookup(self, hash, probe_key);
+  CHECK_SILENT(miss, cell_idx != LRU_NIL);
+
+  uint32_t slot_idx = self->index.cells[cell_idx];
+  list_promote(&self->lru_order, &self->slots[slot_idx].link);
+  self->counters.hits++;
+  return &self->slots[slot_idx];
+
+miss:
+  if (self)
+    self->counters.misses++;
+  return NULL;
 }
 
 struct lru_entry*
-lru_put(struct lru* l, uint64_t hash, const void* probe_key, void* value)
+lru_put(struct lru* self, uint64_t hash, const void* probe_key, void* value)
 {
-  if (!l || !value) {
-    if (l && value)
-      l->ops.destroy(value, l->ops.user);
-    return NULL;
-  }
+  // Preconditions: NULL self leaks `value` (no destroy callback to call);
+  // NULL value is a caller bug. Both are documented in the header.
+  CHECK(Fail, self);
+  CHECK(Fail, value);
 
   // 1. Replace path: same key already present. Refuse if pinned.
-  uint32_t pos = index_lookup(l, hash, probe_key);
-  if (pos != LRU_NIL) {
-    uint32_t s = l->index.cells[pos].slot;
-    if (l->slots[s].refcount > 0) {
+  uint32_t cell_idx = index_lookup(self, hash, probe_key);
+  if (cell_idx != LRU_NIL) {
+    uint32_t slot_idx = self->index.cells[cell_idx];
+    if (self->slots[slot_idx].refcount > 0) {
       // Pinned entry can't be replaced — would invalidate the pin.
-      l->counters.put_failures++;
-      l->ops.destroy(value, l->ops.user);
+      self->counters.put_failures++;
+      self->ops.destroy(value, self->ops.user);
       return NULL;
     }
-    void* old = l->slots[s].value;
-    l->slots[s].value = value;
-    list_promote(l, s);
-    l->counters.replacements++;
-    l->ops.destroy(old, l->ops.user);
-    return &l->slots[s];
+    void* old_value = self->slots[slot_idx].value;
+    self->slots[slot_idx].value = value;
+    list_promote(&self->lru_order, &self->slots[slot_idx].link);
+    self->counters.replacements++;
+    self->ops.destroy(old_value, self->ops.user);
+    return &self->slots[slot_idx];
   }
 
   // 2. Allocate a slot, evicting the LRU tail if the pool is empty.
-  uint32_t s_new = freelist_pop(l);
-  while (s_new == LRU_NIL) {
-    if (evict_lru_tail(l) != 0) {
-      l->counters.put_failures++;
-      l->ops.destroy(value, l->ops.user);
+  uint32_t new_slot = freelist_pop(self);
+  while (new_slot == LRU_NIL) {
+    if (evict_lru_tail(self) != 0) {
+      self->counters.put_failures++;
+      self->ops.destroy(value, self->ops.user);
       return NULL;
     }
-    s_new = freelist_pop(l);
+    new_slot = freelist_pop(self);
   }
-  l->slots[s_new] = (struct lru_entry){
-    .hash = hash,
-    .value = value,
-    .refcount = 0,
-    .lru_prev = LRU_NIL,
-    .lru_next = LRU_NIL,
-  };
+  self->slots[new_slot].hash = hash;
+  self->slots[new_slot].value = value;
+  self->slots[new_slot].refcount = 0;
 
   // 3. Robin-hood insert. On cap-exceed, evict and retry. The orphan
-  //    is whoever ended up unplaced — could be s_new or a previously-
+  //    is whoever ended up unplaced — could be new_slot or a previously-
   //    stored slot.
   for (;;) {
-    uint32_t orphan = index_insert_robin(l, s_new);
-    if (orphan == LRU_NIL)
+    uint32_t orphan_slot = index_insert_robin(self, new_slot);
+    if (orphan_slot == LRU_NIL)
       break;
-    if (orphan == s_new) {
+    if (orphan_slot == new_slot) {
       // Our value never landed. Evict to free a slot in our chain, retry.
       // If eviction itself fails (everything pinned), give up.
-      if (evict_lru_tail(l) != 0) {
+      if (evict_lru_tail(self) != 0) {
         // Fallback: destroy the new value and return our slot.
-        void* val = l->slots[s_new].value;
-        l->slots[s_new] = (struct lru_entry){
-          .hash = 0,
-          .value = NULL,
-          .refcount = 0,
-          .lru_prev = LRU_NIL,
-          .lru_next = LRU_NIL,
-        };
-        freelist_push(l, s_new);
-        l->counters.put_failures++;
-        l->ops.destroy(val, l->ops.user);
+        void* orphan_value = self->slots[new_slot].value;
+        slot_clear(self, new_slot);
+        freelist_push(self, new_slot);
+        self->counters.put_failures++;
+        self->ops.destroy(orphan_value, self->ops.user);
         return NULL;
       }
       continue;
     }
     // Orphan is a previously-existing entry. Evict it (destroy value,
     // unlink from LRU, free slot). Our new slot is now in the index.
-    void* val = l->slots[orphan].value;
-    list_unlink(l, orphan);
-    l->slots[orphan] = (struct lru_entry){
-      .hash = 0,
-      .value = NULL,
-      .refcount = 0,
-      .lru_prev = LRU_NIL,
-      .lru_next = LRU_NIL,
-    };
-    freelist_push(l, orphan);
-    l->size--;
-    l->counters.evictions++;
-    l->ops.destroy(val, l->ops.user);
+    void* orphan_value = self->slots[orphan_slot].value;
+    list_unlink(&self->slots[orphan_slot].link);
+    slot_clear(self, orphan_slot);
+    freelist_push(self, orphan_slot);
+    self->size--;
+    self->counters.evictions++;
+    self->ops.destroy(orphan_value, self->ops.user);
     break;
   }
 
   // 4. Link new slot at MRU.
-  list_push_front(l, s_new);
-  l->size++;
-  l->counters.insertions++;
-  return &l->slots[s_new];
+  list_push_front(&self->lru_order, &self->slots[new_slot].link);
+  self->size++;
+  self->counters.insertions++;
+  return &self->slots[new_slot];
+
+Fail:
+  return NULL;
 }
 
 void*
-lru_entry_value(const struct lru_entry* e)
+lru_entry_value(const struct lru_entry* entry)
 {
-  return e ? e->value : NULL;
+  return entry ? entry->value : NULL;
 }
 
 void
-lru_entry_acquire(struct lru_entry* e)
+lru_entry_acquire(struct lru_entry* entry)
 {
-  if (e)
-    e->refcount++;
+  if (entry)
+    entry->refcount++;
 }
 
 void
-lru_entry_release(struct lru_entry* e)
+lru_entry_release(struct lru_entry* entry)
 {
-  if (e && e->refcount > 0)
-    e->refcount--;
+  if (entry && entry->refcount > 0)
+    entry->refcount--;
 }
 
 void
-lru_stats_get(const struct lru* l, struct lru_stats* out)
+lru_stats_get(const struct lru* self, struct lru_stats* out)
 {
-  if (!out)
-    return;
-  if (!l) {
-    *out = (struct lru_stats){ 0 };
-    return;
-  }
-  uint32_t pinned = 0;
-  for (uint32_t s = l->list.head; s != LRU_NIL; s = l->slots[s].lru_next) {
-    if (l->slots[s].refcount > 0)
-      ++pinned;
+  CHECK(Fail, out);
+  CHECK_SILENT(Fail, self);
+  uint32_t n_pinned = 0;
+  for (const struct lru_list* node = self->lru_order.next;
+       node != &self->lru_order;
+       node = node->next) {
+    if (link_to_entry_const(node)->refcount > 0)
+      ++n_pinned;
   }
   *out = (struct lru_stats){
-    .hits = l->counters.hits,
-    .misses = l->counters.misses,
-    .insertions = l->counters.insertions,
-    .evictions = l->counters.evictions,
-    .replacements = l->counters.replacements,
-    .put_failures = l->counters.put_failures,
-    .size = l->size,
-    .capacity = l->capacity,
-    .pinned = pinned,
-    .max_probe_observed = l->index.max_probe_observed,
+    .counters = self->counters,
+    .size = self->size,
+    .capacity = self->capacity,
+    .pinned = n_pinned,
+    .max_probe_observed = self->index.max_probe_observed,
   };
-}
-
-void
-lru_stats_reset(struct lru* l)
-{
-  if (!l)
-    return;
-  l->counters = (struct lru_counters){ 0 };
-  l->index.max_probe_observed = 0;
+  return;
+Fail:
+  if (out)
+    *out = (struct lru_stats){ 0 };
 }

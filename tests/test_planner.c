@@ -3,9 +3,9 @@
 // planner output: read counts, page alignment, src/dst windows.
 
 #include "damacy.h"
+#include "fixture.h"
 #include "planner.h"
 #include "store.h"
-#include "util/crc32c.h"
 #include "zarr_meta_cache.h"
 #include "zarr_shard_cache.h"
 #include "zarr_shard_index.h"
@@ -16,15 +16,6 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
-
-#define EXPECT(cond)                                                           \
-  do {                                                                         \
-    if (!(cond)) {                                                             \
-      fprintf(                                                                 \
-        stderr, "  expect failed at %s:%d: %s\n", __FILE__, __LINE__, #cond);  \
-      return 1;                                                                \
-    }                                                                          \
-  } while (0)
 
 #define PAGE 4096u
 
@@ -50,71 +41,6 @@ static const char* MINIMAL_ZARR_JSON =
   "\"index_location\":\"end\"}}]"
   "}";
 
-static int
-write_file(const char* path, const char* contents)
-{
-  FILE* f = fopen(path, "w");
-  if (!f)
-    return 1;
-  size_t n = strlen(contents);
-  size_t w = fwrite(contents, 1, n, f);
-  fclose(f);
-  return w == n ? 0 : 1;
-}
-
-static void
-write_le64(uint8_t* dst, uint64_t v)
-{
-  for (int i = 0; i < 8; ++i)
-    dst[i] = (uint8_t)(v >> (8 * i));
-}
-static void
-write_le32(uint8_t* dst, uint32_t v)
-{
-  for (int i = 0; i < 4; ++i)
-    dst[i] = (uint8_t)(v >> (8 * i));
-}
-
-static int
-write_synthetic_shard(const char* path,
-                      size_t payload_bytes,
-                      const uint64_t* offsets,
-                      const uint64_t* nbytes,
-                      size_t n_entries)
-{
-  size_t idx_bytes = zarr_shard_index_size(n_entries);
-  size_t total = payload_bytes + idx_bytes;
-  uint8_t* buf = (uint8_t*)calloc(total, 1);
-  if (!buf)
-    return 1;
-  uint8_t* footer = buf + payload_bytes;
-  for (size_t i = 0; i < n_entries; ++i) {
-    write_le64(footer + 16 * i + 0, offsets[i]);
-    write_le64(footer + 16 * i + 8, nbytes[i]);
-  }
-  uint32_t c = crc32c(footer, n_entries * 16u);
-  write_le32(footer + n_entries * 16u, c);
-
-  FILE* f = fopen(path, "wb");
-  if (!f) {
-    free(buf);
-    return 1;
-  }
-  size_t w = fwrite(buf, 1, total, f);
-  fclose(f);
-  free(buf);
-  return w == total ? 0 : 1;
-}
-
-static void
-rm_tree(const char* dir)
-{
-  char cmd[1024];
-  snprintf(cmd, sizeof cmd, "rm -rf %s", dir);
-  int rc = system(cmd);
-  (void)rc;
-}
-
 // Common fixture: tmpdir + foo array + one shard with 4 entries.
 struct fixture
 {
@@ -134,7 +60,7 @@ fixture_init(struct fixture* f, const uint64_t* offsets, const uint64_t* nbytes)
   snprintf(p, sizeof p, "%s/foo", f->root);
   EXPECT(mkdir(p, 0755) == 0);
   snprintf(p, sizeof p, "%s/foo/zarr.json", f->root);
-  EXPECT(write_file(p, MINIMAL_ZARR_JSON) == 0);
+  EXPECT(fixture_write_file(p, MINIMAL_ZARR_JSON) == 0);
   snprintf(p, sizeof p, "%s/foo/c", f->root);
   EXPECT(mkdir(p, 0755) == 0);
   snprintf(p, sizeof p, "%s/foo/c/0", f->root);
@@ -142,7 +68,7 @@ fixture_init(struct fixture* f, const uint64_t* offsets, const uint64_t* nbytes)
   snprintf(p, sizeof p, "%s/foo/c/0/0", f->root);
   // Payload bytes: large enough to hold any chunk we'll address. Last
   // offset+nbytes determines the lower bound; we use 4096 as headroom.
-  EXPECT(write_synthetic_shard(p, 4096, offsets, nbytes, 4) == 0);
+  EXPECT(fixture_write_synthetic_shard(p, 4096, offsets, nbytes, 4) == 0);
 
   struct store_fs_config sc = { .root = f->root, .nthreads = 1 };
   f->store = store_fs_create(&sc);
@@ -167,7 +93,7 @@ fixture_destroy(struct fixture* f)
   zarr_shard_cache_destroy(f->shards);
   zarr_meta_cache_destroy(f->meta);
   store_destroy(f->store);
-  rm_tree(f->root);
+  fixture_rm_tree(f->root);
 }
 
 static struct damacy_sample
@@ -397,16 +323,6 @@ test_page_alignment(void)
   return 0;
 }
 
-#define RUN(t)                                                                 \
-  do {                                                                         \
-    int r = t();                                                               \
-    if (r != 0) {                                                              \
-      fprintf(stderr, "FAIL %s\n", #t);                                        \
-      return r;                                                                \
-    }                                                                          \
-    printf("ok   %s\n", #t);                                                   \
-  } while (0)
-
 int
 main(void)
 {
@@ -415,6 +331,6 @@ main(void)
   RUN(test_two_samples_indices);
   RUN(test_empty_chunks_skipped);
   RUN(test_page_alignment);
-  printf("all tests passed\n");
+  log_info("all tests passed");
   return 0;
 }

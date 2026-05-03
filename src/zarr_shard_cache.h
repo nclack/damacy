@@ -6,7 +6,8 @@
 // need to reach into the metadata cache.
 #pragma once
 
-#include "damacy.h" // damacy_status
+#include "damacy.h"   // damacy_status
+#include "util/lru.h" // struct lru_counters
 #include "zarr_metadata.h"
 #include "zarr_shard_index.h" // struct zarr_shard_entry
 
@@ -43,10 +44,7 @@ extern "C"
 
   struct zarr_shard_cache_stats
   {
-    uint64_t hits;
-    uint64_t misses;
-    uint64_t insertions;
-    uint64_t evictions;
+    struct lru_counters counters;
     uint32_t size;
     uint32_t capacity;
   };

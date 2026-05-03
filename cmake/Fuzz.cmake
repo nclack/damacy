@@ -6,7 +6,7 @@
 # Warnings.cmake to have been included first.
 #
 # DAMACY_FUZZ also gates: CUDA enable in the top-level CMakeLists.txt;
-# bench/ via an early-return; decoder/pipeline via add_cuda_lib (see
+# bench/ via an early-return; CUDA-linked targets via add_cuda_lib (see
 # Helpers.cmake).
 #
 # Two build modes:

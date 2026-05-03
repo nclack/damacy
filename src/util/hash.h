@@ -6,50 +6,32 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+
 #define HASH_FNV_OFFSET_BASIS 0xcbf29ce484222325ull
 #define HASH_FNV_PRIME 0x00000100000001b3ull
 
-static inline uint64_t
-hash_fnv1a_init(void)
-{
-  return HASH_FNV_OFFSET_BASIS;
-}
+  // Returns the FNV-1a offset basis (the "empty hash" seed).
+  uint64_t hash_fnv1a_init(void);
 
-static inline uint64_t
-hash_fnv1a_step(uint64_t h, const void* bytes, size_t n)
-{
-  const uint8_t* p = (const uint8_t*)bytes;
-  for (size_t i = 0; i < n; ++i)
-    h = (h ^ p[i]) * HASH_FNV_PRIME;
-  return h;
-}
+  // Stream `n_bytes` of `bytes` into a running FNV-1a hash and return
+  // the new state. Use with hash_fnv1a_init to incrementally hash data
+  // that isn't contiguous in memory.
+  uint64_t hash_fnv1a_step(uint64_t state, const void* bytes, size_t n_bytes);
 
-static inline uint64_t
-hash_fnv1a(const void* bytes, size_t n)
-{
-  return hash_fnv1a_step(hash_fnv1a_init(), bytes, n);
-}
+  // Hash `n_bytes` of `bytes` in one call.
+  uint64_t hash_fnv1a(const void* bytes, size_t n_bytes);
 
-static inline uint64_t
-hash_fnv1a_str(const char* s)
-{
-  uint64_t h = hash_fnv1a_init();
-  for (; *s; ++s)
-    h = (h ^ (uint8_t)*s) * HASH_FNV_PRIME;
-  return h;
-}
+  // Hash a NUL-terminated string (the terminator is not included).
+  uint64_t hash_fnv1a_str(const char* s);
 
-// Mix two hashes (or a hash and a counter) in a way that scrambles low
-// bits adequately for use as a hash table key.
-static inline uint64_t
-hash_combine(uint64_t a, uint64_t b)
-{
-  // Murmur-like finalizer applied to the combination.
-  uint64_t h = a ^ (b + 0x9e3779b97f4a7c15ull + (a << 6) + (a >> 2));
-  h ^= h >> 33;
-  h *= 0xff51afd7ed558ccdull;
-  h ^= h >> 33;
-  h *= 0xc4ceb9fe1a85ec53ull;
-  h ^= h >> 33;
-  return h;
+  // Mix two hashes (or a hash and a counter) in a way that scrambles
+  // low bits adequately for use as a hash table key.
+  uint64_t hash_combine(uint64_t a, uint64_t b);
+
+#ifdef __cplusplus
 }
+#endif

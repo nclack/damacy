@@ -2,8 +2,8 @@
 // store, writes a synthetic shard file whose footer is a valid
 // (offset, nbytes) index protected by CRC32C, and exercises the cache.
 
+#include "fixture.h"
 #include "store.h"
-#include "util/crc32c.h"
 #include "zarr_metadata.h"
 #include "zarr_shard_cache.h"
 #include "zarr_shard_index.h"
@@ -14,72 +14,6 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
-
-#define EXPECT(cond)                                                           \
-  do {                                                                         \
-    if (!(cond)) {                                                             \
-      fprintf(                                                                 \
-        stderr, "  expect failed at %s:%d: %s\n", __FILE__, __LINE__, #cond);  \
-      return 1;                                                                \
-    }                                                                          \
-  } while (0)
-
-static void
-write_le64(uint8_t* dst, uint64_t v)
-{
-  for (int i = 0; i < 8; ++i)
-    dst[i] = (uint8_t)(v >> (8 * i));
-}
-
-static void
-write_le32(uint8_t* dst, uint32_t v)
-{
-  for (int i = 0; i < 4; ++i)
-    dst[i] = (uint8_t)(v >> (8 * i));
-}
-
-// Build a synthetic shard file at `path`: PAYLOAD_BYTES of dummy data
-// followed by a valid index footer for `n_entries` entries with the
-// supplied offsets/sizes.
-static int
-write_synthetic_shard(const char* path,
-                      size_t payload_bytes,
-                      const uint64_t* offsets,
-                      const uint64_t* nbytes,
-                      size_t n_entries)
-{
-  size_t idx_bytes = zarr_shard_index_size(n_entries);
-  size_t total = payload_bytes + idx_bytes;
-  uint8_t* buf = (uint8_t*)calloc(total, 1);
-  if (!buf)
-    return 1;
-  uint8_t* footer = buf + payload_bytes;
-  for (size_t i = 0; i < n_entries; ++i) {
-    write_le64(footer + 16 * i + 0, offsets[i]);
-    write_le64(footer + 16 * i + 8, nbytes[i]);
-  }
-  uint32_t c = crc32c(footer, n_entries * 16u);
-  write_le32(footer + n_entries * 16u, c);
-
-  FILE* f = fopen(path, "wb");
-  if (!f) {
-    free(buf);
-    return 1;
-  }
-  size_t w = fwrite(buf, 1, total, f);
-  fclose(f);
-  free(buf);
-  return w == total ? 0 : 1;
-}
-
-static void
-rm_tree(const char* dir)
-{
-  char cmd[1024];
-  snprintf(cmd, sizeof cmd, "rm -rf %s", dir);
-  int rc = system(cmd);
-  (void)rc;
-}
 
 static int
 test_shard_cache(void)
@@ -101,9 +35,9 @@ test_shard_cache(void)
   snprintf(path, sizeof path, "%s/foo/c/0", root);
   EXPECT(mkdir(path, 0755) == 0);
   snprintf(path, sizeof path, "%s/foo/c/0/0", root);
-  EXPECT(write_synthetic_shard(path, 4096, offsets, nbytes, 4) == 0);
+  EXPECT(fixture_write_synthetic_shard(path, 4096, offsets, nbytes, 4) == 0);
   snprintf(path, sizeof path, "%s/foo/c/0/1", root);
-  EXPECT(write_synthetic_shard(path, 4096, offsets, nbytes, 4) == 0);
+  EXPECT(fixture_write_synthetic_shard(path, 4096, offsets, nbytes, 4) == 0);
 
   struct store_fs_config sc = { .root = root, .nthreads = 1 };
   struct store* store = store_fs_create(&sc);
@@ -144,8 +78,8 @@ test_shard_cache(void)
 
   struct zarr_shard_cache_stats st;
   zarr_shard_cache_stats_get(c, &st);
-  EXPECT(st.hits == 1);
-  EXPECT(st.misses == 1);
+  EXPECT(st.counters.hits == 1);
+  EXPECT(st.counters.misses == 1);
   EXPECT(st.size == 1);
 
   // Different shard coord → another miss; both cached.
@@ -163,24 +97,14 @@ test_shard_cache(void)
 
   zarr_shard_cache_destroy(c);
   store_destroy(store);
-  rm_tree(root);
+  fixture_rm_tree(root);
   return 0;
 }
-
-#define RUN(t)                                                                 \
-  do {                                                                         \
-    int r = t();                                                               \
-    if (r != 0) {                                                              \
-      fprintf(stderr, "FAIL %s\n", #t);                                        \
-      return r;                                                                \
-    }                                                                          \
-    printf("ok   %s\n", #t);                                                   \
-  } while (0)
 
 int
 main(void)
 {
   RUN(test_shard_cache);
-  printf("all tests passed\n");
+  log_info("all tests passed");
   return 0;
 }

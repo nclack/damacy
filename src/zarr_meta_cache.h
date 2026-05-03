@@ -6,7 +6,8 @@
 // at least as long as the cache.
 #pragma once
 
-#include "damacy.h" // damacy_status
+#include "damacy.h"   // damacy_status
+#include "util/lru.h" // struct lru_counters
 #include "zarr_metadata.h"
 
 #include <stdint.h>
@@ -45,10 +46,7 @@ extern "C"
 
   struct zarr_meta_cache_stats
   {
-    uint64_t hits;
-    uint64_t misses;
-    uint64_t insertions;
-    uint64_t evictions;
+    struct lru_counters counters;
     uint32_t size;
     uint32_t capacity;
   };

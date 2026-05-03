@@ -1,8 +1,10 @@
 #include "zarr_meta_cache.h"
 
+#include "log/log.h"
 #include "store.h"
 #include "util/hash.h"
 #include "util/lru.h"
+#include "util/prelude.h"
 #include "util/strbuf.h"
 #include "zarr_metadata.h"
 
@@ -21,158 +23,138 @@ struct zarr_meta_cache
   struct lru* lru;
 };
 
-static char*
-str_dup(const char* s)
-{
-  size_t n = strlen(s);
-  char* p = (char*)malloc(n + 1);
-  if (!p)
-    return NULL;
-  memcpy(p, s, n + 1);
-  return p;
-}
-
 static int
 meta_eq(const void* value, const void* probe_key, void* user)
 {
   (void)user;
-  const struct meta_entry* e = (const struct meta_entry*)value;
+  const struct meta_entry* entry = (const struct meta_entry*)value;
   const char* uri = (const char*)probe_key;
-  return strcmp(e->uri, uri) == 0;
+  return strcmp(entry->uri, uri) == 0;
 }
 
 static void
 meta_destroy(void* value, void* user)
 {
   (void)user;
-  struct meta_entry* e = (struct meta_entry*)value;
-  if (!e)
+  struct meta_entry* entry = (struct meta_entry*)value;
+  if (!entry)
     return;
-  free(e->uri);
-  free(e);
-}
-
-// Build "<uri>/zarr.json" or just "zarr.json" when uri is empty.
-static int
-join_meta_key(struct strbuf* sb, const char* uri)
-{
-  strbuf_reset(sb);
-  if (uri && uri[0]) {
-    if (strbuf_append_cstr(sb, uri))
-      return 1;
-    size_t L = strbuf_len(sb);
-    if (L > 0 && strbuf_cstr(sb)[L - 1] != '/') {
-      if (strbuf_append(sb, "/", 1))
-        return 1;
-    }
-  }
-  return strbuf_append_cstr(sb, "zarr.json");
+  free(entry->uri);
+  free(entry);
 }
 
 struct zarr_meta_cache*
 zarr_meta_cache_create(struct store* store, uint32_t capacity)
 {
-  if (!store || capacity == 0)
-    return NULL;
-  struct zarr_meta_cache* c = (struct zarr_meta_cache*)calloc(1, sizeof(*c));
-  if (!c)
-    return NULL;
-  c->store = store;
+  struct zarr_meta_cache* self = NULL;
+
+  CHECK_SILENT(error, store);
+  CHECK_SILENT(error, capacity > 0);
+
+  self = (struct zarr_meta_cache*)calloc(1, sizeof(*self));
+  CHECK(error, self);
+  self->store = store;
+
   struct lru_ops ops = {
     .eq = meta_eq,
     .destroy = meta_destroy,
-    .user = NULL,
   };
-  // max_probe = 16: with idx_size = 2 * capacity (>= 32) and FNV-1a on
+  // max_probe = 16: with n_cells = 2 * capacity (>= 32) and FNV-1a on
   // distinct strings, observed chain length stays well under 16.
-  c->lru = lru_create(capacity, 16, &ops);
-  if (!c->lru) {
-    free(c);
-    return NULL;
+  self->lru = lru_create(capacity, 16, &ops);
+  CHECK(error, self->lru);
+
+  return self;
+
+error:
+  if (self) {
+    lru_destroy(self->lru);
+    free(self);
   }
-  return c;
+  return NULL;
 }
 
 void
-zarr_meta_cache_destroy(struct zarr_meta_cache* c)
+zarr_meta_cache_destroy(struct zarr_meta_cache* self)
 {
-  if (!c)
+  if (!self)
     return;
-  lru_destroy(c->lru);
-  free(c);
+  lru_destroy(self->lru);
+  free(self);
 }
 
 enum damacy_status
-zarr_meta_cache_get(struct zarr_meta_cache* c,
+zarr_meta_cache_get(struct zarr_meta_cache* self,
                     const char* uri,
                     const struct zarr_metadata** out)
 {
-  if (!c || !uri || !out)
-    return DAMACY_INVAL;
+  CHECK_SILENT(invalid, self);
+  CHECK_SILENT(invalid, uri);
+  CHECK_SILENT(invalid, out);
   *out = NULL;
 
-  uint64_t h = hash_fnv1a_str(uri);
-  struct lru_entry* e = lru_get(c->lru, h, uri);
-  if (e) {
-    *out = &((const struct meta_entry*)lru_entry_value(e))->meta;
+  uint64_t hash = hash_fnv1a_str(uri);
+  struct lru_entry* hit = lru_get(self->lru, hash, uri);
+  if (hit) {
+    *out = &((const struct meta_entry*)lru_entry_value(hit))->meta;
     return DAMACY_OK;
   }
 
   struct strbuf key = { 0 };
-  if (join_meta_key(&key, uri)) {
+  if (strbuf_join_path(&key, uri, "zarr.json")) {
     strbuf_free(&key);
     return DAMACY_OOM;
   }
 
   struct store_view view = { 0 };
-  int rc = store_map(c->store, strbuf_cstr(&key), &view);
+  int rc = store_map(self->store, strbuf_cstr(&key), &view);
   strbuf_free(&key);
   if (rc)
     return DAMACY_NOTFOUND;
 
   struct meta_entry* entry = (struct meta_entry*)calloc(1, sizeof(*entry));
   if (!entry) {
-    store_unmap(c->store, &view);
+    store_unmap(self->store, &view);
     return DAMACY_OOM;
   }
   if (zarr_metadata_parse((const char*)view.data, view.len, &entry->meta)) {
-    store_unmap(c->store, &view);
+    store_unmap(self->store, &view);
     free(entry);
     return DAMACY_DECODE;
   }
-  store_unmap(c->store, &view);
+  store_unmap(self->store, &view);
 
-  entry->uri = str_dup(uri);
+  entry->uri = strdup(uri);
   if (!entry->uri) {
     free(entry);
     return DAMACY_OOM;
   }
 
-  e = lru_put(c->lru, h, uri, entry);
-  if (!e) {
+  struct lru_entry* inserted = lru_put(self->lru, hash, uri, entry);
+  if (!inserted) {
     // Cache full and all entries pinned; lru_put already destroyed entry.
     return DAMACY_OOM;
   }
-  *out = &((const struct meta_entry*)lru_entry_value(e))->meta;
+  *out = &((const struct meta_entry*)lru_entry_value(inserted))->meta;
   return DAMACY_OK;
+
+invalid:
+  if (out)
+    *out = NULL;
+  return DAMACY_INVAL;
 }
 
 void
-zarr_meta_cache_stats_get(const struct zarr_meta_cache* c,
+zarr_meta_cache_stats_get(const struct zarr_meta_cache* self,
                           struct zarr_meta_cache_stats* out)
 {
   if (!out)
     return;
-  if (!c) {
-    memset(out, 0, sizeof(*out));
-    return;
-  }
-  struct lru_stats s;
-  lru_stats_get(c->lru, &s);
-  out->hits = s.hits;
-  out->misses = s.misses;
-  out->insertions = s.insertions;
-  out->evictions = s.evictions;
-  out->size = s.size;
-  out->capacity = s.capacity;
+  struct lru_stats stats;
+  lru_stats_get(self ? self->lru : NULL, &stats);
+  *out = (struct zarr_meta_cache_stats){
+    .counters = stats.counters,
+    .size = stats.size,
+    .capacity = stats.capacity,
+  };
 }

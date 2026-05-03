@@ -1,5 +1,5 @@
-# bench/ depends on CUDA-linked targets (pipeline, decoder), which are
-# skipped under DAMACY_FUZZ. Bail out early in that mode.
+# bench/ links damacy, which becomes a CUDA-linked target. add_cuda_lib
+# is a no-op under DAMACY_FUZZ, so bail out early in that mode.
 if(DAMACY_FUZZ)
     return()
 endif()

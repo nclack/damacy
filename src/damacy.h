@@ -55,10 +55,12 @@ extern "C"
   };
 
   // Variable-rank AABB. Only dims[0..rank) are read; axis order matches
-  // the zarr's stored axis order. rank <= DAMACY_MAX_RANK.
+  // the zarr's stored axis order. rank <= DAMACY_MAX_RANK for sample
+  // AABBs. Storage is sized DAMACY_MAX_RANK + 1 to accommodate internal
+  // dst AABBs (sample rank + 1 leading batch axis); see chunk_plan.dst.
   struct damacy_aabb
   {
-    struct damacy_interval dims[DAMACY_MAX_RANK];
+    struct damacy_interval dims[DAMACY_MAX_RANK + 1];
     uint8_t rank;
   };
 

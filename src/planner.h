@@ -28,10 +28,9 @@ extern "C"
   // the next planner_plan call.
   struct read_op
   {
-    const char* shard_path; // null-terminated; planner-owned
-    uint64_t file_offset;   // multiple of page_alignment
-    uint32_t nbytes;        // multiple of page_alignment
-    uint32_t _pad0;
+    const char* shard_path;  // null-terminated; planner-owned
+    uint64_t file_offset;    // multiple of page_alignment
+    uint32_t nbytes;         // multiple of page_alignment
     uint64_t dst_buf_offset; // wave-scheduler-assigned; planner sets 0
   };
 
@@ -47,8 +46,6 @@ extern "C"
     uint32_t decompressed_nbytes;
     uint32_t dev_decompressed_offset; // scheduler-assigned
     uint16_t batch_pool_slot;
-    uint8_t _pad0;
-    uint8_t _pad1;
     struct damacy_aabb src;               // chunk-local
     struct damacy_aabb dst;               // [N, ...]
     int64_t src_strides[DAMACY_MAX_RANK]; // elements
@@ -82,11 +79,19 @@ extern "C"
     uint32_t n_chunk_plans;
   };
 
-  // Plan a batch. samples are processed in order; sample i becomes
-  // dst.dims[0] = (i, i+1). All chunk_plans are tagged with
-  // batch_pool_slot. Empty chunks (offset == ZARR_SHARD_EMPTY_OFFSET)
-  // are skipped — callers should treat the corresponding output region
-  // as zeros.
+  // Plan one training batch — i.e., the N samples that land in one
+  // output tensor of shape [N, ...zarr_axes]. samples are processed in
+  // order; sample i becomes dst.dims[0] = (i, i+1). All chunk_plans
+  // are tagged with batch_pool_slot so the scheduler knows which slot
+  // in the batch pool receives the assembled output.
+  //
+  // This is independent of the scheduler's wave granularity: the wave
+  // scheduler chunks the produced plan queue into wave-sized dispatch
+  // units (one batch typically spans multiple waves). The planner is
+  // batch-shaped; waves are a downstream concern.
+  //
+  // Empty chunks (offset == ZARR_SHARD_EMPTY_OFFSET) are skipped —
+  // callers should treat the corresponding output region as zeros.
   enum damacy_status planner_plan(struct planner* p,
                                   const struct damacy_sample* samples,
                                   uint32_t n_samples,

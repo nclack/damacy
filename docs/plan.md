@@ -55,15 +55,47 @@ should follow them.
 
 ### Code style
 
-- **Logging + checks via `util/prelude.h`.** `.c` files include
-  `util/prelude.h` for `CHECK(label, expr)` / `CHECK_SILENT(label, expr)` /
-  `log_*` macros (`log_error` etc.). Errors funnel through a single
-  `error:` label that frees partial state and returns the right
-  `damacy_status`. `prelude.h` is private — never include from a header.
-  See `src/util/lru.c::lru_create` for the canonical pattern.
-- **Designated initializers.** `*p = (struct foo){ .a = ..., .b = ... }`
-  instead of field-by-field assignment chains. Omitted fields are
-  zero-initialized — don't spell out `= 0` for trailing fields.
+- **Headers contain declarations only.** No `static inline` function
+  bodies, no `inline` definitions. If a helper needs a function, the
+  function lives in a `.c` file with its own library target. Macros
+  are fine in headers — they're not implementation code.
+- **`self` is the receiver pointer name.** Methods on a struct take
+  the canonical pointer parameter as `self`, e.g. `lru_get(struct lru*
+  self, ...)`. Improves readability and makes "this is a method on the
+  receiver" structurally obvious.
+- **Variable naming scales with scope and includes units.**
+  Short loop counters (`i`, `d`) and tightly-scoped temporaries are
+  fine. Anything that survives across multiple lines or out of a
+  block uses a descriptive name. Quantities encode units in the name:
+  `chunk_size_bytes`, `n_inner_per_shard`, `decompressed_n_bytes`,
+  `aligned_file_offset`. No `c`/`l`/`p`/`e`/`s` for objects with a
+  lifetime longer than three lines.
+- **Logging + checks split between `util/prelude.h` and `log/log.h`.**
+  `prelude.h` provides `CHECK(label, expr)` / `CHECK_SILENT(label, expr)`
+  / `CHECK_MUL_OVERFLOW` plus `countof` / `container_of`. CHECK
+  expansions reference `log_error`, so any `.c` that uses CHECK includes
+  `log/log.h` directly. Parse-only modules that only need `countof`
+  (e.g. `zarr_metadata.c`) include prelude alone, no logger dependency.
+  Errors funnel through a single `error:` (or `invalid:`,
+  `precondition:`, etc.) label that frees partial state and returns the
+  right `damacy_status`. CHECK replaces `if (!cond) return ...` for
+  precondition checks. `prelude.h` is private — never include from a
+  header. See `src/util/lru.c::lru_create` for the canonical pattern.
+- **Public methods check `self` consistently.** Every public entry
+  point begins with `CHECK_SILENT(Fail, self)` (or its label-named
+  equivalent) before any dereference. A missing check on one method is
+  a bug, not a "tighter precondition".
+- **Many-arg functions: group invariants into a context struct.** When
+  a function takes ≥5 args and several are constant across the call
+  site's loop, fold them into a per-call `struct foo_ctx` and pass
+  `const struct foo_ctx*`. See `planner.c::emit_chunk` and its
+  `struct emit_ctx`.
+- **POSIX is fair game.** `strdup`, `pthread_*`, `mkdtemp`,
+  `clock_gettime` etc. are used directly. Don't introduce wrapper
+  functions claiming "portability" without a concrete non-POSIX target.
+- **Designated initializers.** `*self = (struct foo){ .a = ..., .b =
+  ... }` instead of field-by-field assignment chains. Omitted fields
+  are zero-initialized — don't spell out `= 0` for trailing fields.
 - **Factored sub-structs.** Top-level structs are grouped by
   responsibility. e.g. `struct lru` contains `lru_index`, `lru_list`,
   `lru_freelist`, `lru_counters` so helpers operate on `struct lru*`
@@ -119,16 +151,39 @@ should follow them.
 
 ### Test fixture pattern
 
-Cache and planner integration tests build a tmpdir-rooted fs store:
+Shared helpers live in `tests/expect.h` (`EXPECT` / `RUN` macros, both
+lowering onto the project logger) and `tests/fixture.h` (file-system
+test scaffolding: `fixture_write_file`, `fixture_write_synthetic_shard`,
+`fixture_rm_tree`, plus the LE encoders). All test executables include
+expect.h; the fs-backed integration tests (test_zarr_meta_cache,
+test_zarr_shard_cache, test_planner) include fixture.h.
 
-- `mkdtemp` for the root.
-- A small `MINIMAL_ZARR_JSON` literal (sharded zstd, default
-  chunk_key_encoding, end index_location) at `<root>/<uri>/zarr.json`.
-- Synthetic shard files at `<root>/<uri>/c/<a>/<b>/...` with
-  hand-built footers (offset/nbytes pairs + CRC32C).
-- `rm -rf` via `system()` for cleanup.
+`main` is a flat list of `RUN(test_foo)` calls — no table-driven loops,
+no continuing past failures. RUN fast-fails the executable on the first
+failing test so cascading failures don't mask the root cause.
+
+The fs fixture pattern: `mkdtemp` for the root; a per-test
+`MINIMAL_ZARR_JSON` literal (sharded zstd, default chunk_key_encoding,
+end index_location) at `<root>/<uri>/zarr.json`; synthetic shard files
+at `<root>/<uri>/c/<a>/<b>/...` with hand-built footers (offset/nbytes
+pairs + CRC32C); `rm -rf` via `system()` for cleanup.
 
 See `tests/test_planner.c::fixture_init` for the canonical setup.
+
+## Patterns from review
+
+Two review passes against steps 1–3 produced concrete cleanups; the
+durable conventions they surfaced are documented above (Code style,
+LRU contract, Planner contract, Test fixture pattern). One additional
+pattern worth calling out:
+
+- **Partial-batch operations must surface failure, not pretend success.**
+  When submitting N items and item k fails, return a sentinel the caller
+  can detect, and drain any in-flight work first so it doesn't touch
+  caller buffers after return. See `store_fs.c::fs_submit` (sentinel:
+  `seq == 0`).
+
+`git log` is authoritative for the per-change history.
 
 ## What I'd revisit
 
@@ -137,9 +192,6 @@ See `tests/test_planner.c::fixture_init` for the canonical setup.
   indices can't be evicted underfoot.
 - **`DAMACY_RANK` vs `DAMACY_INVAL`.** I split RANK out as its own
   status; if it never fires usefully, fold back into INVAL.
-- **Zarr meta and shard caches share boilerplate** (str_dup, build path,
-  cache wrapper). Worth extracting if a third cache appears (e.g., a
-  resolver cache for multi-store URIs).
 - **`src/util/lru.c` size**. ~500 LOC of carefully-factored code; could
   split helpers (list / freelist / index) into separate `.c` files if
   it grows again.

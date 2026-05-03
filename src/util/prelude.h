@@ -1,26 +1,26 @@
 /// PRIVATE: never include in other headers.
 ///
-/// Common helpers used throughout the implementation files: logging
-/// wrappers (log_*), checked-precondition macros (CHECK / CHECK_SILENT),
-/// and a few small inline utilities. The CHECK macros log the failing
-/// expression at LOG_ERROR and goto a caller-provided label so error
-/// paths read top-to-bottom and free their resources in one place.
+/// Small utility macros: countof, container_of, and the
+/// checked-precondition macros (CHECK / CHECK_SILENT / CHECK_MUL_OVERFLOW).
+/// The CHECK family logs the failing expression at LOG_ERROR and gotos a
+/// caller-provided label so error paths read top-to-bottom and free their
+/// resources in one place.
+///
+/// CHECK expansions reference log_error from "log/log.h" — sources that
+/// use CHECK must include that header themselves. Sources that only need
+/// countof / container_of can include prelude.h alone (e.g. parse-only
+/// modules that don't want a logger dependency).
+///
+/// Macros only — no `static inline` definitions. Anything that needs a
+/// real function lives in its own .c file (see util/hash.c).
 #pragma once
 
-#include "log/log.h"
-
 #include <stddef.h>
-#include <stdint.h>
-
-#ifdef __cplusplus
-extern "C"
-{
-#endif
 
 #define container_of(ptr, type, member)                                        \
   ((type*)((char*)(ptr) - offsetof(type, member)))
 
-#define countof(e) (sizeof(e) / sizeof((e)[0]))
+#define countof(arr) (sizeof(arr) / sizeof((arr)[0]))
 
 #define CHECK(lbl, e)                                                          \
   do {                                                                         \
@@ -46,20 +46,3 @@ extern "C"
       goto lbl;                                                                \
     }                                                                          \
   } while (0)
-
-  static inline size_t align_up(size_t x, size_t alignment)
-  {
-    return (x + alignment - 1) / alignment * alignment;
-  }
-
-  static inline int ceil_log2(uint64_t v)
-  {
-    int p = 0;
-    while ((1ull << p) < v)
-      ++p;
-    return p;
-  }
-
-#ifdef __cplusplus
-}
-#endif

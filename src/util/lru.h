@@ -66,6 +66,9 @@ extern "C"
   // found, the old value is destroyed and replaced. If the cache is
   // full and no non-pinned entry can be evicted, returns NULL and the
   // caller's `value` is destroyed via ops.destroy.
+  //
+  // Preconditions: l != NULL (passing NULL leaks `value` since the
+  // destroy callback lives on l) and value != NULL.
   struct lru_entry* lru_put(struct lru* l,
                             uint64_t hash,
                             const void* probe_key,
@@ -80,7 +83,10 @@ extern "C"
   void lru_entry_acquire(struct lru_entry* e);
   void lru_entry_release(struct lru_entry* e);
 
-  struct lru_stats
+  // Cumulative event counters. Embedded in lru_stats; also the type
+  // the LRU itself stores internally so stats_get is a single
+  // struct-assign of the running totals.
+  struct lru_counters
   {
     uint64_t hits;
     uint64_t misses;
@@ -88,14 +94,18 @@ extern "C"
     uint64_t evictions;
     uint64_t replacements; // put with matching key replaced existing
     uint64_t put_failures; // returned NULL because all entries pinned
+  };
+
+  struct lru_stats
+  {
+    struct lru_counters counters;
     uint32_t size;
     uint32_t capacity;
     uint32_t pinned;
     uint32_t max_probe_observed;
   };
 
-  void lru_stats_get(const struct lru* l, struct lru_stats* out);
-  void lru_stats_reset(struct lru* l);
+  void lru_stats_get(const struct lru* self, struct lru_stats* out);
 
 #ifdef __cplusplus
 }

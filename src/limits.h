@@ -3,9 +3,8 @@
 
 #include <stdint.h>
 
-// Maximum tensor rank we'll plan over. NGFF is canonically 5D; this leaves
-// headroom and keeps fixed-size on-stack arrays small.
-#define DAMACY_MAX_RANK 32
+// Maximum tensor rank we'll plan over.
+#define DAMACY_MAX_RANK 31
 
 // Per-chunk byte caps. compressed_nbytes / decompressed_nbytes in
 // chunk_plan are uint32_t; we deliberately cap chunks at 4 GB so the

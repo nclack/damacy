@@ -6,35 +6,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-static char*
-str_dup(const char* s)
-{
-  if (!s)
-    return NULL;
-  size_t n = strlen(s);
-  char* p = (char*)malloc(n + 1);
-  if (!p)
-    return NULL;
-  memcpy(p, s, n + 1);
-  return p;
-}
-
-static int
-join_path(struct strbuf* sb, const char* root, const char* key)
-{
-  strbuf_reset(sb);
-  if (root && root[0]) {
-    if (strbuf_append_cstr(sb, root))
-      return 1;
-    size_t L = strbuf_len(sb);
-    if (L > 0 && strbuf_cstr(sb)[L - 1] != '/') {
-      if (strbuf_append(sb, "/", 1))
-        return 1;
-    }
-  }
-  return strbuf_append_cstr(sb, key);
-}
-
 // Locate or open a file for the given key. Returns NULL on failure.
 // Caller does not own the returned handle; the store owns it for its
 // lifetime.
@@ -53,7 +24,7 @@ fs_get_file(struct store_fs* fs, const char* key)
 
   // Compose full path and open outside the lock.
   struct strbuf path = { 0 };
-  if (join_path(&path, fs->root, key)) {
+  if (strbuf_join_path(&path, fs->root, key)) {
     strbuf_free(&path);
     return NULL;
   }
@@ -85,7 +56,7 @@ fs_get_file(struct store_fs* fs, const char* key)
     fs->slots = p;
     fs->cap_slots = new_cap;
   }
-  char* dup = str_dup(key);
+  char* dup = strdup(key);
   if (!dup) {
     pthread_mutex_unlock(&fs->cache_mu);
     platform_file_close(f);
@@ -137,28 +108,35 @@ fs_submit(struct store* s, const struct store_read* reads, size_t n)
     return ev;
   }
 
+  // Sentinel: seq == 0 means partial-submit failure. Callers (store_read_many)
+  // detect this and surface an error; without it, a half-submitted batch
+  // would silently leave dst buffers unfilled. On failure we still drain
+  // jobs already in flight so they don't write into caller buffers after
+  // we return.
   for (size_t i = 0; i < n; ++i) {
     struct fs_read_job* j =
       (struct fs_read_job*)calloc(1, sizeof(struct fs_read_job));
     if (!j)
-      break;
+      goto drain;
     j->fs = fs;
-    j->key = str_dup(reads[i].key);
+    j->key = strdup(reads[i].key);
     j->dst = reads[i].dst;
     j->offset = reads[i].offset;
     j->len = reads[i].len;
     if (!j->key) {
       free(j);
-      break;
+      goto drain;
     }
-    if (io_queue_post(fs->q, fs_read_job_fn, j, fs_read_job_free)) {
-      fs_read_job_free(j);
-      break;
-    }
+    if (io_queue_post(fs->q, fs_read_job_fn, j, fs_read_job_free))
+      goto drain;
   }
   struct io_event ioev = io_queue_record(fs->q);
   ev.seq = ioev.seq;
   return ev;
+
+drain:
+  io_event_wait(fs->q, io_queue_record(fs->q));
+  return ev; // ev.seq == 0 signals failure
 }
 
 static void
@@ -173,7 +151,7 @@ fs_stat(struct store* s, const char* key, uint64_t* out)
 {
   struct store_fs* fs = (struct store_fs*)s;
   struct strbuf path = { 0 };
-  if (join_path(&path, fs->root, key)) {
+  if (strbuf_join_path(&path, fs->root, key)) {
     strbuf_free(&path);
     return 1;
   }
@@ -187,7 +165,7 @@ fs_map(struct store* s, const char* key, struct store_view* out)
 {
   struct store_fs* fs = (struct store_fs*)s;
   struct strbuf path = { 0 };
-  if (join_path(&path, fs->root, key)) {
+  if (strbuf_join_path(&path, fs->root, key)) {
     strbuf_free(&path);
     return 1;
   }
@@ -262,7 +240,7 @@ store_fs_create(const struct store_fs_config* cfg)
   if (!fs)
     return NULL;
   fs->base.vt = &fs_vtable;
-  fs->root = str_dup(cfg->root);
+  fs->root = strdup(cfg->root);
   if (!fs->root)
     goto fail;
   pthread_mutex_init(&fs->cache_mu, NULL);

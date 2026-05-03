@@ -152,6 +152,22 @@ strbuf_set(struct strbuf* sb, const char* s)
   return strbuf_append_cstr(sb, s);
 }
 
+int
+strbuf_join_path(struct strbuf* sb, const char* prefix, const char* suffix)
+{
+  strbuf_reset(sb);
+  if (prefix && prefix[0]) {
+    if (strbuf_append_cstr(sb, prefix))
+      return 1;
+    size_t len = strbuf_len(sb);
+    if (len > 0 && strbuf_cstr(sb)[len - 1] != '/') {
+      if (strbuf_append(sb, "/", 1))
+        return 1;
+    }
+  }
+  return strbuf_append_cstr(sb, suffix);
+}
+
 const char*
 strbuf_cstr(const struct strbuf* sb)
 {
