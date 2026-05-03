@@ -56,6 +56,11 @@ add_src_lib(zarr_shard_cache SOURCES zarr_shard_cache.h zarr_shard_cache.c
     LINKS zarr lru store strbuf
 )
 
+# Planner: samples + cached metadata → page-aligned read_ops + chunk_plans.
+add_src_lib(planner SOURCES planner.h planner.c
+    LINKS zarr_meta_cache zarr_shard_cache zarr dtype platform strbuf log
+)
+
 # GPU pieces — add_cuda_lib is a no-op under DAMACY_FUZZ.
 add_cuda_lib(decoder SOURCES decoder.h decoder.c
     LINKS CUDA::cudart_static nvcomp::nvcomp

@@ -9,6 +9,7 @@ add_damacy_test(test_json json)
 add_damacy_test(test_lru lru)
 add_damacy_test(test_zarr_meta_cache zarr_meta_cache zarr store)
 add_damacy_test(test_zarr_shard_cache zarr_shard_cache zarr store crc32c)
+add_damacy_test(test_planner planner zarr_meta_cache zarr_shard_cache zarr store crc32c)
 
 if(DAMACY_FUZZ)
     add_subdirectory(fuzz)
