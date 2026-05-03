@@ -1,191 +1,359 @@
-# damacy public C++ API — surface design
+# damacy public C API — surface design
 
-> Draft produced 2026-04-29 by the `surface` agent during the API design
-> walkthrough. Parked while the C-language kvikio benchmark proceeds. This draft
-> is C++-flavored; the eventual library is more likely to be Rust + pyo3 bindings
-> (see project memory). This represents one independent angle on the public-facing
-> API; some open questions and naming have evolved since (see appendix at the
-> end).
+> Rewritten 2026-05-03 after the design discussion that retired the
+> `Sampler` concept, added multi-zarr push-with-lookahead, and made O_DIRECT a
+> first-class constraint.
+>
+> The implementation is C (matching the rest of the codebase). The eventual
+> Python binding is planned via Rust+pyo3 or a thin C++ shim; this header
+> is the canonical surface either way.
+
+## Premises
+
+- **No internal sampler.** Users (typically a PyTorch `Sampler`/`DataLoader`)
+  push `(uri, aabb)` tuples. damacy plans, loads, decompresses, and
+  assembles. A uniform-crop sampler exists *for benchmarking and tests* in
+  `bench/`, not in the public API.
+- **Multi-zarr.** Every push carries a `uri`. Metadata and shard indices
+  are cached per-uri.
+- **Push-with-lookahead.** The user pushes ahead of consumption so the
+  planner has a window to coalesce reads across batches. Fixed-capacity
+  queue; pushes block (or `-EAGAIN`) when full.
+- **Strictly bounded resources.** Every memory pool, thread count, and
+  cache size is fixed at `damacy_create`. Nothing grows during streaming.
+- **O_DIRECT, page-aligned reads** from day 1 into a fixed pinned host
+  staging slab. Page size is read once via `platform_page_alignment()`.
+- **Two CUDA streams** (driver API): `h2d` for transfers, `compute` for
+  decompress + assemble. Events synchronize across them.
+- **Device binding by current context.** `damacy_create` captures the
+  caller's current `CUcontext` and binds the instance to it for life;
+  there is no `device_id` in the config. Multi-GPU = one `damacy*` per
+  rank, in the standard DDP-one-process-per-GPU shape (see rationale).
+- **Streamed (wave) assembly.** The host staging slab is *not* sized for
+  a worst-case batch. The pipeline streams chunks through it in waves,
+  writing each chunk into its destination output tensor as it goes. The
+  per-batch output tensor is sized for one batch; the staging slab is
+  sized for IO throughput.
+- **Double-buffered, not configurable.** Internally damacy keeps two
+  wave slots and two batch slots in flight. Deeper buffering only
+  averages latency, not throughput; there is no `prefetch_depth` knob.
+- **Main-thread orchestration.** All planning, CUDA launches, and event
+  polling happen on the user's thread inside `damacy_push` /
+  `damacy_pop` / `damacy_flush`. The only auxiliary threads are the
+  `n_io_threads` IO workers. No CUDA host callbacks.
+- **Fail-the-stream errors.** Any IO/decode/CUDA failure puts the
+  instance into a terminal state — subsequent `pop` returns the failure,
+  `push` returns `DAMACY_SHUTDOWN`. Recovery is `damacy_destroy` +
+  `damacy_create`.
+- **`damacy_flush` for end-of-epoch.** Drains everything currently
+  planned and finalizes any partial last batch (truncated to the count
+  of complete samples). Idempotent. Stream is resumable after flush.
+- **Fixed-width types throughout.** `uint32_t` / `uint64_t` for sizes
+  and counts; no `size_t` / `int` in the public ABI. Documented limits
+  for chunk and shard sizes (see `src/limits.h`).
 
 ## Header sketch
 
-```cpp
-// damacy/damacy.hpp
+```c
+// damacy.h
 #pragma once
-#include <array>
-#include <cstdint>
-#include <expected>
-#include <generator>     // C++23
-#include <memory>
-#include <span>
-#include <string_view>
+#include <stddef.h>
+#include <stdint.h>
+#include "damacy/limits.h"   // DAMACY_MAX_RANK
 
-namespace damacy {
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-enum class DType : uint8_t { u8, u16, i16, u32, f16, f32 };
-
-// 5D shape over (t, c, z, y, x). Use 1 for unused leading dims.
-struct Shape5 { int64_t t, c, z, y, x; };
-
-// Half-open AABB in a source's index space at mip level 0.
-// Spatial fields are inclusive-lo / exclusive-hi voxel indices;
-// (t, c) are channel/time slabs.
-struct AABB {
-    std::array<int64_t, 5> lo;   // t, c, z, y, x
-    std::array<int64_t, 5> hi;
+enum damacy_dtype {
+  DAMACY_U8, DAMACY_U16, DAMACY_I16, DAMACY_U32, DAMACY_F16, DAMACY_F32
 };
 
-struct SourceInfo {
-    Shape5     shape_l0;     // shape at mip 0
-    DType      dtype;
-    int        n_levels;     // count of precomputed mips
-    std::array<double, 3> voxel_size_um;  // z, y, x
+enum damacy_status {
+  DAMACY_OK        = 0,
+  DAMACY_AGAIN,        // non-blocking call would block (queue full)
+  DAMACY_INVAL,        // bad arguments
+  DAMACY_NOTFOUND,     // uri unresolvable / not a zarr
+  DAMACY_DTYPE,        // zarr dtype != configured dtype
+  DAMACY_RANK,         // sample rank incompatible with zarr rank
+  DAMACY_IO,           // read/open failure on a shard file
+  DAMACY_DECODE,       // codec parse / decompression failure
+  DAMACY_CUDA,         // driver/runtime call failed
+  DAMACY_OOM,          // would exceed a configured cap
+  DAMACY_SHUTDOWN,     // pipeline destroyed or draining
 };
 
-// Opaque, ref-counted handle to an opened NGFF zarr store.
-class Source {
-public:
-    SourceInfo info() const noexcept;
-    std::string_view uri() const noexcept;
-    // ...
-private:
-    struct Impl; std::shared_ptr<Impl> p_;
-    friend std::expected<Source, class Error> open_source(std::string_view);
+// Human-readable name for a status code; safe for log/error messages.
+const char* damacy_status_str(enum damacy_status s);
+
+// Half-open [beg, end) interval along one axis, in level-0 voxel indices.
+struct damacy_interval {
+  int64_t beg, end;
 };
 
-struct Error { int code; std::string message; };
-template <class T> using Result = std::expected<T, Error>;
-
-Result<Source> open_source(std::string_view uri);
-
-// One sample request: a box in source space at a chosen mip.
-struct SampleSpec {
-    Source   source;
-    AABB     aabb;        // expressed in level-0 indices
-    int      mip = 0;     // which precomputed level to read
+// Variable-rank AABB. Only dims[0..rank) are read; axis order matches the
+// zarr's stored axis order. rank <= DAMACY_MAX_RANK.
+struct damacy_aabb {
+  struct damacy_interval dims[DAMACY_MAX_RANK];
+  uint8_t                rank;
 };
 
-// What every sample in a batch shares.
-struct BatchLayout {
-    Shape5  sample_shape;   // shape of one sample after mip selection
-    DType   dtype;
-    int     batch_size;     // s
+struct damacy_sample {
+  const char*        uri;   // null-terminated; copied internally
+  struct damacy_aabb aabb;
 };
 
-// GPU-resident batch. Library-owned via shared_ptr to a pool slot.
-class Batch {
-public:
-    BatchLayout layout() const noexcept;
-    void*       device_ptr() const noexcept;        // (s,t,c,z,y,x) contiguous
-    size_t      nbytes()     const noexcept;
-    int         device_id()  const noexcept;
-    cudaStream_t ready_stream() const noexcept;     // wait on this before consuming
-
-    // DLPack export. Capsule keeps the Batch alive via its deleter.
-    DLManagedTensor* to_dlpack() &&;                // consumes the Batch
-private:
-    struct Impl; std::shared_ptr<Impl> p_;
-    friend class BatchStream;
+// Caller-owned slice of samples to push.
+struct damacy_sample_slice {
+  const struct damacy_sample* beg;
+  const struct damacy_sample* end;
 };
 
-// --- Sampling strategies (the common case) ---------------------------------
+// All resource caps fixed at create-time. Nothing grows after this.
+// Device is captured from the current CUcontext at damacy_create.
+// Output batches are double-buffered (B=2); waves are double-buffered
+// internally. Neither is configurable.
+struct damacy_config {
+  // Batch geometry
+  uint32_t batch_size;             // samples per batch
+  uint32_t lookahead_batches;      // user-push queue depth (>= 2)
+  uint32_t n_io_threads;
 
-struct UniformCropSampler {
-    Source     source;
-    Shape5     crop_shape;       // shape per sample, in voxels at mip
-    int        mip = 0;
-    uint64_t   seed = 0;
-    // Optional: restrict where crops may originate (default: full volume).
-    std::optional<AABB> within = std::nullopt;
+  // Streaming buffers (split in half across two wave slots internally)
+  uint64_t host_buffer_bytes;      // pinned staging; sized for IO bw
+  uint64_t device_buffer_bytes;    // device decompress scratch
+
+  // LRU caps (no FD cache; FDs are open/close per read_op)
+  uint32_t n_zarrs_meta_cache;
+  uint32_t n_shards_meta_cache;
+
+  // Output dtype expected from all pushed samples; mismatched zarrs error.
+  enum damacy_dtype dtype;
 };
 
-// --- The stream ------------------------------------------------------------
+struct damacy;
+struct damacy_batch;
 
-struct StreamConfig {
-    int batch_size      = 16;
-    int prefetch_depth  = 2;     // batches in flight
-    int device_id       = 0;
-    size_t cache_bytes  = size_t(1) << 30;   // chunk-LRU budget
+enum damacy_status damacy_create(const struct damacy_config* cfg,
+                                 struct damacy**             out);
+void               damacy_destroy(struct damacy* d);
+
+// Push as many samples as fit. The return value is the unconsumed suffix
+// of the input slice plus a status:
+//   OK        all samples were consumed (result.unconsumed.beg == samples.end)
+//   AGAIN     the lookahead queue filled mid-slice; caller should pop a
+//             batch (or wait) and retry with the returned suffix
+//   INVAL     bad arguments (samples.beg > samples.end, null d, etc.)
+//   NOTFOUND  could not resolve a uri; result.unconsumed.beg points at it
+//   DTYPE     zarr dtype mismatch; result.unconsumed.beg points at the sample
+//   RANK      sample rank incompatible with the resolved zarr's rank
+// On any non-AGAIN error, the offending sample is at result.unconsumed.beg
+// and was NOT consumed.
+struct damacy_push_result {
+  struct damacy_sample_slice unconsumed;
+  enum damacy_status         status;
+};
+struct damacy_push_result
+damacy_push(struct damacy* d, struct damacy_sample_slice samples);
+
+// Block until the next batch is on-device-ready, in push-FIFO order.
+// *out is owned by damacy until damacy_release.
+enum damacy_status damacy_pop(struct damacy* d, struct damacy_batch** out);
+
+// Return the batch's slot to the pool.
+void damacy_release(struct damacy* d, struct damacy_batch* b);
+
+// Drain anything currently planned/in-flight, finalize any partial last
+// batch (truncated to the number of complete samples) and ready it for
+// pop. Idempotent. Stream is resumable after flush; subsequent push
+// starts a fresh batch.
+enum damacy_status damacy_flush(struct damacy* d);
+
+struct damacy_batch_info {
+  void*             device_ptr;                   // dtype-typed, contiguous
+  int64_t           shape[DAMACY_MAX_RANK + 1];   // [N, ...zarr axes]
+  uint8_t           rank;                         // includes leading N axis
+  enum damacy_dtype dtype;
+  void*             ready_stream;                 // CUstream
+  uint64_t          batch_id;                     // monotonic
+};
+// device ordinal is derivable from device_ptr via
+// cuPointerGetAttribute(..., CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL, ...)
+// or from ready_stream via cuStreamGetCtx → cuCtxGetDevice.
+
+void damacy_batch_info(const struct damacy_batch* b,
+                       struct damacy_batch_info*  out);
+
+// Cumulative metrics. All counters are stage-cumulative; reset with
+// damacy_stats_reset.
+struct damacy_metric {
+  const char* name;
+  float       ms;            // cumulative
+  float       best_ms;       // best single observation (1e30f = none)
+  double      input_bytes;   // cumulative bytes consumed by stage
+  double      output_bytes;  // cumulative bytes produced by stage
+  uint64_t    count;
 };
 
-class BatchStream {
-public:
-    // High-level: one sampler, fixed batch size. Common case.
-    template <class Sampler>
-    static Result<BatchStream> make(Sampler s, StreamConfig cfg = {});
+struct damacy_stats {
+  struct damacy_metric plan;
+  struct damacy_metric io;
+  struct damacy_metric h2d;
+  struct damacy_metric decompress;
+  struct damacy_metric assemble;
+  struct damacy_metric pop_wait_io;
+  struct damacy_metric pop_wait_compute;
+  struct damacy_metric push_backpressure;
+  struct damacy_metric flush_wait;
 
-    // Low-level escape hatch: caller supplies each batch's specs.
-    static Result<BatchStream> from_specs(
-        std::function<std::vector<SampleSpec>(uint64_t batch_idx)> producer,
-        StreamConfig cfg = {});
-
-    // Pull-style. Blocks until the next batch is on-device-ready.
-    Result<Batch> next();
-
-    // Range-style sugar over next(). Infinite by default.
-    std::generator<Batch> take(size_t n);
-
-    void shutdown();
+  uint64_t zarr_meta_hits, zarr_meta_misses;
+  uint64_t shard_idx_hits, shard_idx_misses;
+  uint64_t batches_emitted;
+  uint64_t batches_truncated;
+  uint64_t waves_emitted;
 };
 
-} // namespace damacy
-```
+void damacy_stats_get(const struct damacy* d, struct damacy_stats* out);
+void damacy_stats_reset(struct damacy* d);
 
-## Training loop example
-
-```cpp
-#include <damacy/damacy.hpp>
-using namespace damacy;
-
-int main() {
-    auto src = open_source("s3://bucket/embryo.ome.zarr").value();
-
-    auto stream = BatchStream::make(
-        UniformCropSampler{
-            .source     = src,
-            .crop_shape = {1, 2, 64, 128, 128},
-            .mip        = 1,
-            .seed       = 42,
-        },
-        StreamConfig{ .batch_size = 8, .prefetch_depth = 3 }
-    ).value();
-
-    for (Batch batch : stream.take(10'000)) {
-        train_step(batch.device_ptr(), batch.layout(), batch.ready_stream());
-    }
+#ifdef __cplusplus
 }
+#endif
 ```
 
-Python side:
+## Usage shape
 
-```python
-caps = damacy_cpp.next_batch_dlpack(stream)   # std::move(batch).to_dlpack()
-x    = jax.dlpack.from_dlpack(caps)
+```c
+// CUDA context for the target device must be current before damacy_create.
+struct damacy_config cfg = {
+  .batch_size          = 8,
+  .lookahead_batches   = 4,        // user pushes a few batches ahead
+  .n_io_threads        = 8,
+  .host_buffer_bytes   = 256ull << 20,   // 128 MB per wave slot
+  .device_buffer_bytes = 512ull << 20,   // 256 MB per wave slot
+  .n_zarrs_meta_cache  = 4096,
+  .n_shards_meta_cache = 16384,
+  .dtype               = DAMACY_U16,
+};
+struct damacy* d = NULL;
+if (damacy_create(&cfg, &d) != DAMACY_OK) { /* handle */ }
+
+// Helper: drain a slice through push, popping when the queue is full.
+static void
+push_all(struct damacy* d, struct damacy_sample_slice s,
+         void (*consume)(struct damacy*))
+{
+  while (s.beg != s.end) {
+    struct damacy_push_result r = damacy_push(d, s);
+    s = r.unconsumed;
+    if (r.status == DAMACY_OK)    return;
+    if (r.status == DAMACY_AGAIN) { consume(d); continue; }
+    /* otherwise: log r.status, skip the bad sample, advance, etc. */
+    fprintf(stderr, "push: %s\n", damacy_status_str(r.status));
+    s.beg += 1;   // skip and continue, or break
+  }
+}
+
+static void train_one(struct damacy* d) {
+  struct damacy_batch* b = NULL;
+  damacy_pop(d, &b);
+  struct damacy_batch_info info; damacy_batch_info(b, &info);
+  train_step(&info);   // makes its compute stream wait on info.ready_stream
+  damacy_release(d, b);
+}
+
+// Prime the lookahead. user_fill_slice fills `buf` with up to N samples.
+struct damacy_sample buf[256];
+for (int primed = 0; primed < cfg.lookahead_batches * cfg.batch_size; ) {
+  size_t n = user_fill_slice(buf, sizeof buf / sizeof *buf);
+  push_all(d, (struct damacy_sample_slice){ buf, buf + n }, train_one);
+  primed += (int)n;
+}
+
+// Steady state.
+for (int step = 0; step < N_STEPS; ++step) {
+  train_one(d);
+  size_t n = user_fill_slice(buf, cfg.batch_size);
+  push_all(d, (struct damacy_sample_slice){ buf, buf + n }, train_one);
+}
+
+damacy_destroy(d);
 ```
 
-## Rationale (most opinionated choices)
+## Python binding shape (later)
 
-- **Sampler objects, not raw `(uri, aabb)` lists, for v1.** The common case is "uniform crops from one source." `UniformCropSampler` makes that 5 lines. `from_specs(producer)` is the escape hatch so the lower-level `SampleSpec` path stays first-class without polluting the easy path.
-- **Library-owned `Batch` via pooled `shared_ptr`.** Caller-allocated buffers force the user to know `prefetch_depth * batch_nbytes` ahead of time and break the streaming pipeline's freedom to reuse slots. Pool + handle lets the runtime recycle GPU memory as soon as the user drops the `Batch`.
-- **`std::expected<T, Error>` everywhere; no exceptions across the API.** Most consumers will be embedded in Python via pybind/nanobind; `expected` translates cleanly to Python exceptions at the boundary, and C++ training loops typically `.value()` or propagate. Exceptions through CUDA/coroutine code paths are a pit of despair.
-- **`cudaStream_t ready_stream()` is exposed, not hidden.** The whole point of damacy is overlapping decode with training; the user must be able to make their training stream wait on ours without a host sync. This is the one piece of CUDA we refuse to abstract.
-- **C++23 `std::generator` for iteration, not coroutines in the public API.** Range-for over `stream.take(N)` is what trainers actually want. `next()` stays available for non-iterating consumers (e.g., a Python `__next__`).
+A thin pyo3/pybind layer turns `damacy_pop` + `damacy_batch_info` into a
+DLPack v1.0 capsule whose stream field carries `ready_stream`, so JAX/PyTorch
+consumers don't need a host sync. The capsule deleter calls `damacy_release`.
 
-## Open questions
+## Why these choices
 
-- AABB units: I chose level-0 voxels with a separate `mip` field. Alternative: AABB already in the chosen mip's units. Internals owner: which is cheaper to plumb through the chunk planner?
-- DLPack stream semantics: do we expose our `ready_stream` via the DLPack v1.0 stream field, or require the Python caller to sync before handoff? Affects whether JAX/PyTorch zero-copy is truly async.
-- Should `UniformCropSampler` accept a `mask` / `weights` source for foreground-biased sampling, or do we punt that to a `WeightedCropSampler` later? Punting feels right per "no hypothetical futures."
-- `Shape5` vs. a variable-rank `Shape` template: NGFF is canonically 5D, but `(t=1, c=1)` everywhere is ugly. Worth a `Shape{c, z, y, x}` overload?
-- Error taxonomy: is one `Error{code, message}` enough, or do we want `enum class ErrorKind { Io, Decode, Cuda, BadSpec, OutOfMemory }` for typed dispatch? I lean toward the enum for Python translation.
+- **Push-with-lookahead, not pull-with-callback.** The user's sampler is
+  the source of truth for ordering; damacy never invents samples or
+  reorders pushed ones across batches. Lookahead exists *within* the
+  planner as cross-batch coalescing room, not in the consumer-visible
+  order.
+- **No `Sampler` class.** The original draft's `UniformCropSampler` belongs
+  in user code (or `bench/`). Embedding it would either be too restrictive
+  for real workloads or balloon into a parallel sampler library.
+- **`damacy_release` is explicit, not RAII-via-shared_ptr.** Same reason
+  C; no language assumes destructor semantics.
+- **Pool-managed `damacy_batch`.** Caller-allocated output tensors would
+  force the user to plan `prefetch_depth × batch_nbytes` and break the
+  pipeline's freedom to recycle slots; the handle gives the runtime control.
+- **`ready_stream` exposed.** Overlapping decode with training is the entire
+  point; users must be able to `cuStreamWaitEvent` instead of host-syncing.
+- **Bounded `damacy_config`.** Production trainers want predictable RSS
+  and no surprise allocations during training. The config struct is the
+  whole resource contract.
+- **No `device_id` field.** `damacy_create` captures the calling thread's
+  current `CUcontext`; the IO and scheduler threads `cuCtxSetCurrent` to
+  that context as needed. Same pattern as cuBLAS/cuDNN/nvCOMP. The device
+  ordinal is derivable from the returned `device_ptr` (or `ready_stream`)
+  if a consumer needs it for routing.
+- **Slice push, not single-sample push.** Per-sample call overhead is the
+  obvious bottleneck for a streaming API once batch size grows or samples
+  are tiny. `damacy_push` takes a `damacy_sample_slice` and returns the
+  unconsumed suffix + status, so callers amortize call overhead and so
+  partial consumption (queue full mid-slice, validation error on one
+  sample) is expressible without losing the cursor. Internally the URI is
+  copied so the caller can free the slice immediately after return.
+- **Typed `damacy_status` enum, not POSIX errnos.** Returned by every
+  fallible call; `damacy_status_str` gives a human-readable name. Future
+  bindings (Python via pyo3/pybind) translate the enum to native
+  exceptions cleanly, and we avoid overloading `errno` semantics for
+  library-specific conditions like `DAMACY_DTYPE` or `DAMACY_RANK`.
 
-## User decisions during walkthrough (2026-04-29)
+## Multi-GPU shape (v1: one damacy per rank)
 
-Some of the open questions were resolved during the walkthrough. Recording them here for when we come back to this draft:
+The supported pattern is the standard PyTorch DDP layout: **one OS process
+per GPU**. Each rank establishes a CUDA context for its device, calls
+`damacy_create` once, and pushes/pops on that single damacy. The library
+never multiplexes batches across devices.
 
-- **AABB units: level-0 index space.** This draft already chose this — confirmed.
-- **Mip selection: auto** from requested aabb resolution, not caller-specified. The `mip` field on `SampleSpec`/`UniformCropSampler` should become optional / a `target_voxel_size` style input. Goal: avoid aliasing and bound load cost to the sample size.
-- **DLPack stream field: yes**, pass our `ready_stream` through so JAX/PyTorch consumers don't need a host sync.
-- **GDS: deferred.** Host-pinned + cudaMemcpyAsync is the baseline. Don't design around GDS.
-- **Read-config naming.** The GLSL-style "sampler" concept (interpolation/boundary/value-transform) needs a different name to avoid colliding with `Sampler`/`UniformCropSampler` (the training-side concept). Likely a per-axis config struct, where the axes include a "value axis" so dtype cast / affine / clip slot uniformly into the same shape. No LUT, no gamma. See project memory.
-- **Implementation language: likely Rust + pyo3, not C++.** The damacy library proper will probably be Rust with Python bindings via `pyo3`/`maturin`. This draft's C++ headers are kept as a reference for the *public surface shape* — the eventual Rust API will mirror these types and verbs, just expressed as Rust.
+This works because under DDP each rank's data loader only ever needs to
+produce batches for one GPU; cross-rank coordination (gradient all-reduce)
+is NCCL's job, not the data loader's. The user's `Sampler` (typically
+`DistributedSampler`) handles cross-rank dataset partitioning *before*
+samples are pushed.
+
+Single-process multi-GPU (legacy `nn.DataParallel`, some model-parallel
+inference servers) is out of scope for v1. The escape hatch is to
+construct multiple `damacy*` instances, one per device. A future v2 could
+let one instance fan batches across devices, but it would change output
+pool partitioning, scheduler structure, and the per-context binding rule
+above; not worth the cost for a workload most users don't have.
+
+## Open / deferred
+
+- **Mip selection.** Auto from requested aabb resolution per project memory;
+  selection logic lives in the planner and is not exposed in the surface.
+  Out of scope for v1 — we plan at level 0 only.
+- **Mixed dtype across zarrs.** Out of scope; the config's `dtype` is
+  enforced uniformly. A future `damacy_subgroup` could partition pushes.
+- **Read-config (interpolation/boundary/value-transform).** Deferred; the
+  per-axis "read sampler" naming is parked per project memory. v1 returns
+  the raw stored data; transforms happen post-pop.
+- **GDS (cufile).** Deferred. Host-pinned + cudaMemcpyAsync is the v1
+  path. The internal `host_buffer` becomes a `device_buffer` later without
+  surface changes.

@@ -1,5 +1,9 @@
 # TODO
 
+## To triage
+
+- [ ] support for bf16 fp16
+
 ## Fuzzing
 
 - [ ] **Dockerfile + build.sh for the fuzz harnesses.** Base on an

@@ -1,5 +1,18 @@
 # dev log
 
+## 2026-05-03
+
+Working on design/interface some more.
+
+One interesting note: I was thinking about multiplexing to gpus but that doesn't
+work for ddp since that's normally one gpu per process (just easier to do in
+python that way). Could think about a loading process, but then how do you
+switch to cufile etc. Also, centralizing the caches just saves relatively cheap
+memory though it might save some loads. Anyway, looks like it would have to look
+more like a peer-exchange if you wanted to save io. Almost certainly not
+worth it (especially if you have a network layer cache).
+
+
 ## 2026-05-02
 
 Reviewing the generated code.
@@ -24,9 +37,11 @@ Mappings:
 Steps, given a collection of `(uri,bbox)` requests
 1. Read metadata from collection of uri's. What do we need to pull out?
 2. Map bbox's to `(shard id, chunk id)`
-3.
+3. ...
 
 Will want to stream read bytes up to the gpu. What is the indexing structure?
+
+The stages are still not clear to me though it seems they should be.
 
 ## 2026-05-01
 
