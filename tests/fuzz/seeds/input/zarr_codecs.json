@@ -1,0 +1,1 @@
+{"codecs":[{"name":"bytes"},{"name":"sharding_indexed","id":42}],"shape":[1024,1024,128],"chunks":[64,64,16]}

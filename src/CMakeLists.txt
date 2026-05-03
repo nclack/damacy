@@ -1,15 +1,4 @@
-# add_src_lib(TARGET SOURCES src... [LINKS lib...])
-#   Static library + warnings + src/ as the public include root.
-set(_SRC_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
-function(add_src_lib TARGET)
-    cmake_parse_arguments(ARG "" "" "SOURCES;LINKS" ${ARGN})
-    add_library(${TARGET} STATIC ${ARG_SOURCES})
-    target_include_directories(${TARGET} PUBLIC ${_SRC_INCLUDE_DIR})
-    target_link_libraries(${TARGET} PRIVATE warnings)
-    if(ARG_LINKS)
-        target_link_libraries(${TARGET} PUBLIC ${ARG_LINKS})
-    endif()
-endfunction()
+# Helpers (add_src_lib, add_platform_sources) live in cmake/Helpers.cmake.
 
 # Foundational types
 add_src_lib(dtype       SOURCES dtype.c dtype.h)
@@ -48,11 +37,11 @@ add_src_lib(zarr SOURCES zarr.h zarr_reader.c zarr_metadata.h zarr_metadata.c
     LINKS store dimension dtype codec_types json strbuf crc32c
 )
 
-# GPU pieces
-add_src_lib(decoder SOURCES decoder.h decoder.c
+# GPU pieces — add_cuda_lib is a no-op under DAMACY_FUZZ.
+add_cuda_lib(decoder SOURCES decoder.h decoder.c
     LINKS CUDA::cudart_static nvcomp::nvcomp
 )
 
-add_src_lib(pipeline SOURCES pipeline.h pipeline.c
+add_cuda_lib(pipeline SOURCES pipeline.h pipeline.c
     LINKS zarr decoder threadpool CUDA::cudart_static
 )

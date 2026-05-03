@@ -66,6 +66,9 @@
             pkg-config
             git
             clang-tools
+            # clang itself (not just clang-tools) is needed for the libFuzzer
+            # build under tests/fuzz/. Ships libclang_rt.fuzzer alongside.
+            clang
             uv
             python311
           ];

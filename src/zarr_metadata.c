@@ -4,6 +4,8 @@
 
 #include <string.h>
 
+#define countof(arr) (sizeof(arr) / sizeof((arr)[0]))
+
 // Read a JSON array of unsigned integers into out[0..max_rank). Sets
 // *out_rank to the number of elements. Returns 0 on success.
 static int
@@ -14,13 +16,9 @@ read_uint_array(struct json_node arr,
 {
   if (arr.type != JSON_ARRAY)
     return 1;
-  static const struct json_seg iter_segs[] = {
-    { .kind = SEG_ITER },
-    { .kind = SEG_END },
-  };
-  static const struct json_pred iter_pred = { .segs = iter_segs };
+  static const struct json_query iter_parts[] = { { .kind = QUERY_ITER } };
   struct json_iter it;
-  if (json_iter_init(arr.s, &iter_pred, &it, NULL))
+  if (json_iter_init(arr.s, iter_parts, countof(iter_parts), &it, NULL))
     return 1;
   size_t n = 0;
   for (;;) {
@@ -60,19 +58,11 @@ parse_inner_codec(struct json_node codecs_arr, struct codec_config* out)
   if (codecs_arr.type != JSON_ARRAY)
     return 1;
 
-  static const struct json_seg iter_segs[] = {
-    { .kind = SEG_ITER },
-    { .kind = SEG_END },
-  };
-  static const struct json_pred iter_pred = { .segs = iter_segs };
-  static const struct json_seg name_path[] = {
-    { SEG_KEY, .key = "name" },
-    { .kind = SEG_END },
-  };
-  static const struct json_pred name_pred = { .segs = name_path };
+  static const struct json_query iter_parts[] = { { .kind = QUERY_ITER } };
+  static const struct json_query name_path[] = { { QUERY_KEY, .key = "name" } };
 
   struct json_iter it;
-  if (json_iter_init(codecs_arr.s, &iter_pred, &it, NULL))
+  if (json_iter_init(codecs_arr.s, iter_parts, countof(iter_parts), &it, NULL))
     return 1;
 
   for (;;) {
@@ -83,20 +73,19 @@ parse_inner_codec(struct json_node codecs_arr, struct codec_config* out)
     if (e != JSON_OK || c.type != JSON_OBJECT)
       return 1;
     struct json_node name;
-    if (json_resolve(c.s, &name_pred, &name, NULL) || name.type != JSON_STRING)
+    if (json_resolve(c.s, name_path, countof(name_path), &name, NULL) ||
+        name.type != JSON_STRING)
       return 1;
     if (json_str_eq(name, "bytes"))
       continue; // metadata-only; not a transformation we model
     if (json_str_eq(name, "zstd")) {
       out->id = CODEC_ZSTD;
-      static const struct json_seg level_path[] = {
-        { SEG_KEY, .key = "configuration" },
-        { SEG_KEY, .key = "level" },
-        { .kind = SEG_END },
+      static const struct json_query level_path[] = {
+        { QUERY_KEY, .key = "configuration" }, { QUERY_KEY, .key = "level" }
       };
-      static const struct json_pred level_pred = { .segs = level_path };
       struct json_node level;
-      if (json_resolve(c.s, &level_pred, &level, NULL) == JSON_OK) {
+      if (json_resolve(c.s, level_path, countof(level_path), &level, NULL) ==
+          JSON_OK) {
         int64_t lv = 0;
         if (json_as_int(level, &lv) == 0 && lv >= 0 && lv < 256)
           out->level = (uint8_t)lv;
@@ -121,25 +110,20 @@ zarr_metadata_parse(const char* src, size_t src_len, struct zarr_metadata* out)
 
   // node_type must be "array"
   {
-    static const struct json_seg path[] = {
-      { SEG_KEY, .key = "node_type" },
-      { .kind = SEG_END },
-    };
-    static const struct json_pred pred = { .segs = path };
+    static const struct json_query path[] = { { QUERY_KEY,
+                                                .key = "node_type" } };
     struct json_node n;
-    if (json_resolve(all, &pred, &n, NULL) || !json_str_eq(n, "array"))
+    if (json_resolve(all, path, countof(path), &n, NULL) ||
+        !json_str_eq(n, "array"))
       return 1;
   }
 
   // zarr_format must be 3
   {
-    static const struct json_seg path[] = {
-      { SEG_KEY, .key = "zarr_format" },
-      { .kind = SEG_END },
-    };
-    static const struct json_pred pred = { .segs = path };
+    static const struct json_query path[] = { { QUERY_KEY,
+                                                .key = "zarr_format" } };
     struct json_node n;
-    if (json_resolve(all, &pred, &n, NULL))
+    if (json_resolve(all, path, countof(path), &n, NULL))
       return 1;
     int64_t v = 0;
     if (json_as_int(n, &v) || v != 3)
@@ -148,13 +132,9 @@ zarr_metadata_parse(const char* src, size_t src_len, struct zarr_metadata* out)
 
   // shape
   {
-    static const struct json_seg path[] = {
-      { SEG_KEY, .key = "shape" },
-      { .kind = SEG_END },
-    };
-    static const struct json_pred pred = { .segs = path };
+    static const struct json_query path[] = { { QUERY_KEY, .key = "shape" } };
     struct json_node n;
-    if (json_resolve(all, &pred, &n, NULL))
+    if (json_resolve(all, path, countof(path), &n, NULL))
       return 1;
     if (read_uint_array(n, out->shape, &out->rank, DAMACY_MAX_RANK))
       return 1;
@@ -162,13 +142,10 @@ zarr_metadata_parse(const char* src, size_t src_len, struct zarr_metadata* out)
 
   // data_type
   {
-    static const struct json_seg path[] = {
-      { SEG_KEY, .key = "data_type" },
-      { .kind = SEG_END },
-    };
-    static const struct json_pred pred = { .segs = path };
+    static const struct json_query path[] = { { QUERY_KEY,
+                                                .key = "data_type" } };
     struct json_node n;
-    if (json_resolve(all, &pred, &n, NULL))
+    if (json_resolve(all, path, countof(path), &n, NULL))
       return 1;
     if (parse_data_type(n, &out->dtype))
       return 1;
@@ -176,15 +153,13 @@ zarr_metadata_parse(const char* src, size_t src_len, struct zarr_metadata* out)
 
   // chunk_grid -> outer (shard) shape
   {
-    static const struct json_seg path[] = {
-      { SEG_KEY, .key = "chunk_grid" },
-      { SEG_KEY, .key = "configuration" },
-      { SEG_KEY, .key = "chunk_shape" },
-      { .kind = SEG_END },
+    static const struct json_query path[] = {
+      { QUERY_KEY, .key = "chunk_grid" },
+      { QUERY_KEY, .key = "configuration" },
+      { QUERY_KEY, .key = "chunk_shape" }
     };
-    static const struct json_pred pred = { .segs = path };
     struct json_node n;
-    if (json_resolve(all, &pred, &n, NULL))
+    if (json_resolve(all, path, countof(path), &n, NULL))
       return 1;
     uint8_t rank2 = 0;
     if (read_uint_array(n, out->shard_shape, &rank2, DAMACY_MAX_RANK))
@@ -194,36 +169,30 @@ zarr_metadata_parse(const char* src, size_t src_len, struct zarr_metadata* out)
   }
 
   // codecs[] | select(.name == "sharding_indexed") — find the sharding codec
-  static const struct json_seg sharding_name_path[] = {
-    { SEG_KEY, .key = "name" },
-    { .kind = SEG_END },
-  };
-  static const struct json_seg sharding_path[] = {
-    { SEG_KEY, .key = "codecs" },
-    { .kind = SEG_ITER },
-    { SEG_WHERE,
-      .where = { .path = sharding_name_path,
+  static const struct json_query sharding_name_path[] = { { QUERY_KEY,
+                                                            .key = "name" } };
+  static const struct json_query sharding_path[] = {
+    { QUERY_KEY, .key = "codecs" },
+    { .kind = QUERY_ITER },
+    { QUERY_WHERE,
+      .where = { .part = sharding_name_path,
+                 .n = countof(sharding_name_path),
                  .rhs = "sharding_indexed",
-                 .rhs_type = JSON_STRING } },
-    { .kind = SEG_END },
+                 .rhs_type = JSON_STRING } }
   };
-  static const struct json_pred sharding_pred = { .segs = sharding_path };
 
   struct json_node sharding;
-  if (json_resolve(all, &sharding_pred, &sharding, NULL))
+  if (json_resolve(all, sharding_path, countof(sharding_path), &sharding, NULL))
     return 1; // v0 requires sharded layout
   out->sharded = 1;
 
   // inner chunk shape
   {
-    static const struct json_seg path[] = {
-      { SEG_KEY, .key = "configuration" },
-      { SEG_KEY, .key = "chunk_shape" },
-      { .kind = SEG_END },
+    static const struct json_query path[] = {
+      { QUERY_KEY, .key = "configuration" }, { QUERY_KEY, .key = "chunk_shape" }
     };
-    static const struct json_pred pred = { .segs = path };
     struct json_node n;
-    if (json_resolve(sharding.s, &pred, &n, NULL))
+    if (json_resolve(sharding.s, path, countof(path), &n, NULL))
       return 1;
     uint8_t rank2 = 0;
     if (read_uint_array(n, out->inner_chunk_shape, &rank2, DAMACY_MAX_RANK))
@@ -234,14 +203,11 @@ zarr_metadata_parse(const char* src, size_t src_len, struct zarr_metadata* out)
 
   // inner codecs
   {
-    static const struct json_seg path[] = {
-      { SEG_KEY, .key = "configuration" },
-      { SEG_KEY, .key = "codecs" },
-      { .kind = SEG_END },
+    static const struct json_query path[] = {
+      { QUERY_KEY, .key = "configuration" }, { QUERY_KEY, .key = "codecs" }
     };
-    static const struct json_pred pred = { .segs = path };
     struct json_node n;
-    if (json_resolve(sharding.s, &pred, &n, NULL))
+    if (json_resolve(sharding.s, path, countof(path), &n, NULL))
       return 1;
     if (parse_inner_codec(n, &out->inner_codec))
       return 1;
@@ -250,14 +216,12 @@ zarr_metadata_parse(const char* src, size_t src_len, struct zarr_metadata* out)
   // index_location (optional; defaults to "end")
   out->index_location_end = 1;
   {
-    static const struct json_seg path[] = {
-      { SEG_KEY, .key = "configuration" },
-      { SEG_KEY, .key = "index_location" },
-      { .kind = SEG_END },
+    static const struct json_query path[] = {
+      { QUERY_KEY, .key = "configuration" },
+      { QUERY_KEY, .key = "index_location" }
     };
-    static const struct json_pred pred = { .segs = path };
     struct json_node n;
-    if (json_resolve(sharding.s, &pred, &n, NULL) == JSON_OK &&
+    if (json_resolve(sharding.s, path, countof(path), &n, NULL) == JSON_OK &&
         json_str_eq(n, "start"))
       out->index_location_end = 0;
   }

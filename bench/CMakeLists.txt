@@ -1,3 +1,9 @@
+# bench/ depends on CUDA-linked targets (pipeline, decoder), which are
+# skipped under DAMACY_FUZZ. Bail out early in that mode.
+if(DAMACY_FUZZ)
+    return()
+endif()
+
 add_executable(damacy_bench main.c)
 target_link_libraries(
     damacy_bench

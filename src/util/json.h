@@ -4,11 +4,15 @@
 // source. Nothing is parsed up front; the bytes belonging to subtrees
 // the caller never asks for are never lexed.
 //
-// A query is a sequence of json_seg segments wrapped in a json_pred.
-// The same query type drives both:
+// A query is an array of json_query parts plus its length (`n_parts`).
+// Callers typically derive n_parts from a static array via their own
+// `sizeof(arr)/sizeof((arr)[0])` macro (commonly named `countof`).
+// The same query drives both:
 //   json_resolve   — return the first surviving result.
 //   json_iter_init — open a stream of results (next + next + ... until
 //                    JSON_ERR_NOT_FOUND).
+//
+// An empty query (parts=NULL, n_parts=0) returns the root value.
 //
 // Lifetime: every returned json_node holds a cslice into the original
 // src buffer; src must outlive any node derived from it.
@@ -57,8 +61,8 @@ extern "C"
 
   struct json_node
   {
-    uint8_t type;    // enum json_type
-    uint8_t flag;    // enum json_node_flag
+    enum json_type type;
+    enum json_node_flag flag;
     struct cslice s; // span into src (between quotes for strings)
   };
 
@@ -73,44 +77,39 @@ extern "C"
 
   // ---- Query language --------------------------------------------------
 
-  enum json_seg_kind
+  enum json_query_kind
   {
-    SEG_END = 0, // sentinel: zero-init terminates a segment array.
-    SEG_KEY,     // .key                — single-valued
-    SEG_INDEX,   // .[i]                — single-valued
-    SEG_ITER,    // .[]                 — yields each element
-    SEG_WHERE,   // select(path == rhs) — pass-through if predicate holds
+    QUERY_KEY = 0, // .key                — single-valued
+    QUERY_INDEX,   // .[i]                — single-valued
+    QUERY_ITER,    // .[]                 — yields each element
+    QUERY_WHERE,   // select(part == rhs) — pass-through if predicate holds
   };
 
-  struct json_seg
+  struct json_query
   {
-    enum json_seg_kind kind;
+    enum json_query_kind kind;
     union
     {
-      const char* key; // SEG_KEY
-      size_t index;    // SEG_INDEX
+      const char* key; // QUERY_KEY
+      size_t index;    // QUERY_INDEX
       struct
       {
-        const struct json_seg* path; // sub-query against current value
-        const char* rhs;             // NUL-terminated literal to compare
-        enum json_type rhs_type;     // STRING, NUMBER, BOOL
+        const struct json_query* part; // sub-query against current value
+        size_t n;                      // length of `part` array
+        const char* rhs;               // NUL-terminated literal to compare
+        enum json_type rhs_type;       // STRING, NUMBER, BOOL
       } where;
     };
   };
 
-  // A query: pointer to a SEG_END-terminated segment array.
-  struct json_pred
-  {
-    const struct json_seg* segs;
-  };
-
   // ---- Resolution ------------------------------------------------------
 
-  // Evaluate pred against src and return the first surviving result.
-  // Multi-valued queries (containing SEG_ITER) simply return their first
-  // emitted value.
+  // Evaluate the query against src and return the first surviving
+  // result. Multi-valued queries (containing QUERY_ITER) simply return
+  // their first emitted value. `n_parts == 0` returns the root.
   enum json_err json_resolve(struct cslice src,
-                             const struct json_pred* pred,
+                             const struct json_query* parts,
+                             size_t n_parts,
                              struct json_node* out,
                              struct json_error* err);
 
@@ -123,7 +122,7 @@ extern "C"
 
   struct json_iter_frame
   {
-    size_t seg_index;   // segment that opened this frame (SEG_ITER)
+    size_t part_index;  // index of the QUERY_ITER part that opened this frame
     struct cslice rest; // remaining bytes inside the open array
     uint8_t saw_first;  // have we emitted the first element yet?
   };
@@ -131,16 +130,18 @@ extern "C"
   struct json_iter
   {
     struct cslice src;
-    const struct json_pred* pred;
+    const struct json_query* parts;
+    size_t n_parts;
     struct json_error last_err;
     uint8_t depth;
     uint8_t done;
     struct json_iter_frame frames[JSON_ITER_MAX_FRAMES];
   };
 
-  // Open an iteration over pred's results. err is optional.
+  // Open an iteration over the query's results. err is optional.
   enum json_err json_iter_init(struct cslice src,
-                               const struct json_pred* pred,
+                               const struct json_query* parts,
+                               size_t n_parts,
                                struct json_iter* it,
                                struct json_error* err);
 

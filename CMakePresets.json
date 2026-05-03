@@ -9,6 +9,26 @@
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "CMAKE_BUILD_TYPE": "RelWithDebInfo"
       }
+    },
+    {
+      "name": "fuzz",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-fuzz",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "DAMACY_FUZZ": "ON"
+      }
+    },
+    {
+      "name": "fuzz-cov",
+      "inherits": "fuzz",
+      "binaryDir": "${sourceDir}/build-fuzz-cov",
+      "cacheVariables": {
+        "DAMACY_FUZZ_COVERAGE": "ON"
+      }
     }
   ]
 }

@@ -11,11 +11,22 @@ work on integrating via flake which would be fun.
 Revised the json interface to (a) use a query structure and (b) parse the
 string from scratch, more or less, to satisfy a query. This way it's
 zero-copy zero-alloc. If it's slow, then later we could probably cache by
-query prefix.
+query prefix. Added tests, fuzzing and coverage.
 
 Setting up the file io so that it's mmap for metadata and direct (unbuffered)
 io for reads. This means that we'll need a layer that coalesces chunks by
 page and then produces the right chunk pointers later.
+
+Mappings:
+- `uri` -> `array_id`
+- `array_id` -> `layout`: Layout is `(shape,shards,chunks)`
+
+Steps, given a collection of `(uri,bbox)` requests
+1. Read metadata from collection of uri's. What do we need to pull out?
+2. Map bbox's to `(shard id, chunk id)`
+3.
+
+Will want to stream read bytes up to the gpu. What is the indexing structure?
 
 ## 2026-05-01
 

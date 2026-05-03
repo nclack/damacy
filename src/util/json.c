@@ -31,13 +31,15 @@ skip_ws(struct cslice* c)
 // fills the output, and advances c->beg past the consumed bytes.
 
 static int
-lex_string_span(struct cslice* c, struct cslice* span, uint8_t* flag)
+lex_string_span(struct cslice* c,
+                struct cslice* span,
+                enum json_node_flag* flag)
 {
   if (cs_at_end(*c) || *c->beg != '"')
     return 1;
   c->beg++;
   const char* start = c->beg;
-  uint8_t f = JSON_NODE_FLAG_NONE;
+  enum json_node_flag f = JSON_NODE_FLAG_NONE;
   while (!cs_at_end(*c)) {
     char ch = *c->beg;
     if (ch == '"') {
@@ -87,10 +89,12 @@ lex_string_span(struct cslice* c, struct cslice* span, uint8_t* flag)
 }
 
 static int
-lex_number_span(struct cslice* c, struct cslice* span, uint8_t* flag)
+lex_number_span(struct cslice* c,
+                struct cslice* span,
+                enum json_node_flag* flag)
 {
   const char* start = c->beg;
-  uint8_t f = JSON_NODE_FLAG_NONE;
+  enum json_node_flag f = JSON_NODE_FLAG_NONE;
   if (!cs_at_end(*c) && *c->beg == '-')
     c->beg++;
   if (cs_at_end(*c))
@@ -162,7 +166,7 @@ skip_container(struct cslice* c)
       // Lex through the string.
       struct cslice tmp = *c;
       struct cslice span;
-      uint8_t f;
+      enum json_node_flag f;
       if (lex_string_span(&tmp, &span, &f))
         return 1;
       *c = tmp;
@@ -266,7 +270,7 @@ object_step(struct json_node node, const char* key, struct json_node* out)
     if (cs_at_end(c))
       return JSON_ERR_PARSE;
     struct cslice key_span;
-    uint8_t key_flag;
+    enum json_node_flag key_flag;
     if (lex_string_span(&c, &key_span, &key_flag))
       return JSON_ERR_PARSE;
     skip_ws(&c);
@@ -372,27 +376,28 @@ bool_eq_literal(struct json_node n, const char* rhs)
   return span == L && memcmp(n.s.beg, rhs, L) == 0;
 }
 
-// Forward decl: WHERE evaluation reuses json_resolve to apply a sub-pred.
+// Forward decl: WHERE evaluation reuses json_resolve to apply a sub-query.
 enum json_err
 json_resolve(struct cslice src,
-             const struct json_pred* pred,
+             const struct json_query* parts,
+             size_t n_parts,
              struct json_node* out,
              struct json_error* err);
 
 static int
-where_holds(struct json_node node, const struct json_seg* seg)
+where_holds(struct json_node node, const struct json_query* part)
 {
-  struct json_pred sub = { .segs = seg->where.path };
   struct json_node leaf;
-  if (json_resolve(node.s, &sub, &leaf, NULL) != JSON_OK)
+  if (json_resolve(node.s, part->where.part, part->where.n, &leaf, NULL) !=
+      JSON_OK)
     return 0;
-  switch (seg->where.rhs_type) {
+  switch (part->where.rhs_type) {
     case JSON_STRING:
-      return str_eq_unescaped(leaf, seg->where.rhs);
+      return str_eq_unescaped(leaf, part->where.rhs);
     case JSON_NUMBER:
-      return num_eq_literal(leaf, seg->where.rhs);
+      return num_eq_literal(leaf, part->where.rhs);
     case JSON_BOOL:
-      return bool_eq_literal(leaf, seg->where.rhs);
+      return bool_eq_literal(leaf, part->where.rhs);
     default:
       return 0;
   }
@@ -401,7 +406,7 @@ where_holds(struct json_node node, const struct json_seg* seg)
 // ---- Core evaluator --------------------------------------------------------
 //
 // The evaluator walks segments left-to-right, mutating `cur`. When it
-// hits SEG_ITER, it opens a frame on the iterator stack (or, in single-
+// hits QUERY_ITER, it opens a frame on the iterator stack (or, in single-
 // result mode, just descends into the first element). On a WHERE failure
 // or NOT_FOUND deeper down, it backtracks to the most recent open frame
 // and advances to that array's next element.
@@ -447,12 +452,15 @@ iter_take(struct cslice* rest, uint8_t* saw_first, struct json_node* out)
   return lex_value(rest, out);
 }
 
-// Apply segments[start ..] to cur. If we hit a SEG_ITER and `it` is not
-// NULL, push a frame and continue with the first element. If `it` is
-// NULL (single-result mode), just descend into the first element.
+// Apply parts[start .. n) to cur. QUERY_ITER pushes a frame onto the
+// iterator stack and continues with the first element. `it` is always
+// non-NULL: json_resolve owns a stack-local iter, and json_iter_next +
+// backtrack_iter pass through the caller's. When the loop runs to
+// completion (all parts consumed), the current value is the result.
 static enum json_err
 apply_from(struct json_node cur,
-           const struct json_seg* segs,
+           const struct json_query* parts,
+           size_t n,
            size_t start,
            struct json_iter* it,
            struct json_node* out);
@@ -470,7 +478,7 @@ backtrack_iter(struct json_iter* it, struct json_node* out)
     }
     if (e != JSON_OK)
       return e;
-    e = apply_from(next, it->pred->segs, f->seg_index + 1, it, out);
+    e = apply_from(next, it->parts, it->n_parts, f->part_index + 1, it, out);
     if (e == JSON_OK)
       return JSON_OK;
     if (e == JSON_ERR_NOT_FOUND)
@@ -482,36 +490,32 @@ backtrack_iter(struct json_iter* it, struct json_node* out)
 
 static enum json_err
 apply_from(struct json_node cur,
-           const struct json_seg* segs,
+           const struct json_query* parts,
+           size_t n,
            size_t start,
            struct json_iter* it,
            struct json_node* out)
 {
-  for (size_t i = start;; ++i) {
-    enum json_seg_kind k = segs[i].kind;
-    if (k == SEG_END) {
-      *out = cur;
-      return JSON_OK;
-    }
-    if (k == SEG_KEY) {
-      enum json_err e = object_step(cur, segs[i].key, &cur);
-      if (e != JSON_OK)
-        return e;
-    } else if (k == SEG_INDEX) {
-      enum json_err e = array_step(cur, segs[i].index, &cur);
-      if (e != JSON_OK)
-        return e;
-    } else if (k == SEG_ITER) {
-      if (!it) {
-        // Single-result: descend into first element.
-        enum json_err e = array_step(cur, 0, &cur);
+  for (size_t i = start; i < n; ++i) {
+    // Switch with no default: -Wswitch-enum forces every new kind to land here.
+    switch (parts[i].kind) {
+      case QUERY_KEY: {
+        enum json_err e = object_step(cur, parts[i].key, &cur);
         if (e != JSON_OK)
           return e;
-      } else {
+        break;
+      }
+      case QUERY_INDEX: {
+        enum json_err e = array_step(cur, parts[i].index, &cur);
+        if (e != JSON_OK)
+          return e;
+        break;
+      }
+      case QUERY_ITER: {
         if (it->depth >= JSON_ITER_MAX_FRAMES)
           return JSON_ERR_OOM;
         struct json_iter_frame* f = &it->frames[it->depth];
-        f->seg_index = i;
+        f->part_index = i;
         enum json_err e = iter_open_array(cur, &f->rest, &f->saw_first);
         if (e != JSON_OK)
           return e;
@@ -527,26 +531,29 @@ apply_from(struct json_node cur,
         if (e != JSON_OK)
           return e;
         cur = first;
+        break;
       }
-    } else if (k == SEG_WHERE) {
-      if (!where_holds(cur, &segs[i]))
-        return JSON_ERR_NOT_FOUND;
-      // pass-through; keep cur
-    } else {
-      return JSON_ERR_INVALID;
+      case QUERY_WHERE:
+        if (!where_holds(cur, &parts[i]))
+          return JSON_ERR_NOT_FOUND;
+        // pass-through; keep cur
+        break;
     }
   }
+  *out = cur;
+  return JSON_OK;
 }
 
 // ---- Public API ------------------------------------------------------------
 
 enum json_err
 json_resolve(struct cslice src,
-             const struct json_pred* pred,
+             const struct json_query* parts,
+             size_t n_parts,
              struct json_node* out,
              struct json_error* err)
 {
-  if (!pred || !pred->segs || !out) {
+  if (!out || (n_parts > 0 && !parts)) {
     if (err)
       *err = (struct json_error){ .code = JSON_ERR_INVALID, .offset = 0 };
     return JSON_ERR_INVALID;
@@ -561,14 +568,15 @@ json_resolve(struct cslice src,
         (struct json_error){ .code = e, .offset = (size_t)(c.beg - src.beg) };
     return e;
   }
-  // Try the path; on NOT_FOUND with iter segments, fall back to scanning
+  // Try the path; on NOT_FOUND with iter parts, fall back to scanning
   // the iter alternatives via a temporary iterator.
   struct json_iter it;
   it.src = src;
-  it.pred = pred;
+  it.parts = parts;
+  it.n_parts = n_parts;
   it.depth = 0;
   it.done = 0;
-  e = apply_from(root, pred->segs, 0, &it, out);
+  e = apply_from(root, parts, n_parts, 0, &it, out);
   if (e == JSON_ERR_NOT_FOUND && it.depth > 0)
     e = backtrack_iter(&it, out);
   if (e != JSON_OK && err)
@@ -579,17 +587,19 @@ json_resolve(struct cslice src,
 
 enum json_err
 json_iter_init(struct cslice src,
-               const struct json_pred* pred,
+               const struct json_query* parts,
+               size_t n_parts,
                struct json_iter* it,
                struct json_error* err)
 {
-  if (!pred || !pred->segs || !it) {
+  if (!it || (n_parts > 0 && !parts)) {
     if (err)
       *err = (struct json_error){ .code = JSON_ERR_INVALID, .offset = 0 };
     return JSON_ERR_INVALID;
   }
   it->src = src;
-  it->pred = pred;
+  it->parts = parts;
+  it->n_parts = n_parts;
   it->depth = 0;
   it->done = 0;
   it->last_err = (struct json_error){ JSON_OK, 0 };
@@ -615,7 +625,7 @@ json_iter_next(struct json_iter* it, struct json_node* out)
       it->done = 1;
       return e;
     }
-    e = apply_from(root, it->pred->segs, 0, it, out);
+    e = apply_from(root, it->parts, it->n_parts, 0, it, out);
     if (e == JSON_OK)
       return JSON_OK;
     if (e == JSON_ERR_NOT_FOUND && it->depth > 0)
@@ -720,6 +730,10 @@ json_as_bool(struct json_node n, int* out)
     *out = 0;
     return JSON_OK;
   }
+  // Defense-in-depth: lex_value only emits JSON_BOOL nodes whose span
+  // is exactly "true" or "false", so this path is unreachable on a
+  // well-lexed node. Kept (rather than __builtin_unreachable) so an
+  // invariant break shows up as a clean error code, not UB.
   return JSON_ERR_RANGE;
 }
 

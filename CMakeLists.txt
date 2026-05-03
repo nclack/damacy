@@ -12,17 +12,19 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 
 include(Warnings)
+include(Helpers)
+include(Fuzz) # declares DAMACY_FUZZ and applies fuzz-mode flags
 
 find_package(Threads REQUIRED)
 
-enable_language(CUDA)
-find_package(CUDAToolkit REQUIRED)
-find_package(Nvcomp REQUIRED)
+if(NOT DAMACY_FUZZ)
+    enable_language(CUDA)
+    find_package(CUDAToolkit REQUIRED)
+    find_package(Nvcomp REQUIRED)
+endif()
 
 add_subdirectory(src)
 add_subdirectory(bench)
 
 include(CTest)
-if(BUILD_TESTING)
-    add_subdirectory(tests)
-endif()
+add_subdirectory(tests)
