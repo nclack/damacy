@@ -46,6 +46,11 @@ add_src_lib(zarr_meta_cache SOURCES zarr_meta_cache.h zarr_meta_cache.c
     LINKS zarr lru store strbuf
 )
 
+# damacy-side shard index cache (LRU around zarr_shard_index_parse).
+add_src_lib(zarr_shard_cache SOURCES zarr_shard_cache.h zarr_shard_cache.c
+    LINKS zarr lru store strbuf
+)
+
 # GPU pieces — add_cuda_lib is a no-op under DAMACY_FUZZ.
 add_cuda_lib(decoder SOURCES decoder.h decoder.c
     LINKS CUDA::cudart_static nvcomp::nvcomp
