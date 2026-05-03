@@ -32,6 +32,24 @@ extern "C"
                                     const uint64_t* nbytes,
                                     size_t n_entries);
 
+  // Same shape as fixture_write_synthetic_shard, but the caller supplies
+  // the payload bytes (typically a packed run of zstd-compressed
+  // chunks). offsets/nbytes index into payload[0..payload_n_bytes).
+  int fixture_write_shard_with_payload(const char* path,
+                                       const void* payload,
+                                       size_t payload_n_bytes,
+                                       const uint64_t* offsets,
+                                       const uint64_t* nbytes,
+                                       size_t n_entries);
+
+  // zstd level 3 compress src[0..src_n_bytes) into dst[0..dst_capacity);
+  // writes the compressed length to *out_n_bytes. Returns 0 on success.
+  int fixture_zstd_compress(const void* src,
+                            size_t src_n_bytes,
+                            void* dst,
+                            size_t dst_capacity,
+                            size_t* out_n_bytes);
+
   // Best-effort recursive rmdir via "rm -rf". Caller must ensure `dir`
   // is a tmpdir under their control — there is no path sanitisation.
   void fixture_rm_tree(const char* dir);

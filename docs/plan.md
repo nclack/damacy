@@ -165,9 +165,12 @@ should follow them.
 Shared helpers live in `tests/expect.h` (`EXPECT` / `RUN` macros, both
 lowering onto the project logger) and `tests/fixture.h` (file-system
 test scaffolding: `fixture_write_file`, `fixture_write_synthetic_shard`,
+`fixture_write_shard_with_payload`, `fixture_zstd_compress`,
 `fixture_rm_tree`, plus the LE encoders). All test executables include
 expect.h; the fs-backed integration tests (test_zarr_meta_cache,
-test_zarr_shard_cache, test_planner) include fixture.h.
+test_zarr_shard_cache, test_planner, test_damacy) include fixture.h.
+test_fixture links libzstd via pkg-config; the dependency comes from
+`flake.nix` (devShell `buildInputs`).
 
 `main` is a flat list of `RUN(test_foo)` calls — no table-driven loops,
 no continuing past failures. RUN fast-fails the executable on the first
@@ -210,11 +213,6 @@ pattern worth calling out:
   root. The surface design wants per-uri resolution (`s3://...`,
   multiple roots, etc.); revisit once the wave scheduler is in and a
   multi-backend story is needed.
-- **No on-disk smoke test yet.** End-to-end is exercised via
-  `bench/main.c --root <gen_dataset.py output> --peek` (manually
-  validated against zarr-python). A self-contained test requires
-  real zstd-compressed payloads in the test fixture (libzstd in the
-  flake); deferred.
 - **`DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES = 1 MB` cap.** Tight enough
   to fit nvCOMP's scratch on a 8GB-class laptop GPU; will bite as
   soon as someone configures larger inner chunks. Move it (and
