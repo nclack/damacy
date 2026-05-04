@@ -1,36 +1,29 @@
 #include "decoder.h"
 
+#include "log/log.h"
+#include "util/prelude.h"
+
 #include <nvcomp/zstd.h>
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define CK_CUDA(expr)                                                          \
+#define CU(label, expr)                                                        \
   do {                                                                         \
     cudaError_t _e = (expr);                                                   \
     if (_e != cudaSuccess) {                                                   \
-      fprintf(stderr,                                                          \
-              "[decoder] %s:%d: %s -> %s\n",                                   \
-              __FILE__,                                                        \
-              __LINE__,                                                        \
-              #expr,                                                           \
-              cudaGetErrorString(_e));                                         \
-      goto fail;                                                               \
+      log_error("cuda: %s -> %s", #expr, cudaGetErrorString(_e));              \
+      goto label;                                                              \
     }                                                                          \
   } while (0)
 
-#define CK_NVCOMP(expr)                                                        \
+#define NV(label, expr)                                                        \
   do {                                                                         \
     nvcompStatus_t _s = (expr);                                                \
     if (_s != nvcompSuccess) {                                                 \
-      fprintf(stderr,                                                          \
-              "[decoder] %s:%d: %s -> nvcompStatus=%d\n",                      \
-              __FILE__,                                                        \
-              __LINE__,                                                        \
-              #expr,                                                           \
-              (int)_s);                                                        \
-      goto fail;                                                               \
+      log_error("nvcomp: %s -> nvcompStatus=%d", #expr, (int)_s);              \
+      goto label;                                                              \
     }                                                                          \
   } while (0)
 
@@ -83,71 +76,69 @@ decoder_create(int device_id,
                size_t max_batch_size,
                size_t max_chunk_uncompressed_bytes)
 {
-  if (max_batch_size == 0 || max_chunk_uncompressed_bytes == 0) {
-    fprintf(stderr,
-            "[decoder] bad args: max_batch=%zu max_chunk=%zu\n",
-            max_batch_size,
-            max_chunk_uncompressed_bytes);
-    return NULL;
-  }
-  cudaError_t e0 = cudaSetDevice(device_id);
-  if (e0 != cudaSuccess) {
-    fprintf(stderr,
-            "[decoder] cudaSetDevice(%d) -> %s\n",
-            device_id,
-            cudaGetErrorString(e0));
-    return NULL;
-  }
+  struct decoder* d = NULL;
 
-  struct decoder* d = (struct decoder*)calloc(1, sizeof(*d));
-  if (!d)
-    return NULL;
+  CHECK(Fail, max_batch_size > 0);
+  CHECK(Fail, max_chunk_uncompressed_bytes > 0);
+  CU(Fail, cudaSetDevice(device_id));
+
+  d = (struct decoder*)calloc(1, sizeof(*d));
+  CHECK(Fail, d);
   d->device_id = device_id;
   d->max_batch = max_batch_size;
   d->max_chunk_uncompressed = max_chunk_uncompressed_bytes;
 
   // Device-side fanout arrays.
-  CK_CUDA(
-    cudaMalloc((void**)&d->d_compressed_ptrs, max_batch_size * sizeof(void*)));
-  CK_CUDA(cudaMalloc((void**)&d->d_compressed_sizes,
-                     max_batch_size * sizeof(size_t)));
-  CK_CUDA(cudaMalloc((void**)&d->d_uncompressed_buffer_sizes,
-                     max_batch_size * sizeof(size_t)));
-  CK_CUDA(cudaMalloc((void**)&d->d_uncompressed_actual_sizes,
-                     max_batch_size * sizeof(size_t)));
-  CK_CUDA(cudaMalloc((void**)&d->d_uncompressed_ptrs,
-                     max_batch_size * sizeof(void*)));
-  CK_CUDA(cudaMalloc((void**)&d->d_statuses,
-                     max_batch_size * sizeof(nvcompStatus_t)));
+  CU(Fail,
+     cudaMalloc((void**)&d->d_compressed_ptrs, max_batch_size * sizeof(void*)));
+  CU(Fail,
+     cudaMalloc((void**)&d->d_compressed_sizes,
+                max_batch_size * sizeof(size_t)));
+  CU(Fail,
+     cudaMalloc((void**)&d->d_uncompressed_buffer_sizes,
+                max_batch_size * sizeof(size_t)));
+  CU(Fail,
+     cudaMalloc((void**)&d->d_uncompressed_actual_sizes,
+                max_batch_size * sizeof(size_t)));
+  CU(Fail,
+     cudaMalloc((void**)&d->d_uncompressed_ptrs,
+                max_batch_size * sizeof(void*)));
+  CU(Fail,
+     cudaMalloc((void**)&d->d_statuses,
+                max_batch_size * sizeof(nvcompStatus_t)));
 
   // Pinned host staging.
-  CK_CUDA(cudaMallocHost((void**)&d->h_compressed_ptrs,
-                         max_batch_size * sizeof(void*)));
-  CK_CUDA(cudaMallocHost((void**)&d->h_compressed_sizes,
-                         max_batch_size * sizeof(size_t)));
-  CK_CUDA(cudaMallocHost((void**)&d->h_uncompressed_buffer_sizes,
-                         max_batch_size * sizeof(size_t)));
-  CK_CUDA(cudaMallocHost((void**)&d->h_uncompressed_ptrs,
-                         max_batch_size * sizeof(void*)));
+  CU(Fail,
+     cudaMallocHost((void**)&d->h_compressed_ptrs,
+                    max_batch_size * sizeof(void*)));
+  CU(Fail,
+     cudaMallocHost((void**)&d->h_compressed_sizes,
+                    max_batch_size * sizeof(size_t)));
+  CU(Fail,
+     cudaMallocHost((void**)&d->h_uncompressed_buffer_sizes,
+                    max_batch_size * sizeof(size_t)));
+  CU(Fail,
+     cudaMallocHost((void**)&d->h_uncompressed_ptrs,
+                    max_batch_size * sizeof(void*)));
 
   // Query temp size and allocate.
   nvcompBatchedZstdDecompressOpts_t opts =
     nvcompBatchedZstdDecompressDefaultOpts;
   size_t temp_bytes = 0;
-  CK_NVCOMP(nvcompBatchedZstdDecompressGetTempSizeAsync(
-    max_batch_size,
-    max_chunk_uncompressed_bytes,
-    opts,
-    &temp_bytes,
-    max_batch_size * max_chunk_uncompressed_bytes));
+  NV(Fail,
+     nvcompBatchedZstdDecompressGetTempSizeAsync(
+       max_batch_size,
+       max_chunk_uncompressed_bytes,
+       opts,
+       &temp_bytes,
+       max_batch_size * max_chunk_uncompressed_bytes));
   d->temp_bytes = temp_bytes;
-  if (temp_bytes > 0) {
-    CK_CUDA(cudaMalloc(&d->d_temp, temp_bytes));
-  }
+  if (temp_bytes > 0)
+    CU(Fail, cudaMalloc(&d->d_temp, temp_bytes));
 
   return d;
 
-fail:
+Fail:
   decoder_free_internal(d);
   return NULL;
 }
@@ -167,10 +158,13 @@ decoder_decompress_batch(struct decoder* d,
                          const size_t* uncompressed_sizes,
                          size_t n)
 {
-  if (!d || n == 0 || n > d->max_batch)
-    return 1;
-  if (!compressed || !compressed_sizes || !decompressed || !uncompressed_sizes)
-    return 1;
+  CHECK(Fail, d);
+  CHECK(Fail, n > 0);
+  CHECK(Fail, n <= d->max_batch);
+  CHECK(Fail, compressed);
+  CHECK(Fail, compressed_sizes);
+  CHECK(Fail, decompressed);
+  CHECK(Fail, uncompressed_sizes);
 
   // Copy host-side arrays to pinned host staging, then async H2D into the
   // device fanout arrays nvcomp will read.
@@ -180,46 +174,47 @@ decoder_decompress_batch(struct decoder* d,
     d->h_uncompressed_buffer_sizes[i] = uncompressed_sizes[i];
     d->h_uncompressed_ptrs[i] = decompressed[i];
   }
-  if (cudaMemcpyAsync(d->d_compressed_ptrs,
-                      d->h_compressed_ptrs,
-                      n * sizeof(void*),
-                      cudaMemcpyHostToDevice,
-                      stream) != cudaSuccess)
-    return 1;
-  if (cudaMemcpyAsync(d->d_compressed_sizes,
-                      d->h_compressed_sizes,
-                      n * sizeof(size_t),
-                      cudaMemcpyHostToDevice,
-                      stream) != cudaSuccess)
-    return 1;
-  if (cudaMemcpyAsync(d->d_uncompressed_buffer_sizes,
-                      d->h_uncompressed_buffer_sizes,
-                      n * sizeof(size_t),
-                      cudaMemcpyHostToDevice,
-                      stream) != cudaSuccess)
-    return 1;
-  if (cudaMemcpyAsync(d->d_uncompressed_ptrs,
-                      d->h_uncompressed_ptrs,
-                      n * sizeof(void*),
-                      cudaMemcpyHostToDevice,
-                      stream) != cudaSuccess)
-    return 1;
+  CU(Fail,
+     cudaMemcpyAsync(d->d_compressed_ptrs,
+                     d->h_compressed_ptrs,
+                     n * sizeof(void*),
+                     cudaMemcpyHostToDevice,
+                     stream));
+  CU(Fail,
+     cudaMemcpyAsync(d->d_compressed_sizes,
+                     d->h_compressed_sizes,
+                     n * sizeof(size_t),
+                     cudaMemcpyHostToDevice,
+                     stream));
+  CU(Fail,
+     cudaMemcpyAsync(d->d_uncompressed_buffer_sizes,
+                     d->h_uncompressed_buffer_sizes,
+                     n * sizeof(size_t),
+                     cudaMemcpyHostToDevice,
+                     stream));
+  CU(Fail,
+     cudaMemcpyAsync(d->d_uncompressed_ptrs,
+                     d->h_uncompressed_ptrs,
+                     n * sizeof(void*),
+                     cudaMemcpyHostToDevice,
+                     stream));
 
   nvcompBatchedZstdDecompressOpts_t opts =
     nvcompBatchedZstdDecompressDefaultOpts;
-  nvcompStatus_t s =
-    nvcompBatchedZstdDecompressAsync((const void* const*)d->d_compressed_ptrs,
-                                     d->d_compressed_sizes,
-                                     d->d_uncompressed_buffer_sizes,
-                                     d->d_uncompressed_actual_sizes,
-                                     n,
-                                     d->d_temp,
-                                     d->temp_bytes,
-                                     (void* const*)d->d_uncompressed_ptrs,
-                                     opts,
-                                     d->d_statuses,
-                                     stream);
-  if (s != nvcompSuccess)
-    return 1;
+  NV(Fail,
+     nvcompBatchedZstdDecompressAsync((const void* const*)d->d_compressed_ptrs,
+                                      d->d_compressed_sizes,
+                                      d->d_uncompressed_buffer_sizes,
+                                      d->d_uncompressed_actual_sizes,
+                                      n,
+                                      d->d_temp,
+                                      d->temp_bytes,
+                                      (void* const*)d->d_uncompressed_ptrs,
+                                      opts,
+                                      d->d_statuses,
+                                      stream));
   return 0;
+
+Fail:
+  return 1;
 }

@@ -77,11 +77,11 @@ zarr_shard_cache_create(struct store* store, uint32_t capacity)
 {
   struct zarr_shard_cache* self = NULL;
 
-  CHECK_SILENT(error, store);
-  CHECK_SILENT(error, capacity > 0);
+  CHECK_SILENT(Error, store);
+  CHECK_SILENT(Error, capacity > 0);
 
   self = (struct zarr_shard_cache*)calloc(1, sizeof(*self));
-  CHECK(error, self);
+  CHECK(Error, self);
   self->store = store;
 
   struct lru_ops ops = {
@@ -89,15 +89,12 @@ zarr_shard_cache_create(struct store* store, uint32_t capacity)
     .destroy = shard_destroy,
   };
   self->lru = lru_create(capacity, 16, &ops);
-  CHECK(error, self->lru);
+  CHECK(Error, self->lru);
 
   return self;
 
-error:
-  if (self) {
-    lru_destroy(self->lru);
-    free(self);
-  }
+Error:
+  zarr_shard_cache_destroy(self);
   return NULL;
 }
 
@@ -118,12 +115,12 @@ zarr_shard_cache_get(struct zarr_shard_cache* self,
                      const struct zarr_shard_entry** out_entries,
                      uint64_t* out_n_entries)
 {
-  CHECK_SILENT(invalid, self);
-  CHECK_SILENT(invalid, uri);
-  CHECK_SILENT(invalid, meta);
-  CHECK_SILENT(invalid, shard_coord);
-  CHECK_SILENT(invalid, out_entries);
-  CHECK_SILENT(invalid, out_n_entries);
+  CHECK_SILENT(Invalid, self);
+  CHECK_SILENT(Invalid, uri);
+  CHECK_SILENT(Invalid, meta);
+  CHECK_SILENT(Invalid, shard_coord);
+  CHECK_SILENT(Invalid, out_entries);
+  CHECK_SILENT(Invalid, out_n_entries);
   if (meta->rank == 0 || meta->rank > DAMACY_MAX_RANK) {
     *out_entries = NULL;
     *out_n_entries = 0;
@@ -233,7 +230,7 @@ zarr_shard_cache_get(struct zarr_shard_cache* self,
   *out_n_entries = held->n_entries;
   return DAMACY_OK;
 
-invalid:
+Invalid:
   if (out_entries)
     *out_entries = NULL;
   if (out_n_entries)

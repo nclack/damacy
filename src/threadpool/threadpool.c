@@ -1,6 +1,7 @@
 #include "threadpool/threadpool.h"
 
 #include "platform/platform.h"
+#include "util/prelude.h"
 
 #include <stdalign.h>
 #include <stdatomic.h>
@@ -101,15 +102,28 @@ dispatch(struct threadpool* p, pool_task_fn fn, void* ctx)
     platform_cpu_pause();
 }
 
+// Helper: free a partially-constructed threadpool from threadpool_new's
+// Fail label. Each leaf-free is NULL-safe; this just guards the
+// container deref.
+static void
+threadpool_free_partial(struct threadpool* p)
+{
+  if (!p)
+    return;
+  free(p->workers);
+  platform_cond_free(p->cv);
+  platform_mutex_free(p->mu);
+  free(p);
+}
+
 struct threadpool*
 threadpool_new(int nthreads)
 {
-  if (nthreads < 0)
-    return NULL;
+  struct threadpool* p = NULL;
 
-  struct threadpool* p = (struct threadpool*)calloc(1, sizeof(*p));
-  if (!p)
-    return NULL;
+  CHECK_SILENT(Fail, nthreads >= 0);
+  p = (struct threadpool*)calloc(1, sizeof(*p));
+  CHECK_SILENT(Fail, p);
 
   p->nworkers = nthreads;
   atomic_store_explicit(&p->epoch, 0, memory_order_relaxed);
@@ -122,12 +136,11 @@ threadpool_new(int nthreads)
 
   p->mu = platform_mutex_new();
   p->cv = platform_cond_new();
-  if (!p->mu || !p->cv)
-    goto fail;
+  CHECK_SILENT(Fail, p->mu);
+  CHECK_SILENT(Fail, p->cv);
 
   p->workers = (struct worker*)calloc((size_t)nthreads, sizeof(struct worker));
-  if (!p->workers)
-    goto fail;
+  CHECK_SILENT(Fail, p->workers);
 
   for (int i = 0; i < nthreads; ++i) {
     p->workers[i].pool = p;
@@ -140,17 +153,14 @@ threadpool_new(int nthreads)
       platform_mutex_unlock(p->mu);
       for (int j = 0; j < i; ++j)
         platform_thread_join(p->workers[j].thread);
-      goto fail;
+      goto Fail;
     }
   }
 
   return p;
 
-fail:
-  free(p->workers);
-  platform_cond_free(p->cv);
-  platform_mutex_free(p->mu);
-  free(p);
+Fail:
+  threadpool_free_partial(p);
   return NULL;
 }
 

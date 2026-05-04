@@ -48,11 +48,11 @@ zarr_meta_cache_create(struct store* store, uint32_t capacity)
 {
   struct zarr_meta_cache* self = NULL;
 
-  CHECK_SILENT(error, store);
-  CHECK_SILENT(error, capacity > 0);
+  CHECK_SILENT(Error, store);
+  CHECK_SILENT(Error, capacity > 0);
 
   self = (struct zarr_meta_cache*)calloc(1, sizeof(*self));
-  CHECK(error, self);
+  CHECK(Error, self);
   self->store = store;
 
   struct lru_ops ops = {
@@ -62,15 +62,12 @@ zarr_meta_cache_create(struct store* store, uint32_t capacity)
   // max_probe = 16: with n_cells = 2 * capacity (>= 32) and FNV-1a on
   // distinct strings, observed chain length stays well under 16.
   self->lru = lru_create(capacity, 16, &ops);
-  CHECK(error, self->lru);
+  CHECK(Error, self->lru);
 
   return self;
 
-error:
-  if (self) {
-    lru_destroy(self->lru);
-    free(self);
-  }
+Error:
+  zarr_meta_cache_destroy(self);
   return NULL;
 }
 
@@ -88,9 +85,9 @@ zarr_meta_cache_get(struct zarr_meta_cache* self,
                     const char* uri,
                     const struct zarr_metadata** out)
 {
-  CHECK_SILENT(invalid, self);
-  CHECK_SILENT(invalid, uri);
-  CHECK_SILENT(invalid, out);
+  CHECK_SILENT(Invalid, self);
+  CHECK_SILENT(Invalid, uri);
+  CHECK_SILENT(Invalid, out);
   *out = NULL;
 
   uint64_t hash = hash_fnv1a_str(uri);
@@ -138,7 +135,7 @@ zarr_meta_cache_get(struct zarr_meta_cache* self,
   *out = &((const struct meta_entry*)lru_entry_value(inserted))->meta;
   return DAMACY_OK;
 
-invalid:
+Invalid:
   if (out)
     *out = NULL;
   return DAMACY_INVAL;

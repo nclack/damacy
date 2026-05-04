@@ -321,12 +321,12 @@ struct lru*
 lru_create(uint32_t capacity, uint32_t max_probe, const struct lru_ops* ops)
 {
   struct lru* self = NULL;
-  CHECK_SILENT(error, capacity > 0);
-  CHECK_SILENT(error, max_probe > 0);
-  CHECK_SILENT(error, ops && ops->eq && ops->destroy);
+  CHECK_SILENT(Error, capacity > 0);
+  CHECK_SILENT(Error, max_probe > 0);
+  CHECK_SILENT(Error, ops && ops->eq && ops->destroy);
 
   self = (struct lru*)calloc(1, sizeof(*self));
-  CHECK(error, self);
+  CHECK(Error, self);
 
   uint32_t n_cells = next_pow2_ge(2u * capacity);
 
@@ -343,9 +343,9 @@ lru_create(uint32_t capacity, uint32_t max_probe, const struct lru_ops* ops)
   list_init(&self->freelist);
 
   self->slots = (struct lru_entry*)calloc(capacity, sizeof(*self->slots));
-  CHECK(error, self->slots);
+  CHECK(Error, self->slots);
   self->index.cells = (uint32_t*)malloc(n_cells * sizeof(*self->index.cells));
-  CHECK(error, self->index.cells);
+  CHECK(Error, self->index.cells);
 
   for (uint32_t i = 0; i < n_cells; ++i)
     self->index.cells[i] = LRU_NIL;
@@ -359,12 +359,10 @@ lru_create(uint32_t capacity, uint32_t max_probe, const struct lru_ops* ops)
 
   return self;
 
-error:
-  if (self) {
-    free(self->slots);
-    free(self->index.cells);
-    free(self);
-  }
+Error:
+  // lru_destroy walks lru_order; list_init above ran before any CHECK
+  // that could land here, so the partial-state walk is well-defined.
+  lru_destroy(self);
   return NULL;
 }
 
@@ -385,16 +383,16 @@ lru_destroy(struct lru* self)
 struct lru_entry*
 lru_get(struct lru* self, uint64_t hash, const void* probe_key)
 {
-  CHECK_SILENT(miss, self);
+  CHECK_SILENT(Miss, self);
   uint32_t cell_idx = index_lookup(self, hash, probe_key);
-  CHECK_SILENT(miss, cell_idx != LRU_NIL);
+  CHECK_SILENT(Miss, cell_idx != LRU_NIL);
 
   uint32_t slot_idx = self->index.cells[cell_idx];
   list_promote(&self->lru_order, &self->slots[slot_idx].link);
   self->counters.hits++;
   return &self->slots[slot_idx];
 
-miss:
+Miss:
   if (self)
     self->counters.misses++;
   return NULL;
