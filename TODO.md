@@ -4,6 +4,12 @@
 
 - [ ] support for bf16 fp16
 - [ ] testing the hashmap/lru
+- [ ] add ngff and multiscale
+- [ ] handle oob aabb's
+- [ ] type translation (e.g. u16 to bf16)
+- [ ] eval lru for compressed chunk
+      - may be interesting to eval hit rate
+      - system's virtual page cache may obviate this for host mem 
 
 ## Fuzzing
 

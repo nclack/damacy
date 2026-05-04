@@ -1,5 +1,25 @@
 # dev log
 
+## 2026-05-04
+
+Question: which way to do the step optimization? Maybe from the end to the
+beginning so we now what the downstream bottlenecks are as we go.
+
+Focus on making the benchmarking nice first though. Reviewing for accuracy
+and then: 
+
+- [ ] refine bench scenario(s)
+- [ ] need to do a better multi-zarr setup for bench/test
+- [ ] benchmark output as json
+
+Working on specing scenarios as json, making benchmark out json, and refining
+the base scenario. I'd like 256kB chunks before compression. 3d zarrs with at
+least 4 shards each, maybe 512x512x512 each. sample random in bounds aabb. For
+building the batches, I want each "Sample" to be 64x64x64. Batch of about 1 GB.
+
+- [ ] deal with the "max chunks per batch" - wrong parameterization
+- [ ] review/reduce comments
+
 ## 2026-05-03
 
 Working on design/interface some more.
@@ -15,8 +35,6 @@ worth it (especially if you have a network layer cache).
 Got a basic end-to-end pipeline up. Still needs a lot of work.
 
 - containerof pattern for lru elements?
-- need to do a better multi-zarr setup for bench/test
-- add ngff
 - review the kernel 
 
 ## 2026-05-02

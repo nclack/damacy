@@ -39,14 +39,22 @@ def make_console(stderr: bool = False) -> Console:
 console = make_console()
 
 
-def _fmt_mb(b: float) -> str:
-    return f"{b / 1e6:.1f}" if b > 0 else "-"
+def _fmt_gb(b: float) -> str:
+    return f"{b / 1e9:.2f}" if b > 0 else "-"
 
 
-def _fmt_rate(b: float, secs: float) -> str:
+def _fmt_gbps(b: float, secs: float) -> str:
     if b <= 0 or secs <= 0:
         return "-"
-    return f"{(b / 1e6) / secs:,.0f}"
+    return f"{(b / 1e9) / secs:.2f}"
+
+
+def _fmt_ms(ms: float) -> str:
+    if ms >= 10000:
+        return f"{ms / 1000:.1f} s"
+    if ms >= 100:
+        return f"{ms:.0f}"
+    return f"{ms:.2f}"
 
 
 def _stage_table(r: Results) -> Table:
@@ -58,10 +66,10 @@ def _stage_table(r: Results) -> Table:
     t.add_column("ms_total", justify="right")
     t.add_column("ms_avg", justify="right")
     t.add_column("ms_best", justify="right")
-    t.add_column("MB_in", justify="right")
-    t.add_column("MB_out", justify="right")
-    t.add_column("MB/s_in", justify="right")
-    t.add_column("MB/s_out", justify="right")
+    t.add_column("GB_in", justify="right")
+    t.add_column("GB_out", justify="right")
+    t.add_column("GB/s_in", justify="right")
+    t.add_column("GB/s_out", justify="right")
 
     # color stages by responsibility
     color = {
@@ -82,13 +90,13 @@ def _stage_table(r: Results) -> Table:
             Text(s.name, style=c),
             s.unit,
             f"{s.count:,}",
-            f"{s.ms_total:,.3f}",
-            f"{s.ms_avg:,.3f}" if s.count else "-",
-            f"{s.ms_best:,.3f}" if s.count else "-",
-            _fmt_mb(s.input_bytes),
-            _fmt_mb(s.output_bytes),
-            _fmt_rate(s.input_bytes, secs),
-            _fmt_rate(s.output_bytes, secs),
+            _fmt_ms(s.ms_total),
+            _fmt_ms(s.ms_avg) if s.count else "-",
+            _fmt_ms(s.ms_best) if s.count else "-",
+            _fmt_gb(s.input_bytes),
+            _fmt_gb(s.output_bytes),
+            _fmt_gbps(s.input_bytes, secs),
+            _fmt_gbps(s.output_bytes, secs),
         )
     return t
 
@@ -125,16 +133,16 @@ def _summary_table(r: Results) -> Table:
     tm = r.timings_ms
     d = r.derived
     rows = [
-        ("init", f"{tm.init:.1f} ms"),
-        ("time_to_first_batch", f"{tm.time_to_first_batch:.1f} ms"),
-        ("wall (steady-state)", f"{tm.wall / 1e3:.3f} s"),
+        ("init", _fmt_ms(tm.init) + " ms"),
+        ("time_to_first_batch", _fmt_ms(tm.time_to_first_batch) + " ms"),
+        ("wall (steady-state)", f"{tm.wall / 1e3:.2f} s"),
         ("throughput",
-         f"{d.throughput_mb_s:,.1f} MB/s  [dim](sample volume / wall)[/dim]"),
+         f"{d.throughput_mb_s / 1e3:.2f} GB/s  [dim](sample volume / wall)[/dim]"),
         ("stage_concurrency",
          f"{d.stage_concurrency:.2f}  [dim](sum stage ms / wall ms)[/dim]"),
-        ("chunks/batch", f"{d.chunks_per_batch:.2f}"),
-        ("chunks/wave", f"{d.chunks_per_wave:.2f}"),
-        ("bytes/sample", f"{d.bytes_per_sample:,}"),
+        ("chunks/batch", f"{d.chunks_per_batch:.0f}"),
+        ("chunks/wave", f"{d.chunks_per_wave:.0f}"),
+        ("bytes/sample", f"{d.bytes_per_sample / 1e6:.2f} MB"),
     ]
     for k, v in rows:
         t.add_row(k, v)
