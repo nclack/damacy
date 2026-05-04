@@ -1,11 +1,23 @@
-// End-to-end smoke test for damacy: build a tiny on-disk zarr v3 store
-// with real zstd-compressed inner chunks, push a sample, pop the
-// assembled batch off the GPU, and verify it byte-for-byte against the
-// data we wrote.
+// End-to-end smoke test for damacy: build a sharded zstd zarr v3 store
+// via tests/write_zarr.py, push samples through the pipeline, copy the
+// assembled batch back from device, verify byte-for-byte against the
+// deterministic source content.
 //
-// Reuses the test_planner JSON (2D shape=[4,8], inner=[2,4],
-// shard=[4,8], one shard, 4 inner chunks). Builds the shard with
-// libzstd-compressed payloads instead of zero-filled stubs.
+// Source content is data[i] = (linear_index + offset) masked to dtype
+// (see tests/write_zarr.py). C tests reproduce expected values from
+// the shape + offset without needing a shared RNG.
+//
+// Test cases:
+//   test_full_array              — single zarr, batch_size=1, full AABB
+//   test_partial_crossing_chunks — single zarr, sub-window across 4 chunks
+//   test_multi_batch             — single zarr, batch_size=2, 3 pop-release
+//                                  cycles with distinct AABBs per batch
+//   test_multi_zarr              — two zarrs distinguished by fill offset;
+//                                  batch with one sample from each
+//   test_pipelined               — push 4 batches up front, pop 4 in a row
+//                                  (drives W=2 + B=2 simultaneously)
+//   test_lookahead_backpressure  — push past lookahead cap, expect AGAIN,
+//                                  pop one, push remaining
 
 #include "damacy.h"
 #include "fixture.h"
@@ -18,101 +30,20 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-static const char* MINIMAL_ZARR_JSON =
-  "{"
-  "\"zarr_format\":3,"
-  "\"node_type\":\"array\","
-  "\"shape\":[4,8],"
-  "\"data_type\":\"uint16\","
-  "\"chunk_grid\":{\"name\":\"regular\",\"configuration\":{"
-  "\"chunk_shape\":[4,8]}},"
-  "\"chunk_key_encoding\":{\"name\":\"default\",\"configuration\":{"
-  "\"separator\":\"/\"}},"
-  "\"fill_value\":0,"
-  "\"codecs\":[{\"name\":\"sharding_indexed\",\"configuration\":{"
-  "\"chunk_shape\":[2,4],"
-  "\"codecs\":[{\"name\":\"bytes\",\"configuration\":{\"endian\":\"little\"}},"
-  "{\"name\":\"zstd\",\"configuration\":{\"level\":3,\"checksum\":false}}],"
-  "\"index_codecs\":[{\"name\":\"bytes\",\"configuration\":{"
-  "\"endian\":\"little\"}},{\"name\":\"crc32c\"}],"
-  "\"index_location\":\"end\"}}]"
-  "}";
-
-struct fixture
+// Expected u16 value at a given (y, x) within a shape-(rows, cols)
+// linear-fill zarr written with `--offset off`.
+static uint16_t
+expected_u16_2d(int64_t y, int64_t x, int64_t cols, int64_t off)
 {
-  char root[64];
-  uint16_t source[4][8];
-};
-
-// Build a sharded shard file at <root>/foo/c/0/0 with each of the 4
-// inner chunks zstd-compressed and packed sequentially in the payload.
-// Inner chunk shape [2,4] over uint16 = 16 bytes uncompressed.
-static int
-build_shard(const struct fixture* f, const char* path)
-{
-  enum
-  {
-    PAYLOAD_CAP = 4096,
-    N_ENTRIES = 4
-  };
-  uint8_t payload[PAYLOAD_CAP];
-  uint64_t offsets[N_ENTRIES] = { 0 };
-  uint64_t nbytes[N_ENTRIES] = { 0 };
-  uint64_t cursor = 0;
-
-  for (int chunk_y = 0; chunk_y < 2; ++chunk_y) {
-    for (int chunk_x = 0; chunk_x < 2; ++chunk_x) {
-      int idx = chunk_y * 2 + chunk_x;
-      uint16_t chunk_buf[8];
-      for (int iy = 0; iy < 2; ++iy)
-        for (int ix = 0; ix < 4; ++ix)
-          chunk_buf[iy * 4 + ix] =
-            f->source[chunk_y * 2 + iy][chunk_x * 4 + ix];
-      size_t comp_n = 0;
-      if (fixture_zstd_compress(chunk_buf,
-                                sizeof chunk_buf,
-                                payload + cursor,
-                                PAYLOAD_CAP - cursor,
-                                &comp_n))
-        return 1;
-      offsets[idx] = cursor;
-      nbytes[idx] = comp_n;
-      cursor += comp_n;
-    }
-  }
-  return fixture_write_shard_with_payload(
-    path, payload, cursor, offsets, nbytes, N_ENTRIES);
-}
-
-static int
-fixture_init(struct fixture* f)
-{
-  strcpy(f->root, "/tmp/damacy_smoke_XXXXXX");
-  EXPECT(mkdtemp(f->root));
-  for (int y = 0; y < 4; ++y)
-    for (int x = 0; x < 8; ++x)
-      f->source[y][x] = (uint16_t)(y * 8 + x);
-
-  char p[256];
-  snprintf(p, sizeof p, "%s/foo", f->root);
-  EXPECT(mkdir(p, 0755) == 0);
-  snprintf(p, sizeof p, "%s/foo/zarr.json", f->root);
-  EXPECT(fixture_write_file(p, MINIMAL_ZARR_JSON) == 0);
-  snprintf(p, sizeof p, "%s/foo/c", f->root);
-  EXPECT(mkdir(p, 0755) == 0);
-  snprintf(p, sizeof p, "%s/foo/c/0", f->root);
-  EXPECT(mkdir(p, 0755) == 0);
-  snprintf(p, sizeof p, "%s/foo/c/0/0", f->root);
-  EXPECT(build_shard(f, p) == 0);
-  return 0;
+  return (uint16_t)((uint64_t)(y * cols + x + off) & 0xFFFFu);
 }
 
 static struct damacy_config
-mk_cfg(const char* root)
+mk_cfg(const char* root, uint32_t batch_size)
 {
   return (struct damacy_config){
     .store_root = root,
-    .batch_size = 1,
+    .batch_size = batch_size,
     .lookahead_batches = 2,
     .n_io_threads = 1,
     .host_buffer_bytes = 64ull << 10,
@@ -124,21 +55,33 @@ mk_cfg(const char* root)
 }
 
 static struct damacy_sample
-mk_sample(int64_t y0, int64_t y1, int64_t x0, int64_t x1)
+mk_sample(const char* uri, int64_t y0, int64_t y1, int64_t x0, int64_t x1)
 {
-  struct damacy_sample s = { .uri = "foo", .aabb = { .rank = 2 } };
+  struct damacy_sample s = { .uri = uri, .aabb = { .rank = 2 } };
   s.aabb.dims[0] = (struct damacy_interval){ .beg = y0, .end = y1 };
   s.aabb.dims[1] = (struct damacy_interval){ .beg = x0, .end = x1 };
   return s;
 }
 
-// Push one sample, pop the resulting batch, copy its device buffer to
-// host. Caller-owned `out` must hold at least win_y * win_x u16s.
+static int
+mkdtemp_root(char* root, size_t cap)
+{
+  if (cap < sizeof "/tmp/damacy_smoke_XXXXXX")
+    return 1;
+  strcpy(root, "/tmp/damacy_smoke_XXXXXX");
+  return mkdtemp(root) ? 0 : 1;
+}
+
+// Push one sample, pop the resulting (size-1) batch, copy its device
+// buffer to host. Caller-owned `out` must hold at least
+// out_capacity_elements u16s; the batch's element count is returned in
+// *out_n_elements.
 static int
 run_one(struct damacy* d,
         struct damacy_sample s,
         uint16_t* out,
-        size_t out_capacity_elements)
+        size_t out_capacity_elements,
+        size_t* out_n_elements)
 {
   struct damacy_sample_slice slice = { .beg = &s, .end = &s + 1 };
   struct damacy_push_result pr = damacy_push(d, slice);
@@ -158,56 +101,324 @@ run_one(struct damacy* d,
                     info.device_ptr,
                     n_elements * sizeof(uint16_t),
                     cudaMemcpyDeviceToHost) == cudaSuccess);
+  *out_n_elements = n_elements;
   damacy_release(d, b);
   return 0;
 }
 
-// Sample covers the full array. Output should match `source` exactly.
+// 4×8 zarr, full-AABB sample.
 static int
 test_full_array(void)
 {
-  struct fixture f;
-  if (fixture_init(&f))
-    return 1;
-  struct damacy_config cfg = mk_cfg(f.root);
+  char root[64];
+  EXPECT(mkdtemp_root(root, sizeof root) == 0);
+  char p[256];
+  snprintf(p, sizeof p, "%s/foo", root);
+  int64_t shape[2] = { 4, 8 }, inner[2] = { 2, 4 }, shard[2] = { 4, 8 };
+  EXPECT(fixture_write_zarr(p, shape, inner, shard, 2, "uint16", 0) == 0);
+
+  struct damacy_config cfg = mk_cfg(root, 1);
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
   uint16_t out[4 * 8] = { 0 };
-  if (run_one(d, mk_sample(0, 4, 0, 8), out, 4 * 8))
+  size_t got = 0;
+  if (run_one(d, mk_sample("foo", 0, 4, 0, 8), out, 4 * 8, &got))
     return 1;
+  EXPECT(got == 4 * 8);
   for (int y = 0; y < 4; ++y)
     for (int x = 0; x < 8; ++x)
-      EXPECT(out[y * 8 + x] == f.source[y][x]);
+      EXPECT(out[y * 8 + x] == expected_u16_2d(y, x, 8, 0));
 
   damacy_destroy(d);
-  fixture_rm_tree(f.root);
+  fixture_rm_tree(root);
   return 0;
 }
 
-// Sample covers a sub-region that crosses all four chunks. The
-// assemble kernel must copy the right intersection from each chunk
-// into the right position of the (smaller) output.
+// Sub-window y[1,3) x[2,7) crosses the 2×2 inner-chunk grid; partial
+// intersection per chunk. Output shape [1, 2, 5].
 static int
 test_partial_crossing_chunks(void)
 {
-  struct fixture f;
-  if (fixture_init(&f))
-    return 1;
-  struct damacy_config cfg = mk_cfg(f.root);
+  char root[64];
+  EXPECT(mkdtemp_root(root, sizeof root) == 0);
+  char p[256];
+  snprintf(p, sizeof p, "%s/foo", root);
+  int64_t shape[2] = { 4, 8 }, inner[2] = { 2, 4 }, shard[2] = { 4, 8 };
+  EXPECT(fixture_write_zarr(p, shape, inner, shard, 2, "uint16", 0) == 0);
+
+  struct damacy_config cfg = mk_cfg(root, 1);
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
-  // y[1,3) x[2,7) — touches all 4 chunks (2x2 grid). Output shape [2,5].
   uint16_t out[2 * 5] = { 0 };
-  if (run_one(d, mk_sample(1, 3, 2, 7), out, 2 * 5))
+  size_t got = 0;
+  if (run_one(d, mk_sample("foo", 1, 3, 2, 7), out, 2 * 5, &got))
     return 1;
+  EXPECT(got == 2 * 5);
   for (int y = 0; y < 2; ++y)
     for (int x = 0; x < 5; ++x)
-      EXPECT(out[y * 5 + x] == f.source[1 + y][2 + x]);
+      EXPECT(out[y * 5 + x] == expected_u16_2d(1 + y, 2 + x, 8, 0));
 
   damacy_destroy(d);
-  fixture_rm_tree(f.root);
+  fixture_rm_tree(root);
+  return 0;
+}
+
+// Three sequential batches off one zarr, each batch_size=2 with
+// distinct per-sample AABBs. Exercises pop-release-pop slot recycling
+// (the failure mode step 5 needs to handle once batches overlap).
+static int
+test_multi_batch(void)
+{
+  char root[64];
+  EXPECT(mkdtemp_root(root, sizeof root) == 0);
+  char p[256];
+  snprintf(p, sizeof p, "%s/foo", root);
+  int64_t shape[2] = { 8, 16 }, inner[2] = { 2, 4 }, shard[2] = { 8, 16 };
+  EXPECT(fixture_write_zarr(p, shape, inner, shard, 2, "uint16", 0) == 0);
+
+  struct damacy_config cfg = mk_cfg(root, 2);
+  struct damacy* d = NULL;
+  EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
+
+  // Each sample is 4×8; AABBs cover the four (4×8) quadrants of the
+  // 8×16 array. Batch i takes quadrant pair {2i, 2i+1} (mod 4).
+  const int64_t aabbs[6][4] = {
+    { 0, 4, 0, 8 }, { 0, 4, 8, 16 }, // batch 0: top half
+    { 4, 8, 0, 8 }, { 4, 8, 8, 16 }, // batch 1: bottom half
+    { 0, 4, 0, 8 }, { 4, 8, 8, 16 }, // batch 2: cross-quadrant
+  };
+
+  for (int batch = 0; batch < 3; ++batch) {
+    struct damacy_sample s[2] = {
+      mk_sample("foo",
+                aabbs[batch * 2][0],
+                aabbs[batch * 2][1],
+                aabbs[batch * 2][2],
+                aabbs[batch * 2][3]),
+      mk_sample("foo",
+                aabbs[batch * 2 + 1][0],
+                aabbs[batch * 2 + 1][1],
+                aabbs[batch * 2 + 1][2],
+                aabbs[batch * 2 + 1][3]),
+    };
+    struct damacy_sample_slice slice = { .beg = s, .end = s + 2 };
+    struct damacy_push_result pr = damacy_push(d, slice);
+    EXPECT(pr.status == DAMACY_OK);
+
+    struct damacy_batch* b = NULL;
+    EXPECT(damacy_pop(d, &b) == DAMACY_OK);
+    struct damacy_batch_info info;
+    damacy_batch_info(b, &info);
+    EXPECT(info.rank == 3);
+    EXPECT(info.shape[0] == 2);
+    EXPECT(info.shape[1] == 4);
+    EXPECT(info.shape[2] == 8);
+    EXPECT(info.batch_id == (uint64_t)batch);
+
+    uint16_t out[2 * 4 * 8] = { 0 };
+    EXPECT(
+      cudaMemcpy(out, info.device_ptr, sizeof out, cudaMemcpyDeviceToHost) ==
+      cudaSuccess);
+
+    for (int sample_idx = 0; sample_idx < 2; ++sample_idx) {
+      int64_t y0 = aabbs[batch * 2 + sample_idx][0];
+      int64_t x0 = aabbs[batch * 2 + sample_idx][2];
+      for (int y = 0; y < 4; ++y) {
+        for (int x = 0; x < 8; ++x) {
+          uint16_t got = out[sample_idx * 32 + y * 8 + x];
+          uint16_t want = expected_u16_2d(y0 + y, x0 + x, 16, 0);
+          EXPECT(got == want);
+        }
+      }
+    }
+
+    damacy_release(d, b);
+  }
+
+  damacy_destroy(d);
+  fixture_rm_tree(root);
+  return 0;
+}
+
+// One batch with samples drawn from two different zarrs. The two zarrs
+// share dtype + sample shape but differ in fill offset, so the popped
+// batch should contain one slot of "a" content and one of "b" content
+// — verifying meta+shard cache routing across uris.
+static int
+test_multi_zarr(void)
+{
+  char root[64];
+  EXPECT(mkdtemp_root(root, sizeof root) == 0);
+  char pa[256], pb[256];
+  snprintf(pa, sizeof pa, "%s/a", root);
+  snprintf(pb, sizeof pb, "%s/b", root);
+  int64_t shape[2] = { 4, 8 }, inner[2] = { 2, 4 }, shard[2] = { 4, 8 };
+  EXPECT(fixture_write_zarr(pa, shape, inner, shard, 2, "uint16", 0) == 0);
+  EXPECT(fixture_write_zarr(pb, shape, inner, shard, 2, "uint16", 1000) == 0);
+
+  struct damacy_config cfg = mk_cfg(root, 2);
+  struct damacy* d = NULL;
+  EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
+
+  struct damacy_sample s[2] = {
+    mk_sample("a", 0, 4, 0, 8),
+    mk_sample("b", 0, 4, 0, 8),
+  };
+  struct damacy_sample_slice slice = { .beg = s, .end = s + 2 };
+  struct damacy_push_result pr = damacy_push(d, slice);
+  EXPECT(pr.status == DAMACY_OK);
+
+  struct damacy_batch* b = NULL;
+  EXPECT(damacy_pop(d, &b) == DAMACY_OK);
+  struct damacy_batch_info info;
+  damacy_batch_info(b, &info);
+  EXPECT(info.shape[0] == 2);
+  EXPECT(info.shape[1] == 4);
+  EXPECT(info.shape[2] == 8);
+
+  uint16_t out[2 * 4 * 8] = { 0 };
+  EXPECT(cudaMemcpy(out, info.device_ptr, sizeof out, cudaMemcpyDeviceToHost) ==
+         cudaSuccess);
+  for (int y = 0; y < 4; ++y) {
+    for (int x = 0; x < 8; ++x) {
+      EXPECT(out[0 * 32 + y * 8 + x] == expected_u16_2d(y, x, 8, 0));
+      EXPECT(out[1 * 32 + y * 8 + x] == expected_u16_2d(y, x, 8, 1000));
+    }
+  }
+  damacy_release(d, b);
+
+  damacy_destroy(d);
+  fixture_rm_tree(root);
+  return 0;
+}
+
+// Push 4 batches' worth of samples up front, then pop 4 in a row. The
+// scheduler must overlap W=2 waves and use both B=2 batch slots
+// simultaneously. Verifies pipelined throughput + correctness across
+// multiple in-flight batches.
+static int
+test_pipelined(void)
+{
+  char root[64];
+  EXPECT(mkdtemp_root(root, sizeof root) == 0);
+  char p[256];
+  snprintf(p, sizeof p, "%s/foo", root);
+  int64_t shape[2] = { 8, 16 }, inner[2] = { 2, 4 }, shard[2] = { 8, 16 };
+  EXPECT(fixture_write_zarr(p, shape, inner, shard, 2, "uint16", 0) == 0);
+
+  struct damacy_config cfg = mk_cfg(root, 2);
+  // Bump lookahead so we can hold 4 batches' worth of samples up front
+  // (4 batches * 2 samples = 8 = lookahead_batches=4 * batch_size=2).
+  cfg.lookahead_batches = 4;
+  struct damacy* d = NULL;
+  EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
+
+  // Each sample is 4×8; 4 batches × 2 samples = 8 samples covering 8
+  // non-overlapping (4×8) regions of the 8×16 array (only 4 unique
+  // positions, so we cycle through them twice).
+  const int64_t aabbs[8][4] = {
+    { 0, 4, 0, 8 },  { 0, 4, 8, 16 }, // batch 0
+    { 4, 8, 0, 8 },  { 4, 8, 8, 16 }, // batch 1
+    { 0, 4, 8, 16 }, { 4, 8, 0, 8 },  // batch 2
+    { 0, 4, 0, 8 },  { 4, 8, 8, 16 }, // batch 3
+  };
+  struct damacy_sample samples[8];
+  for (int i = 0; i < 8; ++i)
+    samples[i] =
+      mk_sample("foo", aabbs[i][0], aabbs[i][1], aabbs[i][2], aabbs[i][3]);
+
+  // Push all 8 in one shot.
+  struct damacy_sample_slice slice = { .beg = samples, .end = samples + 8 };
+  struct damacy_push_result pr = damacy_push(d, slice);
+  EXPECT(pr.status == DAMACY_OK);
+  EXPECT(pr.unconsumed.beg == pr.unconsumed.end);
+
+  // Pop 4 batches in order, verify each one's contents.
+  for (int batch = 0; batch < 4; ++batch) {
+    struct damacy_batch* b = NULL;
+    EXPECT(damacy_pop(d, &b) == DAMACY_OK);
+    struct damacy_batch_info info;
+    damacy_batch_info(b, &info);
+    EXPECT(info.batch_id == (uint64_t)batch);
+    EXPECT(info.shape[0] == 2);
+    EXPECT(info.shape[1] == 4);
+    EXPECT(info.shape[2] == 8);
+
+    uint16_t out[2 * 4 * 8] = { 0 };
+    EXPECT(
+      cudaMemcpy(out, info.device_ptr, sizeof out, cudaMemcpyDeviceToHost) ==
+      cudaSuccess);
+
+    for (int sample_idx = 0; sample_idx < 2; ++sample_idx) {
+      int64_t y0 = aabbs[batch * 2 + sample_idx][0];
+      int64_t x0 = aabbs[batch * 2 + sample_idx][2];
+      for (int y = 0; y < 4; ++y) {
+        for (int x = 0; x < 8; ++x) {
+          uint16_t got = out[sample_idx * 32 + y * 8 + x];
+          uint16_t want = expected_u16_2d(y0 + y, x0 + x, 16, 0);
+          EXPECT(got == want);
+        }
+      }
+    }
+    damacy_release(d, b);
+  }
+
+  damacy_destroy(d);
+  fixture_rm_tree(root);
+  return 0;
+}
+
+// Push past the lookahead cap; expect DAMACY_AGAIN with a non-empty
+// unconsumed suffix; pop one batch; push the suffix; verify we get the
+// rest. Verifies push-side backpressure surfacing through to the user.
+static int
+test_lookahead_backpressure(void)
+{
+  char root[64];
+  EXPECT(mkdtemp_root(root, sizeof root) == 0);
+  char p[256];
+  snprintf(p, sizeof p, "%s/foo", root);
+  int64_t shape[2] = { 4, 8 }, inner[2] = { 2, 4 }, shard[2] = { 4, 8 };
+  EXPECT(fixture_write_zarr(p, shape, inner, shard, 2, "uint16", 0) == 0);
+
+  // batch_size=1, lookahead_batches=2 → lookahead cap of 2 samples.
+  struct damacy_config cfg = mk_cfg(root, 1);
+  cfg.lookahead_batches = 2;
+  struct damacy* d = NULL;
+  EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
+
+  // Try to push 3 samples; only 2 should land before AGAIN.
+  struct damacy_sample samples[3] = {
+    mk_sample("foo", 0, 4, 0, 8),
+    mk_sample("foo", 0, 4, 0, 8),
+    mk_sample("foo", 0, 4, 0, 8),
+  };
+  struct damacy_sample_slice slice = { .beg = samples, .end = samples + 3 };
+  struct damacy_push_result pr = damacy_push(d, slice);
+  EXPECT(pr.status == DAMACY_AGAIN);
+  EXPECT(pr.unconsumed.beg == samples + 2);
+  EXPECT(pr.unconsumed.end == samples + 3);
+
+  // Pop one batch to free up a slot (and a lookahead spot).
+  struct damacy_batch* b = NULL;
+  EXPECT(damacy_pop(d, &b) == DAMACY_OK);
+  damacy_release(d, b);
+
+  // Now push the rest — should succeed.
+  pr = damacy_push(d, pr.unconsumed);
+  EXPECT(pr.status == DAMACY_OK);
+  EXPECT(pr.unconsumed.beg == pr.unconsumed.end);
+
+  // Drain the remaining batches.
+  EXPECT(damacy_pop(d, &b) == DAMACY_OK);
+  damacy_release(d, b);
+  EXPECT(damacy_pop(d, &b) == DAMACY_OK);
+  damacy_release(d, b);
+
+  damacy_destroy(d);
+  fixture_rm_tree(root);
   return 0;
 }
 
@@ -216,6 +427,10 @@ main(void)
 {
   RUN(test_full_array);
   RUN(test_partial_crossing_chunks);
+  RUN(test_multi_batch);
+  RUN(test_multi_zarr);
+  RUN(test_pipelined);
+  RUN(test_lookahead_backpressure);
   log_info("all tests passed");
   return 0;
 }

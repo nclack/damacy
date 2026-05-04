@@ -15,3 +15,11 @@
 // expect to use ~46 bits. Asserted at shard-index parse time. Target
 // shards are ~1 GB.
 #define DAMACY_MAX_SHARD_BYTES (1ull << 46)
+
+// Max bytes (including trailing NUL) for a shard path inlined into
+// struct read_op. The plan queue stores read_ops by value across batches
+// (step 5+), so paths can't be heap pointers owned by the planner —
+// they'd dangle on the next plan. 224 leaves headroom for store_root +
+// long uri + chunk-grid coordinates without inflating chunk_plan-sized
+// records too much.
+#define DAMACY_MAX_PATH 224

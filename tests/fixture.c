@@ -6,7 +6,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <zstd.h>
+
+#ifndef WRITE_ZARR_SCRIPT
+#error "WRITE_ZARR_SCRIPT must be defined by the build system"
+#endif
 
 int
 fixture_write_file(const char* path, const char* contents)
@@ -34,24 +37,18 @@ fixture_write_le32(uint8_t* dst, uint32_t value)
     dst[i] = (uint8_t)(value >> (8 * i));
 }
 
-// Common helper: write `payload_n_bytes` of payload (zero-filled when
-// payload == NULL) followed by a footer of n_entries (off, nbytes)
-// + CRC32C.
-static int
-write_shard_inner(const char* path,
-                  const void* payload,
-                  size_t payload_n_bytes,
-                  const uint64_t* offsets,
-                  const uint64_t* nbytes,
-                  size_t n_entries)
+int
+fixture_write_synthetic_shard(const char* path,
+                              size_t payload_n_bytes,
+                              const uint64_t* offsets,
+                              const uint64_t* nbytes,
+                              size_t n_entries)
 {
   size_t footer_n_bytes = zarr_shard_index_size(n_entries);
   size_t total_n_bytes = payload_n_bytes + footer_n_bytes;
   uint8_t* buf = (uint8_t*)calloc(total_n_bytes, 1);
   if (!buf)
     return 1;
-  if (payload && payload_n_bytes)
-    memcpy(buf, payload, payload_n_bytes);
   uint8_t* footer = buf + payload_n_bytes;
   for (size_t i = 0; i < n_entries; ++i) {
     fixture_write_le64(footer + 16 * i + 0, offsets[i]);
@@ -71,42 +68,57 @@ write_shard_inner(const char* path,
   return n_written == total_n_bytes ? 0 : 1;
 }
 
-int
-fixture_write_synthetic_shard(const char* path,
-                              size_t payload_n_bytes,
-                              const uint64_t* offsets,
-                              const uint64_t* nbytes,
-                              size_t n_entries)
+// Append "%lld" / "%lld,%lld,..." to `dst` from `vals[0..rank)`. Returns
+// the number of bytes written (excluding NUL); -1 on truncation.
+static int
+append_csv_i64(char* dst, size_t cap, const int64_t* vals, uint8_t rank)
 {
-  return write_shard_inner(
-    path, NULL, payload_n_bytes, offsets, nbytes, n_entries);
+  size_t off = 0;
+  for (uint8_t d = 0; d < rank; ++d) {
+    int n = snprintf(
+      dst + off, cap - off, d == 0 ? "%lld" : ",%lld", (long long)vals[d]);
+    if (n < 0 || (size_t)n >= cap - off)
+      return -1;
+    off += (size_t)n;
+  }
+  return (int)off;
 }
 
 int
-fixture_write_shard_with_payload(const char* path,
-                                 const void* payload,
-                                 size_t payload_n_bytes,
-                                 const uint64_t* offsets,
-                                 const uint64_t* nbytes,
-                                 size_t n_entries)
+fixture_write_zarr(const char* path,
+                   const int64_t* shape,
+                   const int64_t* inner,
+                   const int64_t* shard,
+                   uint8_t rank,
+                   const char* dtype,
+                   int64_t fill_offset)
 {
-  return write_shard_inner(
-    path, payload, payload_n_bytes, offsets, nbytes, n_entries);
-}
-
-int
-fixture_zstd_compress(const void* src,
-                      size_t src_n_bytes,
-                      void* dst,
-                      size_t dst_capacity,
-                      size_t* out_n_bytes)
-{
-  size_t z = ZSTD_compress(dst, dst_capacity, src, src_n_bytes, 3);
-  if (ZSTD_isError(z))
+  if (!path || !shape || !inner || !shard || !dtype || rank == 0)
     return 1;
-  if (out_n_bytes)
-    *out_n_bytes = z;
-  return 0;
+
+  char shape_csv[128] = { 0 };
+  char inner_csv[128] = { 0 };
+  char shard_csv[128] = { 0 };
+  if (append_csv_i64(shape_csv, sizeof shape_csv, shape, rank) < 0 ||
+      append_csv_i64(inner_csv, sizeof inner_csv, inner, rank) < 0 ||
+      append_csv_i64(shard_csv, sizeof shard_csv, shard, rank) < 0)
+    return 1;
+
+  char cmd[2048];
+  int n = snprintf(cmd,
+                   sizeof cmd,
+                   "uv run --script %s --out %s --shape %s --inner %s "
+                   "--shard %s --dtype %s --offset %lld",
+                   WRITE_ZARR_SCRIPT,
+                   path,
+                   shape_csv,
+                   inner_csv,
+                   shard_csv,
+                   dtype,
+                   (long long)fill_offset);
+  if (n < 0 || (size_t)n >= sizeof cmd)
+    return 1;
+  return system(cmd);
 }
 
 void

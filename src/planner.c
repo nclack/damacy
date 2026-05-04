@@ -15,43 +15,8 @@
 struct planner
 {
   struct planner_config cfg;
-  // Path strings owned by this planner; freed at the start of each
-  // planner_plan call (and on destroy).
-  char** owned_paths;
-  uint32_t n_owned_paths;
-  uint32_t cap_owned_paths;
   struct strbuf path_sb;
 };
-
-// --- ownership helpers ---------------------------------------------------
-
-static void
-clear_owned_paths(struct planner* self)
-{
-  for (uint32_t i = 0; i < self->n_owned_paths; ++i)
-    free(self->owned_paths[i]);
-  self->n_owned_paths = 0;
-}
-
-// Take ownership of a NUL-terminated copy of s. Returns NULL on alloc
-// failure. Stored pointer is stable until the next clear_owned_paths().
-static const char*
-take_path(struct planner* self, const char* s)
-{
-  if (self->n_owned_paths == self->cap_owned_paths) {
-    uint32_t new_cap = self->cap_owned_paths ? self->cap_owned_paths * 2 : 16;
-    char** grown = (char**)realloc(self->owned_paths, new_cap * sizeof(char*));
-    if (!grown)
-      return NULL;
-    self->owned_paths = grown;
-    self->cap_owned_paths = new_cap;
-  }
-  char* copy = strdup(s);
-  if (!copy)
-    return NULL;
-  self->owned_paths[self->n_owned_paths++] = copy;
-  return copy;
-}
 
 // --- math helpers --------------------------------------------------------
 
@@ -139,16 +104,16 @@ planner_create(const struct planner_config* cfg, struct planner** out)
   struct planner* self = NULL;
   enum damacy_status status = DAMACY_INVAL;
 
-  CHECK_SILENT(error, out);
+  CHECK_SILENT(Error, out);
   *out = NULL;
-  CHECK_SILENT(error, cfg);
-  CHECK_SILENT(error, cfg->meta_cache);
-  CHECK_SILENT(error, cfg->shard_cache);
-  CHECK_SILENT(error, cfg->page_alignment > 0);
+  CHECK_SILENT(Error, cfg);
+  CHECK_SILENT(Error, cfg->meta_cache);
+  CHECK_SILENT(Error, cfg->shard_cache);
+  CHECK_SILENT(Error, cfg->page_alignment > 0);
 
   status = DAMACY_OOM;
   self = (struct planner*)calloc(1, sizeof(*self));
-  CHECK(error, self);
+  CHECK(Error, self);
 
   // Designated init zeroes any fields not explicitly named, including
   // path_sb (zero-init is documented as safe for struct strbuf).
@@ -156,8 +121,8 @@ planner_create(const struct planner_config* cfg, struct planner** out)
   *out = self;
   return DAMACY_OK;
 
-error:
-  free(self);
+Error:
+  planner_destroy(self);
   return status;
 }
 
@@ -166,8 +131,6 @@ planner_destroy(struct planner* self)
 {
   if (!self)
     return;
-  clear_owned_paths(self);
-  free(self->owned_paths);
   strbuf_free(&self->path_sb);
   free(self);
 }
@@ -245,11 +208,14 @@ emit_chunk(const struct emit_ctx* ctx,
     return DAMACY_OOM;
 
   uint32_t read_op_idx = out->n_read_ops;
-  out->read_ops[read_op_idx] = (struct read_op){
-    .shard_path = ctx->interned_path,
-    .file_offset = aligned_file_offset,
-    .nbytes = (uint32_t)read_n_bytes,
-  };
+  struct read_op* r = &out->read_ops[read_op_idx];
+  size_t path_len = strlen(ctx->interned_path);
+  if (path_len + 1 > sizeof r->shard_path)
+    return DAMACY_OOM;
+  memcpy(r->shard_path, ctx->interned_path, path_len + 1);
+  r->file_offset = aligned_file_offset;
+  r->nbytes = (uint32_t)read_n_bytes;
+  r->dst_buf_offset = 0;
   out->n_read_ops++;
 
   struct chunk_plan* chunk_plan_out = &out->chunk_plans[out->n_chunk_plans];
@@ -301,18 +267,17 @@ planner_plan(struct planner* self,
              uint16_t batch_pool_slot,
              struct planner_output* out)
 {
-  CHECK_SILENT(invalid, self);
-  CHECK_SILENT(invalid, samples);
-  CHECK_SILENT(invalid, out);
-  CHECK_SILENT(invalid, out->read_ops);
-  CHECK_SILENT(invalid, out->chunk_plans);
+  CHECK_SILENT(Invalid, self);
+  CHECK_SILENT(Invalid, samples);
+  CHECK_SILENT(Invalid, out);
+  CHECK_SILENT(Invalid, out->read_ops);
+  CHECK_SILENT(Invalid, out->chunk_plans);
   out->n_read_ops = 0;
   out->n_chunk_plans = 0;
-  clear_owned_paths(self);
 
   for (uint32_t sample_idx = 0; sample_idx < n_samples; ++sample_idx) {
     const struct damacy_sample* sample = &samples[sample_idx];
-    CHECK_SILENT(invalid, sample->uri);
+    CHECK_SILENT(Invalid, sample->uri);
 
     const struct zarr_metadata* meta = NULL;
     enum damacy_status meta_status =
@@ -383,9 +348,9 @@ planner_plan(struct planner* self,
         if (zarr_shard_path_build(
               &self->path_sb, sample->uri, shard_coord, meta->rank))
           return DAMACY_OOM;
-        ctx.interned_path = take_path(self, strbuf_cstr(&self->path_sb));
-        if (!ctx.interned_path)
-          return DAMACY_OOM;
+        // emit_chunk copies path bytes into each read_op; path_sb is
+        // overwritten next iteration but each read_op carries its own.
+        ctx.interned_path = strbuf_cstr(&self->path_sb);
         for (uint8_t d = 0; d < meta->rank; ++d)
           cached_shard_coord[d] = shard_coord[d];
         have_cached_shard = 1;
@@ -413,6 +378,6 @@ planner_plan(struct planner* self,
 
   return DAMACY_OK;
 
-invalid:
+Invalid:
   return DAMACY_INVAL;
 }

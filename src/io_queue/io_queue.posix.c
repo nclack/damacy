@@ -1,5 +1,7 @@
 #include "io_queue/io_queue.h"
 
+#include "util/prelude.h"
+
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
@@ -86,34 +88,48 @@ worker_thread(void* arg)
   return NULL;
 }
 
+// Helper: free a partially-constructed io_queue from io_queue_create's
+// Fail label. Each leaf-free is NULL-safe; this just guards the
+// container deref.
+static void
+io_queue_free_partial(struct io_queue* q)
+{
+  if (!q)
+    return;
+  free(q->ring);
+  free(q->completed);
+  free(q->workers);
+  pthread_mutex_destroy(&q->mutex);
+  pthread_cond_destroy(&q->cond_not_empty);
+  pthread_cond_destroy(&q->cond_retired);
+  free(q);
+}
+
 struct io_queue*
 io_queue_create(int nthreads)
 {
-  if (nthreads < 0)
-    return NULL;
-  struct io_queue* q = (struct io_queue*)calloc(1, sizeof(*q));
-  if (!q)
-    return NULL;
+  struct io_queue* q = NULL;
 
-  q->ring_cap = 64;
-  q->ring = (struct io_job*)calloc(q->ring_cap, sizeof(struct io_job));
-  q->completed = (uint8_t*)calloc(q->ring_cap, sizeof(uint8_t));
-  if (!q->ring || !q->completed) {
-    free(q->ring);
-    free(q->completed);
-    free(q);
-    return NULL;
-  }
+  CHECK_SILENT(Fail, nthreads >= 0);
+  q = (struct io_queue*)calloc(1, sizeof(*q));
+  CHECK_SILENT(Fail, q);
 
+  // Init sync primitives first so io_queue_free_partial can always
+  // unconditionally destroy them.
   pthread_mutex_init(&q->mutex, NULL);
   pthread_cond_init(&q->cond_not_empty, NULL);
   pthread_cond_init(&q->cond_retired, NULL);
 
+  q->ring_cap = 64;
+  q->ring = (struct io_job*)calloc(q->ring_cap, sizeof(struct io_job));
+  q->completed = (uint8_t*)calloc(q->ring_cap, sizeof(uint8_t));
+  CHECK_SILENT(Fail, q->ring);
+  CHECK_SILENT(Fail, q->completed);
+
   q->nworkers = nthreads;
   if (nthreads > 0) {
     q->workers = (pthread_t*)calloc((size_t)nthreads, sizeof(pthread_t));
-    if (!q->workers)
-      goto fail;
+    CHECK_SILENT(Fail, q->workers);
     for (int i = 0; i < nthreads; ++i) {
       if (pthread_create(&q->workers[i], NULL, worker_thread, q) != 0) {
         // Tear down already-started workers.
@@ -123,21 +139,15 @@ io_queue_create(int nthreads)
         pthread_mutex_unlock(&q->mutex);
         for (int j = 0; j < i; ++j)
           pthread_join(q->workers[j], NULL);
-        goto fail;
+        goto Fail;
       }
     }
   }
   q->started = 1;
   return q;
 
-fail:
-  free(q->ring);
-  free(q->completed);
-  free(q->workers);
-  pthread_mutex_destroy(&q->mutex);
-  pthread_cond_destroy(&q->cond_not_empty);
-  pthread_cond_destroy(&q->cond_retired);
-  free(q);
+Fail:
+  io_queue_free_partial(q);
   return NULL;
 }
 
@@ -267,6 +277,16 @@ io_event_wait(const struct io_queue* q, struct io_event ev)
   while (mq->retired_seq < ev.seq && !mq->shutdown)
     pthread_cond_wait(&mq->cond_retired, &mq->mutex);
   pthread_mutex_unlock(&mq->mutex);
+}
+
+int
+io_event_query(const struct io_queue* q, struct io_event ev)
+{
+  struct io_queue* mq = (struct io_queue*)q;
+  pthread_mutex_lock(&mq->mutex);
+  int retired = (mq->retired_seq >= ev.seq);
+  pthread_mutex_unlock(&mq->mutex);
+  return retired;
 }
 
 int

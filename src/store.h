@@ -64,6 +64,10 @@ extern "C"
   // Block until all reads up to and including ev.seq have completed.
   void store_event_wait(struct store* s, struct store_event ev);
 
+  // Non-blocking variant of store_event_wait. Returns non-zero if every
+  // read up to ev.seq has completed.
+  int store_event_query(struct store* s, struct store_event ev);
+
   // Submit + wait. Returns 0 on success.
   int store_read_many(struct store* s,
                       const struct store_read* reads,

@@ -1,6 +1,7 @@
 #include "store_fs.h"
 
 #include "store.h"
+#include "util/prelude.h"
 #include "util/strbuf.h"
 
 #include <stdlib.h>
@@ -24,11 +25,10 @@ fs_get_file(struct store_fs* fs, const char* key)
 
   // Compose full path and open outside the lock.
   struct strbuf path = { 0 };
-  if (strbuf_join_path(&path, fs->root, key)) {
-    strbuf_free(&path);
-    return NULL;
-  }
-  platform_file* f = platform_file_open_read(strbuf_cstr(&path), 0);
+  platform_file* f = NULL;
+  CHECK_SILENT(Out, strbuf_join_path(&path, fs->root, key) == 0);
+  f = platform_file_open_read(strbuf_cstr(&path), 0);
+Out:
   strbuf_free(&path);
   if (!f)
     return NULL;
@@ -116,8 +116,7 @@ fs_submit(struct store* s, const struct store_read* reads, size_t n)
   for (size_t i = 0; i < n; ++i) {
     struct fs_read_job* j =
       (struct fs_read_job*)calloc(1, sizeof(struct fs_read_job));
-    if (!j)
-      goto drain;
+    CHECK_SILENT(Drain, j);
     j->fs = fs;
     j->key = strdup(reads[i].key);
     j->dst = reads[i].dst;
@@ -125,16 +124,16 @@ fs_submit(struct store* s, const struct store_read* reads, size_t n)
     j->len = reads[i].len;
     if (!j->key) {
       free(j);
-      goto drain;
+      goto Drain;
     }
     if (io_queue_post(fs->q, fs_read_job_fn, j, fs_read_job_free))
-      goto drain;
+      goto Drain;
   }
   struct io_event ioev = io_queue_record(fs->q);
   ev.seq = ioev.seq;
   return ev;
 
-drain:
+Drain:
   io_event_wait(fs->q, io_queue_record(fs->q));
   return ev; // ev.seq == 0 signals failure
 }
@@ -147,15 +146,21 @@ fs_event_wait(struct store* s, struct store_event ev)
 }
 
 static int
+fs_event_query(struct store* s, struct store_event ev)
+{
+  struct store_fs* fs = (struct store_fs*)s;
+  return io_event_query(fs->q, (struct io_event){ .seq = ev.seq });
+}
+
+static int
 fs_stat(struct store* s, const char* key, uint64_t* out)
 {
   struct store_fs* fs = (struct store_fs*)s;
   struct strbuf path = { 0 };
-  if (strbuf_join_path(&path, fs->root, key)) {
-    strbuf_free(&path);
-    return 1;
-  }
-  int rc = platform_path_size(strbuf_cstr(&path), out);
+  int rc = 1;
+  CHECK_SILENT(Out, strbuf_join_path(&path, fs->root, key) == 0);
+  rc = platform_path_size(strbuf_cstr(&path), out);
+Out:
   strbuf_free(&path);
   return rc;
 }
@@ -165,26 +170,25 @@ fs_map(struct store* s, const char* key, struct store_view* out)
 {
   struct store_fs* fs = (struct store_fs*)s;
   struct strbuf path = { 0 };
-  if (strbuf_join_path(&path, fs->root, key)) {
-    strbuf_free(&path);
-    return 1;
-  }
-  struct platform_file_view* pv =
-    (struct platform_file_view*)calloc(1, sizeof(*pv));
-  if (!pv) {
-    strbuf_free(&path);
-    return 1;
-  }
-  int rc = platform_file_map_path(strbuf_cstr(&path), pv);
-  strbuf_free(&path);
+  struct platform_file_view* pv = NULL;
+  int rc = 1;
+
+  CHECK_SILENT(Out, strbuf_join_path(&path, fs->root, key) == 0);
+  pv = (struct platform_file_view*)calloc(1, sizeof(*pv));
+  CHECK_SILENT(Out, pv);
+  rc = platform_file_map_path(strbuf_cstr(&path), pv);
   if (rc) {
     free(pv);
-    return rc;
+    pv = NULL;
+    goto Out;
   }
   out->data = pv->data;
   out->len = pv->len;
   out->backend = pv;
-  return 0;
+
+Out:
+  strbuf_free(&path);
+  return rc;
 }
 
 static void
@@ -222,11 +226,26 @@ fs_destroy(struct store* s)
   free(fs);
 }
 
+// Helper: free a partially-constructed store_fs from store_fs_create's
+// Fail label. fs->cache_mu is initialized inline before any branch that
+// could send us here, so we can always destroy it.
+static void
+store_fs_free_partial(struct store_fs* fs)
+{
+  if (!fs)
+    return;
+  io_queue_destroy(fs->q);
+  pthread_mutex_destroy(&fs->cache_mu);
+  free(fs->root);
+  free(fs);
+}
+
 static const struct store_vtable fs_vtable = {
   .destroy = fs_destroy,
   .stat = fs_stat,
   .submit = fs_submit,
   .event_wait = fs_event_wait,
+  .event_query = fs_event_query,
   .map = fs_map,
   .unmap = fs_unmap,
 };
@@ -234,26 +253,24 @@ static const struct store_vtable fs_vtable = {
 struct store*
 store_fs_create(const struct store_fs_config* cfg)
 {
-  if (!cfg || !cfg->root)
-    return NULL;
-  struct store_fs* fs = (struct store_fs*)calloc(1, sizeof(*fs));
-  if (!fs)
-    return NULL;
+  struct store_fs* fs = NULL;
+
+  CHECK_SILENT(Fail, cfg);
+  CHECK_SILENT(Fail, cfg->root);
+
+  fs = (struct store_fs*)calloc(1, sizeof(*fs));
+  CHECK_SILENT(Fail, fs);
   fs->base.vt = &fs_vtable;
-  fs->root = strdup(cfg->root);
-  if (!fs->root)
-    goto fail;
+  // Init the mutex up front so store_fs_free_partial can always
+  // unconditionally destroy it.
   pthread_mutex_init(&fs->cache_mu, NULL);
+  fs->root = strdup(cfg->root);
+  CHECK_SILENT(Fail, fs->root);
   fs->q = io_queue_create(cfg->nthreads);
-  if (!fs->q)
-    goto fail;
+  CHECK_SILENT(Fail, fs->q);
   return &fs->base;
 
-fail:
-  if (fs->q)
-    io_queue_destroy(fs->q);
-  pthread_mutex_destroy(&fs->cache_mu);
-  free(fs->root);
-  free(fs);
+Fail:
+  store_fs_free_partial(fs);
   return NULL;
 }

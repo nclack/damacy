@@ -79,10 +79,6 @@
             cudaPkgs.nvcomp.static
             cudaPkgs.libcufile
           ] ++ (with pkgs; [
-            # libzstd: test-only. tests/test_damacy.c builds a synthetic
-            # sharded zarr with real zstd-compressed payloads so the
-            # nvCOMP decompress path can be exercised end-to-end.
-            zstd
             lldb
             gh
             man-pages

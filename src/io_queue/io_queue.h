@@ -44,6 +44,10 @@ extern "C"
   // Block until all jobs up to and including ev.seq have completed.
   void io_event_wait(const struct io_queue* q, struct io_event ev);
 
+  // Non-blocking equivalent of io_event_wait. Returns non-zero if every
+  // job up to and including ev.seq has finished, zero otherwise.
+  int io_event_query(const struct io_queue* q, struct io_event ev);
+
   // Returns non-zero once io_queue_destroy has been called.
   int io_queue_is_shutdown(const struct io_queue* q);
 

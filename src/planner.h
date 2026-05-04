@@ -23,15 +23,15 @@ extern "C"
   struct zarr_shard_cache;
 
   // Page-aligned IO operation. Multiple chunk_plans may share one
-  // read_op once coalescing lands; in step 3, 1:1 with chunk_plans.
-  // shard_path lifetime is owned by the planner and remains valid until
-  // the next planner_plan call.
+  // read_op once coalescing lands; pre-step-7 it's 1:1 with chunk_plans.
+  // shard_path is inlined so a read_op survives across batches in the
+  // wave scheduler's plan queue (step 5+).
   struct read_op
   {
-    const char* shard_path;  // null-terminated; planner-owned
-    uint64_t file_offset;    // multiple of page_alignment
-    uint32_t nbytes;         // multiple of page_alignment
-    uint64_t dst_buf_offset; // wave-scheduler-assigned; planner sets 0
+    char shard_path[DAMACY_MAX_PATH]; // null-terminated; truncation = OOM
+    uint64_t file_offset;             // multiple of page_alignment
+    uint32_t nbytes;                  // multiple of page_alignment
+    uint64_t dst_buf_offset;          // wave-scheduler-assigned; planner sets 0
   };
 
   // One chunk's full plan: where on disk, where in the output batch.
@@ -92,6 +92,10 @@ extern "C"
   //
   // Empty chunks (offset == ZARR_SHARD_EMPTY_OFFSET) are skipped —
   // callers should treat the corresponding output region as zeros.
+  //
+  // shard_path strings are copied into each emitted read_op (inline
+  // storage, capped at DAMACY_MAX_PATH); the planner no longer
+  // retains string ownership across calls.
   enum damacy_status planner_plan(struct planner* p,
                                   const struct damacy_sample* samples,
                                   uint32_t n_samples,
