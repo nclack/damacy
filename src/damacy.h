@@ -201,6 +201,7 @@ extern "C"
     uint64_t batches_emitted;
     uint64_t batches_truncated;
     uint64_t waves_emitted;
+    uint64_t chunks_dispatched;
   };
 
   void damacy_stats_get(const struct damacy* d, struct damacy_stats* out);

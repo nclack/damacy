@@ -6,3 +6,6 @@ build-*
 .claude
 .envrc
 typos.toml
+bench/data/
+bench/runs/
+__pycache__

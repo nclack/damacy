@@ -1,0 +1,31 @@
+{
+  "name": "smoke",
+  "dataset": {
+    "store_root": "bench/data/bench.zarr",
+    "n_zarrs": 1,
+    "uri_fmt": "scale0/image",
+    "array_path": "scale0/image",
+    "zarr_shape": [64, 1024, 1024],
+    "chunk_shape": [32, 128, 128],
+    "shard_shape": [64, 512, 512],
+    "dtype": "u16",
+    "zstd_level": 3,
+    "entropy": 0.5,
+    "seed": 42
+  },
+  "sampling": {
+    "sample_shape": [32, 128, 128],
+    "n_batches": 8,
+    "n_warmup_batches": 2,
+    "batch_size": 4,
+    "seed": 1234
+  },
+  "pipeline": {
+    "lookahead_batches": 4,
+    "n_io_threads": 4,
+    "host_buffer_mb": 64,
+    "device_buffer_mb": 128,
+    "n_zarrs_meta_cache": 16,
+    "n_shards_meta_cache": 64
+  }
+}

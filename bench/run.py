@@ -1,86 +1,228 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = []
+# dependencies = ["pydantic>=2", "rich>=13", "typer>=0.12"]
 # ///
-"""One-shot damacy bench runner.
+"""Scenario-driven damacy_bench runner.
 
-Generates the dataset (via bench/gen_dataset.py) on first run, then invokes
-the compiled damacy_bench binary against it. Defaults match gen_dataset.py
-so a no-arg invocation works after `cmake --build build`.
+Reads a scenario JSON (validated via pydantic), ensures every zarr it
+references exists (calls bench/gen_dataset.py per missing zarr with a
+rich progress bar), drops the page cache, runs damacy_bench, archives
+results under bench/runs/<scenario>/<ts>/, and prints a rich report.
 
-  uv run bench/run.py                  # gen if missing, then run
-  uv run bench/run.py --regen          # delete + regenerate dataset first
-  uv run bench/run.py --batches 32 --peek   # extra flags pass through
-
-Use --root to point at a different store. Bench-side knobs (--shape, --uri,
---rank) live on this script and are forwarded; everything else is passed
-through to damacy_bench unchanged. To customize the on-disk geometry, run
-bench/gen_dataset.py manually and point --root at the result.
+  uv run bench/run.py bench/scenarios/default.json
+  uv run bench/run.py bench/scenarios/default.json --regen
 """
-import argparse
+from __future__ import annotations
+
+import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
+from typing import Optional
+
+import typer
+from pydantic import ValidationError
+from rich.console import Console
+from rich.progress import (BarColumn, MofNCompleteColumn, Progress,
+                           SpinnerColumn, TextColumn, TimeElapsedColumn)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_ROOT = REPO_ROOT / "bench" / "data" / "bench.zarr"
 GEN_SCRIPT = REPO_ROOT / "bench" / "gen_dataset.py"
 BENCH_BIN = REPO_ROOT / "build" / "bench" / "damacy_bench"
-DEFAULT_URI = "scale0/image"
-DEFAULT_SHAPE = "32,128,128"  # one inner chunk per sample
-DEFAULT_RANK = 3
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from scenario import (NUMPY_DTYPE, Results, Scenario, format_subdir,  # noqa: E402
+                      zarr_subdir_fmt)
+from report import make_console, render as render_report  # noqa: E402
+
+DEFAULT_SCENARIO = REPO_ROOT / "bench" / "scenarios" / "default.json"
+
+app = typer.Typer(add_completion=False, help=__doc__)
+console = make_console(stderr=True)
 
 
-def gen_dataset(root: Path) -> int:
-    root.parent.mkdir(parents=True, exist_ok=True)
-    cmd = ["uv", "run", str(GEN_SCRIPT), "--out", str(root)]
-    print("+ " + " ".join(cmd), file=sys.stderr)
-    return subprocess.run(cmd).returncode
+def resolve_path(p: str) -> Path:
+    pp = Path(p)
+    return pp if pp.is_absolute() else REPO_ROOT / pp
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(
-        allow_abbrev=False,
-        description=__doc__.splitlines()[0],
-    )
-    ap.add_argument("--root", type=Path, default=DEFAULT_ROOT,
-                    help=f"zarr store path (default: {DEFAULT_ROOT})")
-    ap.add_argument("--uri", default=DEFAULT_URI,
-                    help=f"array name relative to --root (default: {DEFAULT_URI})")
-    ap.add_argument("--shape", default=DEFAULT_SHAPE,
-                    help=f"sample shape csv (default: {DEFAULT_SHAPE})")
-    ap.add_argument("--rank", type=int, default=DEFAULT_RANK,
-                    help=f"sample rank (default: {DEFAULT_RANK})")
-    ap.add_argument("--regen", action="store_true",
-                    help="delete and regenerate the dataset before running")
-    args, passthrough = ap.parse_known_args()
-
-    if args.regen and args.root.exists():
-        print(f"+ rm -rf {args.root}", file=sys.stderr)
-        shutil.rmtree(args.root)
-    if not args.root.exists():
-        rc = gen_dataset(args.root)
-        if rc != 0:
-            return rc
-
-    if not BENCH_BIN.exists():
-        print(f"error: {BENCH_BIN} not found; run `cmake --build build` first",
-              file=sys.stderr)
-        return 1
-
+def gen_one_zarr(out: Path, sc: Scenario, seed: int) -> int:
+    ds = sc.dataset
+    csv = lambda xs: ",".join(str(x) for x in xs)
     cmd = [
-        str(BENCH_BIN),
-        "--root", str(args.root),
-        "--uri", args.uri,
-        "--rank", str(args.rank),
-        "--shape", args.shape,
-        *passthrough,
+        "uv", "run", str(GEN_SCRIPT),
+        "--out", str(out),
+        "--shape", csv(ds.zarr_shape),
+        "--inner", csv(ds.chunk_shape),
+        "--shard", csv(ds.shard_shape),
+        "--dtype", NUMPY_DTYPE[ds.dtype],
+        "--zstd-level", str(ds.zstd_level),
+        "--entropy", str(ds.entropy),
+        "--seed", str(seed),
     ]
-    print("+ " + " ".join(cmd), file=sys.stderr)
-    return subprocess.run(cmd).returncode
+    return subprocess.run(cmd, stdout=subprocess.DEVNULL).returncode
+
+
+def ensure_zarrs(sc: Scenario, regen: bool) -> None:
+    ds = sc.dataset
+    store_root = resolve_path(ds.store_root)
+    sub_fmt = zarr_subdir_fmt(ds.uri_fmt, ds.array_path)
+
+    pending: list[tuple[int, Path]] = []
+    for i in range(ds.n_zarrs):
+        zarr_root = store_root / format_subdir(sub_fmt, i)
+        marker = zarr_root / ds.array_path / "zarr.json"
+        if regen and zarr_root.exists():
+            console.print(f"[yellow]rm -rf[/yellow] {zarr_root}")
+            shutil.rmtree(zarr_root)
+        if not marker.exists():
+            pending.append((i, zarr_root))
+
+    if not pending:
+        console.print(f"[green]✓[/green] all {ds.n_zarrs} zarrs present at "
+                      f"{store_root}")
+        return
+
+    console.print(f"generating [bold]{len(pending)}[/bold] zarr(s) "
+                  f"under [cyan]{store_root}[/cyan]")
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        console=console,
+    ) as prog:
+        task = prog.add_task("gen_dataset", total=len(pending))
+        for i, zarr_root in pending:
+            zarr_root.parent.mkdir(parents=True, exist_ok=True)
+            prog.update(task, description=f"[cyan]{zarr_root.name}[/cyan]")
+            rc = gen_one_zarr(zarr_root, sc, ds.seed + i)
+            if rc != 0:
+                raise typer.Exit(rc)
+            prog.advance(task)
+
+
+def drop_page_cache(roots: list[Path]) -> tuple[int, int]:
+    """posix_fadvise(DONTNEED) every regular file under each root.
+    Best-effort; returns (n_files, n_bytes_hinted)."""
+    if not hasattr(os, "posix_fadvise"):
+        console.print("[yellow]warn[/yellow] posix_fadvise unavailable; "
+                      "cache not dropped")
+        return (0, 0)
+    os.sync()
+    n, sz = 0, 0
+    files: list[Path] = []
+    for root in roots:
+        if root.exists():
+            files.extend(p for p in root.rglob("*") if p.is_file())
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("dropping page cache"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        console=console,
+        transient=True,
+    ) as prog:
+        task = prog.add_task("drop", total=len(files))
+        for p in files:
+            try:
+                fd = os.open(str(p), os.O_RDONLY)
+            except OSError:
+                prog.advance(task)
+                continue
+            try:
+                st = os.fstat(fd)
+                os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+                n += 1
+                sz += st.st_size
+            except OSError:
+                pass
+            finally:
+                os.close(fd)
+                prog.advance(task)
+    return n, sz
+
+
+def run_bench(scenario_path: Path) -> tuple[int, str]:
+    if not BENCH_BIN.exists():
+        raise typer.Exit(
+            f"error: {BENCH_BIN} not found; run `cmake --build build` first"
+        )
+    console.print(f"[dim]+ {BENCH_BIN} {scenario_path}[/dim]")
+    proc = subprocess.run([str(BENCH_BIN), str(scenario_path)],
+                          stdout=subprocess.PIPE, text=True)
+    return proc.returncode, proc.stdout
+
+
+@app.command()
+def main(
+    scenario_path: Path = typer.Argument(
+        DEFAULT_SCENARIO, metavar="SCENARIO", exists=True, dir_okay=False,
+        readable=True,
+        help=f"path to scenario.json (default: {DEFAULT_SCENARIO.relative_to(REPO_ROOT)})"
+    ),
+    regen: bool = typer.Option(
+        False, "--regen",
+        help="delete and regenerate every zarr in the scenario before running"
+    ),
+    runs_dir: Optional[Path] = typer.Option(
+        None, "--runs-dir",
+        help="parent dir for the timestamped run output "
+             "(default: bench/runs/<scenario_name>/<ts>)"
+    ),
+    no_report: bool = typer.Option(
+        False, "--no-report", help="skip pretty-printing the report"
+    ),
+    warm: bool = typer.Option(
+        False, "--warm",
+        help="skip the page-cache drop before running "
+             "(default: drop pages so the bench measures cold IO)"
+    ),
+):
+    try:
+        sc = Scenario.model_validate_json(scenario_path.read_text())
+    except ValidationError as e:
+        console.print(f"[red]invalid scenario {scenario_path}:[/red]")
+        for err in e.errors():
+            loc = ".".join(str(p) for p in err["loc"])
+            console.print(f"  [yellow]{loc}[/yellow]: {err['msg']}")
+        raise typer.Exit(1)
+
+    ensure_zarrs(sc, regen)
+
+    if not warm:
+        store_root = resolve_path(sc.dataset.store_root)
+        n, sz = drop_page_cache([store_root])
+        console.print(f"[green]✓[/green] page cache dropped: {n} files, "
+                      f"{sz / 1e9:.2f} GB hinted")
+
+    rc, stdout = run_bench(scenario_path)
+    if rc != 0:
+        console.print(f"[red]damacy_bench exited {rc}[/red]")
+        raise typer.Exit(rc)
+    if not stdout.strip():
+        console.print("[red]damacy_bench produced no stdout[/red]")
+        raise typer.Exit(1)
+
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    out_dir = (runs_dir / ts) if runs_dir else (
+        REPO_ROOT / "bench" / "runs" / sc.name / ts
+    )
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    results_path = out_dir / "results.json"
+    results_path.write_text(stdout)
+    (out_dir / "scenario.json").write_text(scenario_path.read_text())
+    console.print(f"[green]results:[/green] {results_path}")
+
+    if not no_report:
+        results = Results.model_validate_json(stdout)
+        render_report(results, out=make_console())
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    app()

@@ -38,11 +38,13 @@
 // assemble metadata buffer; max-uncompressed bounds nvCOMP's temp
 // scratch via max_chunks * max_chunk_uncompressed (so the product
 // can't be raised casually — it controls a cudaMalloc).
-#define DAMACY_MAX_CHUNKS_PER_BATCH 256u
-#define DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES (1ull << 20) // 1 MB
-// Wave size cap. With W=2 a wave can never exceed one batch's chunks
-// (waves don't cross batch boundaries in step 5), so this matches.
-#define DAMACY_MAX_CHUNKS_PER_WAVE DAMACY_MAX_CHUNKS_PER_BATCH
+#define DAMACY_MAX_CHUNKS_PER_BATCH 16384u
+#define DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES (512ull << 10) // 512 KB
+// Wave cap is decoupled from batch cap: nvCOMP's temp scratch is sized
+// as MAX_CHUNKS_PER_WAVE * MAX_CHUNK_UNCOMPRESSED (×2 waves), so we
+// keep this small and let large batches split across multiple waves.
+// Waves still don't cross batch boundaries.
+#define DAMACY_MAX_CHUNKS_PER_WAVE 512u
 
 // Poll interval inside damacy_pop's wait-loop. ~50 µs is short enough
 // that the boundary between wave stages doesn't add visible latency,
@@ -830,6 +832,7 @@ peel_wave(struct damacy* self, uint16_t wave_idx, uint16_t slot_idx)
   wave->state = WAVE_IO;
   slot->n_chunks_dispatched += take;
   self->stats.waves_emitted++;
+  self->stats.chunks_dispatched += take;
   return DAMACY_OK;
 }
 

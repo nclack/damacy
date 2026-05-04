@@ -1,0 +1,30 @@
+{
+  "name": "default",
+  "dataset": {
+    "store_root": "bench/data/default",
+    "n_zarrs": 8,
+    "uri_fmt": "z%03u/scale0/image",
+    "zarr_shape": [512, 512, 512],
+    "chunk_shape": [32, 64, 64],
+    "shard_shape": [256, 256, 512],
+    "dtype": "u16",
+    "zstd_level": 3,
+    "entropy": 0.5,
+    "seed": 42
+  },
+  "sampling": {
+    "sample_shape": [128, 128, 128],
+    "n_batches": 50,
+    "n_warmup_batches": 5,
+    "batch_size": 256,
+    "seed": 1234
+  },
+  "pipeline": {
+    "lookahead_batches": 4,
+    "n_io_threads": 8,
+    "host_buffer_mb": 1024,
+    "device_buffer_mb": 1024,
+    "n_zarrs_meta_cache": 4096,
+    "n_shards_meta_cache": 16384
+  }
+}

@@ -1,0 +1,139 @@
+"""Pydantic models shared by run.py and report.py.
+
+Mirrors the scenario.json schema and the results.json emitted by
+damacy_bench. Both scripts add this directory to sys.path before
+importing.
+"""
+from __future__ import annotations
+
+from typing import Literal
+
+from pydantic import BaseModel, Field, field_validator
+
+DType = Literal["u8", "u16", "i16", "u32", "f16", "f32"]
+
+NUMPY_DTYPE = {
+    "u8": "uint8",
+    "u16": "uint16",
+    "i16": "int16",
+    "u32": "uint32",
+    "f16": "float16",
+    "f32": "float32",
+}
+
+
+class Dataset(BaseModel):
+    store_root: str
+    n_zarrs: int = Field(gt=0)
+    uri_fmt: str
+    array_path: str = "scale0/image"
+    zarr_shape: list[int]
+    chunk_shape: list[int]
+    shard_shape: list[int]
+    dtype: DType
+    zstd_level: int = 3
+    entropy: float = 0.5
+    seed: int = 42
+
+    @field_validator("zarr_shape", "chunk_shape", "shard_shape")
+    @classmethod
+    def _positive(cls, v: list[int]) -> list[int]:
+        if not v or any(x <= 0 for x in v):
+            raise ValueError("shape entries must be positive")
+        return v
+
+
+class Sampling(BaseModel):
+    sample_shape: list[int]
+    n_batches: int = Field(gt=0)
+    n_warmup_batches: int = 0
+    batch_size: int = Field(gt=0)
+    seed: int = 1234
+
+
+class Pipeline(BaseModel):
+    lookahead_batches: int = Field(gt=0)
+    n_io_threads: int = Field(gt=0)
+    host_buffer_mb: int = Field(gt=0)
+    device_buffer_mb: int = Field(gt=0)
+    n_zarrs_meta_cache: int = 4096
+    n_shards_meta_cache: int = 16384
+
+
+class Scenario(BaseModel):
+    name: str = "scenario"
+    dataset: Dataset
+    sampling: Sampling
+    pipeline: Pipeline
+
+
+# --- results -----------------------------------------------------------------
+
+
+class Stage(BaseModel):
+    name: str
+    unit: str
+    count: int
+    ms_total: float
+    ms_avg: float
+    ms_best: float
+    input_bytes: float
+    output_bytes: float
+
+
+class Timings(BaseModel):
+    init: float
+    time_to_first_batch: float
+    wall: float
+
+
+class Counters(BaseModel):
+    samples_pushed: int
+    batches_emitted: int
+    batches_truncated: int
+    waves_emitted: int
+    chunks_dispatched: int
+    distinct_zarrs: int
+    distinct_shards: int
+    zarr_meta_hits: int
+    zarr_meta_misses: int
+    shard_idx_hits: int
+    shard_idx_misses: int
+
+
+class Derived(BaseModel):
+    bytes_per_sample: int
+    throughput_mb_s: float
+    stage_concurrency: float
+    chunks_per_batch: float
+    chunks_per_wave: float
+
+
+class Results(BaseModel):
+    scenario: Scenario
+    timings_ms: Timings
+    stages: list[Stage]
+    counters: Counters
+    derived: Derived
+
+
+# --- helpers -----------------------------------------------------------------
+
+
+def zarr_subdir_fmt(uri_fmt: str, array_path: str) -> str:
+    """Strip the array sub-path from the URI template to get the per-zarr
+    on-disk directory template. Empty string when the array is at the
+    store root (single-zarr scenarios)."""
+    if uri_fmt == array_path:
+        return ""
+    suffix = "/" + array_path
+    if not uri_fmt.endswith(suffix):
+        raise ValueError(
+            f"uri_fmt {uri_fmt!r} must end with /{array_path!r}; "
+            "set dataset.array_path to override"
+        )
+    return uri_fmt[: -len(suffix)]
+
+
+def format_subdir(sub_fmt: str, i: int) -> str:
+    return (sub_fmt % i) if "%" in sub_fmt else sub_fmt
