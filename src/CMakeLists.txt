@@ -67,14 +67,19 @@ add_cuda_lib(decoder SOURCES decoder.h decoder.c
 )
 
 # Bytewise gather kernel: chunk windows → output batch tensor.
+# CUDA::cudart_static for the runtime-API hooks the `<<<...>>>` syntax
+# lowers to; CUDA::cuda_driver for CUstream / CUdeviceptr at the
+# public surface.
 add_cuda_lib(assemble SOURCES assemble.h assemble.cu
-    LINKS CUDA::cudart_static
+    LINKS CUDA::cudart_static CUDA::cuda_driver log
 )
 
-# Public damacy surface. Step 4: end-to-end pipeline (single wave per
-# batch, no overlap). Wave scheduling + double-buffering land in step 5.
+# Public damacy surface. damacy.c uses the CUDA driver API exclusively
+# (cuMem*, cuStream*, cuEvent*); the runtime API is only pulled in
+# transitively via decoder/assemble (nvcomp's headers + the kernel
+# launch in assemble.cu).
 add_cuda_lib(damacy SOURCES damacy.h damacy.c damacy_status.c
     LINKS platform planner zarr_meta_cache zarr_shard_cache zarr store
           decoder assemble dtype log strbuf
-          CUDA::cudart_static
+          CUDA::cuda_driver
 )

@@ -9,11 +9,19 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define CU(label, expr)                                                        \
+// nvcomp's batched API takes `cudaStream_t`. CUstream and cudaStream_t
+// are the same opaque-pointer typedef in CUDA's headers, so we can
+// pass the value through unchanged. nvcomp/zstd.h pulls in
+// <cuda_runtime.h> for that typedef — the only place this codebase
+// touches the runtime headers. We don't call any runtime API.
+
+#define CR(label, expr)                                                        \
   do {                                                                         \
-    cudaError_t _e = (expr);                                                   \
-    if (_e != cudaSuccess) {                                                   \
-      log_error("cuda: %s -> %s", #expr, cudaGetErrorString(_e));              \
+    CUresult _r = (expr);                                                      \
+    if (_r != CUDA_SUCCESS) {                                                  \
+      const char* _msg = NULL;                                                 \
+      cuGetErrorString(_r, &_msg);                                             \
+      log_error("cu: %s -> %s", #expr, _msg ? _msg : "?");                     \
       goto label;                                                              \
     }                                                                          \
   } while (0)
@@ -33,8 +41,10 @@ struct decoder
   size_t max_batch;
   size_t max_chunk_uncompressed;
 
-  // Device-side fanout buffers (sized for max_batch).
-  const void** d_compressed_ptrs; // [n] device pointers to compressed buffers
+  // Device-side fanout buffers (sized for max_batch). Stored as the
+  // typed pointers nvcomp wants; cast to/from CUdeviceptr at the
+  // alloc/free/memcpy boundary via the CUDPTR helper below.
+  const void** d_compressed_ptrs;
   size_t* d_compressed_sizes;
   size_t* d_uncompressed_buffer_sizes;
   size_t* d_uncompressed_actual_sizes;
@@ -52,22 +62,35 @@ struct decoder
   size_t temp_bytes;
 };
 
+// Driver API uses CUdeviceptr (uint64_t) for device pointers; our
+// fields are typed pointers. Cast through uintptr_t to silence
+// pointer-to-int conversion diagnostics. CUdeviceptr → typed pointer
+// uses the inverse cast.
+#define CUDPTR(p) ((CUdeviceptr)(uintptr_t)(p))
+
 static void
 decoder_free_internal(struct decoder* d)
 {
   if (!d)
     return;
-  cudaFree(d->d_compressed_ptrs);
-  cudaFree(d->d_compressed_sizes);
-  cudaFree(d->d_uncompressed_buffer_sizes);
-  cudaFree(d->d_uncompressed_actual_sizes);
-  cudaFree(d->d_uncompressed_ptrs);
-  cudaFree(d->d_statuses);
-  cudaFree(d->d_temp);
-  cudaFreeHost(d->h_compressed_ptrs);
-  cudaFreeHost(d->h_compressed_sizes);
-  cudaFreeHost(d->h_uncompressed_buffer_sizes);
-  cudaFreeHost(d->h_uncompressed_ptrs);
+  // cuMemFree on 0 returns CUDA_ERROR_INVALID_VALUE; guard each.
+  void* dev_ptrs[] = {
+    (void*)d->d_compressed_ptrs,
+    (void*)d->d_compressed_sizes,
+    (void*)d->d_uncompressed_buffer_sizes,
+    (void*)d->d_uncompressed_actual_sizes,
+    (void*)d->d_uncompressed_ptrs,
+    (void*)d->d_statuses,
+    (void*)d->d_temp,
+  };
+  for (size_t i = 0; i < sizeof dev_ptrs / sizeof *dev_ptrs; ++i)
+    if (dev_ptrs[i])
+      cuMemFree(CUDPTR(dev_ptrs[i]));
+  // cuMemFreeHost on NULL is documented as a no-op.
+  cuMemFreeHost(d->h_compressed_ptrs);
+  cuMemFreeHost(d->h_compressed_sizes);
+  cuMemFreeHost(d->h_uncompressed_buffer_sizes);
+  cuMemFreeHost(d->h_uncompressed_ptrs);
   free(d);
 }
 
@@ -80,7 +103,9 @@ decoder_create(int device_id,
 
   CHECK(Fail, max_batch_size > 0);
   CHECK(Fail, max_chunk_uncompressed_bytes > 0);
-  CU(Fail, cudaSetDevice(device_id));
+  // Caller is expected to have a CUDA context current on this thread
+  // (damacy_create retains the device's primary context). device_id is
+  // tracked for logging / future reuse but we don't switch contexts here.
 
   d = (struct decoder*)calloc(1, sizeof(*d));
   CHECK(Fail, d);
@@ -88,37 +113,35 @@ decoder_create(int device_id,
   d->max_batch = max_batch_size;
   d->max_chunk_uncompressed = max_chunk_uncompressed_bytes;
 
-  // Device-side fanout arrays.
-  CU(Fail,
-     cudaMalloc((void**)&d->d_compressed_ptrs, max_batch_size * sizeof(void*)));
-  CU(Fail,
-     cudaMalloc((void**)&d->d_compressed_sizes,
-                max_batch_size * sizeof(size_t)));
-  CU(Fail,
-     cudaMalloc((void**)&d->d_uncompressed_buffer_sizes,
-                max_batch_size * sizeof(size_t)));
-  CU(Fail,
-     cudaMalloc((void**)&d->d_uncompressed_actual_sizes,
-                max_batch_size * sizeof(size_t)));
-  CU(Fail,
-     cudaMalloc((void**)&d->d_uncompressed_ptrs,
-                max_batch_size * sizeof(void*)));
-  CU(Fail,
-     cudaMalloc((void**)&d->d_statuses,
-                max_batch_size * sizeof(nvcompStatus_t)));
+  // Device-side fanout arrays. cuMemAlloc takes &CUdeviceptr; we
+  // allocate into a local then assign through with the natural pointer
+  // type. (CUDPTR() handles the inverse direction at use sites.)
+  CUdeviceptr dptr = 0;
+  CR(Fail, cuMemAlloc(&dptr, max_batch_size * sizeof(void*)));
+  d->d_compressed_ptrs = (const void**)(uintptr_t)dptr;
+  CR(Fail, cuMemAlloc(&dptr, max_batch_size * sizeof(size_t)));
+  d->d_compressed_sizes = (size_t*)(uintptr_t)dptr;
+  CR(Fail, cuMemAlloc(&dptr, max_batch_size * sizeof(size_t)));
+  d->d_uncompressed_buffer_sizes = (size_t*)(uintptr_t)dptr;
+  CR(Fail, cuMemAlloc(&dptr, max_batch_size * sizeof(size_t)));
+  d->d_uncompressed_actual_sizes = (size_t*)(uintptr_t)dptr;
+  CR(Fail, cuMemAlloc(&dptr, max_batch_size * sizeof(void*)));
+  d->d_uncompressed_ptrs = (void**)(uintptr_t)dptr;
+  CR(Fail, cuMemAlloc(&dptr, max_batch_size * sizeof(nvcompStatus_t)));
+  d->d_statuses = (nvcompStatus_t*)(uintptr_t)dptr;
 
   // Pinned host staging.
-  CU(Fail,
-     cudaMallocHost((void**)&d->h_compressed_ptrs,
+  CR(Fail,
+     cuMemAllocHost((void**)&d->h_compressed_ptrs,
                     max_batch_size * sizeof(void*)));
-  CU(Fail,
-     cudaMallocHost((void**)&d->h_compressed_sizes,
+  CR(Fail,
+     cuMemAllocHost((void**)&d->h_compressed_sizes,
                     max_batch_size * sizeof(size_t)));
-  CU(Fail,
-     cudaMallocHost((void**)&d->h_uncompressed_buffer_sizes,
+  CR(Fail,
+     cuMemAllocHost((void**)&d->h_uncompressed_buffer_sizes,
                     max_batch_size * sizeof(size_t)));
-  CU(Fail,
-     cudaMallocHost((void**)&d->h_uncompressed_ptrs,
+  CR(Fail,
+     cuMemAllocHost((void**)&d->h_uncompressed_ptrs,
                     max_batch_size * sizeof(void*)));
 
   // Query temp size and allocate.
@@ -133,8 +156,10 @@ decoder_create(int device_id,
        &temp_bytes,
        max_batch_size * max_chunk_uncompressed_bytes));
   d->temp_bytes = temp_bytes;
-  if (temp_bytes > 0)
-    CU(Fail, cudaMalloc(&d->d_temp, temp_bytes));
+  if (temp_bytes > 0) {
+    CR(Fail, cuMemAlloc(&dptr, temp_bytes));
+    d->d_temp = (void*)(uintptr_t)dptr;
+  }
 
   return d;
 
@@ -151,7 +176,7 @@ decoder_destroy(struct decoder* d)
 
 int
 decoder_decompress_batch(struct decoder* d,
-                         cudaStream_t stream,
+                         CUstream stream,
                          const void* const* compressed,
                          const size_t* compressed_sizes,
                          void* const* decompressed,
@@ -174,42 +199,38 @@ decoder_decompress_batch(struct decoder* d,
     d->h_uncompressed_buffer_sizes[i] = uncompressed_sizes[i];
     d->h_uncompressed_ptrs[i] = decompressed[i];
   }
-  CU(Fail,
-     cudaMemcpyAsync(d->d_compressed_ptrs,
-                     d->h_compressed_ptrs,
-                     n * sizeof(void*),
-                     cudaMemcpyHostToDevice,
-                     stream));
-  CU(Fail,
-     cudaMemcpyAsync(d->d_compressed_sizes,
-                     d->h_compressed_sizes,
-                     n * sizeof(size_t),
-                     cudaMemcpyHostToDevice,
-                     stream));
-  CU(Fail,
-     cudaMemcpyAsync(d->d_uncompressed_buffer_sizes,
-                     d->h_uncompressed_buffer_sizes,
-                     n * sizeof(size_t),
-                     cudaMemcpyHostToDevice,
-                     stream));
-  CU(Fail,
-     cudaMemcpyAsync(d->d_uncompressed_ptrs,
-                     d->h_uncompressed_ptrs,
-                     n * sizeof(void*),
-                     cudaMemcpyHostToDevice,
-                     stream));
+  CR(Fail,
+     cuMemcpyHtoDAsync(CUDPTR(d->d_compressed_ptrs),
+                       d->h_compressed_ptrs,
+                       n * sizeof(void*),
+                       stream));
+  CR(Fail,
+     cuMemcpyHtoDAsync(CUDPTR(d->d_compressed_sizes),
+                       d->h_compressed_sizes,
+                       n * sizeof(size_t),
+                       stream));
+  CR(Fail,
+     cuMemcpyHtoDAsync(CUDPTR(d->d_uncompressed_buffer_sizes),
+                       d->h_uncompressed_buffer_sizes,
+                       n * sizeof(size_t),
+                       stream));
+  CR(Fail,
+     cuMemcpyHtoDAsync(CUDPTR(d->d_uncompressed_ptrs),
+                       d->h_uncompressed_ptrs,
+                       n * sizeof(void*),
+                       stream));
 
   nvcompBatchedZstdDecompressOpts_t opts =
     nvcompBatchedZstdDecompressDefaultOpts;
   NV(Fail,
-     nvcompBatchedZstdDecompressAsync((const void* const*)d->d_compressed_ptrs,
+     nvcompBatchedZstdDecompressAsync(d->d_compressed_ptrs,
                                       d->d_compressed_sizes,
                                       d->d_uncompressed_buffer_sizes,
                                       d->d_uncompressed_actual_sizes,
                                       n,
                                       d->d_temp,
                                       d->temp_bytes,
-                                      (void* const*)d->d_uncompressed_ptrs,
+                                      d->d_uncompressed_ptrs,
                                       opts,
                                       d->d_statuses,
                                       stream));

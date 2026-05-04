@@ -12,7 +12,7 @@
 
 #include "limits.h"
 
-#include <cuda_runtime.h>
+#include <cuda.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -37,7 +37,7 @@ extern "C"
   // Launch the assemble kernel on `stream`. `chunks_dev` is a
   // device-resident array of n_chunks descriptors; arena_base /
   // output_base are device pointers. Returns 0 on success.
-  int assemble_launch(cudaStream_t stream,
+  int assemble_launch(CUstream stream,
                       const struct assemble_chunk* chunks_dev,
                       uint32_t n_chunks,
                       uint32_t max_window_elements,

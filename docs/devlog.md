@@ -12,9 +12,12 @@ memory though it might save some loads. Anyway, looks like it would have to look
 more like a peer-exchange if you wanted to save io. Almost certainly not
 worth it (especially if you have a network layer cache).
 
-- will need to follow up on code style. use of logging, check macros, etc
-- use a struct dlist primitive in lru. consider offsets instead of pointers
-- containerof pattern for lru elements 
+Got a basic end-to-end pipeline up. Still needs a lot of work.
+
+- containerof pattern for lru elements?
+- need to do a better multi-zarr setup for bench/test
+- add ngff
+- review the kernel 
 
 ## 2026-05-02
 

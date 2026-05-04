@@ -265,9 +265,45 @@ main(int argc, char** argv)
   struct damacy_stats stats;
   damacy_stats_get(d, &stats);
 
+  uint64_t bytes_per_sample = 2; // dtype DAMACY_U16
+  for (uint8_t d = 0; d < args.rank; ++d)
+    bytes_per_sample *= (uint64_t)args.shape[d];
+  double total_bytes = (double)pushed * (double)bytes_per_sample;
+  double mb_per_s = (total_bytes / 1e6) / (t1 - t0);
+
   printf("samples pushed:         %llu\n", (unsigned long long)pushed);
   printf("batches popped:         %llu\n", (unsigned long long)popped);
+  printf("bytes/sample:           %llu\n",
+         (unsigned long long)bytes_per_sample);
   printf("wall:                   %.3f s\n", t1 - t0);
+  printf("throughput:             %.1f MB/s (uncompressed, sample volume)\n",
+         mb_per_s);
+
+  printf("\n%-12s %8s %10s %10s %10s %10s\n",
+         "stage",
+         "count",
+         "ms_total",
+         "ms_best",
+         "MB_in",
+         "MB_out");
+  const struct damacy_metric* mets[] = {
+    &stats.io,
+    &stats.h2d,
+    &stats.decompress,
+    &stats.assemble,
+  };
+  for (size_t i = 0; i < sizeof mets / sizeof *mets; ++i) {
+    const struct damacy_metric* m = mets[i];
+    if (m->count == 0)
+      continue;
+    printf("%-12s %8llu %10.2f %10.3f %10.1f %10.1f\n",
+           m->name ? m->name : "?",
+           (unsigned long long)m->count,
+           (double)m->ms,
+           (double)m->best_ms,
+           m->input_bytes / 1e6,
+           m->output_bytes / 1e6);
+  }
   printf("batches_emitted:        %llu\n",
          (unsigned long long)stats.batches_emitted);
   printf("waves_emitted:          %llu\n",

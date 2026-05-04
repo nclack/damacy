@@ -7,10 +7,10 @@
 //
 // All buffers passed to decoder_decompress_batch are *device* pointers. The
 // caller is responsible for getting compressed bytes onto the device first
-// (e.g., via cudaMemcpyAsync from a pinned host staging ring).
+// (e.g., via cuMemcpyHtoDAsync from a pinned host staging ring).
 #pragma once
 
-#include <cuda_runtime.h>
+#include <cuda.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -42,7 +42,7 @@ extern "C"
   // `stream`; the caller is expected to record an event after the call to
   // sequence dependent work.
   int decoder_decompress_batch(struct decoder* d,
-                               cudaStream_t stream,
+                               CUstream stream,
                                const void* const* compressed,
                                const size_t* compressed_sizes,
                                void* const* decompressed,

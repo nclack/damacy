@@ -1,6 +1,7 @@
 #include "assemble.h"
 
-#include <stdio.h>
+#include "log/log.h"
+#include "util/prelude.h"
 
 namespace {
 
@@ -46,8 +47,13 @@ assemble_kernel(const struct assemble_chunk* chunks,
 
 } // namespace
 
+// Public surface uses driver-API types (CUstream, CUdeviceptr) so the
+// rest of damacy stays free of cudart includes. We cast through to the
+// runtime types only at the kernel-launch boundary inside this .cu —
+// `<<<...>>>` lowers to runtime-API calls regardless of how the host
+// side talks to CUDA.
 extern "C" int
-assemble_launch(cudaStream_t stream,
+assemble_launch(CUstream stream,
                 const struct assemble_chunk* chunks_dev,
                 uint32_t n_chunks,
                 uint32_t max_window_elements,
@@ -55,16 +61,23 @@ assemble_launch(cudaStream_t stream,
                 void* output_base,
                 uint32_t bpe)
 {
+  // C++ doesn't permit `goto` to jump past the dim3 / cudaError_t
+  // initializations below, so the project's CHECK macros (which goto
+  // a Fail label) don't fit here. Use direct returns for the
+  // preconditions instead.
   if (n_chunks == 0)
     return 0;
   if (!chunks_dev || !arena_base || !output_base || bpe == 0)
     return 1;
+
   uint32_t blocks_y =
     (max_window_elements + kThreadsPerBlock - 1) / kThreadsPerBlock;
   if (blocks_y == 0)
     blocks_y = 1;
   dim3 grid(n_chunks, blocks_y, 1);
   dim3 block(kThreadsPerBlock, 1, 1);
+  // CUstream and cudaStream_t are the same opaque-pointer typedef, so
+  // we can pass it through to the kernel-launch syntax unchanged.
   assemble_kernel<<<grid, block, 0, stream>>>(chunks_dev,
                                               n_chunks,
                                               (const uint8_t*)arena_base,
@@ -72,7 +85,7 @@ assemble_launch(cudaStream_t stream,
                                               bpe);
   cudaError_t err = cudaGetLastError();
   if (err != cudaSuccess) {
-    fprintf(stderr, "[assemble] launch: %s\n", cudaGetErrorString(err));
+    log_error("assemble launch: %s", cudaGetErrorString(err));
     return 1;
   }
   return 0;
