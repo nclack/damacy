@@ -76,6 +76,48 @@ monotonic_ns(void)
   return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
+// Initialize a damacy_metric to a "no observations yet" state with a
+// stable name pointer.
+static void
+metric_init(struct damacy_metric* m, const char* name)
+{
+  m->name = name;
+  m->ms = 0.f;
+  m->best_ms = 1e30f;
+  m->input_bytes = 0;
+  m->output_bytes = 0;
+  m->count = 0;
+}
+
+// Record one observation (elapsed ms + per-stage byte totals) into a
+// cumulative damacy_metric. For stall-style metrics (no throughput),
+// pass 0 for both byte counters.
+static void
+metric_record(struct damacy_metric* m, float ms, uint64_t bin, uint64_t bout)
+{
+  m->ms += ms;
+  if (ms < m->best_ms)
+    m->best_ms = ms;
+  m->input_bytes += (double)bin;
+  m->output_bytes += (double)bout;
+  m->count += 1;
+}
+
+// Initialize all metrics in `s` to the no-observation state.
+static void
+stats_init(struct damacy_stats* s)
+{
+  memset(s, 0, sizeof(*s));
+  metric_init(&s->plan, "plan");
+  metric_init(&s->io, "io");
+  metric_init(&s->h2d, "h2d");
+  metric_init(&s->decompress, "decompress");
+  metric_init(&s->assemble, "assemble");
+  metric_init(&s->pop_wait_io, "pop_wait_io");
+  metric_init(&s->pop_wait_compute, "pop_wait_compute");
+  metric_init(&s->flush_wait, "flush_wait");
+}
+
 struct damacy_batch
 {
   struct damacy* d;
@@ -675,8 +717,11 @@ plan_into_slot(struct damacy* self, uint16_t slot_idx, uint32_t n_samples)
     .chunk_plans = slot->chunk_plans,
     .chunk_plans_cap = DAMACY_MAX_CHUNKS_PER_BATCH,
   };
+  uint64_t plan_t0 = monotonic_ns();
   status = planner_plan(
     self->planner, self->batch_stage, n_samples, slot_idx, &plan_out);
+  metric_record(
+    &self->stats.plan, (float)((monotonic_ns() - plan_t0) / 1.0e6), 0, 0);
   if (status != DAMACY_OK)
     goto Cleanup;
 
@@ -917,48 +962,6 @@ kick_compute(struct damacy* self, struct damacy_wave* wave)
 CudaFail:
   self->failed_status = DAMACY_CUDA;
   return DAMACY_CUDA;
-}
-
-// Initialize a damacy_metric to a "no observations yet" state with a
-// stable name pointer.
-static void
-metric_init(struct damacy_metric* m, const char* name)
-{
-  m->name = name;
-  m->ms = 0.f;
-  m->best_ms = 1e30f;
-  m->input_bytes = 0;
-  m->output_bytes = 0;
-  m->count = 0;
-}
-
-// Drain per-wave timings into the cumulative damacy_metric `m`. ms is
-// elapsed wall (ms), and bytes_in/out are the per-stage byte totals.
-static void
-metric_record(struct damacy_metric* m, float ms, uint64_t bin, uint64_t bout)
-{
-  m->ms += ms;
-  if (ms < m->best_ms)
-    m->best_ms = ms;
-  m->input_bytes += (double)bin;
-  m->output_bytes += (double)bout;
-  m->count += 1;
-}
-
-// Initialize all metrics in `s` to the no-observation state.
-static void
-stats_init(struct damacy_stats* s)
-{
-  memset(s, 0, sizeof(*s));
-  metric_init(&s->plan, "plan");
-  metric_init(&s->io, "io");
-  metric_init(&s->h2d, "h2d");
-  metric_init(&s->decompress, "decompress");
-  metric_init(&s->assemble, "assemble");
-  metric_init(&s->pop_wait_io, "pop_wait_io");
-  metric_init(&s->pop_wait_compute, "pop_wait_compute");
-  metric_init(&s->push_backpressure, "push_backpressure");
-  metric_init(&s->flush_wait, "flush_wait");
 }
 
 // All wave events have fired (asm_end signaled implies everything
@@ -1298,7 +1301,25 @@ damacy_pop(struct damacy* self, struct damacy_batch** out)
     if (!any_wave_in_flight(self) && !any_batch_in_flight(self) &&
         self->lookahead.size < self->cfg.batch_size)
       return DAMACY_AGAIN;
+    // Attribute the upcoming poll to whichever stage we're blocked on.
+    // Prefer compute when any wave has reached H2D/ASSEMBLE — that's
+    // what we'd most likely be waiting on; fall back to IO otherwise.
+    int waiting_compute = 0;
+    for (int w = 0; w < 2; ++w) {
+      enum wave_state ws = self->waves[w].state;
+      if (ws == WAVE_H2D || ws == WAVE_ASSEMBLE) {
+        waiting_compute = 1;
+        break;
+      }
+    }
+    uint64_t poll_t0 = monotonic_ns();
     platform_sleep_ns(DAMACY_POP_POLL_NS);
+    float poll_ms = (float)((monotonic_ns() - poll_t0) / 1.0e6);
+    metric_record(waiting_compute ? &self->stats.pop_wait_compute
+                                  : &self->stats.pop_wait_io,
+                  poll_ms,
+                  0,
+                  0);
   }
 
 InvalidArg:
@@ -1352,6 +1373,7 @@ damacy_flush(struct damacy* self)
 
   // Drain everything in flight by spinning the scheduler until no
   // FILLING slots remain.
+  uint64_t flush_t0 = monotonic_ns();
   while (any_wave_in_flight(self) || find_oldest_filling_slot(self) >= 0) {
     enum damacy_status s = advance_waves(self);
     if (s != DAMACY_OK)
@@ -1362,6 +1384,10 @@ damacy_flush(struct damacy* self)
     if (any_wave_in_flight(self))
       platform_sleep_ns(DAMACY_POP_POLL_NS);
   }
+  metric_record(&self->stats.flush_wait,
+                (float)((monotonic_ns() - flush_t0) / 1.0e6),
+                0,
+                0);
   return DAMACY_OK;
 }
 

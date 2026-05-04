@@ -153,6 +153,96 @@ make_sample(const struct bench_args* args)
   return s;
 }
 
+// --- report -----------------------------------------------------------------
+
+// Per-stage row. Stall metrics carry zero bytes and print '-' for the
+// MB/s columns; throughput stages get derived MB/s from
+// input_bytes / ms.
+static void
+print_metric_row(const struct damacy_metric* m)
+{
+  if (m->count == 0)
+    return;
+  double ms_avg = (double)m->ms / (double)m->count;
+  double mb_in = m->input_bytes / 1e6;
+  double mb_out = m->output_bytes / 1e6;
+  double secs = (double)m->ms / 1e3;
+  int has_bytes = (m->input_bytes > 0.0) || (m->output_bytes > 0.0);
+  printf("%-18s %8llu %10.2f %10.3f %10.3f",
+         m->name ? m->name : "?",
+         (unsigned long long)m->count,
+         (double)m->ms,
+         ms_avg,
+         (double)m->best_ms);
+  if (has_bytes && secs > 0.0)
+    printf(" %10.1f %10.1f %10.0f %10.0f\n",
+           mb_in,
+           mb_out,
+           mb_in / secs,
+           mb_out / secs);
+  else
+    printf(" %10s %10s %10s %10s\n", "-", "-", "-", "-");
+}
+
+static void
+print_metric_table(const struct damacy_stats* s)
+{
+  printf("\n%-18s %8s %10s %10s %10s %10s %10s %10s %10s\n",
+         "stage",
+         "count",
+         "ms_total",
+         "ms_avg",
+         "ms_best",
+         "MB_in",
+         "MB_out",
+         "MB/s_in",
+         "MB/s_out");
+  const struct damacy_metric* mets[] = {
+    &s->plan,
+    &s->io,
+    &s->h2d,
+    &s->decompress,
+    &s->assemble,
+    &s->pop_wait_io,
+    &s->pop_wait_compute,
+    &s->flush_wait,
+  };
+  for (size_t i = 0; i < sizeof mets / sizeof *mets; ++i)
+    print_metric_row(mets[i]);
+}
+
+static void
+print_summary(uint64_t pushed,
+              uint64_t popped,
+              uint64_t bytes_per_sample,
+              double wall_s)
+{
+  double total_bytes = (double)pushed * (double)bytes_per_sample;
+  double mb_per_s = wall_s > 0.0 ? (total_bytes / 1e6) / wall_s : 0.0;
+  printf("samples pushed:         %llu\n", (unsigned long long)pushed);
+  printf("batches popped:         %llu\n", (unsigned long long)popped);
+  printf("bytes/sample:           %llu\n",
+         (unsigned long long)bytes_per_sample);
+  printf("wall:                   %.3f s\n", wall_s);
+  printf("throughput:             %.1f MB/s (uncompressed, sample volume)\n",
+         mb_per_s);
+}
+
+static void
+print_counters(const struct damacy_stats* s)
+{
+  printf("batches_emitted:        %llu\n",
+         (unsigned long long)s->batches_emitted);
+  printf("waves_emitted:          %llu\n",
+         (unsigned long long)s->waves_emitted);
+  printf("zarr_meta hits/misses:  %llu/%llu\n",
+         (unsigned long long)s->zarr_meta_hits,
+         (unsigned long long)s->zarr_meta_misses);
+  printf("shard_idx hits/misses:  %llu/%llu\n",
+         (unsigned long long)s->shard_idx_hits,
+         (unsigned long long)s->shard_idx_misses);
+}
+
 int
 main(int argc, char** argv)
 {
@@ -268,52 +358,11 @@ main(int argc, char** argv)
   uint64_t bytes_per_sample = 2; // dtype DAMACY_U16
   for (uint8_t d = 0; d < args.rank; ++d)
     bytes_per_sample *= (uint64_t)args.shape[d];
-  double total_bytes = (double)pushed * (double)bytes_per_sample;
-  double mb_per_s = (total_bytes / 1e6) / (t1 - t0);
 
-  printf("samples pushed:         %llu\n", (unsigned long long)pushed);
-  printf("batches popped:         %llu\n", (unsigned long long)popped);
-  printf("bytes/sample:           %llu\n",
-         (unsigned long long)bytes_per_sample);
-  printf("wall:                   %.3f s\n", t1 - t0);
-  printf("throughput:             %.1f MB/s (uncompressed, sample volume)\n",
-         mb_per_s);
-
-  printf("\n%-12s %8s %10s %10s %10s %10s\n",
-         "stage",
-         "count",
-         "ms_total",
-         "ms_best",
-         "MB_in",
-         "MB_out");
-  const struct damacy_metric* mets[] = {
-    &stats.io,
-    &stats.h2d,
-    &stats.decompress,
-    &stats.assemble,
-  };
-  for (size_t i = 0; i < sizeof mets / sizeof *mets; ++i) {
-    const struct damacy_metric* m = mets[i];
-    if (m->count == 0)
-      continue;
-    printf("%-12s %8llu %10.2f %10.3f %10.1f %10.1f\n",
-           m->name ? m->name : "?",
-           (unsigned long long)m->count,
-           (double)m->ms,
-           (double)m->best_ms,
-           m->input_bytes / 1e6,
-           m->output_bytes / 1e6);
-  }
-  printf("batches_emitted:        %llu\n",
-         (unsigned long long)stats.batches_emitted);
-  printf("waves_emitted:          %llu\n",
-         (unsigned long long)stats.waves_emitted);
-  printf("zarr_meta hits/misses:  %llu/%llu\n",
-         (unsigned long long)stats.zarr_meta_hits,
-         (unsigned long long)stats.zarr_meta_misses);
-  printf("shard_idx hits/misses:  %llu/%llu\n",
-         (unsigned long long)stats.shard_idx_hits,
-         (unsigned long long)stats.shard_idx_misses);
+  print_summary(pushed, popped, bytes_per_sample, t1 - t0);
+  print_metric_table(&stats);
+  printf("\n");
+  print_counters(&stats);
 
   free(samples);
   damacy_destroy(d);

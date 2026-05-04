@@ -194,7 +194,6 @@ extern "C"
     struct damacy_metric assemble;
     struct damacy_metric pop_wait_io;
     struct damacy_metric pop_wait_compute;
-    struct damacy_metric push_backpressure;
     struct damacy_metric flush_wait;
 
     uint64_t zarr_meta_hits, zarr_meta_misses;
