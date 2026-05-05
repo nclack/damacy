@@ -8,8 +8,8 @@
 
 #include "damacy.h"   // damacy_status
 #include "util/lru.h" // struct lru_counters
-#include "zarr_metadata.h"
-#include "zarr_shard_index.h" // struct zarr_shard_entry
+#include "zarr/zarr_metadata.h"
+#include "zarr/zarr_shard_index.h" // struct zarr_shard_entry
 
 #include <stdint.h>
 

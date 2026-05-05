@@ -1,11 +1,23 @@
 // Internal: parse a zarr v3 array's zarr.json into a flat metadata struct.
 #pragma once
 
-#include "dtype.h"
+#include "dtype/dtype.h"
 #include "limits.h"
-#include "types.codec.h"
 
 #include <stdint.h>
+
+// Inner-codec subset we actually parse out of zarr.json. Extend as more
+// codecs are taught to the parser; today only NONE / ZSTD are recognized.
+enum compression_codec
+{
+  CODEC_NONE,
+  CODEC_ZSTD,
+};
+
+struct codec_config
+{
+  enum compression_codec id;
+};
 
 struct zarr_metadata
 {

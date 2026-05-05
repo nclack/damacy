@@ -1,13 +1,13 @@
-#include "planner.h"
+#include "planner/planner.h"
 
-#include "dtype.h"
+#include "dtype/dtype.h"
 #include "log/log.h"
 #include "util/prelude.h"
 #include "util/strbuf.h"
-#include "zarr_meta_cache.h"
-#include "zarr_metadata.h"
-#include "zarr_shard_cache.h"
-#include "zarr_shard_index.h"
+#include "zarr/zarr_meta_cache.h"
+#include "zarr/zarr_metadata.h"
+#include "zarr/zarr_shard_cache.h"
+#include "zarr/zarr_shard_index.h"
 
 #include <stdlib.h>
 #include <string.h>

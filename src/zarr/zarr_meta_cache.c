@@ -1,12 +1,12 @@
-#include "zarr_meta_cache.h"
+#include "zarr/zarr_meta_cache.h"
 
 #include "log/log.h"
-#include "store.h"
+#include "store/store.h"
 #include "util/hash.h"
 #include "util/lru.h"
 #include "util/prelude.h"
 #include "util/strbuf.h"
-#include "zarr_metadata.h"
+#include "zarr/zarr_metadata.h"
 
 #include <stdlib.h>
 #include <string.h>

@@ -4,9 +4,9 @@
 // result byte-for-byte. Exercises rank 3, 4, 5 plus bpe ∈ {1, 2, 4}
 // without going through zarr/IO.
 
-#include "assemble.h"
+#include "assemble/assemble.h"
 #include "expect.h"
-#include "planner.h"
+#include "planner/planner.h"
 
 #include <cuda.h>
 #include <cuda_runtime.h>

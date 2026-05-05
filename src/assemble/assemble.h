@@ -9,7 +9,7 @@
 #pragma once
 
 #include "limits.h"
-#include "planner.h"
+#include "planner/planner.h"
 
 #include <cuda.h>
 #include <stddef.h>

@@ -16,17 +16,17 @@
 
 #include "damacy.h"
 
-#include "assemble.h"
-#include "decoder.h"
-#include "dtype.h"
+#include "assemble/assemble.h"
+#include "decoder/decoder.h"
+#include "dtype/dtype.h"
 #include "log/log.h"
-#include "planner.h"
+#include "planner/planner.h"
 #include "platform/platform.h"
-#include "store.h"
+#include "store/store.h"
 #include "util/prelude.h"
-#include "zarr_meta_cache.h"
-#include "zarr_metadata.h"
-#include "zarr_shard_cache.h"
+#include "zarr/zarr_meta_cache.h"
+#include "zarr/zarr_metadata.h"
+#include "zarr/zarr_shard_cache.h"
 
 #include <cuda.h>
 #include <stdlib.h>

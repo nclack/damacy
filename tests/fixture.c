@@ -1,7 +1,7 @@
 #include "fixture.h"
 
 #include "util/crc32c.h"
-#include "zarr_shard_index.h"
+#include "zarr/zarr_shard_index.h"
 
 #include <stdio.h>
 #include <stdlib.h>

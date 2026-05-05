@@ -1,14 +1,14 @@
-#include "zarr_shard_cache.h"
+#include "zarr/zarr_shard_cache.h"
 
 #include "limits.h"
 #include "log/log.h"
-#include "store.h"
+#include "store/store.h"
 #include "util/hash.h"
 #include "util/lru.h"
 #include "util/prelude.h"
 #include "util/strbuf.h"
-#include "zarr_metadata.h"
-#include "zarr_shard_index.h"
+#include "zarr/zarr_metadata.h"
+#include "zarr/zarr_shard_index.h"
 
 #include <stdlib.h>
 #include <string.h>

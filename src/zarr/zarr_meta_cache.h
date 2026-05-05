@@ -8,7 +8,7 @@
 
 #include "damacy.h"   // damacy_status
 #include "util/lru.h" // struct lru_counters
-#include "zarr_metadata.h"
+#include "zarr/zarr_metadata.h"
 
 #include <stdint.h>
 

@@ -3,10 +3,10 @@
 // (offset, nbytes) index protected by CRC32C, and exercises the cache.
 
 #include "fixture.h"
-#include "store.h"
-#include "zarr_metadata.h"
-#include "zarr_shard_cache.h"
-#include "zarr_shard_index.h"
+#include "store/store.h"
+#include "zarr/zarr_metadata.h"
+#include "zarr/zarr_shard_cache.h"
+#include "zarr/zarr_shard_index.h"
 
 #include <stdio.h>
 #include <stdlib.h>

@@ -1,5 +1,13 @@
 # dev log
 
+## 2026-05-05
+
+Goal for today would be to actually try this out on the cluster. Will also
+start on the python interface. It would be nice to get this into a state
+where I can hand it off.
+
+- [ ] zarr_metadata.c - separate parsing and validation
+
 ## 2026-05-04
 
 Question: which way to do the step optimization? Maybe from the end to the

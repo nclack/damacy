@@ -1,7 +1,7 @@
 // Internal: filesystem store. Public callers use store.h only.
 #pragma once
 
-#include "store.h"
+#include "store/store.h"
 
 #include "io_queue/io_queue.h"
 #include "platform/platform_io.h"

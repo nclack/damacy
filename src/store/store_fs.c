@@ -1,6 +1,6 @@
-#include "store_fs.h"
+#include "store/store_fs.h"
 
-#include "store.h"
+#include "store/store.h"
 #include "util/prelude.h"
 #include "util/strbuf.h"
 

@@ -1,4 +1,4 @@
-#include "dimension.h"
+#include "dimension/dimension.h"
 
 #include <stdlib.h>
 #include <string.h>

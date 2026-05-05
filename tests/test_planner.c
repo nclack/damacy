@@ -5,11 +5,11 @@
 
 #include "damacy.h"
 #include "fixture.h"
-#include "planner.h"
-#include "store.h"
-#include "zarr_meta_cache.h"
-#include "zarr_shard_cache.h"
-#include "zarr_shard_index.h"
+#include "planner/planner.h"
+#include "store/store.h"
+#include "zarr/zarr_meta_cache.h"
+#include "zarr/zarr_shard_cache.h"
+#include "zarr/zarr_shard_index.h"
 
 #include <stdio.h>
 #include <stdlib.h>

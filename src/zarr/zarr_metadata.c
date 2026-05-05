@@ -1,4 +1,4 @@
-#include "zarr_metadata.h"
+#include "zarr/zarr_metadata.h"
 
 #include "util/json.h"
 #include "util/prelude.h"
@@ -79,16 +79,6 @@ parse_inner_codec(struct json_node codecs_arr, struct codec_config* out)
       continue; // metadata-only; not a transformation we model
     if (json_str_eq(name, "zstd")) {
       out->id = CODEC_ZSTD;
-      static const struct json_query level_path[] = {
-        { QUERY_KEY, .key = "configuration" }, { QUERY_KEY, .key = "level" }
-      };
-      struct json_node level;
-      if (json_resolve(c.s, level_path, countof(level_path), &level, NULL) ==
-          JSON_OK) {
-        int64_t lv = 0;
-        if (json_as_int(level, &lv) == 0 && lv >= 0 && lv < 256)
-          out->level = (uint8_t)lv;
-      }
       return 0;
     }
     return 1; // unknown / unsupported codec for v0

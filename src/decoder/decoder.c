@@ -1,4 +1,4 @@
-#include "decoder.h"
+#include "decoder/decoder.h"
 
 #include "log/log.h"
 #include "util/prelude.h"

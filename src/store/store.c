@@ -1,6 +1,6 @@
-#include "store.h"
+#include "store/store.h"
 
-#include "store_fs.h"
+#include "store/store_fs.h"
 #include "util/prelude.h"
 
 void

@@ -1,4 +1,4 @@
-#include "zarr_shard_index.h"
+#include "zarr/zarr_shard_index.h"
 
 #include "util/crc32c.h"
 #include "util/strbuf.h"

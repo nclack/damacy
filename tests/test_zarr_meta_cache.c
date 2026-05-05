@@ -3,9 +3,9 @@
 // hit/miss/eviction behaviour.
 
 #include "fixture.h"
-#include "store.h"
-#include "zarr_meta_cache.h"
-#include "zarr_metadata.h"
+#include "store/store.h"
+#include "zarr/zarr_meta_cache.h"
+#include "zarr/zarr_metadata.h"
 
 #include <stdio.h>
 #include <stdlib.h>

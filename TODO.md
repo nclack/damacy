@@ -9,7 +9,8 @@
 - [ ] type translation (e.g. u16 to bf16)
 - [ ] eval lru for compressed chunk
       - may be interesting to eval hit rate
-      - system's virtual page cache may obviate this for host mem 
+      - system's virtual page cache may obviate this for host mem
+- [ ] how to add back blosc support - will need decompression on the cpu side
 
 ## Fuzzing
 
