@@ -9,3 +9,8 @@ typos.toml
 bench/data/
 bench/runs/
 __pycache__
+*.so
+*.egg-info
+.venv
+dist
+uv.lock

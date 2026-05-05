@@ -1,0 +1,45 @@
+# Keep the build context small and reproducible. Anything large or
+# host-specific should be excluded here.
+
+# Local build artifacts
+build
+build-*
+dist
+*.egg-info
+*.so
+
+# Python / venv
+.venv
+__pycache__
+*.pyc
+
+# Bench fixtures and run outputs (1+ GiB; not needed inside the image —
+# the cluster mounts data via a volume).
+bench/data
+bench/runs
+
+# VCS + editor noise
+.git
+.gitignore
+.github
+.cache
+.clangd
+.clang-format
+.envrc
+.direnv
+.pre-commit-config.yaml
+
+# Nix toolchain (this image uses conda-forge instead)
+flake.nix
+flake.lock
+
+# Personal/agent state
+.claude
+docs/devlog.md
+
+# Docker self-references
+Dockerfile
+.dockerignore
+
+# Experiments tree (not part of the bench surface; keeps the context lean)
+experiments

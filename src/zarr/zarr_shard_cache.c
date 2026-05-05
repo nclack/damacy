@@ -1,6 +1,6 @@
 #include "zarr/zarr_shard_cache.h"
 
-#include "limits.h"
+#include "damacy_limits.h"
 #include "log/log.h"
 #include "store/store.h"
 #include "util/hash.h"

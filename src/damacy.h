@@ -10,7 +10,7 @@
 // shape: dataloader thread pops, training thread releases).
 #pragma once
 
-#include "limits.h"
+#include "damacy_limits.h"
 
 #include <stddef.h>
 #include <stdint.h>

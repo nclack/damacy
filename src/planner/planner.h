@@ -8,8 +8,8 @@
 // scheduler; the planner zeroes them.
 #pragma once
 
-#include "damacy.h" // damacy_status, damacy_sample, damacy_aabb
-#include "limits.h" // DAMACY_MAX_RANK
+#include "damacy.h"        // damacy_status, damacy_sample, damacy_aabb
+#include "damacy_limits.h" // DAMACY_MAX_RANK
 
 #include <stddef.h>
 #include <stdint.h>

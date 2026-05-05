@@ -1,6 +1,6 @@
 #include "assemble/assemble.h"
 
-#include "limits.h"
+#include "damacy_limits.h"
 #include "log/log.h"
 #include "util/prelude.h"
 

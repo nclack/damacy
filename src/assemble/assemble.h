@@ -8,7 +8,7 @@
 // arena offset and the chunk's grid position.
 #pragma once
 
-#include "limits.h"
+#include "damacy_limits.h"
 #include "planner/planner.h"
 
 #include <cuda.h>

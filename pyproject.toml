@@ -1,0 +1,29 @@
+[build-system]
+requires = ["scikit-build-core>=0.10"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "damacy"
+version = "0.0.1"
+description = "High-throughput streaming loader for sharded NGFF zarr stores."
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Nathan Clack", email = "nclack@gmail.com" }]
+requires-python = ">=3.11"
+
+[tool.scikit-build]
+# scikit-build-core invokes our top-level CMakeLists with DAMACY_PYTHON=ON
+# so the python/ subdirectory builds the extension. The C lib + tests are
+# unaffected; non-python builds default DAMACY_PYTHON=OFF.
+cmake.args = ["-DDAMACY_PYTHON=ON"]
+cmake.build-type = "RelWithDebInfo"
+build-dir = "build/{wheel_tag}"
+wheel.packages = ["python/damacy"]
+# ABI-stable wheels are deferred until the public surface is final;
+# until then we build a per-cpython wheel.
+wheel.py-api = ""
+
+[tool.scikit-build.cmake.define]
+# CUDA is required for the python module (via the damacy lib). Fuzz mode
+# is not relevant to wheel builds.
+DAMACY_FUZZ = "OFF"

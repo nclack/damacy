@@ -1,0 +1,68 @@
+# Step 1 — verify the project compiles in CI.
+#
+# Configures CMake with DAMACY_PYTHON=ON, builds everything (C library,
+# damacy_bench, and the Python extension), and uploads the build dir as
+# an artifact so the test workflow (or a human) can inspect the output.
+#
+# Runs on the self-hosted GPU runner because the default build path
+# enables CUDA + nvCOMP. Tests are intentionally not invoked here; see
+# test.yml for the test job.
+
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    # Self-hosted runner labels — adjust if the actual runner uses
+    # different tags (e.g. add `linux` / `x64` / a hostname label).
+    runs-on: [self-hosted, gpu]
+
+    env:
+      # nvcomp may not live on the standard search path; the project's
+      # FindNvcomp.cmake honors Nvcomp_ROOT (see flake.nix). Override at
+      # the runner level via repo/runner secrets if needed.
+      Nvcomp_ROOT: ${{ vars.NVCOMP_ROOT }}
+      CMAKE_BUILD_PARALLEL_LEVEL: 0
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show toolchain versions
+        run: |
+          cmake --version
+          ninja --version || true
+          gcc --version
+          nvcc --version || true
+          python3 --version
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DDAMACY_PYTHON=ON
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Stage Python extension into source tree
+        # The developer pattern (per project notes): copy the freshly built
+        # .so next to python/damacy/__init__.py so `PYTHONPATH=python` can
+        # resolve `damacy._native`. This artifact is consumed by test.yml.
+        run: |
+          cp build/python/_native*.so python/damacy/
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: damacy-build-${{ github.sha }}
+          path: |
+            build/
+            python/damacy/_native*.so
+          retention-days: 7
+          if-no-files-found: error

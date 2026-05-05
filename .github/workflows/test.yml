@@ -1,0 +1,104 @@
+# Step 2 — run ctest + a Python import smoke test, and produce an HTML
+# coverage report.
+#
+# Builds with DAMACY_COVERAGE=ON (gcov instrumentation injected via the
+# `warnings` interface target — see CMakeLists.txt), then:
+#   - runs the full ctest suite (CPU tests + the two CUDA tests, which
+#     need the self-hosted GPU runner),
+#   - imports `damacy` from Python and prints __version__,
+#   - produces an HTML coverage report via `gcovr`,
+#   - uploads the HTML report as a workflow artifact.
+#
+# Kept as a separate workflow file so step 1 (build.yml) can be landed
+# and verified independently.
+
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    # Self-hosted runner labels — same as build.yml. The two CUDA tests
+    # (test_damacy, test_assemble) require an NVIDIA GPU at runtime.
+    runs-on: [self-hosted, gpu]
+
+    env:
+      Nvcomp_ROOT: ${{ vars.NVCOMP_ROOT }}
+      CMAKE_BUILD_PARALLEL_LEVEL: 0
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show toolchain versions
+        run: |
+          cmake --version
+          gcc --version
+          nvcc --version || true
+          python3 --version
+
+      - name: Install gcovr
+        run: |
+          python3 -m pip install --user --upgrade gcovr
+
+      - name: Configure (with coverage)
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DDAMACY_PYTHON=ON \
+            -DDAMACY_COVERAGE=ON
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Stage Python extension into source tree
+        run: |
+          cp build/python/_native*.so python/damacy/
+
+      - name: Run ctest
+        # All 7 tests; the two CUDA tests require the GPU runner. ctest
+        # reports nonzero on any failure.
+        run: ctest --output-on-failure --test-dir build
+
+      - name: Python import smoke test
+        # Drive the Python side without needing an installed wheel. The
+        # __init__.py imports `damacy._native`; PYTHONPATH=python lets it
+        # resolve to the just-built .so we copied above.
+        env:
+          PYTHONPATH: ${{ github.workspace }}/python
+        run: |
+          python3 -c "import damacy; print('damacy', damacy.__version__)"
+          # Exercise a public API call to confirm the C extension links
+          # and runs (not just imports). set_log_quiet is a trivial no-op
+          # forward into the C library.
+          python3 -c "import damacy; damacy._native.set_log_quiet(True); print('api-ok')"
+
+      - name: Generate coverage report
+        # gcovr walks the build tree, finds the .gcno/.gcda files dropped
+        # by --coverage, and emits an HTML report. --root anchors paths
+        # to the source tree; --exclude drops third-party + tests + the
+        # experiments/ playground.
+        if: always()
+        run: |
+          mkdir -p coverage-html
+          ~/.local/bin/gcovr \
+            --root . \
+            --html-details coverage-html/index.html \
+            --exclude '.*/tests/.*' \
+            --exclude '.*/experiments/.*' \
+            --exclude '.*/build/.*' \
+            --print-summary \
+            || true
+
+      - name: Upload coverage HTML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html-${{ github.sha }}
+          path: coverage-html/
+          retention-days: 14
+          if-no-files-found: warn

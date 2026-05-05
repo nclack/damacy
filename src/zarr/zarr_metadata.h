@@ -1,8 +1,8 @@
 // Internal: parse a zarr v3 array's zarr.json into a flat metadata struct.
 #pragma once
 
+#include "damacy_limits.h"
 #include "dtype/dtype.h"
-#include "limits.h"
 
 #include <stdint.h>
 

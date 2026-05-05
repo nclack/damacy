@@ -23,14 +23,40 @@ if(NOT DAMACY_FUZZ)
     find_package(Nvcomp REQUIRED)
 endif()
 
+option(
+    DAMACY_PYTHON
+    "Build the Python extension module (python/damacy/_native)"
+    OFF
+)
+
+# DAMACY_COVERAGE — gcov-style instrumentation on the `warnings` interface
+# target so every src lib/test inherits --coverage. Intended for CI; not
+# compatible with DAMACY_FUZZ (which uses clang source-based coverage).
+option(DAMACY_COVERAGE "Build with gcov coverage instrumentation" OFF)
+if(DAMACY_COVERAGE AND NOT DAMACY_FUZZ)
+    target_compile_options(
+        warnings
+        INTERFACE $<$<COMPILE_LANGUAGE:C,CXX>:--coverage;-O0;-g>
+    )
+    target_link_options(warnings INTERFACE --coverage)
+endif()
+
 add_subdirectory(src)
 add_subdirectory(bench)
 
 # Research playground for the assemble kernel — non-default targets
 # (asmbench, damacy_bench_capture). Built explicitly via
-# `cmake --build build --target asmbench` etc.
-if(NOT DAMACY_FUZZ)
+# `cmake --build build --target asmbench` etc. The directory may be
+# pruned from build contexts that don't ship experiments (e.g. Docker).
+if(
+    NOT DAMACY_FUZZ
+    AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/experiments/asm/CMakeLists.txt"
+)
     add_subdirectory(experiments/asm)
+endif()
+
+if(DAMACY_PYTHON)
+    add_subdirectory(python)
 endif()
 
 include(CTest)
