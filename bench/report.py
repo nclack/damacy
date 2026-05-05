@@ -62,14 +62,13 @@ def _stage_table(r: Results) -> Table:
               show_lines=False, header_style="bold")
     t.add_column("stage", style="cyan", no_wrap=True)
     t.add_column("unit", style="dim")
-    t.add_column("count", justify="right")
+    t.add_column("GB/s_in", justify="right")
     t.add_column("ms_total", justify="right")
     t.add_column("ms_avg", justify="right")
     t.add_column("ms_best", justify="right")
+    t.add_column("count", justify="right")
     t.add_column("GB_in", justify="right")
     t.add_column("GB_out", justify="right")
-    t.add_column("GB/s_in", justify="right")
-    t.add_column("GB/s_out", justify="right")
 
     # color stages by responsibility
     color = {
@@ -89,14 +88,13 @@ def _stage_table(r: Results) -> Table:
         t.add_row(
             Text(s.name, style=c),
             s.unit,
-            f"{s.count:,}",
+            _fmt_gbps(s.input_bytes, secs),
             _fmt_ms(s.ms_total),
             _fmt_ms(s.ms_avg) if s.count else "-",
             _fmt_ms(s.ms_best) if s.count else "-",
+            f"{s.count:,}",
             _fmt_gb(s.input_bytes),
             _fmt_gb(s.output_bytes),
-            _fmt_gbps(s.input_bytes, secs),
-            _fmt_gbps(s.output_bytes, secs),
         )
     return t
 

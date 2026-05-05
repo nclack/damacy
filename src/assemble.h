@@ -31,7 +31,9 @@ extern "C"
   // Launch the assemble kernel on `stream`. Inputs (device-resident
   // unless noted):
   //   rank           — spatial rank shared by all chunks in the wave
-  //                    (1..5 supported; assert before launch)
+  //                    (1..DAMACY_MAX_RANK supported; ranks 1..8 use a
+  //                    compile-time-templated kernel, higher ranks use
+  //                    the runtime-rank fallback)
   //   d_samples      — sample_plan[] for the batch slot (size n_samples)
   //   n_samples      — number of samples in the batch slot
   //   d_chunks       — assemble_chunk[] for the wave (size n_chunks)

@@ -22,10 +22,11 @@ building the batches, I want each "Sample" to be 64x64x64. Batch of about 1 GB.
 
 Need to speed up a`assemble.cu`.
 
-- [ ] assert that chunk sizes are the same for all lod's from the same zarr.
+- [x] assert that chunk sizes are the same for all lod's from the same zarr.
       This will be a design constraint that can probably be relaxed in practice.
+- [x] Looks like the code is clipping chunks on load, which isn't right. fix
 
-- [ ] Looks like the code is clipping chunks on load, which isn't right. fix
+Much better. Got assemble from 1 GB/s to 80 GB/s.
       
 
 ## 2026-05-03
