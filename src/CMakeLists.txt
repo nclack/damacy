@@ -1,9 +1,9 @@
 # Helpers (add_src_lib, add_platform_sources) live in cmake/Helpers.cmake.
 
-# Logging — internal log_* macros + stderr sink. util/prelude.h's CHECK
-# macros lower onto log_error, so any module that uses prelude must
-# transitively link this target.
-add_src_lib(log SOURCES log/log.h log/log.c)
+# Logging — internal log_* macros (log/log.h) + public callback-registry
+# control surface (damacy_log.h). util/prelude.h's CHECK macros lower
+# onto log_error, so any module that uses prelude must link this target.
+add_src_lib(log SOURCES log/log.h log/log.c ${PROJECT_SOURCE_DIR}/src/damacy_log.h)
 
 # Foundational types
 add_src_lib(dtype     SOURCES dtype/dtype.c dtype/dtype.h)
@@ -27,33 +27,33 @@ add_platform_sources(platform_io platform/platform_io)
 
 # Concurrency primitives
 add_src_lib(threadpool SOURCES threadpool/threadpool.c threadpool/threadpool.h
-    LINKS platform
+    LINKS platform log
 )
 
-add_src_lib(io_queue SOURCES io_queue/io_queue.h LINKS platform_io)
+add_src_lib(io_queue SOURCES io_queue/io_queue.h LINKS platform_io log)
 add_platform_sources(io_queue io_queue/io_queue)
 
 # Read-side store
 add_src_lib(store SOURCES store/store.h store/store.c store/store_fs.h store/store_fs.c
-    LINKS io_queue platform_io strbuf
+    LINKS io_queue platform_io strbuf log
 )
 
 # Zarr v3 metadata + shard-index parsers (cache-layer building blocks).
 add_src_lib(zarr SOURCES zarr/zarr_metadata.h zarr/zarr_metadata.c
     zarr/zarr_shard_index.h zarr/zarr_shard_index.c
-    LINKS dtype json strbuf crc32c
+    LINKS dtype json strbuf crc32c log
 )
 
 # damacy-side metadata cache (LRU around zarr_metadata_parse).
 # damacy.h is header-included for the damacy_status enum; no link needed
 # (no symbols referenced).
 add_src_lib(zarr_meta_cache SOURCES zarr/zarr_meta_cache.h zarr/zarr_meta_cache.c
-    LINKS zarr lru store strbuf hash
+    LINKS zarr lru store strbuf hash log
 )
 
 # damacy-side shard index cache (LRU around zarr_shard_index_parse).
 add_src_lib(zarr_shard_cache SOURCES zarr/zarr_shard_cache.h zarr/zarr_shard_cache.c
-    LINKS zarr lru store strbuf hash
+    LINKS zarr lru store strbuf hash log
 )
 
 # Planner: samples + cached metadata → page-aligned read_ops + chunk_plans.

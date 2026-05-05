@@ -1,6 +1,8 @@
-// Internal log macros. All output goes to stderr at or above the
-// configured threshold (default INFO).
 #pragma once
+
+// Internal log macros used throughout damacy. The public control API
+// lives in src/damacy_log.h and shares the same dispatcher and level
+// values.
 
 #ifdef __cplusplus
 extern "C"
@@ -29,9 +31,6 @@ extern "C"
     __attribute__((format(printf, 4, 5)))
 #endif
     ;
-
-  // Threshold for stderr output. Default: LOG_INFO.
-  void log_set_level(int level);
 
 #ifdef __cplusplus
 }
