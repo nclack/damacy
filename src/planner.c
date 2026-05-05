@@ -144,6 +144,7 @@ struct emit_ctx
   const struct damacy_sample* sample;
   const struct zarr_metadata* meta;
   const uint64_t* inner_per_shard_dim; // [meta->rank]
+  const uint64_t* chunk_lo;            // [meta->rank], first chunk for sample
   uint32_t sample_idx_in_batch;
   uint16_t batch_pool_slot;
   uint32_t decompressed_n_bytes; // == inner_chunk_bytes(meta) (validated)
@@ -155,7 +156,8 @@ struct emit_ctx
 };
 
 // Process one chunk: build read_op + chunk_plan, append to output.
-// Returns DAMACY_OOM if the output buffers are full.
+// Returns DAMACY_OOM if the output buffers are full; DAMACY_DECODE if
+// the chunk is empty (we assert dense coverage within a sample's AABB).
 static enum damacy_status
 emit_chunk(const struct emit_ctx* ctx,
            const uint64_t* chunk_coord,
@@ -170,8 +172,12 @@ emit_chunk(const struct emit_ctx* ctx,
 
   const struct zarr_shard_entry* entry = &ctx->shard_entries[entry_idx];
   if (entry->offset == ZARR_SHARD_EMPTY_OFFSET ||
-      entry->nbytes == ZARR_SHARD_EMPTY_NBYTES)
-    return DAMACY_OK; // empty chunk, skip
+      entry->nbytes == ZARR_SHARD_EMPTY_NBYTES) {
+    log_error("planner: empty chunk inside sample AABB; sparse zarrs are "
+              "unsupported (sample_idx=%u)",
+              ctx->sample_idx_in_batch);
+    return DAMACY_DECODE;
+  }
 
   if (entry->nbytes > DAMACY_MAX_CHUNK_BYTES)
     return DAMACY_DECODE;
@@ -188,21 +194,6 @@ emit_chunk(const struct emit_ctx* ctx,
   uint32_t chunk_offset_in_read =
     (uint32_t)(entry->offset - aligned_file_offset);
 
-  // Intersection of sample AABB with this chunk's level-0 footprint.
-  int64_t intersect_lo[DAMACY_MAX_RANK];
-  int64_t intersect_hi[DAMACY_MAX_RANK];
-  for (uint8_t d = 0; d < meta->rank; ++d) {
-    int64_t chunk_origin =
-      (int64_t)(chunk_coord[d] * meta->inner_chunk_shape[d]);
-    int64_t chunk_end = chunk_origin + (int64_t)meta->inner_chunk_shape[d];
-    int64_t aabb_lo = ctx->sample->aabb.dims[d].beg;
-    int64_t aabb_hi = ctx->sample->aabb.dims[d].end;
-    intersect_lo[d] = aabb_lo > chunk_origin ? aabb_lo : chunk_origin;
-    intersect_hi[d] = aabb_hi < chunk_end ? aabb_hi : chunk_end;
-    if (intersect_lo[d] >= intersect_hi[d])
-      return DAMACY_OK; // shouldn't happen given chunk_range, but defensive
-  }
-
   if (out->n_read_ops >= out->read_ops_cap ||
       out->n_chunk_plans >= out->chunk_plans_cap)
     return DAMACY_OOM;
@@ -218,43 +209,17 @@ emit_chunk(const struct emit_ctx* ctx,
   r->dst_buf_offset = 0;
   out->n_read_ops++;
 
-  struct chunk_plan* chunk_plan_out = &out->chunk_plans[out->n_chunk_plans];
-  *chunk_plan_out = (struct chunk_plan){
+  struct chunk_plan* cp = &out->chunk_plans[out->n_chunk_plans];
+  *cp = (struct chunk_plan){
     .read_op_idx = read_op_idx,
     .offset_in_read = chunk_offset_in_read,
     .compressed_nbytes = (uint32_t)entry->nbytes,
     .decompressed_nbytes = ctx->decompressed_n_bytes,
     .batch_pool_slot = ctx->batch_pool_slot,
-    .src = { .rank = meta->rank },
-    .dst = { .rank = (uint8_t)(meta->rank + 1) },
+    .sample_idx_in_batch = (uint16_t)ctx->sample_idx_in_batch,
   };
-
-  // src AABB: intersection in chunk-local coordinates.
-  for (uint8_t d = 0; d < meta->rank; ++d) {
-    int64_t chunk_origin =
-      (int64_t)(chunk_coord[d] * meta->inner_chunk_shape[d]);
-    chunk_plan_out->src.dims[d] = (struct damacy_interval){
-      .beg = intersect_lo[d] - chunk_origin,
-      .end = intersect_hi[d] - chunk_origin,
-    };
-  }
-
-  // dst AABB: leading sample-index axis, then intersection in
-  // sample-local coordinates.
-  chunk_plan_out->dst.dims[0] = (struct damacy_interval){
-    .beg = ctx->sample_idx_in_batch,
-    .end = ctx->sample_idx_in_batch + 1,
-  };
-  for (uint8_t d = 0; d < meta->rank; ++d) {
-    chunk_plan_out->dst.dims[d + 1] = (struct damacy_interval){
-      .beg = intersect_lo[d] - ctx->sample->aabb.dims[d].beg,
-      .end = intersect_hi[d] - ctx->sample->aabb.dims[d].beg,
-    };
-  }
-
-  // Element strides for the chunk (row-major over inner_chunk_shape).
-  row_major_strides(
-    meta->inner_chunk_shape, meta->rank, chunk_plan_out->src_strides);
+  for (uint8_t d = 0; d < meta->rank; ++d)
+    cp->chunk_d[d] = (uint32_t)(chunk_coord[d] - ctx->chunk_lo[d]);
 
   out->n_chunk_plans++;
   return DAMACY_OK;
@@ -265,6 +230,8 @@ planner_plan(struct planner* self,
              const struct damacy_sample* samples,
              uint32_t n_samples,
              uint16_t batch_pool_slot,
+             const int64_t* dst_strides,
+             uint8_t dst_full_rank,
              struct planner_output* out)
 {
   CHECK_SILENT(Invalid, self);
@@ -272,8 +239,12 @@ planner_plan(struct planner* self,
   CHECK_SILENT(Invalid, out);
   CHECK_SILENT(Invalid, out->read_ops);
   CHECK_SILENT(Invalid, out->chunk_plans);
+  CHECK_SILENT(Invalid, out->sample_plans);
+  CHECK_SILENT(Invalid, dst_strides);
+  CHECK_SILENT(Invalid, dst_full_rank >= 1);
   out->n_read_ops = 0;
   out->n_chunk_plans = 0;
+  out->n_sample_plans = 0;
 
   for (uint32_t sample_idx = 0; sample_idx < n_samples; ++sample_idx) {
     const struct damacy_sample* sample = &samples[sample_idx];
@@ -285,6 +256,8 @@ planner_plan(struct planner* self,
     if (meta_status != DAMACY_OK)
       return meta_status;
     if (sample->aabb.rank != meta->rank)
+      return DAMACY_RANK;
+    if ((uint8_t)(meta->rank + 1) != dst_full_rank)
       return DAMACY_RANK;
 
     uint64_t inner_per_shard_dim[DAMACY_MAX_RANK];
@@ -300,10 +273,44 @@ planner_plan(struct planner* self,
     if (chunk_range(&sample->aabb, meta, chunk_lo, chunk_hi))
       return DAMACY_INVAL;
 
+    // Emit the per-sample header before chunks. chunk_offset records
+    // where this sample's chunks start in the chunk_plans stream.
+    if (out->n_sample_plans >= out->sample_plans_cap)
+      return DAMACY_OOM;
+    struct sample_plan* sp = &out->sample_plans[out->n_sample_plans];
+    *sp = (struct sample_plan){
+      .batch_pool_slot = batch_pool_slot,
+      .sample_idx_in_batch = (uint16_t)sample_idx,
+      .rank = meta->rank,
+      .sample_dst_off_elems = (int64_t)sample_idx * dst_strides[0],
+      .chunk_offset = out->n_chunk_plans,
+      .chunk_count = 0, // filled after the chunk emit loop
+    };
+    int64_t src_strides[DAMACY_MAX_RANK];
+    row_major_strides(meta->inner_chunk_shape, meta->rank, src_strides);
+    uint32_t chunk_count = 1;
+    for (uint8_t d = 0; d < meta->rank; ++d) {
+      uint32_t S = (uint32_t)meta->inner_chunk_shape[d];
+      uint32_t N = (uint32_t)(chunk_hi[d] - chunk_lo[d]);
+      int64_t chunk_grid_origin = (int64_t)(chunk_lo[d] * (uint64_t)S);
+      sp->dims[d] = (struct sample_dim){
+        .chunk_shape = S,
+        .chunk_grid_extent = N,
+        .aabb_lo_relative = sample->aabb.dims[d].beg - chunk_grid_origin,
+        .aabb_extent = sample->aabb.dims[d].end - sample->aabb.dims[d].beg,
+        .dst_stride = dst_strides[d + 1],
+        .src_stride = src_strides[d],
+      };
+      chunk_count *= N;
+    }
+    sp->chunk_count = chunk_count;
+    out->n_sample_plans++;
+
     struct emit_ctx ctx = {
       .sample = sample,
       .meta = meta,
       .inner_per_shard_dim = inner_per_shard_dim,
+      .chunk_lo = chunk_lo,
       .sample_idx_in_batch = sample_idx,
       .batch_pool_slot = batch_pool_slot,
       .decompressed_n_bytes = (uint32_t)decompressed_n_bytes,

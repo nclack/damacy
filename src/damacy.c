@@ -158,8 +158,11 @@ struct damacy_batch_slot
   void* dev_ptr;      // device output tensor (allocated lazily)
 
   // Plan for this batch (filled by planner_plan, peeled by waves).
-  struct read_op* read_ops;       // size DAMACY_MAX_CHUNKS_PER_BATCH
-  struct chunk_plan* chunk_plans; // size DAMACY_MAX_CHUNKS_PER_BATCH
+  struct read_op* read_ops;         // size DAMACY_MAX_CHUNKS_PER_BATCH
+  struct chunk_plan* chunk_plans;   // size DAMACY_MAX_CHUNKS_PER_BATCH
+  struct sample_plan* sample_plans; // size cfg.batch_size
+  void* d_sample_plans;             // device mirror, uploaded once per batch
+  uint32_t n_sample_plans;          // == n_samples on success
   uint32_t n_chunks;
   uint32_t n_chunks_dispatched; // 0 .. n_chunks; chunks given to a wave
   int32_t chunks_remaining;     // n_chunks - chunks completed via waves
@@ -206,10 +209,14 @@ struct damacy_wave
   void** h_decompressed_ptrs;
   size_t* h_decompressed_sizes;
 
-  // Assemble metadata staging (host + device).
-  struct assemble_chunk* h_assemble;
-  struct assemble_chunk* d_assemble;
-  uint32_t assemble_max_window;
+  // Assemble per-wave-chunk metadata staging (host + device). One
+  // record per chunk in the wave, containing the chunk's arena offset
+  // and (sample_idx, chunk_d). Per-sample constants live in the batch
+  // slot's d_sample_plans, indexed by sample_idx_in_batch.
+  struct assemble_chunk* h_assemble_chunks;
+  struct assemble_chunk* d_assemble_chunks;
+  uint32_t assemble_max_blocks_per_chunk;
+  uint8_t assemble_rank;
 
   // store_read[] scratch.
   struct store_read* store_reads;
@@ -405,7 +412,7 @@ lookahead_drain(struct damacy_lookahead* la,
 // --- batch pool -----------------------------------------------------------
 
 static int
-batch_slot_init(struct damacy_batch_slot* slot)
+batch_slot_init(struct damacy_batch_slot* slot, uint32_t batch_size_cap)
 {
   slot->read_ops = (struct read_op*)calloc(DAMACY_MAX_CHUNKS_PER_BATCH,
                                            sizeof(struct read_op));
@@ -413,6 +420,14 @@ batch_slot_init(struct damacy_batch_slot* slot)
   slot->chunk_plans = (struct chunk_plan*)calloc(DAMACY_MAX_CHUNKS_PER_BATCH,
                                                  sizeof(struct chunk_plan));
   CHECK(Error, slot->chunk_plans);
+  slot->sample_plans =
+    (struct sample_plan*)calloc(batch_size_cap, sizeof(struct sample_plan));
+  CHECK(Error, slot->sample_plans);
+  CUdeviceptr dptr = 0;
+  if (cuMemAlloc(&dptr, (size_t)batch_size_cap * sizeof(struct sample_plan)) !=
+      CUDA_SUCCESS)
+    goto Error;
+  slot->d_sample_plans = (void*)(uintptr_t)dptr;
   return 0;
 Error:
   return 1;
@@ -426,6 +441,9 @@ batch_slot_destroy(struct damacy_batch_slot* slot)
   // dev_ptr is owned by the batch_pool's lazy allocation; freed there.
   free(slot->read_ops);
   free(slot->chunk_plans);
+  free(slot->sample_plans);
+  if (slot->d_sample_plans)
+    cuMemFree(CUDPTR(slot->d_sample_plans));
   memset(slot, 0, sizeof(*slot));
 }
 
@@ -586,15 +604,15 @@ wave_init(struct damacy_wave* wave,
   CHECK(Error, wave->h_decompressed_ptrs);
   wave->h_decompressed_sizes = (size_t*)calloc(cap, sizeof(size_t));
   CHECK(Error, wave->h_decompressed_sizes);
-  wave->h_assemble =
+  wave->h_assemble_chunks =
     (struct assemble_chunk*)calloc(cap, sizeof(struct assemble_chunk));
-  CHECK(Error, wave->h_assemble);
+  CHECK(Error, wave->h_assemble_chunks);
   wave->store_reads =
     (struct store_read*)calloc(cap, sizeof(struct store_read));
   CHECK(Error, wave->store_reads);
 
   CR(Error, cuMemAlloc(&dptr, (size_t)cap * sizeof(struct assemble_chunk)));
-  wave->d_assemble = (struct assemble_chunk*)(uintptr_t)dptr;
+  wave->d_assemble_chunks = (struct assemble_chunk*)(uintptr_t)dptr;
   CR(Error, cuEventCreate(&wave->ev.h2d_start, CU_EVENT_DEFAULT));
   CR(Error, cuEventCreate(&wave->ev.h2d_end, CU_EVENT_DEFAULT));
   CR(Error, cuEventCreate(&wave->ev.decomp_start, CU_EVENT_DEFAULT));
@@ -622,8 +640,8 @@ wave_destroy(struct damacy_wave* wave)
     cuMemFree(CUDPTR(wave->dev_compressed));
   if (wave->dev_decompressed)
     cuMemFree(CUDPTR(wave->dev_decompressed));
-  if (wave->d_assemble)
-    cuMemFree(CUDPTR(wave->d_assemble));
+  if (wave->d_assemble_chunks)
+    cuMemFree(CUDPTR(wave->d_assemble_chunks));
   // cuEventDestroy is not no-op on NULL; guard each.
   CUevent* const events[] = { &wave->ev.h2d_start,    &wave->ev.h2d_end,
                               &wave->ev.decomp_start, &wave->ev.decomp_end,
@@ -635,7 +653,7 @@ wave_destroy(struct damacy_wave* wave)
   free(wave->h_compressed_sizes);
   free(wave->h_decompressed_ptrs);
   free(wave->h_decompressed_sizes);
-  free(wave->h_assemble);
+  free(wave->h_assemble_chunks);
   free(wave->store_reads);
   memset(wave, 0, sizeof(*wave));
 }
@@ -718,10 +736,17 @@ plan_into_slot(struct damacy* self, uint16_t slot_idx, uint32_t n_samples)
     .read_ops_cap = DAMACY_MAX_CHUNKS_PER_BATCH,
     .chunk_plans = slot->chunk_plans,
     .chunk_plans_cap = DAMACY_MAX_CHUNKS_PER_BATCH,
+    .sample_plans = slot->sample_plans,
+    .sample_plans_cap = self->cfg.batch_size,
   };
   uint64_t plan_t0 = monotonic_ns();
-  status = planner_plan(
-    self->planner, self->batch_stage, n_samples, slot_idx, &plan_out);
+  status = planner_plan(self->planner,
+                        self->batch_stage,
+                        n_samples,
+                        slot_idx,
+                        self->batch_pool.strides,
+                        self->batch_pool.rank,
+                        &plan_out);
   metric_record(
     &self->stats.plan, (float)((monotonic_ns() - plan_t0) / 1.0e6), 0, 0);
   if (status != DAMACY_OK)
@@ -730,13 +755,25 @@ plan_into_slot(struct damacy* self, uint16_t slot_idx, uint32_t n_samples)
   slot->n_chunks = plan_out.n_chunk_plans;
   slot->n_chunks_dispatched = 0;
   slot->chunks_remaining = (int32_t)plan_out.n_chunk_plans;
+  slot->n_sample_plans = plan_out.n_sample_plans;
   slot->n_samples = n_samples;
   slot->batch_id = self->next_batch_id++;
   slot->state = BATCH_FILLING;
 
-  // Degenerate batch: no chunks (all empty). Output stays
-  // zero-initialized below; transition straight to READY after we
-  // ensure the device tensor is zeroed.
+  // Upload sample_plans to device once per batch. Waves consume them
+  // alongside their per-wave chunk records.
+  if (plan_out.n_sample_plans > 0) {
+    if (cuMemcpyHtoD(CUDPTR(slot->d_sample_plans),
+                     slot->sample_plans,
+                     (size_t)plan_out.n_sample_plans *
+                       sizeof(struct sample_plan)) != CUDA_SUCCESS) {
+      status = DAMACY_CUDA;
+      goto Cleanup;
+    }
+  }
+
+  // Degenerate batch: planner emits no chunks → output stays
+  // zero-initialized; transition straight to READY after zeroing.
   if (slot->n_chunks == 0) {
     if (cuMemsetD8(CUDPTR(slot->dev_ptr), 0, self->batch_pool.n_bytes) !=
         CUDA_SUCCESS) {
@@ -873,47 +910,59 @@ build_decoder_fanout(struct damacy* self, struct damacy_wave* wave)
   }
 }
 
-// Build per-chunk assemble metadata for this wave; returns max window
-// element count (for kernel grid sizing). Also accumulates the
-// per-wave assemble.output_bytes total.
-static uint32_t
+// Build per-wave-chunk assemble metadata. For each chunk in the wave,
+// emit the {src_base_byte_off, sample_idx_in_batch, chunk_d} record
+// the kernel needs. Also computes max_blocks_per_chunk over the wave
+// for grid sizing and accumulates assemble.output_bytes (effective
+// in-AABB voxels per chunk × bpe).
+//
+// Sets wave->assemble_max_blocks_per_chunk and wave->assemble_rank.
+// The sample_plans for the batch slot are uploaded once at plan time
+// and shared across all waves of that batch.
+static void
 build_assemble_meta(struct damacy* self, struct damacy_wave* wave)
 {
   struct damacy_batch_slot* slot =
     &self->batch_pool.slots[wave->batch_pool_slot];
   uint32_t bpe = damacy_dtype_bpe(self->cfg.dtype);
   uint8_t spatial_rank = (uint8_t)(self->batch_pool.rank - 1);
-  uint32_t max_window = 1;
+  uint32_t max_bpc = 0;
+  wave->assemble_rank = spatial_rank;
   for (uint32_t i = 0; i < wave->n_chunks; ++i) {
     struct chunk_plan* c = &slot->chunk_plans[wave->batch_chunk_offset + i];
-    struct assemble_chunk* a = &wave->h_assemble[i];
-
-    int64_t src_off_elems = 0;
+    struct assemble_chunk* a = &wave->h_assemble_chunks[i];
+    a->src_base_byte_off = (uint64_t)c->dev_decompressed_offset;
+    a->sample_idx_in_batch = c->sample_idx_in_batch;
     for (uint8_t d = 0; d < spatial_rank; ++d)
-      src_off_elems += c->src.dims[d].beg * c->src_strides[d];
-    a->src_base_byte_off =
-      c->dev_decompressed_offset + (uint64_t)src_off_elems * (uint64_t)bpe;
+      a->chunk_d[d] = c->chunk_d[d];
 
-    int64_t sample_idx = c->dst.dims[0].beg;
-    int64_t dst_off_elems = sample_idx * self->batch_pool.strides[0];
-    for (uint8_t d = 0; d < spatial_rank; ++d)
-      dst_off_elems += c->dst.dims[d + 1].beg * self->batch_pool.strides[d + 1];
-    a->dst_base_byte_off = (uint64_t)dst_off_elems * (uint64_t)bpe;
+    const struct sample_plan* sp = &slot->sample_plans[c->sample_idx_in_batch];
+    uint32_t bpc = assemble_blocks_per_chunk(spatial_rank, sp->dims);
+    if (bpc > max_bpc)
+      max_bpc = bpc;
 
-    a->rank = spatial_rank;
-    uint64_t win_elems = 1;
+    // Effective in-AABB extent for this chunk along each axis. The
+    // chunk's footprint in sample-local coords is
+    //   [chunk_d[d]*S - aabb_lo_relative,
+    //    chunk_d[d]*S + S - aabb_lo_relative)
+    // intersected with [0, aabb_extent[d]).
+    uint64_t eff = 1;
     for (uint8_t d = 0; d < spatial_rank; ++d) {
-      uint32_t w = (uint32_t)(c->src.dims[d].end - c->src.dims[d].beg);
-      a->win[d] = w;
-      a->src_strides[d] = c->src_strides[d];
-      a->dst_strides[d] = self->batch_pool.strides[d + 1];
-      win_elems *= w;
+      int64_t S = (int64_t)sp->dims[d].chunk_shape;
+      int64_t origin_in_sample =
+        (int64_t)c->chunk_d[d] * S - sp->dims[d].aabb_lo_relative;
+      int64_t lo = origin_in_sample > 0 ? origin_in_sample : 0;
+      int64_t hi = origin_in_sample + S < sp->dims[d].aabb_extent
+                     ? origin_in_sample + S
+                     : sp->dims[d].aabb_extent;
+      int64_t extent = hi > lo ? hi - lo : 0;
+      eff *= (uint64_t)extent;
     }
-    if (win_elems > max_window)
-      max_window = (uint32_t)win_elems;
-    wave->assemble_out_bytes += win_elems * (uint64_t)bpe;
+    wave->assemble_out_bytes += eff * (uint64_t)bpe;
   }
-  return max_window;
+  if (max_bpc == 0)
+    max_bpc = 1;
+  wave->assemble_max_blocks_per_chunk = max_bpc;
 }
 
 // H2D done — kick decompress + assemble on stream_compute, record
@@ -941,17 +990,20 @@ kick_compute(struct damacy* self, struct damacy_wave* wave)
   }
   CR(CudaFail, cuEventRecord(wave->ev.decomp_end, s));
 
-  uint32_t max_window = build_assemble_meta(self, wave);
+  build_assemble_meta(self, wave);
   CR(CudaFail,
-     cuMemcpyHtoDAsync(CUDPTR(wave->d_assemble),
-                       wave->h_assemble,
+     cuMemcpyHtoDAsync(CUDPTR(wave->d_assemble_chunks),
+                       wave->h_assemble_chunks,
                        (size_t)wave->n_chunks * sizeof(struct assemble_chunk),
                        s));
   CR(CudaFail, cuEventRecord(wave->ev.asm_start, s));
   if (assemble_launch(self->stream_compute,
-                      wave->d_assemble,
+                      wave->assemble_rank,
+                      (const struct sample_plan*)slot->d_sample_plans,
+                      slot->n_sample_plans,
+                      wave->d_assemble_chunks,
                       wave->n_chunks,
-                      max_window,
+                      wave->assemble_max_blocks_per_chunk,
                       wave->dev_decompressed,
                       slot->dev_ptr,
                       damacy_dtype_bpe(self->cfg.dtype))) {
@@ -959,7 +1011,6 @@ kick_compute(struct damacy* self, struct damacy_wave* wave)
     return DAMACY_CUDA;
   }
   CR(CudaFail, cuEventRecord(wave->ev.asm_end, s));
-  wave->assemble_max_window = max_window;
   wave->state = WAVE_ASSEMBLE;
   return DAMACY_OK;
 CudaFail:
@@ -1165,7 +1216,8 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   CHECK(Fail, planner_create(&pcfg, &self->planner) == DAMACY_OK);
 
   for (int b = 0; b < 2; ++b)
-    CHECK(Fail, batch_slot_init(&self->batch_pool.slots[b]) == 0);
+    CHECK(Fail,
+          batch_slot_init(&self->batch_pool.slots[b], cfg->batch_size) == 0);
 
   uint64_t host_per_wave = cfg->host_buffer_bytes / 2;
   uint64_t dev_per_wave = cfg->device_buffer_bytes / 2;

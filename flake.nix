@@ -78,6 +78,8 @@
             cudaPkgs.nvcomp
             cudaPkgs.nvcomp.static
             cudaPkgs.libcufile
+            cudaPkgs.nsight_systems
+            cudaPkgs.nsight_compute
           ] ++ (with pkgs; [
             lldb
             gh

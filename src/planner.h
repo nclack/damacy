@@ -34,21 +34,47 @@ extern "C"
     uint64_t dst_buf_offset;          // wave-scheduler-assigned; planner sets 0
   };
 
-  // One chunk's full plan: where on disk, where in the output batch.
-  // src/dst use the rank-erased damacy_aabb so kernels can iterate
-  // uniformly. src.rank == zarr.rank; dst.rank == zarr.rank + 1 with
-  // dst.dims[0] = (sample_index_in_batch, +1).
+  // Per-dimension bundle for one sample. Co-locating all of dimension d's
+  // parameters lets the assemble kernel's R-loop touch one cache line per
+  // iteration instead of seven scattered loads.
+  struct sample_dim
+  {
+    uint32_t chunk_shape;       // S[d] — uniform per source, no clipping
+    uint32_t chunk_grid_extent; // N[d] — chunks per dimension within sample
+    int64_t aabb_lo_relative;   // aabb_lo[d] − chunk_grid_origin[d], in [0,S)
+    int64_t aabb_extent;        // sample AABB extent
+    int64_t dst_stride;         // batch tensor stride (elements)
+    int64_t src_stride;         // chunk-local row-major stride (elements)
+  };
+
+  // Per-sample header consumed by assemble. All chunks within the sample
+  // share these constants (uniform shape, single source). Per-chunk
+  // records are reduced to {dev_decompressed_offset, chunk_d}.
+  struct sample_plan
+  {
+    uint16_t batch_pool_slot;
+    uint16_t sample_idx_in_batch;
+    uint8_t rank;                            // spatial rank
+    struct sample_dim dims[DAMACY_MAX_RANK]; // dims[0..rank)
+    int64_t
+      sample_dst_off_elems; // sample slot start (elements; * bpe at runtime)
+    uint32_t chunk_offset;  // first chunk in chunk_plans
+    uint32_t chunk_count;   // ∏ dims[d].chunk_grid_extent
+  };
+
+  // Per-chunk plan. Carries IO/decompress fields plus assemble-side
+  // chunk_d (grid position within sample, 0..N[d]) and sample_idx so
+  // the kernel can look up the sample_plan.
   struct chunk_plan
   {
     uint32_t read_op_idx;
     uint32_t offset_in_read; // chunk start within the read
     uint32_t compressed_nbytes;
     uint32_t decompressed_nbytes;
-    uint32_t dev_decompressed_offset; // scheduler-assigned
+    uint32_t dev_decompressed_offset; // scheduler-assigned (per wave)
     uint16_t batch_pool_slot;
-    struct damacy_aabb src;               // chunk-local
-    struct damacy_aabb dst;               // [N, ...]
-    int64_t src_strides[DAMACY_MAX_RANK]; // elements
+    uint16_t sample_idx_in_batch;      // index into planner_output.sample_plans
+    uint32_t chunk_d[DAMACY_MAX_RANK]; // grid position within sample (0..N)
   };
 
   struct planner_config
@@ -67,7 +93,7 @@ extern "C"
   void planner_destroy(struct planner* p);
 
   // Output buffers for planner_plan. Caller owns the storage; planner
-  // populates *_n on success. If either buffer fills before the plan
+  // populates *_n on success. If any buffer fills before the plan
   // completes, planner_plan returns DAMACY_OOM.
   struct planner_output
   {
@@ -77,21 +103,25 @@ extern "C"
     struct chunk_plan* chunk_plans;
     uint32_t chunk_plans_cap;
     uint32_t n_chunk_plans;
+    struct sample_plan* sample_plans;
+    uint32_t sample_plans_cap;
+    uint32_t n_sample_plans;
   };
 
   // Plan one training batch — i.e., the N samples that land in one
   // output tensor of shape [N, ...zarr_axes]. samples are processed in
-  // order; sample i becomes dst.dims[0] = (i, i+1). All chunk_plans
-  // are tagged with batch_pool_slot so the scheduler knows which slot
-  // in the batch pool receives the assembled output.
+  // order; sample i becomes sample_plans[i].sample_idx_in_batch == i.
+  // All chunk_plans are tagged with batch_pool_slot so the scheduler
+  // knows which slot in the batch pool receives the assembled output.
   //
   // This is independent of the scheduler's wave granularity: the wave
   // scheduler chunks the produced plan queue into wave-sized dispatch
   // units (one batch typically spans multiple waves). The planner is
   // batch-shaped; waves are a downstream concern.
   //
-  // Empty chunks (offset == ZARR_SHARD_EMPTY_OFFSET) are skipped —
-  // callers should treat the corresponding output region as zeros.
+  // Empty chunks inside a sample's AABB cause planner_plan to fail with
+  // DAMACY_DECODE — the assemble kernel assumes a dense chunk grid per
+  // sample. Sparse-zarr support is a separate effort.
   //
   // shard_path strings are copied into each emitted read_op (inline
   // storage, capped at DAMACY_MAX_PATH); the planner no longer
@@ -100,6 +130,8 @@ extern "C"
                                   const struct damacy_sample* samples,
                                   uint32_t n_samples,
                                   uint16_t batch_pool_slot,
+                                  const int64_t* dst_strides, // [rank+1]
+                                  uint8_t dst_full_rank,      // rank+1
                                   struct planner_output* out);
 
 #ifdef __cplusplus

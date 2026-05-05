@@ -1,16 +1,15 @@
-// Assemble kernel: bytewise gather from per-chunk decompressed buffers
-// in a device arena into the output batch tensor.
+// Assemble kernel: scatter from per-chunk decompressed buffers in a
+// device arena into the output batch tensor.
 //
-// One launch handles n_chunks chunks. Each chunk has a window (same
-// shape in src and dst); the kernel walks elements in the window,
-// computing src (chunk-local) and dst (output-tensor) byte offsets via
-// per-axis strides. dtype is encoded via bpe (bytes per element).
-//
-// Step 4: invoked synchronously per batch by damacy.c. Step 5+ shares
-// the compute stream with decompress.
+// The kernel iterates the union of chunks for each sample (a single
+// rectangle per sample, U[d] = N[d] * S[d]) and culls voxels outside
+// the sample's tight AABB at write time. Per-sample constants live in
+// `struct sample_plan` (planner.h); per-wave-chunk records carry the
+// arena offset and the chunk's grid position.
 #pragma once
 
 #include "limits.h"
+#include "planner.h"
 
 #include <cuda.h>
 #include <stddef.h>
@@ -21,29 +20,46 @@ extern "C"
 {
 #endif
 
-  // Per-chunk descriptor consumed by the assemble kernel. The kernel
-  // reads dims[0..rank); src/dst base offsets already account for the
-  // chunk's position in the arena and the sample's slot in the output.
+  // Per-chunk record materialized at wave dispatch time.
   struct assemble_chunk
   {
-    uint64_t src_base_byte_off;           // first window element in arena
-    uint64_t dst_base_byte_off;           // first window element in output
-    uint32_t win[DAMACY_MAX_RANK];        // window extent per axis
-    int64_t src_strides[DAMACY_MAX_RANK]; // chunk row-major strides (elements)
-    int64_t dst_strides[DAMACY_MAX_RANK]; // output strides for spatial axes
-    uint32_t rank;
+    uint64_t src_base_byte_off;        // arena byte offset of chunk start
+    uint16_t sample_idx_in_batch;      // index into d_samples[]
+    uint32_t chunk_d[DAMACY_MAX_RANK]; // chunk grid position within sample
   };
 
-  // Launch the assemble kernel on `stream`. `chunks_dev` is a
-  // device-resident array of n_chunks descriptors; arena_base /
-  // output_base are device pointers. Returns 0 on success.
+  // Launch the assemble kernel on `stream`. Inputs (device-resident
+  // unless noted):
+  //   rank           — spatial rank shared by all chunks in the wave
+  //                    (1..5 supported; assert before launch)
+  //   d_samples      — sample_plan[] for the batch slot (size n_samples)
+  //   n_samples      — number of samples in the batch slot
+  //   d_chunks       — assemble_chunk[] for the wave (size n_chunks)
+  //   n_chunks       — number of chunks in the wave
+  //   max_blocks_per_chunk — gridDim.x; max over the wave's chunks of
+  //                          ∏ ceil_div(S[d], T[d]). Pre-computed host
+  //                          side; chunks with fewer blocks early-return
+  //                          on the surplus.
+  //   arena_base / output_base — base device pointers
+  //   bpe            — bytes per element (1, 2, 4, or 8)
+  //
+  // Returns 0 on success, non-zero on launch error.
   int assemble_launch(CUstream stream,
-                      const struct assemble_chunk* chunks_dev,
+                      uint8_t rank,
+                      const struct sample_plan* d_samples,
+                      uint32_t n_samples,
+                      const struct assemble_chunk* d_chunks,
                       uint32_t n_chunks,
-                      uint32_t max_window_elements,
+                      uint32_t max_blocks_per_chunk,
                       const void* arena_base,
                       void* output_base,
                       uint32_t bpe);
+
+  // Compute blocks-per-chunk for a sample given its dims and the kernel's
+  // block-tile shape. Host-side helper used by damacy.c when packing the
+  // wave's metadata. Returns 0 for unsupported ranks.
+  uint32_t assemble_blocks_per_chunk(uint8_t rank,
+                                     const struct sample_dim* dims);
 
 #ifdef __cplusplus
 }

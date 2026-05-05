@@ -20,6 +20,14 @@ building the batches, I want each "Sample" to be 64x64x64. Batch of about 1 GB.
 - [ ] deal with the "max chunks per batch" - wrong parameterization
 - [ ] review/reduce comments
 
+Need to speed up a`assemble.cu`.
+
+- [ ] assert that chunk sizes are the same for all lod's from the same zarr.
+      This will be a design constraint that can probably be relaxed in practice.
+
+- [ ] Looks like the code is clipping chunks on load, which isn't right. fix
+      
+
 ## 2026-05-03
 
 Working on design/interface some more.

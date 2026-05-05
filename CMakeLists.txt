@@ -26,5 +26,12 @@ endif()
 add_subdirectory(src)
 add_subdirectory(bench)
 
+# Research playground for the assemble kernel — non-default targets
+# (asmbench, damacy_bench_capture). Built explicitly via
+# `cmake --build build --target asmbench` etc.
+if(NOT DAMACY_FUZZ)
+    add_subdirectory(experiments/asm)
+endif()
+
 include(CTest)
 add_subdirectory(tests)
