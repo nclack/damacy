@@ -1,12 +1,14 @@
 # Step 1 — verify the project compiles in CI.
 #
-# Configures CMake with DAMACY_PYTHON=ON, builds everything (C library,
-# damacy_bench, and the Python extension), and uploads the build dir as
-# an artifact so the test workflow (or a human) can inspect the output.
+# The Dockerfile is the single source of truth for the build toolchain
+# (CUDA devel base, cmake, ninja, uv, nvcomp, scikit-build-core). It
+# already runs `cmake configure` + `cmake --build` + the CPU subset of
+# ctest as part of `docker build`, so a successful image build is a
+# successful compile.
 #
-# Runs on the self-hosted GPU runner because the default build path
-# enables CUDA + nvCOMP. Tests are intentionally not invoked here; see
-# test.yml for the test job.
+# Runs on the self-hosted runner because subsequent jobs (test.yml) want
+# to reuse the locally cached image layers; nothing in this job needs a
+# GPU.
 
 name: build
 
@@ -18,58 +20,22 @@ on:
 
 jobs:
   build:
-    # Self-hosted runner labels — adjust if the actual runner uses
-    # different tags (e.g. add `linux` / `x64` / a hostname label).
     runs-on: [self-hosted, gpu]
-
-    env:
-      # nvcomp may not live on the standard search path; the project's
-      # FindNvcomp.cmake honors Nvcomp_ROOT (see flake.nix). Override at
-      # the runner level via repo/runner secrets if needed.
-      Nvcomp_ROOT: ${{ vars.NVCOMP_ROOT }}
-      CMAKE_BUILD_PARALLEL_LEVEL: 0
-
-    # The toolchain (cmake/ninja/gcc/cuda) lives in the project's nix
-    # devShell, not on the runner's default PATH. Run every step inside
-    # `nix develop --command bash` so flake.nix supplies the toolchain.
-    defaults:
-      run:
-        shell: nix develop --command bash -e {0}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show toolchain versions
+      - name: Show docker version
+        run: docker version
+
+      - name: Build docker image
+        # Tag with the SHA so test.yml can reuse the same image (the
+        # local layer cache on the self-hosted runner makes this cheap
+        # on cache hits). Also tag :ci-latest as a moving alias for ad
+        # hoc inspection.
         run: |
-          cmake --version
-          ninja --version || true
-          gcc --version
-          nvcc --version || true
-          python3 --version
-
-      - name: Configure
-        run: |
-          cmake -S . -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DDAMACY_PYTHON=ON
-
-      - name: Build
-        run: cmake --build build
-
-      - name: Stage Python extension into source tree
-        # The developer pattern (per project notes): copy the freshly built
-        # .so next to python/damacy/__init__.py so `PYTHONPATH=python` can
-        # resolve `damacy._native`. This artifact is consumed by test.yml.
-        run: |
-          cp build/python/_native*.so python/damacy/
-
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: damacy-build-${{ github.sha }}
-          path: |
-            build/
-            python/damacy/_native*.so
-          retention-days: 7
-          if-no-files-found: error
+          docker build \
+            --tag damacy:${{ github.sha }} \
+            --tag damacy:ci-latest \
+            .

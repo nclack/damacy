@@ -1,16 +1,16 @@
-# Step 2 — run ctest + a Python import smoke test, and produce an HTML
-# coverage report.
+# Step 2 — run the full ctest suite (including the CUDA tests) and a
+# Python import smoke test, both inside the Docker image produced by
+# build.yml's recipe.
 #
-# Builds with DAMACY_COVERAGE=ON (gcov instrumentation injected via the
-# `warnings` interface target — see CMakeLists.txt), then:
-#   - runs the full ctest suite (CPU tests + the two CUDA tests, which
-#     need the self-hosted GPU runner),
-#   - imports `damacy` from Python and prints __version__,
-#   - produces an HTML coverage report via `gcovr`,
-#   - uploads the HTML report as a workflow artifact.
+# The Dockerfile already runs the CPU subset of ctest during the image
+# build; here we re-run ctest with `--gpus all` so test_damacy and
+# test_assemble actually exercise the device. The Python smoke test
+# confirms the editable install can resolve the `_native` extension.
 #
-# Kept as a separate workflow file so step 1 (build.yml) can be landed
-# and verified independently.
+# This job rebuilds the image rather than depending on build.yml because
+# (a) GitHub-Actions doesn't share artifacts between workflows by
+# default, and (b) the self-hosted runner's local docker layer cache
+# makes the second build essentially free on a cache hit.
 
 name: test
 
@@ -22,90 +22,31 @@ on:
 
 jobs:
   test:
-    # Self-hosted runner labels — same as build.yml. The two CUDA tests
-    # (test_damacy, test_assemble) require an NVIDIA GPU at runtime.
+    # Self-hosted runner with a GPU and the nvidia-container-toolkit
+    # configured so `docker run --gpus all` can attach the device.
     runs-on: [self-hosted, gpu]
-
-    env:
-      Nvcomp_ROOT: ${{ vars.NVCOMP_ROOT }}
-      CMAKE_BUILD_PARALLEL_LEVEL: 0
-
-    # The toolchain (cmake/ninja/gcc/cuda) lives in the project's nix
-    # devShell, not on the runner's default PATH. Run every step inside
-    # `nix develop --command bash` so flake.nix supplies the toolchain.
-    defaults:
-      run:
-        shell: nix develop --command bash -e {0}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show toolchain versions
+      - name: Build docker image
         run: |
-          cmake --version
-          gcc --version
-          nvcc --version || true
-          python3 --version
+          docker build --tag damacy:${{ github.sha }} .
 
-      - name: Install gcovr
+      - name: Run ctest (with GPU)
+        # All 7 tests; the two CUDA tests require the GPU. ctest exits
+        # nonzero on any failure, which fails the step.
         run: |
-          python3 -m pip install --user --upgrade gcovr
-
-      - name: Configure (with coverage)
-        run: |
-          cmake -S . -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DDAMACY_PYTHON=ON \
-            -DDAMACY_COVERAGE=ON
-
-      - name: Build
-        run: cmake --build build
-
-      - name: Stage Python extension into source tree
-        run: |
-          cp build/python/_native*.so python/damacy/
-
-      - name: Run ctest
-        # All 7 tests; the two CUDA tests require the GPU runner. ctest
-        # reports nonzero on any failure.
-        run: ctest --output-on-failure --test-dir build
+          docker run --rm --gpus all \
+            damacy:${{ github.sha }} \
+            ctest --output-on-failure --test-dir build
 
       - name: Python import smoke test
-        # Drive the Python side without needing an installed wheel. The
-        # __init__.py imports `damacy._native`; PYTHONPATH=python lets it
-        # resolve to the just-built .so we copied above.
-        env:
-          PYTHONPATH: ${{ github.workspace }}/python
+        # Confirms the editable install + the prebuilt _native*.so are
+        # resolvable, and that calling into the C extension works (not
+        # just the import). set_log_quiet is a trivial no-op forward.
         run: |
-          python3 -c "import damacy; print('damacy', damacy.__version__)"
-          # Exercise a public API call to confirm the C extension links
-          # and runs (not just imports). set_log_quiet is a trivial no-op
-          # forward into the C library.
-          python3 -c "import damacy; damacy._native.set_log_quiet(True); print('api-ok')"
-
-      - name: Generate coverage report
-        # gcovr walks the build tree, finds the .gcno/.gcda files dropped
-        # by --coverage, and emits an HTML report. --root anchors paths
-        # to the source tree; --exclude drops third-party + tests + the
-        # experiments/ playground.
-        if: always()
-        run: |
-          mkdir -p coverage-html
-          ~/.local/bin/gcovr \
-            --root . \
-            --html-details coverage-html/index.html \
-            --exclude '.*/tests/.*' \
-            --exclude '.*/experiments/.*' \
-            --exclude '.*/build/.*' \
-            --print-summary \
-            || true
-
-      - name: Upload coverage HTML
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-html-${{ github.sha }}
-          path: coverage-html/
-          retention-days: 14
-          if-no-files-found: warn
+          docker run --rm --gpus all \
+            damacy:${{ github.sha }} \
+            python3 -c "import damacy; print('damacy', damacy.__version__); damacy._native.set_log_quiet(True); print('api-ok')"
