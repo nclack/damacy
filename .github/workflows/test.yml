@@ -3,15 +3,17 @@
 #
 # Builds a *separate* Debug+coverage image (via --build-arg) so the
 # release-ish image produced by build.yml stays unaffected. The runtime
-# steps then drive ctest with `--gpus all` so test_damacy / test_assemble
-# actually exercise the device, run a Python smoke test against the
-# editable install, and finally invoke gcovr to emit a Cobertura XML
-# (for Codecov) plus an HTML detail report (uploaded as an artifact).
+# steps then drive ctest with `--device=nvidia.com/gpu=all` (CDI; the
+# runner's docker maps the legacy `--gpus all` flag to a CDI lookup
+# that spuriously demands an AMD spec, so we go to CDI directly), run
+# a Python smoke test against the editable install, invoke gcovr to
+# emit Cobertura XML + HTML detail, and push the XML to Codecov via
+# codecov-cli — all in one container so the .gcda files written by
+# ctest are still around for gcovr.
 #
-# This job rebuilds the image rather than depending on build.yml because
-# (a) GitHub Actions doesn't share artifacts between workflows by
-# default, and (b) the self-hosted runner's local docker layer cache
-# makes the second build essentially free on a cache hit.
+# codecov-cli runs *inside* the container because the runner host is
+# NixOS and the upstream codecov/codecov-action ships a generic-linux
+# binary that NixOS can't exec.
 
 name: test
 
@@ -23,8 +25,8 @@ on:
 
 jobs:
   test:
-    # Self-hosted runner with a GPU and the nvidia-container-toolkit
-    # configured so `docker run --gpus all` can attach the device.
+    # Self-hosted runner with a GPU exposed via CDI
+    # (`docker run --device=nvidia.com/gpu=all`) and docker on PATH.
     runs-on: [self-hosted, gpu]
 
     env:
@@ -45,17 +47,30 @@ jobs:
             --build-arg DAMACY_COVERAGE=ON \
             --tag "$IMAGE" .
 
-      - name: Run ctest + Python smoke + gcovr (in container)
-        # Single `docker run` so all three steps share one container's
-        # writable layer — the .gcda files written by ctest persist for
-        # gcovr to consume in the same invocation. Using --name (no
-        # --rm) leaves the stopped container around for `docker cp`.
+      - name: Run ctest + Python smoke + gcovr + codecov upload
+        # Single named (no --rm) container so .gcda files from ctest
+        # survive for gcovr in the same invocation, and so the HTML
+        # report is `docker cp`-able afterwards. CODECOV_TOKEN +
+        # GITHUB_* env are forwarded into the container so codecov-cli
+        # can attribute the upload to this run.
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         run: |
-          docker run --name "$CONTAINER" --gpus all "$IMAGE" \
+          docker run --name "$CONTAINER" --device=nvidia.com/gpu=all \
+            -e CODECOV_TOKEN \
+            -e GITHUB_ACTIONS \
+            -e GITHUB_REF \
+            -e GITHUB_SHA \
+            -e GITHUB_HEAD_REF \
+            -e GITHUB_REPOSITORY \
+            -e GITHUB_RUN_ID \
+            -e GITHUB_WORKFLOW \
+            "$IMAGE" \
             bash -c '
               set -e
               ctest --output-on-failure --test-dir build
               python3 -c "import damacy; print(\"damacy\", damacy.__version__); damacy._native.set_log_quiet(True); print(\"api-ok\")"
+              mkdir -p coverage-html
               gcovr --root . \
                 --xml-pretty --output coverage.xml \
                 --html-details coverage-html/index.html \
@@ -63,27 +78,21 @@ jobs:
                 --exclude ".*/experiments/.*" \
                 --exclude ".*/build/.*" \
                 --print-summary
+              if [ -n "${CODECOV_TOKEN:-}" ]; then
+                codecovcli upload-process --file coverage.xml --flag unittests \
+                  || echo "WARN: codecov upload failed; continuing" >&2
+              else
+                echo "NOTE: CODECOV_TOKEN not set; skipping upload" >&2
+              fi
             '
 
-      - name: Extract coverage artifacts
-        # Always-run so we still grab whatever gcovr produced even if
-        # ctest itself failed (we rely on `set -e` above to abort gcovr
-        # on failure, but a partial run is better than nothing).
+      - name: Extract coverage HTML
+        # Always-run so we still grab whatever gcovr produced even if a
+        # prior step inside the container failed.
         if: always()
         run: |
-          docker cp "$CONTAINER":/workspace/damacy/coverage.xml ./coverage.xml || true
           docker cp "$CONTAINER":/workspace/damacy/coverage-html ./coverage-html || true
           docker rm "$CONTAINER" || true
-
-      - name: Upload coverage to Codecov
-        if: always()
-        uses: codecov/codecov-action@v4
-        with:
-          files: ./coverage.xml
-          # Cobertura is gcovr's --xml-pretty format.
-          flags: unittests
-          fail_ci_if_error: false
-          token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Upload coverage HTML artifact
         if: always()
