@@ -70,6 +70,7 @@ jobs:
               set -e
               ctest --output-on-failure --test-dir build
               python3 -c "import damacy; print(\"damacy\", damacy.__version__); damacy._native.set_log_quiet(True); print(\"api-ok\")"
+              mkdir -p coverage-html
               gcovr --root . \
                 --xml-pretty --output coverage.xml \
                 --html-details coverage-html/index.html \
