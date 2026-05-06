@@ -29,6 +29,13 @@ jobs:
       Nvcomp_ROOT: ${{ vars.NVCOMP_ROOT }}
       CMAKE_BUILD_PARALLEL_LEVEL: 0
 
+    # The toolchain (cmake/ninja/gcc/cuda) lives in the project's nix
+    # devShell, not on the runner's default PATH. Run every step inside
+    # `nix develop --command bash` so flake.nix supplies the toolchain.
+    defaults:
+      run:
+        shell: nix develop --command bash -e {0}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
