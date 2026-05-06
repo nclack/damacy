@@ -69,9 +69,12 @@ RUN uv pip install scikit-build-core
 ARG CMAKE_BUILD_TYPE=RelWithDebInfo
 ARG DAMACY_COVERAGE=OFF
 
-# gcovr is only needed when DAMACY_COVERAGE=ON; install it into the
-# project venv so it's on PATH for the test workflow.
-RUN if [ "${DAMACY_COVERAGE}" = "ON" ]; then uv pip install gcovr; fi
+# gcovr + codecov-cli are only needed when DAMACY_COVERAGE=ON; install
+# them into the project venv so they're on PATH for the test workflow.
+# codecov-cli runs inside the container because the runner host is NixOS
+# and the upstream codecov-action ships a generic-linux binary that
+# can't exec there.
+RUN if [ "${DAMACY_COVERAGE}" = "ON" ]; then uv pip install gcovr codecov-cli; fi
 
 # ----- nvcomp (standalone NVIDIA distribution) -------------------------------
 RUN set -eux; \
