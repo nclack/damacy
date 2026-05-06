@@ -1,14 +1,15 @@
-# Step 2 — run the full ctest suite (including the CUDA tests) and a
-# Python import smoke test, both inside the Docker image produced by
-# build.yml's recipe.
+# Step 2 — run the full ctest suite (including the CUDA tests), a Python
+# import smoke test, and produce/upload a coverage report.
 #
-# The Dockerfile already runs the CPU subset of ctest during the image
-# build; here we re-run ctest with `--gpus all` so test_damacy and
-# test_assemble actually exercise the device. The Python smoke test
-# confirms the editable install can resolve the `_native` extension.
+# Builds a *separate* Debug+coverage image (via --build-arg) so the
+# release-ish image produced by build.yml stays unaffected. The runtime
+# steps then drive ctest with `--gpus all` so test_damacy / test_assemble
+# actually exercise the device, run a Python smoke test against the
+# editable install, and finally invoke gcovr to emit a Cobertura XML
+# (for Codecov) plus an HTML detail report (uploaded as an artifact).
 #
 # This job rebuilds the image rather than depending on build.yml because
-# (a) GitHub-Actions doesn't share artifacts between workflows by
+# (a) GitHub Actions doesn't share artifacts between workflows by
 # default, and (b) the self-hosted runner's local docker layer cache
 # makes the second build essentially free on a cache hit.
 
@@ -26,27 +27,69 @@ jobs:
     # configured so `docker run --gpus all` can attach the device.
     runs-on: [self-hosted, gpu]
 
+    env:
+      # Image tag derived from the SHA so concurrent runs don't trample
+      # each other. `-cov` keeps it visually distinct from the release
+      # image produced by build.yml.
+      IMAGE: damacy:${{ github.sha }}-cov
+      CONTAINER: damacy-cov-${{ github.run_id }}-${{ github.run_attempt }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build docker image
+      - name: Build docker image (Debug + coverage)
         run: |
-          docker build --tag damacy:${{ github.sha }} .
+          docker build \
+            --build-arg CMAKE_BUILD_TYPE=Debug \
+            --build-arg DAMACY_COVERAGE=ON \
+            --tag "$IMAGE" .
 
-      - name: Run ctest (with GPU)
-        # All 7 tests; the two CUDA tests require the GPU. ctest exits
-        # nonzero on any failure, which fails the step.
+      - name: Run ctest + Python smoke + gcovr (in container)
+        # Single `docker run` so all three steps share one container's
+        # writable layer — the .gcda files written by ctest persist for
+        # gcovr to consume in the same invocation. Using --name (no
+        # --rm) leaves the stopped container around for `docker cp`.
         run: |
-          docker run --rm --gpus all \
-            damacy:${{ github.sha }} \
-            ctest --output-on-failure --test-dir build
+          docker run --name "$CONTAINER" --gpus all "$IMAGE" \
+            bash -c '
+              set -e
+              ctest --output-on-failure --test-dir build
+              python3 -c "import damacy; print(\"damacy\", damacy.__version__); damacy._native.set_log_quiet(True); print(\"api-ok\")"
+              gcovr --root . \
+                --xml-pretty --output coverage.xml \
+                --html-details coverage-html/index.html \
+                --exclude ".*/tests/.*" \
+                --exclude ".*/experiments/.*" \
+                --exclude ".*/build/.*" \
+                --print-summary
+            '
 
-      - name: Python import smoke test
-        # Confirms the editable install + the prebuilt _native*.so are
-        # resolvable, and that calling into the C extension works (not
-        # just the import). set_log_quiet is a trivial no-op forward.
+      - name: Extract coverage artifacts
+        # Always-run so we still grab whatever gcovr produced even if
+        # ctest itself failed (we rely on `set -e` above to abort gcovr
+        # on failure, but a partial run is better than nothing).
+        if: always()
         run: |
-          docker run --rm --gpus all \
-            damacy:${{ github.sha }} \
-            python3 -c "import damacy; print('damacy', damacy.__version__); damacy._native.set_log_quiet(True); print('api-ok')"
+          docker cp "$CONTAINER":/workspace/damacy/coverage.xml ./coverage.xml || true
+          docker cp "$CONTAINER":/workspace/damacy/coverage-html ./coverage-html || true
+          docker rm "$CONTAINER" || true
+
+      - name: Upload coverage to Codecov
+        if: always()
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.xml
+          # Cobertura is gcovr's --xml-pretty format.
+          flags: unittests
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Upload coverage HTML artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html-${{ github.sha }}
+          path: coverage-html/
+          retention-days: 14
+          if-no-files-found: warn

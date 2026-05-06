@@ -62,6 +62,17 @@ ENV PATH=/opt/venv/bin:${PATH} \
 # --no-build-isolation) can find it.
 RUN uv pip install scikit-build-core
 
+# ----- build configuration ---------------------------------------------------
+# Override at `docker build` time via --build-arg to produce a coverage
+# image for CI. The defaults give a release-ish image suitable for
+# cluster runs of damacy_bench.
+ARG CMAKE_BUILD_TYPE=RelWithDebInfo
+ARG DAMACY_COVERAGE=OFF
+
+# gcovr is only needed when DAMACY_COVERAGE=ON; install it into the
+# project venv so it's on PATH for the test workflow.
+RUN if [ "${DAMACY_COVERAGE}" = "ON" ]; then uv pip install gcovr; fi
+
 # ----- nvcomp (standalone NVIDIA distribution) -------------------------------
 RUN set -eux; \
     mkdir -p /opt/nvcomp; \
@@ -78,9 +89,11 @@ WORKDIR /workspace/damacy
 COPY . /workspace/damacy
 
 # Configure + build the C library, damacy_bench, and the Python extension.
+# CMAKE_BUILD_TYPE and DAMACY_COVERAGE come from --build-arg above.
 RUN cmake -S . -B build -G Ninja \
         -DDAMACY_PYTHON=ON \
-        -DCMAKE_BUILD_TYPE=RelWithDebInfo
+        -DDAMACY_COVERAGE=${DAMACY_COVERAGE} \
+        -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
 RUN cmake --build build
 
 # Build-time sanity (CPU-only subset; the two CUDA tests need a GPU at
