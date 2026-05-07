@@ -14,7 +14,7 @@ Emits five (.blosc1, .raw) pairs alongside this script:
   lz4_shuffle_ts4        cname=lz4   shuffle=on   typesize=4  64 KB / 1 block
   zstd_noshuffle_ts4     cname=zstd  shuffle=off  typesize=4  64 KB / 1 block
   lz4_noshuffle_ts1      cname=lz4   shuffle=off  typesize=1  64 KB / 1 block
-  lz4_noshuffle_ts4_mb   cname=lz4   shuffle=off  typesize=4  4 MB / 64 blocks
+  lz4_noshuffle_ts4_mb   cname=lz4   shuffle=off  typesize=4  4 MB / 16 blocks
 
 Each .blosc1 is the codec.encode(...) output; each .raw is the original
 bytes. The spike consumes both and verifies round-trip.

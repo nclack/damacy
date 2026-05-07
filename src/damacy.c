@@ -39,18 +39,10 @@
 #include <string.h>
 #include <time.h>
 
-// Per-batch hard caps (v1; configurable when we land cfg knobs).
-// Max chunks bounds the planner output, the decoder fanout, and the
-// assemble metadata buffer; max-uncompressed bounds nvCOMP's temp
-// scratch via max_chunks * max_chunk_uncompressed (so the product
-// can't be raised casually — it controls a cudaMalloc).
+// Per-batch hard cap. Bounds the planner output and the assemble
+// metadata buffer. Wave caps + chunk-uncompressed cap live in
+// damacy_limits.h since they're shared with kernel modules.
 #define DAMACY_MAX_CHUNKS_PER_BATCH 16384u
-#define DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES (512ull << 10) // 512 KB
-// Wave cap is decoupled from batch cap: nvCOMP's temp scratch is sized
-// as MAX_CHUNKS_PER_WAVE * MAX_CHUNK_UNCOMPRESSED (×2 waves), so we
-// keep this small and let large batches split across multiple waves.
-// Waves still don't cross batch boundaries.
-#define DAMACY_MAX_CHUNKS_PER_WAVE 512u
 
 // Worst-case substream count per wave. blosc1-zstd has 1 substream per
 // blosc-block; blosc1-lz4 splits blosc-blocks into `typesize` substreams.
@@ -724,18 +716,20 @@ wave_init(struct damacy_wave* wave,
   CR(Error, cuEventCreate(&wave->ev.asm_start, CU_EVENT_DEFAULT));
   CR(Error, cuEventCreate(&wave->ev.asm_end, CU_EVENT_DEFAULT));
 
-  // The wave's decompressed-arena cap bounds total bytes per nvcomp
-  // batch; pass it as max_total_uncompressed so temp scratch isn't
-  // sized for the (vastly overprovisioned) max_batch * per-substream
-  // worst case.
-  const size_t wave_total_uncompressed =
-    (size_t)DAMACY_MAX_CHUNKS_PER_WAVE * DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES;
+  // nvcomp temp scratch is sized off the runtime per-wave decompress
+  // budget rather than the (much larger) compile-time worst case. The
+  // per-substream cap is bounded above by the compile-time ceiling so
+  // a tiny config still gets at least 1 byte of headroom.
+  const size_t wave_total_uncompressed = dev_decompressed_bytes;
+  size_t per_substream_cap = DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES;
+  if (per_substream_cap > dev_decompressed_bytes && dev_decompressed_bytes > 0)
+    per_substream_cap = dev_decompressed_bytes;
   wave->zstd_decoder = decoder_zstd_create(DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE,
-                                           DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES,
+                                           per_substream_cap,
                                            wave_total_uncompressed);
   CHECK(Error, wave->zstd_decoder);
   wave->lz4_decoder = decoder_lz4_create(DAMACY_MAX_BLOSC_LZ4_SUBS_PER_WAVE,
-                                         DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES,
+                                         per_substream_cap,
                                          wave_total_uncompressed);
   CHECK(Error, wave->lz4_decoder);
   return 0;

@@ -35,6 +35,12 @@ blosc1_parse_and_count_kernel(const struct blosc1_chunk_input* __restrict__ in,
                               struct blosc1_chunk_counts* __restrict__ counts,
                               uint32_t n_chunks)
 {
+  // bstarts/sorted live in shared memory (one block per chunk; only
+  // thread 0 reads/writes). Per-thread arrays at MAX_BLOCKS=64 would
+  // spill to local memory.
+  __shared__ uint32_t bstarts[DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK];
+  __shared__ uint32_t sorted[DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK];
+
   const uint32_t i = blockIdx.x;
   if (i >= n_chunks || threadIdx.x != 0)
     return;
@@ -104,8 +110,6 @@ blosc1_parse_and_count_kernel(const struct blosc1_chunk_input* __restrict__ in,
       const uint32_t per_stream_dst =
         (nstreams_per_block == 1) ? h.blocksize : (h.blocksize / h.typesize);
 
-      uint32_t bstarts[DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK];
-      uint32_t sorted[DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK];
       for (uint32_t bi = 0; bi < h.nblocks; ++bi)
         bstarts[bi] = read_u32_le(p + kHeaderBytes + 4u * bi);
       for (uint32_t bi = 0; bi < h.nblocks; ++bi) {
@@ -156,12 +160,15 @@ done:
   counts[i] = c;
 }
 
-// Block size of blosc1_scan_offsets_kernel. Equals the max wave size
-// (DAMACY_MAX_CHUNKS_PER_WAVE in damacy.c). Hard-coded here to avoid
-// a damacy.h dependency from the kernel module; the launcher rejects
-// n_chunks > kScanBlockSize.
-constexpr uint32_t kScanBlockSize = 512;
+// Block size of blosc1_scan_offsets_kernel. Sized to cover one full
+// wave's worth of chunks; the launcher rejects n_chunks > kScanBlockSize.
+constexpr uint32_t kScanBlockSize = DAMACY_MAX_CHUNKS_PER_WAVE;
 constexpr uint32_t kScanWarps = kScanBlockSize / 32u;
+static_assert(kScanBlockSize % 32u == 0,
+              "scan kernel assumes whole-warp block size");
+static_assert(DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK >=
+                DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES / (64ull << 10),
+              "blocks-per-chunk cap below worst case");
 
 __device__ uint32_t
 warp_exclusive_scan_u32(uint32_t v, uint32_t lane)
@@ -259,9 +266,9 @@ blosc1_scan_offsets_kernel(
   }
 }
 
-// blockDim.x is a full warp so warp scheduling isn't half-utilised.
-// Active lanes are 0 .. h.nblocks-1.
-constexpr uint32_t kEmitBlockDim = 32;
+// One thread per blosc-block; sized for the cap. With cap=64 this is
+// two warps per block.
+constexpr uint32_t kEmitBlockDim = DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK;
 static_assert(DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK <= kEmitBlockDim, "");
 
 struct EmitSmem
