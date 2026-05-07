@@ -100,7 +100,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: true
           gh-pages-branch: gh-pages
-          benchmark-data-dir-path: bench/timings
+          benchmark-data-dir-path: timings
           # Loose threshold while we're collecting baseline noise data;
           # tighten once we have ~20 points and know the variance.
           alert-threshold: '150%'
@@ -117,7 +117,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: true
           gh-pages-branch: gh-pages
-          benchmark-data-dir-path: bench/throughput
+          benchmark-data-dir-path: throughput
           alert-threshold: '150%'
           comment-on-alert: true
           fail-on-alert: false
