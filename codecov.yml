@@ -1,0 +1,30 @@
+# Codecov config — drives the PR status checks fed by test.yml's upload.
+#
+# `project` evaluates total coverage on the PR head against the base.
+# `patch` evaluates coverage of just the lines changed by the PR — the
+# more useful signal for review. Both post as commit statuses, so GitHub
+# branch protection can require them.
+
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 1%
+        informational: false
+    patch:
+      default:
+        target: auto
+        threshold: 1%
+        informational: false
+
+comment:
+  layout: "reach, diff, flags, files"
+  behavior: default
+  require_changes: false
+
+# Mirror gcovr's exclusions in test.yml so the report and the gate agree.
+ignore:
+  - "tests/**"
+  - "experiments/**"
+  - "build/**"
