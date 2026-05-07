@@ -114,9 +114,26 @@ done:
   counts[i] = c;
 }
 
-// Single-block exclusive-scan over up to MAX_CHUNKS_PER_WAVE entries.
-// Five parallel scans (zstd, lz4, memcpy, unshuffle, bitunshuffle) each
-// run in a separate warp-strided pass through shared memory.
+// Block size of blosc1_scan_offsets_kernel. Equals the max wave size
+// (DAMACY_MAX_CHUNKS_PER_WAVE in damacy.c). Hard-coded here to avoid
+// a damacy.h dependency from the kernel module; the launcher rejects
+// n_chunks > kScanBlockSize.
+constexpr uint32_t kScanBlockSize = 512;
+constexpr uint32_t kScanWarps = kScanBlockSize / 32u;
+
+__device__ uint32_t
+warp_exclusive_scan_u32(uint32_t v, uint32_t lane)
+{
+  uint32_t x = v;
+#pragma unroll
+  for (int i = 1; i < 32; i <<= 1) {
+    const uint32_t up = __shfl_up_sync(0xffffffffu, x, (uint32_t)i);
+    if (lane >= (uint32_t)i)
+      x += up;
+  }
+  return x - v;
+}
+
 __global__ void
 blosc1_scan_offsets_kernel(
   const struct blosc1_chunk_counts* __restrict__ counts,
@@ -124,33 +141,96 @@ blosc1_scan_offsets_kernel(
   struct blosc1_totals* __restrict__ totals,
   uint32_t n_chunks)
 {
-  if (threadIdx.x != 0)
-    return;
+  __shared__ uint32_t warp_z[kScanWarps];
+  __shared__ uint32_t warp_l[kScanWarps];
+  __shared__ uint32_t warp_m[kScanWarps];
+  __shared__ uint32_t warp_u[kScanWarps];
+  __shared__ uint32_t warp_b[kScanWarps];
 
-  uint32_t z = 0, l = 0, m = 0, u = 0, b = 0;
-  for (uint32_t i = 0; i < n_chunks; ++i) {
-    const struct blosc1_chunk_counts c = counts[i];
-    struct blosc1_chunk_offsets o;
-    o.zstd_off = z;
-    o.lz4_off = l;
-    o.memcpy_off = m;
-    o.unshuffle_off = u;
-    o.bitunshuffle_off = b;
-    offsets[i] = o;
-    z += c.n_zstd;
-    l += c.n_lz4;
-    m += c.n_memcpy;
-    u += c.has_unshuffle;
-    b += c.has_bitunshuffle;
+  const uint32_t tid = threadIdx.x;
+  const uint32_t lane = tid & 31u;
+  const uint32_t warp = tid >> 5u;
+
+  struct blosc1_chunk_counts c = { 0, 0, 0, 0, 0 };
+  if (tid < n_chunks)
+    c = counts[tid];
+
+  uint32_t z_ex = warp_exclusive_scan_u32(c.n_zstd, lane);
+  uint32_t l_ex = warp_exclusive_scan_u32(c.n_lz4, lane);
+  uint32_t m_ex = warp_exclusive_scan_u32(c.n_memcpy, lane);
+  uint32_t u_ex = warp_exclusive_scan_u32(c.has_unshuffle, lane);
+  uint32_t b_ex = warp_exclusive_scan_u32(c.has_bitunshuffle, lane);
+
+  if (lane == 31u) {
+    warp_z[warp] = z_ex + c.n_zstd;
+    warp_l[warp] = l_ex + c.n_lz4;
+    warp_m[warp] = m_ex + c.n_memcpy;
+    warp_u[warp] = u_ex + c.has_unshuffle;
+    warp_b[warp] = b_ex + c.has_bitunshuffle;
   }
-  totals->n_zstd = z;
-  totals->n_lz4 = l;
-  totals->n_memcpy = m;
-  totals->n_unshuffle = u;
-  totals->n_bitunshuffle = b;
+  __syncthreads();
+
+  if (warp == 0u) {
+    const uint32_t in_range = lane < kScanWarps ? 1u : 0u;
+    uint32_t z = in_range ? warp_z[lane] : 0u;
+    uint32_t l = in_range ? warp_l[lane] : 0u;
+    uint32_t m = in_range ? warp_m[lane] : 0u;
+    uint32_t u = in_range ? warp_u[lane] : 0u;
+    uint32_t b = in_range ? warp_b[lane] : 0u;
+    z = warp_exclusive_scan_u32(z, lane);
+    l = warp_exclusive_scan_u32(l, lane);
+    m = warp_exclusive_scan_u32(m, lane);
+    u = warp_exclusive_scan_u32(u, lane);
+    b = warp_exclusive_scan_u32(b, lane);
+    if (in_range) {
+      warp_z[lane] = z;
+      warp_l[lane] = l;
+      warp_m[lane] = m;
+      warp_u[lane] = u;
+      warp_b[lane] = b;
+    }
+  }
+  __syncthreads();
+
+  z_ex += warp_z[warp];
+  l_ex += warp_l[warp];
+  m_ex += warp_m[warp];
+  u_ex += warp_u[warp];
+  b_ex += warp_b[warp];
+
+  if (tid < n_chunks) {
+    struct blosc1_chunk_offsets o;
+    o.zstd_off = z_ex;
+    o.lz4_off = l_ex;
+    o.memcpy_off = m_ex;
+    o.unshuffle_off = u_ex;
+    o.bitunshuffle_off = b_ex;
+    offsets[tid] = o;
+  }
+
+  if (tid + 1u == n_chunks) {
+    totals->n_zstd = z_ex + c.n_zstd;
+    totals->n_lz4 = l_ex + c.n_lz4;
+    totals->n_memcpy = m_ex + c.n_memcpy;
+    totals->n_unshuffle = u_ex + c.has_unshuffle;
+    totals->n_bitunshuffle = b_ex + c.has_bitunshuffle;
+  }
 }
 
-// One CUDA block per chunk; blockDim.x = DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK.
+// blockDim.x is a full warp so warp scheduling isn't half-utilised.
+// Active lanes are 0 .. h.nblocks-1.
+constexpr uint32_t kEmitBlockDim = 32;
+static_assert(DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK <= kEmitBlockDim, "");
+
+struct EmitSmem
+{
+  struct blosc1_chunk_input chunk;
+  struct blosc1_chunk_hdr hdr;
+  struct blosc1_chunk_offsets offsets;
+  uint32_t bstarts[DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK];
+  uint32_t sorted_offsets[DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK];
+};
+
 __global__ void
 blosc1_emit_fanout_kernel(
   const struct blosc1_chunk_input* __restrict__ in,
@@ -167,140 +247,129 @@ blosc1_emit_fanout_kernel(
   if (i >= n_chunks)
     return;
 
-  const struct blosc1_chunk_input chunk = in[i];
-  const struct blosc1_chunk_hdr h = hdrs[i];
-  const struct blosc1_chunk_offsets o = offsets[i];
+  // Per-chunk metadata: load once per block into shared memory rather
+  // than into every thread's registers.
+  __shared__ EmitSmem s;
+  if (threadIdx.x == 0) {
+    s.chunk = in[i];
+    s.hdr = hdrs[i];
+    s.offsets = offsets[i];
+  }
+  __syncthreads();
 
-  if (h.err != 0)
+  if (s.hdr.err != 0)
     return;
 
-  uint8_t* d_decomp = (uint8_t*)chunk.d_decompressed;
-  const uint8_t* d_comp = (const uint8_t*)chunk.d_compressed;
+  const uint8_t codec = s.chunk.codec_id;
+  uint8_t* d_decomp = (uint8_t*)s.chunk.d_decompressed;
+  const uint8_t* d_comp = (const uint8_t*)s.chunk.d_compressed;
 
-  if (chunk.codec_id == CODEC_NONE) {
+  if (codec == CODEC_NONE) {
     if (threadIdx.x == 0) {
-      struct gpu_memcpy_op op;
-      op.d_src = d_comp;
-      op.d_dst = d_decomp;
-      op.nbytes = chunk.decompressed_nbytes;
-      memcpy_ops[o.memcpy_off] = op;
+      struct gpu_memcpy_op* slot = &memcpy_ops[s.offsets.memcpy_off];
+      slot->d_src = d_comp;
+      slot->d_dst = d_decomp;
+      slot->nbytes = s.chunk.decompressed_nbytes;
     }
     return;
   }
-  if (chunk.codec_id == CODEC_ZSTD) {
+  if (codec == CODEC_ZSTD) {
     if (threadIdx.x == 0) {
-      struct gpu_substream s;
-      s.d_src = d_comp;
-      s.d_dst = d_decomp;
-      s.src_nbytes = chunk.compressed_nbytes;
-      s.dst_nbytes = chunk.decompressed_nbytes;
-      zstd_subs[o.zstd_off] = s;
+      struct gpu_substream* slot = &zstd_subs[s.offsets.zstd_off];
+      slot->d_src = d_comp;
+      slot->d_dst = d_decomp;
+      slot->src_nbytes = s.chunk.compressed_nbytes;
+      slot->dst_nbytes = s.chunk.decompressed_nbytes;
     }
     return;
   }
 
   // CODEC_BLOSC_*
-  if (h.memcpyed) {
+  if (s.hdr.memcpyed) {
     if (threadIdx.x == 0) {
-      const uint32_t overhead = kHeaderBytes + 4u * h.nblocks;
-      struct gpu_memcpy_op op;
-      op.d_src = d_comp + overhead;
-      op.d_dst = d_decomp;
-      op.nbytes = chunk.decompressed_nbytes;
-      memcpy_ops[o.memcpy_off] = op;
+      const uint32_t overhead = kHeaderBytes + 4u * s.hdr.nblocks;
+      struct gpu_memcpy_op* slot = &memcpy_ops[s.offsets.memcpy_off];
+      slot->d_src = d_comp + overhead;
+      slot->d_dst = d_decomp;
+      slot->nbytes = s.chunk.decompressed_nbytes;
     }
     return;
   }
 
-  // bstarts is in writer-thread completion order; each block's
-  // compressed-payload extent is bounded by the next-higher offset
-  // (or cbytes for the trailing block). Compute each thread's rank
-  // among bstarts; sorted_offsets[rank] gives sorted ascending list.
-  __shared__ uint32_t bstarts[DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK];
-  __shared__ uint32_t sorted_offsets[DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK];
+  // bstarts is in writer-thread completion order; rank-sort to derive
+  // each block's compressed-payload extent.
   const uint32_t t = threadIdx.x;
-  if (t < h.nblocks)
-    bstarts[t] = read_u32_le(d_comp + kHeaderBytes + 4u * t);
+  const uint32_t nblocks = s.hdr.nblocks;
+  if (t < nblocks)
+    s.bstarts[t] = read_u32_le(d_comp + kHeaderBytes + 4u * t);
   __syncthreads();
 
   uint32_t my_off = 0;
-  uint32_t my_end = 0;
   uint32_t my_rank = 0;
-  if (t < h.nblocks) {
-    my_off = bstarts[t];
-    for (uint32_t j = 0; j < h.nblocks; ++j) {
-      const uint32_t other = bstarts[j];
+  if (t < nblocks) {
+    my_off = s.bstarts[t];
+    for (uint32_t j = 0; j < nblocks; ++j) {
+      const uint32_t other = s.bstarts[j];
       if (other < my_off || (other == my_off && j < t))
         ++my_rank;
     }
-    sorted_offsets[my_rank] = my_off;
+    s.sorted_offsets[my_rank] = my_off;
   }
   __syncthreads();
-  if (t < h.nblocks) {
-    my_end =
-      (my_rank + 1u < h.nblocks) ? sorted_offsets[my_rank + 1u] : h.cbytes;
-  }
 
-  if (t >= h.nblocks)
+  if (t >= nblocks)
     return;
 
-  const uint32_t block_start = my_off;
-  const uint32_t block_end = my_end;
-  const uint32_t block_uncompressed = h.blocksize;
-  const uint32_t block_dst_off = t * h.blocksize;
+  const uint32_t block_end =
+    (my_rank + 1u < nblocks) ? s.sorted_offsets[my_rank + 1u] : s.hdr.cbytes;
+  const uint32_t nstreams = (codec == CODEC_BLOSC_LZ4 && s.hdr.typesize > 1)
+                              ? (uint32_t)s.hdr.typesize
+                              : 1u;
+  const uint32_t per_stream_dst =
+    (nstreams == 1u) ? s.hdr.blocksize : (s.hdr.blocksize / s.hdr.typesize);
+  const uint32_t block_dst_off = t * s.hdr.blocksize;
+  struct gpu_substream* dst_table =
+    (codec == CODEC_BLOSC_LZ4) ? lz4_subs : zstd_subs;
+  const uint32_t fanout_base =
+    (codec == CODEC_BLOSC_LZ4 ? s.offsets.lz4_off : s.offsets.zstd_off) +
+    t * nstreams;
 
-  uint32_t nstreams_per_block = 1;
-  if (chunk.codec_id == CODEC_BLOSC_LZ4 && h.typesize > 1)
-    nstreams_per_block = h.typesize;
-  const uint32_t per_stream_dst = (nstreams_per_block == 1)
-                                    ? block_uncompressed
-                                    : (block_uncompressed / h.typesize);
-
-  // Walk int32-prefixed sub-streams within [block_start, block_end).
-  uint32_t cur = block_start;
-  uint32_t emitted = 0;
-  uint32_t fanout_base =
-    (chunk.codec_id == CODEC_BLOSC_LZ4) ? o.lz4_off : o.zstd_off;
-  // Each block writes its substreams contiguously in the chunk's slice;
-  // within the chunk, block t starts at fanout_base + t * nstreams_per_block.
-  fanout_base += t * nstreams_per_block;
-
-  while (cur + 4u <= block_end && emitted < nstreams_per_block) {
+  // Walk int32-prefixed sub-streams within [my_off, block_end). Stream
+  // each descriptor straight to global without holding the temporary in
+  // registers.
+  uint32_t cur = my_off;
+  for (uint32_t k = 0; k < nstreams; ++k) {
+    if (cur + 4u > block_end)
+      break;
     const uint32_t cb = read_u32_le(d_comp + cur);
     cur += 4u;
     if (cur + cb > block_end)
       break;
-    struct gpu_substream s;
-    s.d_src = d_comp + cur;
-    s.d_dst = d_decomp + block_dst_off + emitted * per_stream_dst;
-    s.src_nbytes = cb;
-    s.dst_nbytes = per_stream_dst;
-    if (chunk.codec_id == CODEC_BLOSC_LZ4)
-      lz4_subs[fanout_base + emitted] = s;
-    else
-      zstd_subs[fanout_base + emitted] = s;
+    struct gpu_substream* slot = &dst_table[fanout_base + k];
+    slot->d_src = d_comp + cur;
+    slot->d_dst = d_decomp + block_dst_off + k * per_stream_dst;
+    slot->src_nbytes = cb;
+    slot->dst_nbytes = per_stream_dst;
     cur += cb;
-    ++emitted;
   }
 
-  if (t == 0) {
-    if (h.shuffle) {
-      struct gpu_shuffle_op u;
-      u.d_buf = d_decomp;
-      u.blocksize = h.blocksize;
-      u.typesize = h.typesize;
-      u.nblocks_full = h.nblocks;
-      u.tail_nbytes = 0;
-      unshuffle_ops[o.unshuffle_off] = u;
+  if (t == 0 && (s.hdr.shuffle || s.hdr.bitshuffle)) {
+    if (s.hdr.shuffle) {
+      struct gpu_shuffle_op* slot = &unshuffle_ops[s.offsets.unshuffle_off];
+      slot->d_buf = d_decomp;
+      slot->blocksize = s.hdr.blocksize;
+      slot->typesize = s.hdr.typesize;
+      slot->nblocks_full = nblocks;
+      slot->tail_nbytes = 0;
     }
-    if (h.bitshuffle) {
-      struct gpu_shuffle_op u;
-      u.d_buf = d_decomp;
-      u.blocksize = h.blocksize;
-      u.typesize = h.typesize;
-      u.nblocks_full = h.nblocks;
-      u.tail_nbytes = 0;
-      bitunshuffle_ops[o.bitunshuffle_off] = u;
+    if (s.hdr.bitshuffle) {
+      struct gpu_shuffle_op* slot =
+        &bitunshuffle_ops[s.offsets.bitunshuffle_off];
+      slot->d_buf = d_decomp;
+      slot->blocksize = s.hdr.blocksize;
+      slot->typesize = s.hdr.typesize;
+      slot->nblocks_full = nblocks;
+      slot->tail_nbytes = 0;
     }
   }
 }
@@ -343,7 +412,12 @@ blosc1_scan_offsets_launch(CUstream stream,
     cudaMemsetAsync(d_totals, 0, sizeof(*d_totals), (cudaStream_t)stream);
     return 0;
   }
-  blosc1_scan_offsets_kernel<<<1, 32, 0, (cudaStream_t)stream>>>(
+  if (n_chunks > kScanBlockSize) {
+    log_error(
+      "blosc1_scan_offsets_launch: n_chunks=%u > %u", n_chunks, kScanBlockSize);
+    return 1;
+  }
+  blosc1_scan_offsets_kernel<<<1, kScanBlockSize, 0, (cudaStream_t)stream>>>(
     d_counts, d_offsets, d_totals, n_chunks);
   return launch_status_check("blosc1_scan_offsets_launch") == cudaSuccess ? 0
                                                                           : 1;
@@ -364,7 +438,7 @@ blosc1_emit_fanout_launch(CUstream stream,
   if (n_chunks == 0)
     return 0;
   blosc1_emit_fanout_kernel<<<n_chunks,
-                              DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK,
+                              kEmitBlockDim,
                               0,
                               (cudaStream_t)stream>>>(d_inputs,
                                                       d_hdrs,
