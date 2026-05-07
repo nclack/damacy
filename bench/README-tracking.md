@@ -4,8 +4,11 @@ Wall-clock and throughput numbers from `damacy_bench` are tracked over
 time on the `gh-pages` branch via
 [github-action-benchmark](https://github.com/benchmark-action/github-action-benchmark).
 
-The CI workflow (`.github/workflows/bench.yml`) runs on every push to
-`main` (and on manual `workflow_dispatch`):
+The CI workflow (`.github/workflows/bench.yml`) runs daily at 07:23 UTC
+and on manual `workflow_dispatch`. It does **not** run on every push or
+PR — full bench takes ~30 min and per-merge data points are noisier
+than they are useful. To compare a specific PR or commit, dispatch the
+workflow manually from the Actions tab against that ref.
 
 1. Builds the release docker image.
 2. Runs `bench/scenarios/default.json` then `bench/scenarios/mixed.json`

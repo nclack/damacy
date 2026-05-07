@@ -14,8 +14,11 @@
 name: bench
 
 on:
-  push:
-    branches: [main]
+  # Daily at 07:23 UTC (off the top of the hour so we don't compete with
+  # GitHub's hourly cron surge). GitHub may delay scheduled runs by tens
+  # of minutes under load — exactness doesn't matter for trend tracking.
+  schedule:
+    - cron: '23 7 * * *'
   workflow_dispatch:
 
 permissions:
