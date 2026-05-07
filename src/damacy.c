@@ -711,14 +711,20 @@ wave_init(struct damacy_wave* wave,
   CR(Error, cuEventCreate(&wave->ev.asm_start, CU_EVENT_DEFAULT));
   CR(Error, cuEventCreate(&wave->ev.asm_end, CU_EVENT_DEFAULT));
 
-  // nvcomp temp scratch is sized off the runtime per-wave decompress
-  // budget rather than the (much larger) compile-time worst case. The
-  // per-substream cap is bounded above by the compile-time ceiling so
-  // a tiny config still gets at least 1 byte of headroom.
-  const size_t wave_total_uncompressed = dev_decompressed_bytes;
+  // nvcomp temp scratch is sized off min(compile-time worst case,
+  // runtime per-wave decompress budget). Tests with small configs avoid
+  // a wasteful huge scratch; production configs avoid inflating beyond
+  // the compile-time bound (which would push us over the GPU memory
+  // budget on 8 GB cards).
+  const size_t compile_worst =
+    (size_t)DAMACY_MAX_CHUNKS_PER_WAVE * DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES;
+  const size_t wave_total_uncompressed = dev_decompressed_bytes < compile_worst
+                                           ? dev_decompressed_bytes
+                                           : compile_worst;
   size_t per_substream_cap = DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES;
-  if (per_substream_cap > dev_decompressed_bytes && dev_decompressed_bytes > 0)
-    per_substream_cap = dev_decompressed_bytes;
+  if (per_substream_cap > wave_total_uncompressed &&
+      wave_total_uncompressed > 0)
+    per_substream_cap = wave_total_uncompressed;
   wave->zstd_decoder = decoder_zstd_create(DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE,
                                            per_substream_cap,
                                            wave_total_uncompressed);
