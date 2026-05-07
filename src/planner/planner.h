@@ -86,6 +86,11 @@ extern "C"
     // Page alignment used for read_op.file_offset / nbytes. Typically
     // platform_page_alignment(), captured once at create.
     uint64_t page_alignment;
+    // Runtime ceiling on per-chunk uncompressed bytes. Chunks exceeding
+    // this fail planner_plan with DAMACY_INVAL — earlier than the parse
+    // kernel's nblocks check, and surfaces sample.uri to the caller.
+    // 0 means "no extra cap beyond DAMACY_MAX_CHUNK_BYTES".
+    uint64_t max_chunk_uncompressed_bytes;
   };
 
   struct planner;

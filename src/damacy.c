@@ -306,6 +306,12 @@ struct damacy
   uint64_t page_alignment;
   int cuda_device;
 
+  // GPU memory budgeting: total bytes committed at create-time (waves +
+  // per-batch metadata). Lazy batch-output tensors are summed against
+  // gpu_bytes_budget at batch_pool_allocate. 0 budget = no cap.
+  uint64_t gpu_bytes_committed;
+  uint64_t gpu_bytes_budget;
+
   struct store* store;
   struct zarr_meta_cache* meta_cache;
   struct zarr_shard_cache* shard_cache;
@@ -387,6 +393,10 @@ validate_config(const struct damacy_config* cfg)
   // sizing.
   CHECK_SILENT(Invalid,
                cfg->max_bytes_per_element <= DAMACY_BLOSC_MAX_TYPESIZE);
+  // Runtime per-chunk cap is bounded by the kernel-array ceiling.
+  CHECK_SILENT(Invalid,
+               cfg->max_chunk_uncompressed_bytes <=
+                 DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES);
   return DAMACY_OK;
 Invalid:
   return DAMACY_INVAL;
@@ -400,6 +410,125 @@ resolve_max_bpe(const struct damacy_config* cfg)
 {
   return cfg->max_bytes_per_element ? cfg->max_bytes_per_element
                                     : (uint8_t)DAMACY_BLOSC_MAX_TYPESIZE;
+}
+
+// Resolve the effective per-chunk uncompressed byte cap. 0 maps to the
+// 512 KB default; clamps to the compile-time ceiling for safety.
+static uint64_t
+resolve_max_chunk_uncompressed(const struct damacy_config* cfg)
+{
+  uint64_t v = cfg->max_chunk_uncompressed_bytes;
+  if (v == 0)
+    v = DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES;
+  if (v > DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES)
+    v = DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES;
+  return v;
+}
+
+// --- GPU memory budget ---------------------------------------------------
+
+// Categorised breakdown of expected device-resident bytes for the wave
+// pool plus per-batch metadata. Lazy batch-output tensors are accounted
+// separately at batch_pool_allocate time (size depends on first AABB).
+struct gpu_budget
+{
+  uint64_t dev_compressed;        // 2× host_per_wave (H2D mirror)
+  uint64_t dev_decompressed;      // 2× dev_per_wave
+  uint64_t dev_unshuffle_scratch; // 2× dev_per_wave
+  uint64_t blosc1_meta;           // 2× per-wave parse + assemble metadata
+  uint64_t fanout_soa;            // 2× per-wave nvcomp fanout SOA + op arrays
+  uint64_t nvcomp_temp;           // 2× (zstd_temp + lz4_temp + actual+status)
+  uint64_t batch_metadata;        // 2× cfg.batch_size × sizeof(sample_plan)
+  uint64_t total;
+};
+
+// Sum of struct-array allocs wave_init makes for blosc1 parse + assemble
+// metadata, scaled to one wave.
+static uint64_t
+wave_blosc1_meta_bytes(void)
+{
+  const uint64_t cap = (uint64_t)DAMACY_MAX_CHUNKS_PER_WAVE;
+  return cap * sizeof(struct assemble_chunk) +
+         cap * sizeof(struct blosc1_chunk_input) +
+         cap * sizeof(struct blosc1_chunk_hdr) +
+         cap * sizeof(struct blosc1_chunk_counts) +
+         cap * sizeof(struct blosc1_chunk_offsets) +
+         sizeof(struct blosc1_totals);
+}
+
+// One wave's nvcomp fanout SOA + memcpy/shuffle op arrays.
+static uint64_t
+wave_fanout_soa_bytes(uint8_t max_bpe)
+{
+  const uint64_t zsubs = (uint64_t)DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE;
+  const uint64_t lsubs = (uint64_t)lz4_subs_per_wave(max_bpe);
+  // Each codec fanout: 2× (void*) + 2× (size_t).
+  uint64_t soa = zsubs * (2 * sizeof(void*) + 2 * sizeof(size_t)) +
+                 lsubs * (2 * sizeof(void*) + 2 * sizeof(size_t));
+  soa += (uint64_t)DAMACY_MAX_BLOSC_MEMCPY_OPS_PER_WAVE *
+         sizeof(struct gpu_memcpy_op);
+  soa += 2ull * (uint64_t)DAMACY_MAX_BLOSC_SHUFFLE_OPS_PER_WAVE *
+         sizeof(struct gpu_shuffle_op);
+  return soa;
+}
+
+// Predicted nvcomp scratch (temp workspace + actual-size + status arrays)
+// for one wave, mirroring wave_init's capacity math.
+static enum damacy_status
+wave_nvcomp_bytes(const struct damacy_config* cfg, uint64_t* out)
+{
+  const uint64_t dev_per_wave = cfg->device_buffer_bytes / 2;
+  const uint64_t runtime_chunk_cap = resolve_max_chunk_uncompressed(cfg);
+  const uint8_t max_bpe = resolve_max_bpe(cfg);
+  const uint64_t zsubs = (uint64_t)DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE;
+  const uint64_t lsubs = (uint64_t)lz4_subs_per_wave(max_bpe);
+  const uint64_t cap_worst =
+    (uint64_t)DAMACY_MAX_CHUNKS_PER_WAVE * runtime_chunk_cap;
+  const uint64_t total_uncompressed =
+    dev_per_wave < cap_worst ? dev_per_wave : cap_worst;
+  uint64_t zstd_per = runtime_chunk_cap;
+  if (zstd_per > total_uncompressed && total_uncompressed > 0)
+    zstd_per = total_uncompressed;
+  uint64_t lz4_per = zstd_per / max_bpe;
+  if (lz4_per == 0)
+    lz4_per = 1;
+  size_t zstd_temp = 0, lz4_temp = 0;
+  if (decoder_zstd_query_temp_bytes(
+        zsubs, (size_t)zstd_per, (size_t)total_uncompressed, &zstd_temp))
+    return DAMACY_CUDA;
+  if (decoder_lz4_query_temp_bytes(
+        lsubs, (size_t)lz4_per, (size_t)total_uncompressed, &lz4_temp))
+    return DAMACY_CUDA;
+  // Per-codec actual-size (size_t) and status (int) output arrays.
+  *out = (uint64_t)zstd_temp + zsubs * sizeof(size_t) + zsubs * sizeof(int) +
+         (uint64_t)lz4_temp + lsubs * sizeof(size_t) + lsubs * sizeof(int);
+  return DAMACY_OK;
+}
+
+static enum damacy_status
+gpu_budget_compute(const struct damacy_config* cfg, struct gpu_budget* out)
+{
+  const uint64_t host_per_wave = cfg->host_buffer_bytes / 2;
+  const uint64_t dev_per_wave = cfg->device_buffer_bytes / 2;
+  const uint8_t max_bpe = resolve_max_bpe(cfg);
+
+  uint64_t per_wave_nvcomp = 0;
+  enum damacy_status s = wave_nvcomp_bytes(cfg, &per_wave_nvcomp);
+  if (s != DAMACY_OK)
+    return s;
+
+  out->dev_compressed = 2ull * host_per_wave;
+  out->dev_decompressed = 2ull * dev_per_wave;
+  out->dev_unshuffle_scratch = 2ull * dev_per_wave;
+  out->blosc1_meta = 2ull * wave_blosc1_meta_bytes();
+  out->fanout_soa = 2ull * wave_fanout_soa_bytes(max_bpe);
+  out->nvcomp_temp = 2ull * per_wave_nvcomp;
+  out->batch_metadata =
+    2ull * (uint64_t)cfg->batch_size * sizeof(struct sample_plan);
+  out->total = out->dev_compressed + out->dev_decompressed +
+               out->dev_unshuffle_scratch + out->blosc1_meta + out->fanout_soa +
+               out->nvcomp_temp + out->batch_metadata;
+  return DAMACY_OK;
 }
 
 // --- lookahead ring -------------------------------------------------------
@@ -550,11 +679,27 @@ batch_pool_allocate(struct damacy* self, const struct damacy_aabb* sample_aabb)
   pool->n_bytes =
     (uint64_t)self->cfg.batch_size * (uint64_t)spatial_volume * (uint64_t)bpe;
 
+  // Lazy batch-output check against the GPU budget. Two slot tensors land
+  // here; the wave/batch-metadata totals were already committed at create.
+  if (self->gpu_bytes_budget > 0) {
+    uint64_t need = 2ull * pool->n_bytes;
+    if (self->gpu_bytes_committed + need > self->gpu_bytes_budget) {
+      log_error("damacy: batch-output pool would exceed GPU budget "
+                "(committed=%llu add=%llu cap=%llu n_bytes=%llu)",
+                (unsigned long long)self->gpu_bytes_committed,
+                (unsigned long long)need,
+                (unsigned long long)self->gpu_bytes_budget,
+                (unsigned long long)pool->n_bytes);
+      return DAMACY_OOM;
+    }
+  }
+
   for (int s = 0; s < 2; ++s) {
     CUdeviceptr dptr = 0;
     CR(CudaFail, cuMemAlloc(&dptr, pool->n_bytes));
     pool->slots[s].dev_ptr = (void*)(uintptr_t)dptr;
   }
+  self->gpu_bytes_committed += 2ull * pool->n_bytes;
   pool->allocated = 1;
   return DAMACY_OK;
 
@@ -641,7 +786,8 @@ static int
 wave_init(struct damacy_wave* wave,
           uint64_t host_slab_bytes,
           uint64_t dev_decompressed_bytes,
-          uint8_t max_bpe)
+          uint8_t max_bpe,
+          uint64_t max_chunk_uncompressed_bytes)
 {
   wave->state = WAVE_FREE;
   wave->host_slab_cap = host_slab_bytes;
@@ -734,20 +880,21 @@ wave_init(struct damacy_wave* wave,
   CR(Error, cuEventCreate(&wave->ev.asm_start, CU_EVENT_DEFAULT));
   CR(Error, cuEventCreate(&wave->ev.asm_end, CU_EVENT_DEFAULT));
 
-  // nvcomp temp scratch is sized off min(compile-time worst case,
-  // runtime per-wave decompress budget). Tests with small configs avoid
-  // a wasteful huge scratch; production configs avoid inflating beyond
-  // the compile-time bound (which would push us over the GPU memory
-  // budget on 8 GB cards).
-  const size_t compile_worst =
-    (size_t)DAMACY_MAX_CHUNKS_PER_WAVE * DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES;
-  const size_t wave_total_uncompressed = dev_decompressed_bytes < compile_worst
-                                           ? dev_decompressed_bytes
-                                           : compile_worst;
+  // nvcomp temp scratch is sized off min(runtime per-chunk cap × wave
+  // chunks, runtime per-wave decompress budget). The runtime cap (set
+  // by cfg.max_chunk_uncompressed_bytes; default 512 KB) is the lever
+  // that lets users keep nvcomp scratch small on tight GPU budgets while
+  // still letting the compile-time ceiling stretch to 2 MB for users on
+  // bigger devices.
+  const size_t cap_chunks = DAMACY_MAX_CHUNKS_PER_WAVE;
+  const size_t runtime_chunk_cap = (size_t)max_chunk_uncompressed_bytes;
+  const size_t cap_worst = cap_chunks * runtime_chunk_cap;
+  const size_t wave_total_uncompressed =
+    dev_decompressed_bytes < cap_worst ? dev_decompressed_bytes : cap_worst;
   // Zstd substream == one blosc-block, ≤ chunk_uncompressed_cap.
   // LZ4 substream == blosc-block / typesize, so the per-substream cap
   // tightens by max_bpe — directly shrinks nvcomp's LZ4 temp scratch.
-  size_t zstd_per_substream_cap = DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES;
+  size_t zstd_per_substream_cap = runtime_chunk_cap;
   if (zstd_per_substream_cap > wave_total_uncompressed &&
       wave_total_uncompressed > 0)
     zstd_per_substream_cap = wave_total_uncompressed;
@@ -758,8 +905,8 @@ wave_init(struct damacy_wave* wave,
                                            zstd_per_substream_cap,
                                            wave_total_uncompressed);
   CHECK(Error, wave->zstd_decoder);
-  wave->lz4_decoder = decoder_lz4_create(
-    lsubs, lz4_per_substream_cap, wave_total_uncompressed);
+  wave->lz4_decoder =
+    decoder_lz4_create(lsubs, lz4_per_substream_cap, wave_total_uncompressed);
   CHECK(Error, wave->lz4_decoder);
   return 0;
 Error:
@@ -1220,10 +1367,11 @@ kick_codec_batches(struct damacy* self,
                                   wave->zstd_fan.d_decomp_buf_sizes,
                                   tot->n_zstd))
       goto DecodeFail;
-    if (decoder_status_reduce_launch(self->stream_zstd,
-                                     decoder_zstd_d_statuses(wave->zstd_decoder),
-                                     d_err,
-                                     tot->n_zstd))
+    if (decoder_status_reduce_launch(
+          self->stream_zstd,
+          decoder_zstd_d_statuses(wave->zstd_decoder),
+          d_err,
+          tot->n_zstd))
       goto DecodeFail;
     CR(CudaFail, cuEventRecord(wave->ev.zstd_done, self->stream_zstd));
   }
@@ -1569,6 +1717,36 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   CR(Fail, cuStreamCreate(&self->stream_zstd, CU_STREAM_DEFAULT));
   CR(Fail, cuStreamCreate(&self->stream_lz4, CU_STREAM_DEFAULT));
 
+  // Predict wave-resident GPU bytes and reject early if over budget.
+  // Batch-output tensors (sized from the first AABB) are checked
+  // separately at batch_pool_allocate.
+  self->gpu_bytes_budget = cfg->max_gpu_memory_bytes;
+  {
+    struct gpu_budget budget = { 0 };
+    s = gpu_budget_compute(cfg, &budget);
+    if (s != DAMACY_OK)
+      goto Fail;
+    self->gpu_bytes_committed = budget.total;
+    if (self->gpu_bytes_budget > 0 &&
+        self->gpu_bytes_committed > self->gpu_bytes_budget) {
+      log_error(
+        "damacy: GPU budget exceeded at create: total=%llu cap=%llu "
+        "(dev_compressed=%llu dev_decompressed=%llu unshuffle_scratch=%llu "
+        "blosc1_meta=%llu fanout_soa=%llu nvcomp_temp=%llu batch_meta=%llu)",
+        (unsigned long long)budget.total,
+        (unsigned long long)self->gpu_bytes_budget,
+        (unsigned long long)budget.dev_compressed,
+        (unsigned long long)budget.dev_decompressed,
+        (unsigned long long)budget.dev_unshuffle_scratch,
+        (unsigned long long)budget.blosc1_meta,
+        (unsigned long long)budget.fanout_soa,
+        (unsigned long long)budget.nvcomp_temp,
+        (unsigned long long)budget.batch_metadata);
+      s = DAMACY_OOM;
+      goto Fail;
+    }
+  }
+
   s = DAMACY_OOM;
   struct store_fs_config sc = {
     .root = self->store_root,
@@ -1584,10 +1762,12 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     zarr_shard_cache_create(self->store, cfg->n_shards_meta_cache);
   CHECK(Fail, self->shard_cache);
 
+  const uint64_t runtime_chunk_cap = resolve_max_chunk_uncompressed(cfg);
   struct planner_config pcfg = {
     .meta_cache = self->meta_cache,
     .shard_cache = self->shard_cache,
     .page_alignment = self->page_alignment,
+    .max_chunk_uncompressed_bytes = runtime_chunk_cap,
   };
   CHECK(Fail, planner_create(&pcfg, &self->planner) == DAMACY_OK);
 
@@ -1603,8 +1783,11 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   const uint8_t max_bpe = resolve_max_bpe(cfg);
   for (int w = 0; w < 2; ++w)
     CHECK(Fail,
-          wave_init(&self->waves[w], host_per_wave, dev_per_wave, max_bpe) ==
-            0);
+          wave_init(&self->waves[w],
+                    host_per_wave,
+                    dev_per_wave,
+                    max_bpe,
+                    runtime_chunk_cap) == 0);
 
   CHECK(Fail,
         lookahead_init(&self->lookahead,

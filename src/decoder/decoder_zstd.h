@@ -40,6 +40,14 @@ extern "C"
   // decoder_status_reduce_launch after a successful batch_device call.
   const int* decoder_zstd_d_statuses(const struct decoder_zstd*);
 
+  // Query nvcomp for the temp scratch size that decoder_zstd_create will
+  // request given the same caps. No allocation, no CUDA context required.
+  // Returns 0 on success and writes *out_bytes.
+  int decoder_zstd_query_temp_bytes(size_t max_batch_size,
+                                    size_t max_chunk_uncompressed_bytes,
+                                    size_t max_total_uncompressed_bytes,
+                                    size_t* out_bytes);
+
 #ifdef __cplusplus
 }
 #endif

@@ -269,6 +269,15 @@ planner_plan(struct planner* self,
     uint64_t decompressed_n_bytes = inner_chunk_bytes(meta);
     if (decompressed_n_bytes == 0)
       return DAMACY_DECODE;
+    if (self->cfg.max_chunk_uncompressed_bytes > 0 &&
+        decompressed_n_bytes > self->cfg.max_chunk_uncompressed_bytes) {
+      log_error("planner: chunk uncompressed=%llu exceeds runtime cap=%llu "
+                "(uri=%s)",
+                (unsigned long long)decompressed_n_bytes,
+                (unsigned long long)self->cfg.max_chunk_uncompressed_bytes,
+                sample->uri);
+      return DAMACY_INVAL;
+    }
 
     uint64_t chunk_lo[DAMACY_MAX_RANK];
     uint64_t chunk_hi[DAMACY_MAX_RANK];

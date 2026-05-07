@@ -33,6 +33,13 @@ extern "C"
   // decoder_zstd_d_statuses for rationale.
   const int* decoder_lz4_d_statuses(const struct decoder_lz4*);
 
+  // Query nvcomp for the temp scratch size decoder_lz4_create will use
+  // given the same caps. No allocation; counterpart to the zstd query.
+  int decoder_lz4_query_temp_bytes(size_t max_batch_size,
+                                   size_t max_substream_uncompressed_bytes,
+                                   size_t max_total_uncompressed_bytes,
+                                   size_t* out_bytes);
+
 #ifdef __cplusplus
 }
 #endif
