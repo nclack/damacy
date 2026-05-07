@@ -221,6 +221,60 @@ test_mixed_codec_batch(void)
   return 0;
 }
 
+// Four zarrs (none, zstd, blosc-zstd, blosc-lz4), one sample each in a
+// batch_size=4 batch. All four codecs route through the unified blosc1
+// GPU pipeline; the wave dispatches to memcpy + nvcomp_zstd + nvcomp_lz4
+// in parallel.
+static int
+test_four_codecs_mixed_batch(void)
+{
+  char root[64];
+  EXPECT(mkdtemp_root(root, sizeof root) == 0);
+  const char* names[4] = { "n", "z", "bz", "bl" };
+  const char* codecs[4] = { "none", "zstd", "blosc-zstd", "blosc-lz4" };
+  const int64_t offsets[4] = { 0, 1000, 2000, 3000 };
+  int64_t shape[2] = { 16, 32 }, inner[2] = { 8, 16 }, shard[2] = { 16, 32 };
+  for (int i = 0; i < 4; ++i) {
+    char p[256];
+    snprintf(p, sizeof p, "%s/%s", root, names[i]);
+    EXPECT(fixture_write_zarr_codec(
+             p, shape, inner, shard, 2, "uint16", offsets[i], codecs[i]) == 0);
+  }
+
+  struct damacy_config cfg = mk_cfg(root, 4);
+  struct damacy* d = NULL;
+  EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
+
+  struct damacy_sample s[4];
+  for (int i = 0; i < 4; ++i)
+    s[i] = mk_sample(names[i], 0, 16, 0, 32);
+  struct damacy_sample_slice slice = { .beg = s, .end = s + 4 };
+  struct damacy_push_result pr = damacy_push(d, slice);
+  EXPECT(pr.status == DAMACY_OK);
+
+  struct damacy_batch* b = NULL;
+  EXPECT(damacy_pop(d, &b) == DAMACY_OK);
+  struct damacy_batch_info info;
+  damacy_batch_info(b, &info);
+  EXPECT(info.shape[0] == 4);
+  EXPECT(info.shape[1] == 16);
+  EXPECT(info.shape[2] == 32);
+
+  uint16_t out[4 * 16 * 32] = { 0 };
+  EXPECT(cudaMemcpy(out, info.device_ptr, sizeof out, cudaMemcpyDeviceToHost) ==
+         cudaSuccess);
+  for (int i = 0; i < 4; ++i)
+    for (int y = 0; y < 16; ++y)
+      for (int x = 0; x < 32; ++x)
+        EXPECT(out[i * 16 * 32 + y * 32 + x] ==
+               expected_u16_2d(y, x, 32, offsets[i]));
+  damacy_release(d, b);
+
+  damacy_destroy(d);
+  fixture_rm_tree(root);
+  return 0;
+}
+
 int
 main(void)
 {
@@ -228,6 +282,7 @@ main(void)
   RUN(test_full_array_blosc_lz4);
   RUN(test_partial_crossing_chunks_blosc);
   RUN(test_mixed_codec_batch);
+  RUN(test_four_codecs_mixed_batch);
   log_info("all tests passed");
   return 0;
 }

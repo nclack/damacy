@@ -27,6 +27,8 @@ def parse_shape(s: str) -> tuple[int, ...]:
 
 
 def make_compressors(codec: str, dtype: np.dtype):
+    if codec == "none":
+        return []
     if codec == "zstd":
         return [ZstdCodec(level=3, checksum=False)]
     if codec == "blosc-zstd":
@@ -58,7 +60,7 @@ def main() -> int:
     ap.add_argument("--offset", type=int, default=0,
                     help="added to each element before dtype masking")
     ap.add_argument("--codec", default="zstd",
-                    choices=["zstd", "blosc-zstd", "blosc-lz4"],
+                    choices=["none", "zstd", "blosc-zstd", "blosc-lz4"],
                     help="inner codec inside the sharding wrapper")
     args = ap.parse_args()
 

@@ -7,7 +7,7 @@
 #   "ngff-zarr>=0.13",
 # ]
 # ///
-"""Generate a synthetic sharded zstd zarr v3 store for the damacy bench.
+"""Generate a synthetic sharded zarr v3 store for the damacy bench.
 
 Writes a single-scale NGFF v0.5 image. Defaults are tuned for a quick smoke
 test (~100 MB on disk at default entropy).
@@ -20,11 +20,29 @@ from pathlib import Path
 
 import numpy as np
 import ngff_zarr as nz
-from zarr.codecs import ZstdCodec
+from zarr.codecs import BloscCname, BloscCodec, BloscShuffle, ZstdCodec
 
 
 def parse_shape(s: str) -> tuple[int, ...]:
     return tuple(int(x) for x in s.split(","))
+
+
+def make_compressors(codec: str, clevel: int, dtype: np.dtype):
+    if codec == "none":
+        return []
+    if codec == "zstd":
+        return [ZstdCodec(level=clevel, checksum=False)]
+    if codec == "blosc-zstd":
+        return [BloscCodec(
+            cname=BloscCname.zstd, clevel=clevel,
+            shuffle=BloscShuffle.shuffle, typesize=int(dtype.itemsize),
+        )]
+    if codec == "blosc-lz4":
+        return [BloscCodec(
+            cname=BloscCname.lz4, clevel=clevel,
+            shuffle=BloscShuffle.shuffle, typesize=int(dtype.itemsize),
+        )]
+    raise SystemExit(f"unknown --codec {codec!r}")
 
 
 def main() -> int:
@@ -42,7 +60,10 @@ def main() -> int:
         help="shard / outer chunk shape (csv); must be a multiple of inner",
     )
     ap.add_argument("--dtype", default="uint16")
-    ap.add_argument("--zstd-level", type=int, default=3)
+    ap.add_argument("--codec", default="zstd",
+                    choices=["none", "zstd", "blosc-zstd", "blosc-lz4"])
+    ap.add_argument("--clevel", type=int, default=3,
+                    help="compression level passed to zstd / blosc")
     ap.add_argument(
         "--entropy",
         type=float,
@@ -101,7 +122,7 @@ def main() -> int:
         multiscales,
         version="0.5",
         chunks_per_shard=chunks_per_shard,
-        compressors=[ZstdCodec(level=args.zstd_level, checksum=False)],
+        compressors=make_compressors(args.codec, args.clevel, dtype),
     )
     print(f"done. store: {out}")
     return 0

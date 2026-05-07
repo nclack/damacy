@@ -11,6 +11,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator
 
 DType = Literal["u8", "u16", "i16", "u32", "f16", "f32"]
+Codec = Literal["none", "zstd", "blosc-zstd", "blosc-lz4"]
 
 NUMPY_DTYPE = {
     "u8": "uint8",
@@ -31,7 +32,11 @@ class Dataset(BaseModel):
     chunk_shape: list[int]
     shard_shape: list[int]
     dtype: DType
-    zstd_level: int = 3
+    # Codec assigned per-zarr cycling through this list. Length must
+    # divide n_zarrs (or be 1). `["zstd"]` reproduces the original
+    # single-codec scenario.
+    codecs: list[Codec] = Field(default_factory=lambda: ["zstd"])
+    clevel: int = 3
     entropy: float = 0.5
     seed: int = 42
 
@@ -41,6 +46,16 @@ class Dataset(BaseModel):
         if not v or any(x <= 0 for x in v):
             raise ValueError("shape entries must be positive")
         return v
+
+    @field_validator("codecs")
+    @classmethod
+    def _nonempty(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("codecs must be non-empty")
+        return v
+
+    def codec_for(self, zarr_idx: int) -> Codec:
+        return self.codecs[zarr_idx % len(self.codecs)]
 
 
 class Sampling(BaseModel):
