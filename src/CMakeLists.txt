@@ -62,8 +62,13 @@ add_src_lib(planner SOURCES planner/planner.h planner/planner.c
 )
 
 # GPU pieces — add_cuda_lib is a no-op under DAMACY_FUZZ.
-add_cuda_lib(decoder SOURCES decoder/decoder.h decoder/decoder.c
-    LINKS CUDA::cudart_static nvcomp::nvcomp log
+add_cuda_lib(decoder
+    SOURCES decoder/decoder.h
+            decoder/decoder_check.h
+            decoder/decoder_zstd.h decoder/decoder_zstd.c
+            decoder/decoder_lz4.h  decoder/decoder_lz4.c
+            decoder/decoder_memcpy.h decoder/decoder_memcpy.cu
+    LINKS CUDA::cudart_static CUDA::cuda_driver nvcomp::nvcomp log
 )
 
 # Bytewise gather kernel: chunk windows → output batch tensor.

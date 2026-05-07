@@ -18,7 +18,7 @@
 #include "damacy.h"
 
 #include "assemble/assemble.h"
-#include "decoder/decoder.h"
+#include "decoder/decoder_zstd.h"
 #include "dtype/dtype.h"
 #include "log/log.h"
 #include "planner/planner.h"
@@ -253,7 +253,7 @@ struct damacy_wave
   // pointer arrays, temp scratch) is not safe to share across in-flight
   // waves. The host-side fanout would be overwritten by the next call
   // before the first call's queued cudaMemcpyAsync has executed.
-  struct decoder* decoder;
+  struct decoder_zstd* zstd_decoder;
 };
 
 struct damacy
@@ -581,7 +581,6 @@ any_batch_in_flight(const struct damacy* self)
 
 static int
 wave_init(struct damacy_wave* wave,
-          int cuda_device,
           uint64_t host_slab_bytes,
           uint64_t dev_decompressed_bytes)
 {
@@ -621,10 +620,9 @@ wave_init(struct damacy_wave* wave,
   CR(Error, cuEventCreate(&wave->ev.asm_start, CU_EVENT_DEFAULT));
   CR(Error, cuEventCreate(&wave->ev.asm_end, CU_EVENT_DEFAULT));
 
-  wave->decoder = decoder_create(cuda_device,
-                                 DAMACY_MAX_CHUNKS_PER_WAVE,
-                                 DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES);
-  CHECK(Error, wave->decoder);
+  wave->zstd_decoder = decoder_zstd_create(DAMACY_MAX_CHUNKS_PER_WAVE,
+                                           DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES);
+  CHECK(Error, wave->zstd_decoder);
   return 0;
 Error:
   return 1;
@@ -635,7 +633,7 @@ wave_destroy(struct damacy_wave* wave)
 {
   if (!wave)
     return;
-  decoder_destroy(wave->decoder);
+  decoder_zstd_destroy(wave->zstd_decoder);
   cuMemFreeHost(wave->host_slab);
   if (wave->dev_compressed)
     cuMemFree(CUDPTR(wave->dev_compressed));
@@ -979,13 +977,13 @@ kick_compute(struct damacy* self, struct damacy_wave* wave)
 
   CR(CudaFail, cuEventRecord(wave->ev.decomp_start, s));
   build_decoder_fanout(self, wave);
-  if (decoder_decompress_batch(wave->decoder,
-                               s,
-                               wave->h_compressed_ptrs,
-                               wave->h_compressed_sizes,
-                               wave->h_decompressed_ptrs,
-                               wave->h_decompressed_sizes,
-                               wave->n_chunks)) {
+  if (decoder_zstd_batch(wave->zstd_decoder,
+                         s,
+                         wave->h_compressed_ptrs,
+                         wave->h_compressed_sizes,
+                         wave->h_decompressed_ptrs,
+                         wave->h_decompressed_sizes,
+                         wave->n_chunks)) {
     self->failed_status = DAMACY_DECODE;
     return DAMACY_DECODE;
   }
@@ -1226,10 +1224,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   CHECK(Fail, host_per_wave > 0 && dev_per_wave > 0);
   s = DAMACY_OOM;
   for (int w = 0; w < 2; ++w)
-    CHECK(Fail,
-          wave_init(
-            &self->waves[w], self->cuda_device, host_per_wave, dev_per_wave) ==
-            0);
+    CHECK(Fail, wave_init(&self->waves[w], host_per_wave, dev_per_wave) == 0);
 
   CHECK(Fail,
         lookahead_init(&self->lookahead,
