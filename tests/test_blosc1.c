@@ -1,7 +1,9 @@
+#include "decoder/bitshuffle.h"
 #include "decoder/blosc1.h"
 #include "decoder/decoder_lz4.h"
 #include "decoder/decoder_memcpy.h"
 #include "decoder/decoder_zstd.h"
+#include "decoder/shuffle.h"
 #include "expect.h"
 #include "zarr/zarr_metadata.h"
 
@@ -31,6 +33,7 @@ static const struct fixture k_fixtures[] = {
   { "zstd_noshuffle_ts4", CODEC_BLOSC_ZSTD },
   { "lz4_noshuffle_ts1", CODEC_BLOSC_LZ4 },
   { "lz4_noshuffle_ts4_mb", CODEC_BLOSC_LZ4 },
+  { "lz4_bitshuffle_ts4", CODEC_BLOSC_LZ4 },
 };
 
 static int
@@ -239,15 +242,27 @@ run_one(const struct fixture* fx, CUstream stream)
     decoder_lz4_destroy(l);
   }
 
-  // Phase 4 adds the unshuffle kernel; for now skip the byte-compare on
-  // shuffled fixtures.
-  if (h_hdr.shuffle == 0 && h_hdr.bitshuffle == 0) {
-    uint8_t* h_got = (uint8_t*)malloc(raw_n);
-    EXPECT(h_got);
-    EXPECT(cuMemcpyDtoH(h_got, d_decomp, raw_n) == CUDA_SUCCESS);
-    EXPECT(memcmp(h_got, h_raw, raw_n) == 0);
-    free(h_got);
+  if (h_hdr.shuffle) {
+    EXPECT(gpu_unshuffle_launch(stream,
+                                (const struct gpu_shuffle_op*)(uintptr_t)d_unsh,
+                                1,
+                                h_hdr.blocksize) == 0);
+    EXPECT(cuStreamSynchronize(stream) == CUDA_SUCCESS);
   }
+  if (h_hdr.bitshuffle) {
+    EXPECT(gpu_bitunshuffle_launch(
+             stream,
+             (const struct gpu_shuffle_op*)(uintptr_t)d_bitunsh,
+             1,
+             h_hdr.blocksize) == 0);
+    EXPECT(cuStreamSynchronize(stream) == CUDA_SUCCESS);
+  }
+
+  uint8_t* h_got = (uint8_t*)malloc(raw_n);
+  EXPECT(h_got);
+  EXPECT(cuMemcpyDtoH(h_got, d_decomp, raw_n) == CUDA_SUCCESS);
+  EXPECT(memcmp(h_got, h_raw, raw_n) == 0);
+  free(h_got);
 
   free(comp_ptrs);
   free(comp_sizes);

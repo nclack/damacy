@@ -69,6 +69,8 @@ add_cuda_lib(decoder
             decoder/decoder_lz4.h  decoder/decoder_lz4.c
             decoder/decoder_memcpy.h decoder/decoder_memcpy.cu
             decoder/blosc1.h decoder/blosc1.cu
+            decoder/shuffle.h decoder/shuffle.cu
+            decoder/bitshuffle.h decoder/bitshuffle.cu
     LINKS CUDA::cudart_static CUDA::cuda_driver nvcomp::nvcomp log zarr
 )
 

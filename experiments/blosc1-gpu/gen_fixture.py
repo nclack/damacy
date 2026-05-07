@@ -86,6 +86,8 @@ def main() -> int:
     emit("lz4_noshuffle_ts4_mb", data=data_4m_i32,
          cname="lz4", shuffle=Blosc.NOSHUFFLE, typesize=4,
          blocksize=65536)
+    emit("lz4_bitshuffle_ts4", data=data_64k_i32,
+         cname="lz4", shuffle=Blosc.BITSHUFFLE, typesize=4)
     print("done")
     return 0
 
