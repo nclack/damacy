@@ -79,7 +79,13 @@ jobs:
                 --exclude ".*/build/.*" \
                 --print-summary
               if [ -n "${CODECOV_TOKEN:-}" ]; then
-                codecovcli upload-process --file coverage.xml --flag unittests \
+                # --git-service github works around a codecov-cli bug where
+                # CI auto-detection lands as service=None in the create-commit
+                # validation call, even though "github-actions" is detected.
+                codecovcli --auto-load-params-from GithubActions \
+                  upload-process \
+                  --git-service github \
+                  --file coverage.xml --flag unittests \
                   || echo "WARN: codecov upload failed; continuing" >&2
               else
                 echo "NOTE: CODECOV_TOKEN not set; skipping upload" >&2
