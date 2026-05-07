@@ -35,6 +35,14 @@ if(NOT DAMACY_FUZZ)
     add_damacy_test(test_damacy damacy test_fixture)
     add_damacy_test(test_assemble assemble CUDA::cuda_driver CUDA::cudart_static)
     add_damacy_test(test_decoder decoder CUDA::cuda_driver)
+    add_damacy_test(test_blosc1 decoder zarr CUDA::cuda_driver)
+    set(_BLOSC1_DIR ${PROJECT_SOURCE_DIR}/experiments/blosc1-gpu)
+    target_compile_definitions(
+        test_blosc1
+        PRIVATE
+            BLOSC1_FIXTURES_DIR="${_BLOSC1_DIR}"
+            BLOSC1_GEN_FIXTURE_SCRIPT="${_BLOSC1_DIR}/gen_fixture.py"
+    )
 endif()
 
 if(DAMACY_FUZZ)

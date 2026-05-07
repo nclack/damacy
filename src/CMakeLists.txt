@@ -68,7 +68,8 @@ add_cuda_lib(decoder
             decoder/decoder_zstd.h decoder/decoder_zstd.c
             decoder/decoder_lz4.h  decoder/decoder_lz4.c
             decoder/decoder_memcpy.h decoder/decoder_memcpy.cu
-    LINKS CUDA::cudart_static CUDA::cuda_driver nvcomp::nvcomp log
+            decoder/blosc1.h decoder/blosc1.cu
+    LINKS CUDA::cudart_static CUDA::cuda_driver nvcomp::nvcomp log zarr
 )
 
 # Bytewise gather kernel: chunk windows → output batch tensor.
