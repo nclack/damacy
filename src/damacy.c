@@ -131,6 +131,10 @@ stats_init(struct damacy_stats* s)
   metric_init(&s->io, "io");
   metric_init(&s->h2d, "h2d");
   metric_init(&s->decompress, "decompress");
+  metric_init(&s->decompress_parse, "decompress.parse");
+  metric_init(&s->decompress_zstd, "decompress.zstd");
+  metric_init(&s->decompress_lz4, "decompress.lz4");
+  metric_init(&s->decompress_post, "decompress.post");
   metric_init(&s->assemble, "assemble");
   metric_init(&s->pop_wait_io, "pop_wait_io");
   metric_init(&s->pop_wait_compute, "pop_wait_compute");
@@ -276,6 +280,7 @@ struct damacy_wave
     CUevent parse_done; // blosc1 parse + scan + emit + D2H totals retired
     CUevent zstd_done;
     CUevent lz4_done;
+    CUevent post_start; // stream_compute resumes after waiting on codec streams
     CUevent decomp_end;
     CUevent asm_start;
     CUevent asm_end;
@@ -714,6 +719,7 @@ wave_init(struct damacy_wave* wave,
   CR(Error, cuEventCreate(&wave->ev.parse_done, CU_EVENT_DEFAULT));
   CR(Error, cuEventCreate(&wave->ev.zstd_done, CU_EVENT_DEFAULT));
   CR(Error, cuEventCreate(&wave->ev.lz4_done, CU_EVENT_DEFAULT));
+  CR(Error, cuEventCreate(&wave->ev.post_start, CU_EVENT_DEFAULT));
   CR(Error, cuEventCreate(&wave->ev.decomp_end, CU_EVENT_DEFAULT));
   CR(Error, cuEventCreate(&wave->ev.asm_start, CU_EVENT_DEFAULT));
   CR(Error, cuEventCreate(&wave->ev.asm_end, CU_EVENT_DEFAULT));
@@ -778,8 +784,8 @@ wave_destroy(struct damacy_wave* wave)
   CUevent* const events[] = { &wave->ev.h2d_start,    &wave->ev.h2d_end,
                               &wave->ev.decomp_start, &wave->ev.parse_done,
                               &wave->ev.zstd_done,    &wave->ev.lz4_done,
-                              &wave->ev.decomp_end,   &wave->ev.asm_start,
-                              &wave->ev.asm_end };
+                              &wave->ev.post_start,   &wave->ev.decomp_end,
+                              &wave->ev.asm_start,    &wave->ev.asm_end };
   for (size_t i = 0; i < countof(events); ++i)
     if (*events[i])
       cuEventDestroy_v2(*events[i]);
@@ -1207,6 +1213,7 @@ kick_compute(struct damacy* self, struct damacy_wave* wave)
     CR(CudaFail, cuStreamWaitEvent(s, wave->ev.zstd_done, 0));
   if (tot.n_lz4 > 0)
     CR(CudaFail, cuStreamWaitEvent(s, wave->ev.lz4_done, 0));
+  CR(CudaFail, cuEventRecord(wave->ev.post_start, s));
 
   // 5. CODEC_NONE / chunk-MEMCPYED bulk copies + (bit)unshuffle filters.
   if (tot.n_memcpy > 0 &&
@@ -1283,6 +1290,22 @@ drain_wave_metrics(struct damacy* self, struct damacy_wave* wave)
                   ms,
                   wave->decomp_in_bytes,
                   wave->decomp_out_bytes);
+  // Sub-stages: parse pipeline + per-codec batch + post-decode kernels.
+  if (cuEventElapsedTime(&ms, wave->ev.decomp_start, wave->ev.parse_done) ==
+      CUDA_SUCCESS)
+    metric_record(&self->stats.decompress_parse, ms, 0, 0);
+  const struct blosc1_totals tot = *wave->h_blosc1_totals;
+  if (tot.n_zstd > 0 &&
+      cuEventElapsedTime(&ms, wave->ev.parse_done, wave->ev.zstd_done) ==
+        CUDA_SUCCESS)
+    metric_record(&self->stats.decompress_zstd, ms, 0, 0);
+  if (tot.n_lz4 > 0 &&
+      cuEventElapsedTime(&ms, wave->ev.parse_done, wave->ev.lz4_done) ==
+        CUDA_SUCCESS)
+    metric_record(&self->stats.decompress_lz4, ms, 0, 0);
+  if (cuEventElapsedTime(&ms, wave->ev.post_start, wave->ev.decomp_end) ==
+      CUDA_SUCCESS)
+    metric_record(&self->stats.decompress_post, ms, 0, 0);
   if (cuEventElapsedTime(&ms, wave->ev.asm_start, wave->ev.asm_end) ==
       CUDA_SUCCESS)
     metric_record(&self->stats.assemble,

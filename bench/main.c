@@ -584,6 +584,10 @@ emit_results(const struct scenario* sc, const struct run_metrics* rm, FILE* out)
   emit_metric(&jw, &rm->stats.io, "wave");
   emit_metric(&jw, &rm->stats.h2d, "wave");
   emit_metric(&jw, &rm->stats.decompress, "wave");
+  emit_metric(&jw, &rm->stats.decompress_parse, "wave");
+  emit_metric(&jw, &rm->stats.decompress_zstd, "wave");
+  emit_metric(&jw, &rm->stats.decompress_lz4, "wave");
+  emit_metric(&jw, &rm->stats.decompress_post, "wave");
   emit_metric(&jw, &rm->stats.assemble, "wave");
   emit_metric(&jw, &rm->stats.pop_wait_io, "poll");
   emit_metric(&jw, &rm->stats.pop_wait_compute, "poll");

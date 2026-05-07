@@ -191,6 +191,15 @@ extern "C"
     struct damacy_metric io;
     struct damacy_metric h2d;
     struct damacy_metric decompress;
+    // Sub-stages of decompress, summing to ~decompress.ms in the
+    // common case. parse: blosc1 parse + scan + emit + D2H of totals.
+    // zstd / lz4: per-codec nvcomp batch on its dedicated stream
+    // (only when n_zstd / n_lz4 > 0). post: memcpy + (bit)unshuffle on
+    // stream_compute after re-joining the parallel streams.
+    struct damacy_metric decompress_parse;
+    struct damacy_metric decompress_zstd;
+    struct damacy_metric decompress_lz4;
+    struct damacy_metric decompress_post;
     struct damacy_metric assemble;
     struct damacy_metric pop_wait_io;
     struct damacy_metric pop_wait_compute;
