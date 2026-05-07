@@ -1,3 +1,3 @@
 # Damacy
 
-High-speed streamed assembly of tensors from zarr sources.
+High-speed streamed assembly of tensors from zarr sources to gpu.
