@@ -225,7 +225,6 @@ struct damacy_wave
   // arrays sized for max-wave caps so a wave of any composition fits.
   struct blosc1_chunk_input* h_blosc1_inputs;
   struct blosc1_totals* h_blosc1_totals;
-  struct blosc1_chunk_hdr* h_blosc1_hdrs;
 
   struct blosc1_chunk_input* d_blosc1_inputs;
   struct blosc1_chunk_hdr* d_blosc1_hdrs;
@@ -246,6 +245,10 @@ struct damacy_wave
   struct gpu_memcpy_op* d_memcpy_ops;
   struct gpu_shuffle_op* d_unshuffle_ops;
   struct gpu_shuffle_op* d_bitunshuffle_ops;
+  // Same extent as dev_decompressed; staging area used by the
+  // (bit)unshuffle kernels so the per-block transpose isn't bounded by
+  // the 64 KB shared-memory cap.
+  void* dev_unshuffle_scratch;
 
   // Assemble per-wave-chunk metadata staging (host + device). One
   // record per chunk in the wave, containing the chunk's arena offset
@@ -643,9 +646,6 @@ wave_init(struct damacy_wave* wave,
   CR(Error,
      cuMemAllocHost((void**)&wave->h_blosc1_totals,
                     sizeof(struct blosc1_totals)));
-  CR(Error,
-     cuMemAllocHost((void**)&wave->h_blosc1_hdrs,
-                    (size_t)cap * sizeof(struct blosc1_chunk_hdr)));
   wave->h_assemble_chunks =
     (struct assemble_chunk*)calloc(cap, sizeof(struct assemble_chunk));
   CHECK(Error, wave->h_assemble_chunks);
@@ -705,6 +705,8 @@ wave_init(struct damacy_wave* wave,
                 DAMACY_MAX_BLOSC_SHUFFLE_OPS_PER_WAVE *
                   sizeof(struct gpu_shuffle_op)));
   wave->d_bitunshuffle_ops = (struct gpu_shuffle_op*)(uintptr_t)dptr;
+  CR(Error, cuMemAlloc(&dptr, dev_decompressed_bytes));
+  wave->dev_unshuffle_scratch = (void*)(uintptr_t)dptr;
 
   CR(Error, cuEventCreate(&wave->ev.h2d_start, CU_EVENT_DEFAULT));
   CR(Error, cuEventCreate(&wave->ev.h2d_end, CU_EVENT_DEFAULT));
@@ -745,7 +747,6 @@ wave_destroy(struct damacy_wave* wave)
   cuMemFreeHost(wave->host_slab);
   cuMemFreeHost(wave->h_blosc1_inputs);
   cuMemFreeHost(wave->h_blosc1_totals);
-  cuMemFreeHost(wave->h_blosc1_hdrs);
   // Bulk device-pointer free; cuMemFree(0) is a no-op for our purposes
   // when wrapped in CUDPTR.
   void* const dev_ptrs[] = {
@@ -768,6 +769,7 @@ wave_destroy(struct damacy_wave* wave)
     wave->d_memcpy_ops,
     wave->d_unshuffle_ops,
     wave->d_bitunshuffle_ops,
+    wave->dev_unshuffle_scratch,
   };
   for (size_t i = 0; i < countof(dev_ptrs); ++i)
     if (dev_ptrs[i])
@@ -1095,21 +1097,6 @@ build_assemble_meta(struct damacy* self, struct damacy_wave* wave)
   wave->assemble_max_blocks_per_chunk = max_bpc;
 }
 
-// Largest blocksize across this wave's blosc-decoded chunks. Reads
-// h_blosc1_hdrs (D2H'd alongside totals); ignores chunks with err set
-// or non-blosc codecs (they have blocksize=0).
-static uint32_t
-wave_max_blocksize(const struct damacy_wave* wave)
-{
-  uint32_t bs = 0;
-  for (uint32_t i = 0; i < wave->n_chunks; ++i) {
-    const struct blosc1_chunk_hdr* h = &wave->h_blosc1_hdrs[i];
-    if (h->err == 0 && h->blocksize > bs)
-      bs = h->blocksize;
-  }
-  return bs;
-}
-
 // H2D done — drive the blosc1 GPU pipeline (parse → scan → emit), gate
 // nvcomp Zstd/LZ4 batches on parallel streams via parse_done, fold
 // memcpy + (un)shuffles back onto stream_compute, then assemble.
@@ -1180,11 +1167,6 @@ kick_compute(struct damacy* self, struct damacy_wave* wave)
                        CUDPTR(wave->d_blosc1_totals),
                        sizeof(struct blosc1_totals),
                        s));
-  CR(CudaFail,
-     cuMemcpyDtoHAsync(wave->h_blosc1_hdrs,
-                       CUDPTR(wave->d_blosc1_hdrs),
-                       (size_t)wave->n_chunks * sizeof(struct blosc1_chunk_hdr),
-                       s));
   CR(CudaFail, cuEventRecord(wave->ev.parse_done, s));
   CR(CudaFail, cuEventSynchronize(wave->ev.parse_done));
 
@@ -1232,17 +1214,21 @@ kick_compute(struct damacy* self, struct damacy_wave* wave)
     self->failed_status = DAMACY_DECODE;
     return DAMACY_DECODE;
   }
-  uint32_t bs = 0;
-  if (tot.n_unshuffle > 0 || tot.n_bitunshuffle > 0)
-    bs = wave_max_blocksize(wave);
   if (tot.n_unshuffle > 0 &&
-      gpu_unshuffle_launch(s, wave->d_unshuffle_ops, tot.n_unshuffle, bs)) {
+      gpu_unshuffle_launch(s,
+                           wave->d_unshuffle_ops,
+                           tot.n_unshuffle,
+                           wave->dev_decompressed,
+                           wave->dev_unshuffle_scratch)) {
     self->failed_status = DAMACY_DECODE;
     return DAMACY_DECODE;
   }
   if (tot.n_bitunshuffle > 0 &&
-      gpu_bitunshuffle_launch(
-        s, wave->d_bitunshuffle_ops, tot.n_bitunshuffle, bs)) {
+      gpu_bitunshuffle_launch(s,
+                              wave->d_bitunshuffle_ops,
+                              tot.n_bitunshuffle,
+                              wave->dev_decompressed,
+                              wave->dev_unshuffle_scratch)) {
     self->failed_status = DAMACY_DECODE;
     return DAMACY_DECODE;
   }

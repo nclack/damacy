@@ -244,11 +244,15 @@ run_one(const struct fixture* fx, CUstream stream)
     decoder_lz4_destroy(l);
   }
 
+  CUdeviceptr d_scratch = 0;
+  if (h_hdr.shuffle || h_hdr.bitshuffle)
+    EXPECT(cuMemAlloc(&d_scratch, raw_n) == CUDA_SUCCESS);
   if (h_hdr.shuffle) {
     EXPECT(gpu_unshuffle_launch(stream,
                                 (const struct gpu_shuffle_op*)(uintptr_t)d_unsh,
                                 1,
-                                h_hdr.blocksize) == 0);
+                                (const void*)(uintptr_t)d_decomp,
+                                (void*)(uintptr_t)d_scratch) == 0);
     EXPECT(cuStreamSynchronize(stream) == CUDA_SUCCESS);
   }
   if (h_hdr.bitshuffle) {
@@ -256,7 +260,8 @@ run_one(const struct fixture* fx, CUstream stream)
              stream,
              (const struct gpu_shuffle_op*)(uintptr_t)d_bitunsh,
              1,
-             h_hdr.blocksize) == 0);
+             (const void*)(uintptr_t)d_decomp,
+             (void*)(uintptr_t)d_scratch) == 0);
     EXPECT(cuStreamSynchronize(stream) == CUDA_SUCCESS);
   }
 
@@ -286,6 +291,8 @@ run_one(const struct fixture* fx, CUstream stream)
   cuMemFree(d_memcpy_ops);
   cuMemFree(d_unsh);
   cuMemFree(d_bitunsh);
+  if (d_scratch)
+    cuMemFree(d_scratch);
   return 0;
 }
 
