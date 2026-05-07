@@ -29,8 +29,8 @@ workflow manually from the Actions tab against that ref.
 
 Once the workflow has run once, the chart lives at
 
-    https://<owner>.github.io/<repo>/bench/timings/
-    https://<owner>.github.io/<repo>/bench/throughput/
+    https://<owner>.github.io/<repo>/timings/
+    https://<owner>.github.io/<repo>/throughput/
 
 Each metric becomes its own chart; PRs that touch `main` get a
 regression comment if any metric exceeds `alert-threshold` (currently
