@@ -27,17 +27,23 @@
   orchestrator polls/syncs explicitly.
 - **IO via `io_queue`.** A `io_queue` (chucky-style: post(fn, ctx),
   record() → event, event_wait, is_shutdown) handles the only true
-  parallelism damacy needs. IO threads do `open(O_RDONLY|O_DIRECT)` →
-  `pread` → `close` per `read_op`.
+  parallelism damacy needs. IO workers issue one `pread` per
+  `read_op` against an FD looked up in store_fs's per-key FD cache
+  (the design originally specified `open`/`close` per read; the
+  implementation evolved to cache FDs — see "FD cache" note below).
 - **Two CUDA streams** (driver API): `h2d` and `compute`. Decompress
   and assemble share `compute` so we don't need an event between them.
 - **Fail-the-stream.** Any IO/decode/CUDA error puts the pipeline into
   a terminal failed state. Subsequent `damacy_pop` returns the failure
   status; subsequent `damacy_push` returns `DAMACY_SHUTDOWN`. Recovery
   requires destroy + recreate.
-- **No FD cache.** `open`/`close` per `read_op`. Cheap because shard
-  indices are cached and `open()` against an already-resolved inode is
-  fast.
+- **Per-key FD cache (lives in `store_fs`).** `fs_get_file` does a
+  linear scan over a `(key → platform_file*)` slot array under a
+  mutex; on miss it `open`s and inserts. FDs are held for the
+  lifetime of the store and closed in `fs_destroy`. The original
+  design said "no FD cache" (cheap because the inode is hot once the
+  shard index is cached); profiling moved this to a cache. There is
+  no eviction yet — `ulimit -n` becomes the implicit cap.
 
 ## Components
 
@@ -109,7 +115,7 @@ Three thread roles, no others:
 | Role | Count | Does |
 |---|---|---|
 | User thread | any | calls public API |
-| io_queue worker | `n_io_threads` | `open`/`pread`/`close` for `read_op`s |
+| io_queue worker | `n_io_threads` | `pread` per `read_op` (FDs cached per key in `store_fs`) |
 | (no orchestrator thread) | 0 | — |
 
 All planner / scheduler / CUDA-launch / event-poll work happens on the
@@ -339,7 +345,7 @@ all buffers.
 | Device wave-meta scratch | small fixed (per slot) | read_ops + chunk_plans |
 | Zarr metadata LRU | `n_zarrs_meta_cache` | small per-entry |
 | Shard index LRU | `n_shards_meta_cache` | each ~ chunks_per_shard × 16B |
-| FDs | none cached | open/close per read_op |
+| FDs | per-key in `store_fs`, no eviction | bounded by `ulimit -n` |
 
 ## Metrics
 
@@ -401,10 +407,12 @@ void damacy_stats_reset(struct damacy* d);
   orchestrator thread (and the queues / locks / wakeups it would need),
   and gives a single sequential narrative for what the pipeline does.
   Cost: poll-sleeps in the wait path. Acceptable v1 trade.
-- **No FD cache.** Per-`read_op` `open`/`close` is cheap once the shard
-  index is cached (the inode is hot). Eliminating the cache drops one
-  LRU and `ulimit -n` worries. Add a thread-local cache later if
-  profiling justifies.
+- **Per-key FD cache.** The original design called for no FD cache
+  (per-`read_op` `open`/`close` is cheap once the inode is hot, and
+  it dodges `ulimit -n`). The implementation now caches FDs in
+  `store_fs` because the syscall + path-resolution savings showed up
+  in profiling. No eviction yet — revisit if `ulimit -n` becomes a
+  problem against very large datasets.
 - **`io_queue` for IO parallelism.** Reuses chucky's pattern: post jobs,
   record an event, wait on the event. Maps cleanly onto the wave's
   IO-done synchronization point.

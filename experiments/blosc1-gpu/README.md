@@ -47,12 +47,27 @@ README. Each is load-bearing for any GPU parser.
    discovered by walking the block payload until accumulated sub-stream
    sizes equal the block's compressed extent.
 
-3. **`bstarts` are NOT in block-index order.** Blosc1 compresses blocks
-   on multiple writer threads and writes each block to the output buffer
-   in completion order, recording the offset under that block's index.
-   `bstarts[1]` may point earlier in the buffer than `bstarts[0]`. Each
-   block's compressed-payload end-offset must be derived by sorting the
-   `bstarts` values and taking the next-higher one.
+3. **`bstarts` are NOT in block-index order under multithreaded
+   compression.** Confirmed by reading `c-blosc/blosc/blosc.c`:
+   - Serial path (`serial_blosc`, line 816) writes
+     `bstarts[j] = ntbytes` *before* compressing block `j`, so
+     single-threaded output has strictly monotonic offsets.
+   - Threaded path (`t_blosc`, lines 1769–1856) takes `count_mutex`
+     twice. The first critical section claims block indices
+     monotonically (`thread_nblock++`); comment on line 1770 reads
+     *"Compression always has to follow the block order."* The second
+     critical section, after the block has been compressed into
+     thread-local scratch, reads the bump pointer
+     `ntdest = num_output_bytes`, writes `bstarts[nblock_] = ntdest`,
+     and advances the bump pointer by `cbytes`. The actual
+     `fastcopy(dest + ntdest, tmp2, cbytes)` runs *outside* the lock,
+     but the slot has already been reserved.
+   - So each block's recorded offset is the bump-pointer value at the
+     moment its compression *finished*. Blocks are physically laid out
+     in finish order; `bstarts` is the index → finish-order map.
+     Sort `bstarts` ascending → buffer layout. A block's compressed
+     extent is bounded by the next-higher offset in the sorted list,
+     with `cbytes` (chunk-header field) closing out the trailing block.
 
 ## Implications for the design
 

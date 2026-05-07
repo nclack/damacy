@@ -99,7 +99,7 @@ extern "C"
     uint64_t host_buffer_bytes;   // pinned staging; sized for IO bw
     uint64_t device_buffer_bytes; // device decompress scratch
 
-    // LRU caps (no FD cache; FDs are open/close per read_op)
+    // LRU caps (FDs are cached per-key by the fs store; not bounded here).
     uint32_t n_zarrs_meta_cache;
     uint32_t n_shards_meta_cache;
 

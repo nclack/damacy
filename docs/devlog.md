@@ -1,5 +1,15 @@
 # dev log
 
+## 2026-05-06
+
+4.8 GB/s on the cluster
+
+They tried the python side but ran into the lack of blosc support.
+
+Adding that on the cpu side is depressing; waves could be mixed.
+
+Looking into blosc1 on gpu. might not be that bad.
+
 ## 2026-05-05
 
 Goal for today would be to actually try this out on the cluster. Will also

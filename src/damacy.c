@@ -11,8 +11,9 @@
 //
 // Threading: planner / scheduler / CUDA launches all run on the user
 // thread inside damacy_push / damacy_pop / damacy_flush. The only
-// background threads are the n_io_threads io_queue workers (open /
-// pread / close per read_op).
+// background threads are the n_io_threads io_queue workers; each job
+// is a single `pread` against an FD looked up in store_fs's per-key
+// FD cache (`store_fs.c::fs_get_file`).
 
 #include "damacy.h"
 

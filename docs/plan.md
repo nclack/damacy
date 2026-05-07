@@ -34,11 +34,15 @@
   Files: `src/assemble.{h,cu}`, rewritten `src/damacy.c`,
   `bench/main.c` driving real samples. New: `damacy_config.store_root`
   (resolves sample.uri against a single fs-backed store; multi-store
-  resolution lands later). v1 caps inside damacy.c:
-  `DAMACY_MAX_CHUNKS_PER_BATCH = 256`,
-  `DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES = 1 MB` — the product gates
-  nvCOMP's temp scratch via `cudaMalloc`, so they can't be raised
-  casually. Output tensor is allocated once at the first batch from
+  resolution lands later). Caps inside damacy.c (current values; step 5
+  decoupled the per-wave cap from the per-batch cap):
+  `DAMACY_MAX_CHUNKS_PER_BATCH = 16384`,
+  `DAMACY_MAX_CHUNKS_PER_WAVE = 512`,
+  `DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES = 512 KB` — nvCOMP's temp
+  scratch is sized as `MAX_CHUNKS_PER_WAVE × MAX_CHUNK_UNCOMPRESSED`
+  (×2 waves), so the per-wave product (not the per-batch one) is the
+  `cudaMalloc`-gated knob and can't be raised casually. Output tensor
+  is allocated once at the first batch from
   the first sample's AABB; subsequent samples must match the same
   per-axis shape. Single batch slot, no overlap; double-buffering
   lands in step 5.
@@ -298,8 +302,8 @@ pattern worth calling out:
   (reading the last chunks of K alongside the first of K+1, fusing
   the IO). Step 7 (coalescing) is the natural place to revisit since
   it touches the same merging logic.
-- **`DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES = 1 MB` cap.** Tight enough
-  to fit nvCOMP's scratch on a 8GB-class laptop GPU; will bite as
-  soon as someone configures larger inner chunks. Move it (and
-  `DAMACY_MAX_CHUNKS_PER_BATCH`) onto `damacy_config` once we know
-  the right knob shape.
+- **`DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES = 512 KB` cap.** Tight enough
+  to fit nvCOMP's scratch on a 8GB-class laptop GPU (paired with
+  `MAX_CHUNKS_PER_WAVE = 512`); will bite as soon as someone
+  configures larger inner chunks. Move it (and the wave/batch chunk
+  caps) onto `damacy_config` once we know the right knob shape.
