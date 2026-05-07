@@ -7,4 +7,4 @@
 
 High-speed streamed assembly of tensors from zarr sources to gpu.
 
-📈 **Performance dashboards:** [throughput](https://nclack.github.io/damacy/bench/throughput/) · [timings](https://nclack.github.io/damacy/bench/timings/) — automatically updated on every push to `main`. See [`bench/README-tracking.md`](bench/README-tracking.md) for details.
+📈 **Performance dashboards:** [throughput](https://nclack.github.io/damacy/bench/throughput/) · [timings](https://nclack.github.io/damacy/bench/timings/) — updated daily and on manual dispatch. See [`bench/README-tracking.md`](bench/README-tracking.md) for details.
