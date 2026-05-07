@@ -12,12 +12,12 @@
 static int
 test_create_destroy(void)
 {
-  struct decoder_zstd* z = decoder_zstd_create(8, 64 * 1024);
+  struct decoder_zstd* z = decoder_zstd_create(8, 64 * 1024, 8 * 64 * 1024);
   EXPECT(z);
   decoder_zstd_destroy(z);
   decoder_zstd_destroy(NULL);
 
-  struct decoder_lz4* l = decoder_lz4_create(64, 64 * 1024);
+  struct decoder_lz4* l = decoder_lz4_create(64, 64 * 1024, 64 * 64 * 1024);
   EXPECT(l);
   decoder_lz4_destroy(l);
   decoder_lz4_destroy(NULL);

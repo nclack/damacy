@@ -56,7 +56,8 @@ decoder_lz4_destroy(struct decoder_lz4* d)
 
 struct decoder_lz4*
 decoder_lz4_create(size_t max_batch_size,
-                   size_t max_substream_uncompressed_bytes)
+                   size_t max_substream_uncompressed_bytes,
+                   size_t max_total_uncompressed_bytes)
 {
   struct decoder_lz4* d = NULL;
 
@@ -97,13 +98,13 @@ decoder_lz4_create(size_t max_batch_size,
 
   nvcompBatchedLZ4DecompressOpts_t opts = nvcompBatchedLZ4DecompressDefaultOpts;
   size_t temp_bytes = 0;
-  NV(Fail,
-     nvcompBatchedLZ4DecompressGetTempSizeAsync(
-       max_batch_size,
-       max_substream_uncompressed_bytes,
-       opts,
-       &temp_bytes,
-       max_batch_size * max_substream_uncompressed_bytes));
+  NV(
+    Fail,
+    nvcompBatchedLZ4DecompressGetTempSizeAsync(max_batch_size,
+                                               max_substream_uncompressed_bytes,
+                                               opts,
+                                               &temp_bytes,
+                                               max_total_uncompressed_bytes));
   d->temp_bytes = temp_bytes;
   if (temp_bytes > 0) {
     CR(Fail, cuMemAlloc(&dptr, temp_bytes));
@@ -171,6 +172,42 @@ decoder_lz4_batch(struct decoder_lz4* d,
                                      d->d_temp,
                                      d->temp_bytes,
                                      d->d_uncompressed_ptrs,
+                                     opts,
+                                     d->d_statuses,
+                                     stream));
+  return 0;
+
+Fail:
+  return 1;
+}
+
+int
+decoder_lz4_batch_device(struct decoder_lz4* d,
+                         CUstream stream,
+                         const void* const* d_compressed,
+                         const size_t* d_compressed_sizes,
+                         void* const* d_decompressed,
+                         const size_t* d_uncompressed_sizes,
+                         size_t n)
+{
+  CHECK(Fail, d);
+  CHECK(Fail, n > 0);
+  CHECK(Fail, n <= d->max_batch);
+  CHECK(Fail, d_compressed);
+  CHECK(Fail, d_compressed_sizes);
+  CHECK(Fail, d_decompressed);
+  CHECK(Fail, d_uncompressed_sizes);
+
+  nvcompBatchedLZ4DecompressOpts_t opts = nvcompBatchedLZ4DecompressDefaultOpts;
+  NV(Fail,
+     nvcompBatchedLZ4DecompressAsync(d_compressed,
+                                     d_compressed_sizes,
+                                     d_uncompressed_sizes,
+                                     d->d_uncompressed_actual_sizes,
+                                     n,
+                                     d->d_temp,
+                                     d->temp_bytes,
+                                     d_decompressed,
                                      opts,
                                      d->d_statuses,
                                      stream));

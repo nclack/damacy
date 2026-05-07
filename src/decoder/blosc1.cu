@@ -231,13 +231,27 @@ struct EmitSmem
   uint32_t sorted_offsets[DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK];
 };
 
+__device__ void
+emit_substream(struct nvcomp_fanout fan,
+               uint32_t idx,
+               const void* d_src,
+               void* d_dst,
+               uint32_t src_n,
+               uint32_t dst_n)
+{
+  fan.d_comp_ptrs[idx] = d_src;
+  fan.d_comp_sizes[idx] = src_n;
+  fan.d_decomp_ptrs[idx] = d_dst;
+  fan.d_decomp_buf_sizes[idx] = dst_n;
+}
+
 __global__ void
 blosc1_emit_fanout_kernel(
   const struct blosc1_chunk_input* __restrict__ in,
   const struct blosc1_chunk_hdr* __restrict__ hdrs,
   const struct blosc1_chunk_offsets* __restrict__ offsets,
-  struct gpu_substream* __restrict__ zstd_subs,
-  struct gpu_substream* __restrict__ lz4_subs,
+  struct nvcomp_fanout zstd,
+  struct nvcomp_fanout lz4,
   struct gpu_memcpy_op* __restrict__ memcpy_ops,
   struct gpu_shuffle_op* __restrict__ unshuffle_ops,
   struct gpu_shuffle_op* __restrict__ bitunshuffle_ops,
@@ -274,13 +288,13 @@ blosc1_emit_fanout_kernel(
     return;
   }
   if (codec == CODEC_ZSTD) {
-    if (threadIdx.x == 0) {
-      struct gpu_substream* slot = &zstd_subs[s.offsets.zstd_off];
-      slot->d_src = d_comp;
-      slot->d_dst = d_decomp;
-      slot->src_nbytes = s.chunk.compressed_nbytes;
-      slot->dst_nbytes = s.chunk.decompressed_nbytes;
-    }
+    if (threadIdx.x == 0)
+      emit_substream(zstd,
+                     s.offsets.zstd_off,
+                     d_comp,
+                     d_decomp,
+                     s.chunk.compressed_nbytes,
+                     s.chunk.decompressed_nbytes);
     return;
   }
 
@@ -328,15 +342,12 @@ blosc1_emit_fanout_kernel(
   const uint32_t per_stream_dst =
     (nstreams == 1u) ? s.hdr.blocksize : (s.hdr.blocksize / s.hdr.typesize);
   const uint32_t block_dst_off = t * s.hdr.blocksize;
-  struct gpu_substream* dst_table =
-    (codec == CODEC_BLOSC_LZ4) ? lz4_subs : zstd_subs;
+  struct nvcomp_fanout fan = (codec == CODEC_BLOSC_LZ4) ? lz4 : zstd;
   const uint32_t fanout_base =
     (codec == CODEC_BLOSC_LZ4 ? s.offsets.lz4_off : s.offsets.zstd_off) +
     t * nstreams;
 
-  // Walk int32-prefixed sub-streams within [my_off, block_end). Stream
-  // each descriptor straight to global without holding the temporary in
-  // registers.
+  // Walk int32-prefixed sub-streams within [my_off, block_end).
   uint32_t cur = my_off;
   for (uint32_t k = 0; k < nstreams; ++k) {
     if (cur + 4u > block_end)
@@ -345,11 +356,12 @@ blosc1_emit_fanout_kernel(
     cur += 4u;
     if (cur + cb > block_end)
       break;
-    struct gpu_substream* slot = &dst_table[fanout_base + k];
-    slot->d_src = d_comp + cur;
-    slot->d_dst = d_decomp + block_dst_off + k * per_stream_dst;
-    slot->src_nbytes = cb;
-    slot->dst_nbytes = per_stream_dst;
+    emit_substream(fan,
+                   fanout_base + k,
+                   d_comp + cur,
+                   d_decomp + block_dst_off + k * per_stream_dst,
+                   cb,
+                   per_stream_dst);
     cur += cb;
   }
 
@@ -428,8 +440,8 @@ blosc1_emit_fanout_launch(CUstream stream,
                           const struct blosc1_chunk_input* d_inputs,
                           const struct blosc1_chunk_hdr* d_hdrs,
                           const struct blosc1_chunk_offsets* d_offsets,
-                          struct gpu_substream* d_zstd_subs,
-                          struct gpu_substream* d_lz4_subs,
+                          struct nvcomp_fanout zstd,
+                          struct nvcomp_fanout lz4,
                           struct gpu_memcpy_op* d_memcpy_ops,
                           struct gpu_shuffle_op* d_unshuffle_ops,
                           struct gpu_shuffle_op* d_bitunshuffle_ops,
@@ -443,8 +455,8 @@ blosc1_emit_fanout_launch(CUstream stream,
                               (cudaStream_t)stream>>>(d_inputs,
                                                       d_hdrs,
                                                       d_offsets,
-                                                      d_zstd_subs,
-                                                      d_lz4_subs,
+                                                      zstd,
+                                                      lz4,
                                                       d_memcpy_ops,
                                                       d_unshuffle_ops,
                                                       d_bitunshuffle_ops,

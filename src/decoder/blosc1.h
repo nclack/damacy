@@ -11,12 +11,15 @@ extern "C"
 {
 #endif
 
-  struct gpu_substream
+  // SOA decompress fanout in nvcomp's expected layout. All four arrays
+  // are device-resident, sized for the worst-case substream count of
+  // the codec (max_chunks_per_wave * blosc-blocks/chunk * substreams/block).
+  struct nvcomp_fanout
   {
-    const void* d_src;
-    void* d_dst;
-    uint32_t src_nbytes;
-    uint32_t dst_nbytes;
+    const void** d_comp_ptrs;
+    size_t* d_comp_sizes;
+    void** d_decomp_ptrs;
+    size_t* d_decomp_buf_sizes;
   };
 
   struct gpu_shuffle_op
@@ -103,8 +106,8 @@ extern "C"
                                 const struct blosc1_chunk_input* d_inputs,
                                 const struct blosc1_chunk_hdr* d_hdrs,
                                 const struct blosc1_chunk_offsets* d_offsets,
-                                struct gpu_substream* d_zstd_subs,
-                                struct gpu_substream* d_lz4_subs,
+                                struct nvcomp_fanout zstd,
+                                struct nvcomp_fanout lz4,
                                 struct gpu_memcpy_op* d_memcpy_ops,
                                 struct gpu_shuffle_op* d_unshuffle_ops,
                                 struct gpu_shuffle_op* d_bitunshuffle_ops,

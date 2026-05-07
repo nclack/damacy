@@ -12,7 +12,8 @@ extern "C"
 
   struct decoder_lz4* decoder_lz4_create(
     size_t max_batch_size,
-    size_t max_substream_uncompressed_bytes);
+    size_t max_substream_uncompressed_bytes,
+    size_t max_total_uncompressed_bytes);
 
   void decoder_lz4_destroy(struct decoder_lz4*);
 
@@ -26,6 +27,16 @@ extern "C"
                         void* const* decompressed,
                         const size_t* uncompressed_sizes,
                         size_t n);
+
+  // Same as decoder_lz4_batch but the four input arrays are already on
+  // the device.
+  int decoder_lz4_batch_device(struct decoder_lz4*,
+                               CUstream stream,
+                               const void* const* d_compressed,
+                               const size_t* d_compressed_sizes,
+                               void* const* d_decompressed,
+                               const size_t* d_uncompressed_sizes,
+                               size_t n);
 
 #ifdef __cplusplus
 }

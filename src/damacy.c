@@ -18,7 +18,12 @@
 #include "damacy.h"
 
 #include "assemble/assemble.h"
+#include "decoder/bitshuffle.h"
+#include "decoder/blosc1.h"
+#include "decoder/decoder_lz4.h"
+#include "decoder/decoder_memcpy.h"
 #include "decoder/decoder_zstd.h"
+#include "decoder/shuffle.h"
 #include "dtype/dtype.h"
 #include "log/log.h"
 #include "planner/planner.h"
@@ -46,6 +51,17 @@
 // keep this small and let large batches split across multiple waves.
 // Waves still don't cross batch boundaries.
 #define DAMACY_MAX_CHUNKS_PER_WAVE 512u
+
+// Worst-case substream count per wave. blosc1-zstd has 1 substream per
+// blosc-block; blosc1-lz4 splits blosc-blocks into `typesize` substreams.
+// Both paths share the per-wave Zstd/LZ4 nvcomp batch caps below.
+#define DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE                                    \
+  (DAMACY_MAX_CHUNKS_PER_WAVE * DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK)
+#define DAMACY_MAX_BLOSC_LZ4_SUBS_PER_WAVE                                     \
+  (DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE * DAMACY_BLOSC_MAX_TYPESIZE)
+// Memcpy ops cap: every chunk could conceivably be MEMCPYED.
+#define DAMACY_MAX_BLOSC_MEMCPY_OPS_PER_WAVE DAMACY_MAX_CHUNKS_PER_WAVE
+#define DAMACY_MAX_BLOSC_SHUFFLE_OPS_PER_WAVE DAMACY_MAX_CHUNKS_PER_WAVE
 
 // Poll interval inside damacy_pop's wait-loop. ~50 µs is short enough
 // that the boundary between wave stages doesn't add visible latency,
@@ -204,11 +220,32 @@ struct damacy_wave
   uint64_t host_slab_cap;
   uint64_t dev_decompressed_cap;
 
-  // Decoder fanout (host side; decoder owns its own pinned/device copies).
-  const void** h_compressed_ptrs;
-  size_t* h_compressed_sizes;
-  void** h_decompressed_ptrs;
-  size_t* h_decompressed_sizes;
+  // blosc1 GPU pipeline state. Host-pinned arrays for the per-wave
+  // chunk inputs (small) and the totals D2H readback (40 B). Device
+  // arrays sized for max-wave caps so a wave of any composition fits.
+  struct blosc1_chunk_input* h_blosc1_inputs;
+  struct blosc1_totals* h_blosc1_totals;
+  struct blosc1_chunk_hdr* h_blosc1_hdrs;
+
+  struct blosc1_chunk_input* d_blosc1_inputs;
+  struct blosc1_chunk_hdr* d_blosc1_hdrs;
+  struct blosc1_chunk_counts* d_blosc1_counts;
+  struct blosc1_chunk_offsets* d_blosc1_offsets;
+  struct blosc1_totals* d_blosc1_totals;
+
+  // SOA fanout consumed by nvcomp's batched APIs (one set per codec).
+  const void** d_zstd_comp_ptrs;
+  size_t* d_zstd_comp_sizes;
+  void** d_zstd_decomp_ptrs;
+  size_t* d_zstd_decomp_buf_sizes;
+  const void** d_lz4_comp_ptrs;
+  size_t* d_lz4_comp_sizes;
+  void** d_lz4_decomp_ptrs;
+  size_t* d_lz4_decomp_buf_sizes;
+
+  struct gpu_memcpy_op* d_memcpy_ops;
+  struct gpu_shuffle_op* d_unshuffle_ops;
+  struct gpu_shuffle_op* d_bitunshuffle_ops;
 
   // Assemble per-wave-chunk metadata staging (host + device). One
   // record per chunk in the wave, containing the chunk's arena offset
@@ -233,6 +270,9 @@ struct damacy_wave
     CUevent h2d_start;
     CUevent h2d_end;
     CUevent decomp_start;
+    CUevent parse_done; // blosc1 parse + scan + emit + D2H totals retired
+    CUevent zstd_done;
+    CUevent lz4_done;
     CUevent decomp_end;
     CUevent asm_start;
     CUevent asm_end;
@@ -249,11 +289,10 @@ struct damacy_wave
   uint64_t decomp_out_bytes;
   uint64_t assemble_out_bytes;
 
-  // Per-wave decoder: nvCOMP scratch (pinned-host fanout, device
-  // pointer arrays, temp scratch) is not safe to share across in-flight
-  // waves. The host-side fanout would be overwritten by the next call
-  // before the first call's queued cudaMemcpyAsync has executed.
+  // Per-wave decoders: nvCOMP scratch (temp workspace + actual-size and
+  // status output arrays) is not safe to share across in-flight waves.
   struct decoder_zstd* zstd_decoder;
+  struct decoder_lz4* lz4_decoder;
 };
 
 struct damacy
@@ -271,6 +310,8 @@ struct damacy
   struct planner* planner;
   CUstream stream_h2d;
   CUstream stream_compute;
+  CUstream stream_zstd;  // nvcomp Zstd batch
+  CUstream stream_lz4;   // nvcomp LZ4 batch
   CUcontext primary_ctx; // retained for the device's lifetime
 
   struct damacy_lookahead lookahead;
@@ -596,14 +637,15 @@ wave_init(struct damacy_wave* wave,
   wave->dev_decompressed = (void*)(uintptr_t)dptr;
 
   uint32_t cap = DAMACY_MAX_CHUNKS_PER_WAVE;
-  wave->h_compressed_ptrs = (const void**)calloc(cap, sizeof(void*));
-  CHECK(Error, wave->h_compressed_ptrs);
-  wave->h_compressed_sizes = (size_t*)calloc(cap, sizeof(size_t));
-  CHECK(Error, wave->h_compressed_sizes);
-  wave->h_decompressed_ptrs = (void**)calloc(cap, sizeof(void*));
-  CHECK(Error, wave->h_decompressed_ptrs);
-  wave->h_decompressed_sizes = (size_t*)calloc(cap, sizeof(size_t));
-  CHECK(Error, wave->h_decompressed_sizes);
+  CR(Error,
+     cuMemAllocHost((void**)&wave->h_blosc1_inputs,
+                    (size_t)cap * sizeof(struct blosc1_chunk_input)));
+  CR(Error,
+     cuMemAllocHost((void**)&wave->h_blosc1_totals,
+                    sizeof(struct blosc1_totals)));
+  CR(Error,
+     cuMemAllocHost((void**)&wave->h_blosc1_hdrs,
+                    (size_t)cap * sizeof(struct blosc1_chunk_hdr)));
   wave->h_assemble_chunks =
     (struct assemble_chunk*)calloc(cap, sizeof(struct assemble_chunk));
   CHECK(Error, wave->h_assemble_chunks);
@@ -613,16 +655,81 @@ wave_init(struct damacy_wave* wave,
 
   CR(Error, cuMemAlloc(&dptr, (size_t)cap * sizeof(struct assemble_chunk)));
   wave->d_assemble_chunks = (struct assemble_chunk*)(uintptr_t)dptr;
+
+  // Per-wave blosc1 GPU pipeline state.
+  CR(Error, cuMemAlloc(&dptr, (size_t)cap * sizeof(struct blosc1_chunk_input)));
+  wave->d_blosc1_inputs = (struct blosc1_chunk_input*)(uintptr_t)dptr;
+  CR(Error, cuMemAlloc(&dptr, (size_t)cap * sizeof(struct blosc1_chunk_hdr)));
+  wave->d_blosc1_hdrs = (struct blosc1_chunk_hdr*)(uintptr_t)dptr;
+  CR(Error,
+     cuMemAlloc(&dptr, (size_t)cap * sizeof(struct blosc1_chunk_counts)));
+  wave->d_blosc1_counts = (struct blosc1_chunk_counts*)(uintptr_t)dptr;
+  CR(Error,
+     cuMemAlloc(&dptr, (size_t)cap * sizeof(struct blosc1_chunk_offsets)));
+  wave->d_blosc1_offsets = (struct blosc1_chunk_offsets*)(uintptr_t)dptr;
+  CR(Error, cuMemAlloc(&dptr, sizeof(struct blosc1_totals)));
+  wave->d_blosc1_totals = (struct blosc1_totals*)(uintptr_t)dptr;
+
+  // SOA fanout for nvcomp Zstd / LZ4 batched calls.
+  const size_t zsubs = DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE;
+  const size_t lsubs = DAMACY_MAX_BLOSC_LZ4_SUBS_PER_WAVE;
+  CR(Error, cuMemAlloc(&dptr, zsubs * sizeof(void*)));
+  wave->d_zstd_comp_ptrs = (const void**)(uintptr_t)dptr;
+  CR(Error, cuMemAlloc(&dptr, zsubs * sizeof(size_t)));
+  wave->d_zstd_comp_sizes = (size_t*)(uintptr_t)dptr;
+  CR(Error, cuMemAlloc(&dptr, zsubs * sizeof(void*)));
+  wave->d_zstd_decomp_ptrs = (void**)(uintptr_t)dptr;
+  CR(Error, cuMemAlloc(&dptr, zsubs * sizeof(size_t)));
+  wave->d_zstd_decomp_buf_sizes = (size_t*)(uintptr_t)dptr;
+  CR(Error, cuMemAlloc(&dptr, lsubs * sizeof(void*)));
+  wave->d_lz4_comp_ptrs = (const void**)(uintptr_t)dptr;
+  CR(Error, cuMemAlloc(&dptr, lsubs * sizeof(size_t)));
+  wave->d_lz4_comp_sizes = (size_t*)(uintptr_t)dptr;
+  CR(Error, cuMemAlloc(&dptr, lsubs * sizeof(void*)));
+  wave->d_lz4_decomp_ptrs = (void**)(uintptr_t)dptr;
+  CR(Error, cuMemAlloc(&dptr, lsubs * sizeof(size_t)));
+  wave->d_lz4_decomp_buf_sizes = (size_t*)(uintptr_t)dptr;
+
+  CR(Error,
+     cuMemAlloc(&dptr,
+                DAMACY_MAX_BLOSC_MEMCPY_OPS_PER_WAVE *
+                  sizeof(struct gpu_memcpy_op)));
+  wave->d_memcpy_ops = (struct gpu_memcpy_op*)(uintptr_t)dptr;
+  CR(Error,
+     cuMemAlloc(&dptr,
+                DAMACY_MAX_BLOSC_SHUFFLE_OPS_PER_WAVE *
+                  sizeof(struct gpu_shuffle_op)));
+  wave->d_unshuffle_ops = (struct gpu_shuffle_op*)(uintptr_t)dptr;
+  CR(Error,
+     cuMemAlloc(&dptr,
+                DAMACY_MAX_BLOSC_SHUFFLE_OPS_PER_WAVE *
+                  sizeof(struct gpu_shuffle_op)));
+  wave->d_bitunshuffle_ops = (struct gpu_shuffle_op*)(uintptr_t)dptr;
+
   CR(Error, cuEventCreate(&wave->ev.h2d_start, CU_EVENT_DEFAULT));
   CR(Error, cuEventCreate(&wave->ev.h2d_end, CU_EVENT_DEFAULT));
   CR(Error, cuEventCreate(&wave->ev.decomp_start, CU_EVENT_DEFAULT));
+  CR(Error, cuEventCreate(&wave->ev.parse_done, CU_EVENT_DEFAULT));
+  CR(Error, cuEventCreate(&wave->ev.zstd_done, CU_EVENT_DEFAULT));
+  CR(Error, cuEventCreate(&wave->ev.lz4_done, CU_EVENT_DEFAULT));
   CR(Error, cuEventCreate(&wave->ev.decomp_end, CU_EVENT_DEFAULT));
   CR(Error, cuEventCreate(&wave->ev.asm_start, CU_EVENT_DEFAULT));
   CR(Error, cuEventCreate(&wave->ev.asm_end, CU_EVENT_DEFAULT));
 
-  wave->zstd_decoder = decoder_zstd_create(DAMACY_MAX_CHUNKS_PER_WAVE,
-                                           DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES);
+  // The wave's decompressed-arena cap bounds total bytes per nvcomp
+  // batch; pass it as max_total_uncompressed so temp scratch isn't
+  // sized for the (vastly overprovisioned) max_batch * per-substream
+  // worst case.
+  const size_t wave_total_uncompressed =
+    (size_t)DAMACY_MAX_CHUNKS_PER_WAVE * DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES;
+  wave->zstd_decoder = decoder_zstd_create(DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE,
+                                           DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES,
+                                           wave_total_uncompressed);
   CHECK(Error, wave->zstd_decoder);
+  wave->lz4_decoder = decoder_lz4_create(DAMACY_MAX_BLOSC_LZ4_SUBS_PER_WAVE,
+                                         DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES,
+                                         wave_total_uncompressed);
+  CHECK(Error, wave->lz4_decoder);
   return 0;
 Error:
   return 1;
@@ -634,24 +741,46 @@ wave_destroy(struct damacy_wave* wave)
   if (!wave)
     return;
   decoder_zstd_destroy(wave->zstd_decoder);
+  decoder_lz4_destroy(wave->lz4_decoder);
   cuMemFreeHost(wave->host_slab);
-  if (wave->dev_compressed)
-    cuMemFree(CUDPTR(wave->dev_compressed));
-  if (wave->dev_decompressed)
-    cuMemFree(CUDPTR(wave->dev_decompressed));
-  if (wave->d_assemble_chunks)
-    cuMemFree(CUDPTR(wave->d_assemble_chunks));
+  cuMemFreeHost(wave->h_blosc1_inputs);
+  cuMemFreeHost(wave->h_blosc1_totals);
+  cuMemFreeHost(wave->h_blosc1_hdrs);
+  // Bulk device-pointer free; cuMemFree(0) is a no-op for our purposes
+  // when wrapped in CUDPTR.
+  void* const dev_ptrs[] = {
+    wave->dev_compressed,
+    wave->dev_decompressed,
+    wave->d_assemble_chunks,
+    wave->d_blosc1_inputs,
+    wave->d_blosc1_hdrs,
+    wave->d_blosc1_counts,
+    wave->d_blosc1_offsets,
+    wave->d_blosc1_totals,
+    (void*)wave->d_zstd_comp_ptrs,
+    wave->d_zstd_comp_sizes,
+    wave->d_zstd_decomp_ptrs,
+    wave->d_zstd_decomp_buf_sizes,
+    (void*)wave->d_lz4_comp_ptrs,
+    wave->d_lz4_comp_sizes,
+    wave->d_lz4_decomp_ptrs,
+    wave->d_lz4_decomp_buf_sizes,
+    wave->d_memcpy_ops,
+    wave->d_unshuffle_ops,
+    wave->d_bitunshuffle_ops,
+  };
+  for (size_t i = 0; i < countof(dev_ptrs); ++i)
+    if (dev_ptrs[i])
+      cuMemFree(CUDPTR(dev_ptrs[i]));
   // cuEventDestroy is not no-op on NULL; guard each.
   CUevent* const events[] = { &wave->ev.h2d_start,    &wave->ev.h2d_end,
-                              &wave->ev.decomp_start, &wave->ev.decomp_end,
-                              &wave->ev.asm_start,    &wave->ev.asm_end };
+                              &wave->ev.decomp_start, &wave->ev.parse_done,
+                              &wave->ev.zstd_done,    &wave->ev.lz4_done,
+                              &wave->ev.decomp_end,   &wave->ev.asm_start,
+                              &wave->ev.asm_end };
   for (size_t i = 0; i < countof(events); ++i)
     if (*events[i])
       cuEventDestroy_v2(*events[i]);
-  free(wave->h_compressed_ptrs);
-  free(wave->h_compressed_sizes);
-  free(wave->h_decompressed_ptrs);
-  free(wave->h_decompressed_sizes);
   free(wave->h_assemble_chunks);
   free(wave->store_reads);
   memset(wave, 0, sizeof(*wave));
@@ -890,22 +1019,24 @@ CudaFail:
   return DAMACY_CUDA;
 }
 
-// Build h_compressed_ptrs / h_decompressed_ptrs from this wave's chunks.
+// Build per-chunk blosc1_chunk_input records for the wave: device
+// pointers into dev_compressed / dev_decompressed plus codec_id.
 static void
-build_decoder_fanout(struct damacy* self, struct damacy_wave* wave)
+build_blosc1_inputs(struct damacy* self, struct damacy_wave* wave)
 {
   struct damacy_batch_slot* slot =
     &self->batch_pool.slots[wave->batch_pool_slot];
   for (uint32_t i = 0; i < wave->n_chunks; ++i) {
     struct chunk_plan* c = &slot->chunk_plans[wave->batch_chunk_offset + i];
     struct read_op* r = &slot->read_ops[wave->batch_chunk_offset + i];
-    wave->h_compressed_ptrs[i] =
-      (const void*)((const uint8_t*)wave->dev_compressed + r->dst_buf_offset +
-                    c->offset_in_read);
-    wave->h_compressed_sizes[i] = c->compressed_nbytes;
-    wave->h_decompressed_ptrs[i] =
+    struct blosc1_chunk_input* in = &wave->h_blosc1_inputs[i];
+    in->d_compressed = (const void*)((const uint8_t*)wave->dev_compressed +
+                                     r->dst_buf_offset + c->offset_in_read);
+    in->d_decompressed =
       (void*)((uint8_t*)wave->dev_decompressed + c->dev_decompressed_offset);
-    wave->h_decompressed_sizes[i] = c->decompressed_nbytes;
+    in->compressed_nbytes = c->compressed_nbytes;
+    in->decompressed_nbytes = c->decompressed_nbytes;
+    in->codec_id = c->codec_id;
   }
 }
 
@@ -964,8 +1095,24 @@ build_assemble_meta(struct damacy* self, struct damacy_wave* wave)
   wave->assemble_max_blocks_per_chunk = max_bpc;
 }
 
-// H2D done — kick decompress + assemble on stream_compute, record
-// per-stage start/end events.
+// Largest blocksize across this wave's blosc-decoded chunks. Reads
+// h_blosc1_hdrs (D2H'd alongside totals); ignores chunks with err set
+// or non-blosc codecs (they have blocksize=0).
+static uint32_t
+wave_max_blocksize(const struct damacy_wave* wave)
+{
+  uint32_t bs = 0;
+  for (uint32_t i = 0; i < wave->n_chunks; ++i) {
+    const struct blosc1_chunk_hdr* h = &wave->h_blosc1_hdrs[i];
+    if (h->err == 0 && h->blocksize > bs)
+      bs = h->blocksize;
+  }
+  return bs;
+}
+
+// H2D done — drive the blosc1 GPU pipeline (parse → scan → emit), gate
+// nvcomp Zstd/LZ4 batches on parallel streams via parse_done, fold
+// memcpy + (un)shuffles back onto stream_compute, then assemble.
 static enum damacy_status
 kick_compute(struct damacy* self, struct damacy_wave* wave)
 {
@@ -974,21 +1121,134 @@ kick_compute(struct damacy* self, struct damacy_wave* wave)
   CUstream s = self->stream_compute;
 
   CR(CudaFail, cuStreamWaitEvent(s, wave->ev.h2d_end, 0));
-
   CR(CudaFail, cuEventRecord(wave->ev.decomp_start, s));
-  build_decoder_fanout(self, wave);
-  if (decoder_zstd_batch(wave->zstd_decoder,
-                         s,
-                         wave->h_compressed_ptrs,
-                         wave->h_compressed_sizes,
-                         wave->h_decompressed_ptrs,
-                         wave->h_decompressed_sizes,
-                         wave->n_chunks)) {
+
+  // 1. blosc1 parse pipeline on stream_compute.
+  build_blosc1_inputs(self, wave);
+  CR(CudaFail,
+     cuMemcpyHtoDAsync(CUDPTR(wave->d_blosc1_inputs),
+                       wave->h_blosc1_inputs,
+                       (size_t)wave->n_chunks *
+                         sizeof(struct blosc1_chunk_input),
+                       s));
+  if (blosc1_parse_and_count_launch(s,
+                                    wave->d_blosc1_inputs,
+                                    wave->d_blosc1_hdrs,
+                                    wave->d_blosc1_counts,
+                                    wave->n_chunks)) {
+    self->failed_status = DAMACY_DECODE;
+    return DAMACY_DECODE;
+  }
+  if (blosc1_scan_offsets_launch(s,
+                                 wave->d_blosc1_counts,
+                                 wave->d_blosc1_offsets,
+                                 wave->d_blosc1_totals,
+                                 wave->n_chunks)) {
+    self->failed_status = DAMACY_DECODE;
+    return DAMACY_DECODE;
+  }
+  struct nvcomp_fanout zstd_fan = {
+    .d_comp_ptrs = wave->d_zstd_comp_ptrs,
+    .d_comp_sizes = wave->d_zstd_comp_sizes,
+    .d_decomp_ptrs = wave->d_zstd_decomp_ptrs,
+    .d_decomp_buf_sizes = wave->d_zstd_decomp_buf_sizes,
+  };
+  struct nvcomp_fanout lz4_fan = {
+    .d_comp_ptrs = wave->d_lz4_comp_ptrs,
+    .d_comp_sizes = wave->d_lz4_comp_sizes,
+    .d_decomp_ptrs = wave->d_lz4_decomp_ptrs,
+    .d_decomp_buf_sizes = wave->d_lz4_decomp_buf_sizes,
+  };
+  if (blosc1_emit_fanout_launch(s,
+                                wave->d_blosc1_inputs,
+                                wave->d_blosc1_hdrs,
+                                wave->d_blosc1_offsets,
+                                zstd_fan,
+                                lz4_fan,
+                                wave->d_memcpy_ops,
+                                wave->d_unshuffle_ops,
+                                wave->d_bitunshuffle_ops,
+                                wave->n_chunks)) {
+    self->failed_status = DAMACY_DECODE;
+    return DAMACY_DECODE;
+  }
+
+  // 2. D2H totals + per-chunk hdrs (latter for blocksize lookup), then
+  //    block the host until the parse pipeline retires.
+  CR(CudaFail,
+     cuMemcpyDtoHAsync(wave->h_blosc1_totals,
+                       CUDPTR(wave->d_blosc1_totals),
+                       sizeof(struct blosc1_totals),
+                       s));
+  CR(CudaFail,
+     cuMemcpyDtoHAsync(wave->h_blosc1_hdrs,
+                       CUDPTR(wave->d_blosc1_hdrs),
+                       (size_t)wave->n_chunks * sizeof(struct blosc1_chunk_hdr),
+                       s));
+  CR(CudaFail, cuEventRecord(wave->ev.parse_done, s));
+  CR(CudaFail, cuEventSynchronize(wave->ev.parse_done));
+
+  const struct blosc1_totals tot = *wave->h_blosc1_totals;
+
+  // 3. Parallel Zstd / LZ4 nvcomp batches on dedicated streams.
+  if (tot.n_zstd > 0) {
+    CR(CudaFail, cuStreamWaitEvent(self->stream_zstd, wave->ev.parse_done, 0));
+    if (decoder_zstd_batch_device(wave->zstd_decoder,
+                                  self->stream_zstd,
+                                  wave->d_zstd_comp_ptrs,
+                                  wave->d_zstd_comp_sizes,
+                                  wave->d_zstd_decomp_ptrs,
+                                  wave->d_zstd_decomp_buf_sizes,
+                                  tot.n_zstd)) {
+      self->failed_status = DAMACY_DECODE;
+      return DAMACY_DECODE;
+    }
+    CR(CudaFail, cuEventRecord(wave->ev.zstd_done, self->stream_zstd));
+  }
+  if (tot.n_lz4 > 0) {
+    CR(CudaFail, cuStreamWaitEvent(self->stream_lz4, wave->ev.parse_done, 0));
+    if (decoder_lz4_batch_device(wave->lz4_decoder,
+                                 self->stream_lz4,
+                                 wave->d_lz4_comp_ptrs,
+                                 wave->d_lz4_comp_sizes,
+                                 wave->d_lz4_decomp_ptrs,
+                                 wave->d_lz4_decomp_buf_sizes,
+                                 tot.n_lz4)) {
+      self->failed_status = DAMACY_DECODE;
+      return DAMACY_DECODE;
+    }
+    CR(CudaFail, cuEventRecord(wave->ev.lz4_done, self->stream_lz4));
+  }
+
+  // 4. Re-join codec streams onto stream_compute.
+  if (tot.n_zstd > 0)
+    CR(CudaFail, cuStreamWaitEvent(s, wave->ev.zstd_done, 0));
+  if (tot.n_lz4 > 0)
+    CR(CudaFail, cuStreamWaitEvent(s, wave->ev.lz4_done, 0));
+
+  // 5. CODEC_NONE / chunk-MEMCPYED bulk copies + (bit)unshuffle filters.
+  if (tot.n_memcpy > 0 &&
+      decoder_memcpy_launch(s, wave->d_memcpy_ops, tot.n_memcpy)) {
+    self->failed_status = DAMACY_DECODE;
+    return DAMACY_DECODE;
+  }
+  uint32_t bs = 0;
+  if (tot.n_unshuffle > 0 || tot.n_bitunshuffle > 0)
+    bs = wave_max_blocksize(wave);
+  if (tot.n_unshuffle > 0 &&
+      gpu_unshuffle_launch(s, wave->d_unshuffle_ops, tot.n_unshuffle, bs)) {
+    self->failed_status = DAMACY_DECODE;
+    return DAMACY_DECODE;
+  }
+  if (tot.n_bitunshuffle > 0 &&
+      gpu_bitunshuffle_launch(
+        s, wave->d_bitunshuffle_ops, tot.n_bitunshuffle, bs)) {
     self->failed_status = DAMACY_DECODE;
     return DAMACY_DECODE;
   }
   CR(CudaFail, cuEventRecord(wave->ev.decomp_end, s));
 
+  // 6. Assemble.
   build_assemble_meta(self, wave);
   CR(CudaFail,
      cuMemcpyHtoDAsync(CUDPTR(wave->d_assemble_chunks),
@@ -1191,6 +1451,8 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   CR(Fail, cuCtxSetCurrent(self->primary_ctx));
   CR(Fail, cuStreamCreate(&self->stream_h2d, CU_STREAM_DEFAULT));
   CR(Fail, cuStreamCreate(&self->stream_compute, CU_STREAM_DEFAULT));
+  CR(Fail, cuStreamCreate(&self->stream_zstd, CU_STREAM_DEFAULT));
+  CR(Fail, cuStreamCreate(&self->stream_lz4, CU_STREAM_DEFAULT));
 
   s = DAMACY_OOM;
   struct store_fs_config sc = {
@@ -1261,6 +1523,10 @@ damacy_destroy(struct damacy* self)
     cuStreamSynchronize(self->stream_compute);
   if (self->stream_h2d)
     cuStreamSynchronize(self->stream_h2d);
+  if (self->stream_zstd)
+    cuStreamSynchronize(self->stream_zstd);
+  if (self->stream_lz4)
+    cuStreamSynchronize(self->stream_lz4);
 
   free(self->batch_stage);
   free(self->batch_samples);
@@ -1278,6 +1544,10 @@ damacy_destroy(struct damacy* self)
     cuStreamDestroy(self->stream_compute);
   if (self->stream_h2d)
     cuStreamDestroy(self->stream_h2d);
+  if (self->stream_zstd)
+    cuStreamDestroy(self->stream_zstd);
+  if (self->stream_lz4)
+    cuStreamDestroy(self->stream_lz4);
   if (self->primary_ctx)
     cuDevicePrimaryCtxRelease(self->cuda_device);
 
