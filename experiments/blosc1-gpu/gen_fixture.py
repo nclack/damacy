@@ -6,17 +6,18 @@
 #   "numcodecs<0.13",
 # ]
 # ///
-"""Generate a single blosc1+lz4 fixture for the GPU decompress spike.
+"""Generate blosc1 fixtures for the GPU decompress derisk.
 
-Writes two files alongside this script:
-  fixture_lz4_noshuffle.blosc1   — bytes from numcodecs.Blosc(cname='lz4', shuffle=NOSHUFFLE)
-  fixture_lz4_noshuffle.raw      — the same bytes uncompressed (ground truth)
+Emits five (.blosc1, .raw) pairs alongside this script:
 
-Also prints the parsed blosc1 header so the spike can be sanity-checked.
+  lz4_noshuffle_ts4      cname=lz4   shuffle=off  typesize=4  64 KB / 1 block
+  lz4_shuffle_ts4        cname=lz4   shuffle=on   typesize=4  64 KB / 1 block
+  zstd_noshuffle_ts4     cname=zstd  shuffle=off  typesize=4  64 KB / 1 block
+  lz4_noshuffle_ts1      cname=lz4   shuffle=off  typesize=1  64 KB / 1 block
+  lz4_noshuffle_ts4_mb   cname=lz4   shuffle=off  typesize=4  4 MB / 64 blocks
 
-The aim is a *small* single-block fixture. A small, highly-compressible
-buffer keeps the test simple — one block, one LZ4 frame, no shuffle to
-reverse.
+Each .blosc1 is the codec.encode(...) output; each .raw is the original
+bytes. The spike consumes both and verifies round-trip.
 """
 from __future__ import annotations
 
@@ -31,49 +32,61 @@ from numcodecs import Blosc
 HERE = Path(__file__).resolve().parent
 
 
-def main() -> int:
-    # Build a small, strongly-compressible buffer: repeat a 64-int pattern
-    # 256× → 16384 int32s = 64 KB. LZ4 will produce a real compressed block
-    # (no MEMCPYED fallback). Using a low-entropy repeating pattern keeps
-    # the LZ4 frame small and the spike fast.
-    pattern = np.arange(64, dtype=np.int32)
-    data = np.tile(pattern, 256)  # 16384 elements, 64 KB
+def make_pattern_int32(nelems: int) -> np.ndarray:
+    """Repeating low-entropy pattern that compresses well under both LZ4 and zstd."""
+    pat = np.arange(64, dtype=np.int32)
+    reps = (nelems + len(pat) - 1) // len(pat)
+    return np.tile(pat, reps)[:nelems]
+
+
+def emit(name: str, *, data: np.ndarray, cname: str, shuffle: int, typesize: int,
+         blocksize: int = 0) -> None:
+    """Encode `data` with the given Blosc options and write fixtures."""
+    codec = Blosc(cname=cname, clevel=5, shuffle=shuffle, blocksize=blocksize)
+    # Pass ndarray so dtype.itemsize → typesize. For typesize=1 we override
+    # by passing the bytes view (uint8 ndarray).
+    if typesize == data.dtype.itemsize:
+        encoded = bytes(codec.encode(data))
+    else:
+        encoded = bytes(codec.encode(data.view(np.uint8)))
     raw = data.tobytes()
 
-    codec = Blosc(
-        cname="lz4",
-        clevel=5,
-        shuffle=Blosc.NOSHUFFLE,
-        blocksize=0,  # auto
-    )
-    # Pass the ndarray directly so Blosc picks up dtype.itemsize as typesize.
-    encoded = bytes(codec.encode(data))
-
-    # Sanity-parse the 16-byte blosc1 header so the spike author knows what
-    # to expect.
-    if len(encoded) < 16:
-        print(f"unexpected encoded size {len(encoded)}", file=sys.stderr)
-        return 1
-    version, versionlz, flags, typesize = struct.unpack_from("BBBB", encoded, 0)
-    nbytes, blocksize, cbytes = struct.unpack_from("<III", encoded, 4)
-    nblocks = (nbytes + blocksize - 1) // blocksize
+    # Parse header to print + sanity-check.
+    version, versionlz, flags, ts = struct.unpack_from("BBBB", encoded, 0)
+    nbytes, bs, cb = struct.unpack_from("<III", encoded, 4)
+    nblocks = (nbytes + bs - 1) // bs
     bstarts = list(struct.unpack_from(f"<{nblocks}i", encoded, 16))
+    print(f"{name:30s}  {len(encoded):>9} bytes  ratio={len(encoded)/len(raw):.3f}")
+    print(f"  flags=0x{flags:02x} typesize={ts} nbytes={nbytes} blocksize={bs}"
+          f" nblocks={nblocks}")
+    if ts != typesize:
+        print(f"  WARNING: requested typesize={typesize} but header says {ts}",
+              file=sys.stderr)
 
-    print(f"encoded: {len(encoded)} bytes ({len(encoded) / len(raw):.3f}× of raw)")
-    print(f"  version={version} versionlz={versionlz} flags=0x{flags:02x} typesize={typesize}")
-    print(f"  nbytes={nbytes} blocksize={blocksize} cbytes={cbytes}")
-    print(f"  nblocks={nblocks} bstarts={bstarts}")
-    # Show per-block compressed sizes.
-    for i, off in enumerate(bstarts):
-        nxt = bstarts[i + 1] if i + 1 < nblocks else cbytes
-        print(f"  block[{i}] offset={off} compressed_size={nxt - off}")
+    (HERE / f"{name}.blosc1").write_bytes(encoded)
+    (HERE / f"{name}.raw").write_bytes(raw)
 
-    out_blosc = HERE / "fixture_lz4_noshuffle.blosc1"
-    out_raw = HERE / "fixture_lz4_noshuffle.raw"
-    out_blosc.write_bytes(encoded)
-    out_raw.write_bytes(raw)
-    print(f"wrote {out_blosc}")
-    print(f"wrote {out_raw}")
+
+def main() -> int:
+    # 64 KB at typesize=4 = 16384 int32s.
+    data_64k_i32 = make_pattern_int32(16384)
+    # 64 KB at typesize=1 = 65536 uint8s with the same low-entropy pattern.
+    data_64k_u8 = data_64k_i32.view(np.uint8).copy()
+    # 4 MB at typesize=4 = 1048576 int32s.
+    data_4m_i32 = make_pattern_int32(1024 * 1024)
+
+    emit("lz4_noshuffle_ts4", data=data_64k_i32,
+         cname="lz4", shuffle=Blosc.NOSHUFFLE, typesize=4)
+    emit("lz4_shuffle_ts4", data=data_64k_i32,
+         cname="lz4", shuffle=Blosc.SHUFFLE, typesize=4)
+    emit("zstd_noshuffle_ts4", data=data_64k_i32,
+         cname="zstd", shuffle=Blosc.NOSHUFFLE, typesize=4)
+    emit("lz4_noshuffle_ts1", data=data_64k_u8,
+         cname="lz4", shuffle=Blosc.NOSHUFFLE, typesize=1)
+    emit("lz4_noshuffle_ts4_mb", data=data_4m_i32,
+         cname="lz4", shuffle=Blosc.NOSHUFFLE, typesize=4,
+         blocksize=65536)
+    print("done")
     return 0
 
 

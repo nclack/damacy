@@ -1,43 +1,75 @@
 # blosc1-gpu derisk
 
-Standalone spike: does `nvcompBatchedLZ4DecompressAsync` consume the LZ4
-bytes that blosc1 produces? If yes, GPU-side blosc1 decompression is
-viable and we can skip the CPU-decode stage proposed in
-`docs/issue-2-blosc-design.md`.
+Standalone harness validating that nvcomp's batched LZ4 and Zstd
+decompressors consume the bytes that blosc1 produces, so the GPU-side
+blosc1 pipeline proposed in `docs/issue-2-blosc-design.md` is feasible.
 
 ## Run
+
+From inside `nix develop`:
 
 ```
 ./gen_fixture.py
 NVCOMP_INC=$(grep '^NVCOMP_INCLUDE_DIR' ../../build/CMakeCache.txt | cut -d= -f2)
 NVCOMP_LIB=$(grep '^NVCOMP_LIBRARY' ../../build/CMakeCache.txt | cut -d= -f2)
 nvcc -O2 -std=c++17 -arch=sm_75 spike.cu -I"$NVCOMP_INC" "$NVCOMP_LIB" -lcuda -o spike
-./spike
+for f in lz4_noshuffle_ts4 lz4_shuffle_ts4 zstd_noshuffle_ts4 \
+         lz4_noshuffle_ts1 lz4_noshuffle_ts4_mb; do
+  ./spike "$f"
+done
 ```
 
-## Result (May 2026)
+## Result matrix (May 2026, all PASS)
 
-PASS — 16384 bytes round-trip byte-perfect. nvcomp's batched LZ4 consumes
-raw `LZ4_compress_default` output as produced by blosc1 in its split
-sub-streams.
+| fixture | codec | shuffle | typesize | blocks | sub-streams/block | total subs | bytes round-tripped |
+|---|---|---|---|---|---|---|---|
+| `lz4_noshuffle_ts4`    | lz4  | off | 4 |  1 | 4 |   4 |  65536 |
+| `lz4_shuffle_ts4`      | lz4  | on  | 4 |  1 | 4 |   4 |  65536 |
+| `zstd_noshuffle_ts4`   | zstd | off | 4 |  1 | 1 |   1 |  65536 |
+| `lz4_noshuffle_ts1`    | lz4  | off | 1 |  1 | 1 |   1 |  65536 |
+| `lz4_noshuffle_ts4_mb` | lz4  | off | 4 | 16 | 4 |  64 | 4194304 |
 
-## Format detail surfaced
+## Format details surfaced
 
-A blosc1 block with codec ∈ {lz4, lz4hc, zstd}, typesize > 1, and
-non-trivial blocksize is *split* into `typesize` independent
-LZ4/zstd sub-streams concatenated as
-`[int32 cbytes_i][frame_i] × typesize`. Each sub-stream decompresses to
-`blocksize/typesize` bytes. The GPU batching unit is the sub-stream, not
-the block — so per-chunk batched-decompress count is `nblocks × typesize`.
+These three came out of the spike and are *not* documented in the c-blosc1
+README. Each is load-bearing for any GPU parser.
 
-## Suggested follow-ups (cheap variations)
+1. **Sub-stream prefixing is universal.** Every block in every codec
+   variant starts with an `int32` cbytes prefix, even when the block is
+   "single sub-stream" (zstd, or lz4 with typesize=1).
 
-1. `shuffle=SHUFFLE` + typesize=4 — verify the unshuffle path with a
-   reference CPU transpose
-2. blosc-zstd equivalent — confirm `nvcompBatchedZstdDecompressAsync`
-   accepts the same sub-stream shape
-3. typesize=1 — confirm split is off (block = single frame, no prefix)
-4. Multi-block fixture (4 MB / 64 KB blocksize) — exercise offset-table
-   walk
+2. **Sub-stream count per block is codec-dependent, not just typesize-dependent:**
+   - lz4 / lz4hc with typesize > 1 → split into `typesize` sub-streams.
+   - lz4 / lz4hc with typesize = 1 → 1 sub-stream.
+   - zstd → 1 sub-stream regardless of typesize.
 
-These are minor extensions of `spike.cu`.
+   The header carries no "split" flag — the count is implicit and must be
+   discovered by walking the block payload until accumulated sub-stream
+   sizes equal the block's compressed extent.
+
+3. **`bstarts` are NOT in block-index order.** Blosc1 compresses blocks
+   on multiple writer threads and writes each block to the output buffer
+   in completion order, recording the offset under that block's index.
+   `bstarts[1]` may point earlier in the buffer than `bstarts[0]`. Each
+   block's compressed-payload end-offset must be derived by sorting the
+   `bstarts` values and taking the next-higher one.
+
+## Implications for the design
+
+- The sub-stream — not the block — is the unit handed to nvcomp's batched
+  API. For `1 MB chunks × 64 KB blocks × typesize=4` LZ4 data that's
+  `16 × 4 = 64` LZ4 calls per chunk batched together. Generous parallel
+  width; metadata table grows by `typesize×` for the LZ4 case.
+- For zstd inner codec, batching is per-block (1 zstd call per block).
+- Byte-shuffle reverse is a per-block CPU/GPU transpose applied after
+  decompress. Tested on CPU here; will become a small CUDA kernel in
+  the actual implementation.
+
+## Suggested follow-ups (not done here)
+
+- Memcpyed flag (forced-uncompressed blocks): synthesize via random data
+  or `clevel=0` and verify the spike's parser detects + handles them.
+- Bitshuffle (`shuffle=2`): fixture + reference reversal; punt the GPU
+  bitshuffle kernel until needed.
+- Partial last block: fixture where `nbytes % blocksize != 0`; verify
+  the per-substream dst sizing on the trailing block.
