@@ -1,14 +1,34 @@
 # dev log
 
+## 2026-05-07
+
+continuing on blosc
+
+- [ ] performance pass on blosc kernels
+- [x] benchmark scenarios - all blosc + mixed
+- [ ] evaluated eliminating the d2h after parsing the blosc headers
+- [x] test mixed codec sources
+
+looks pretty slow - or is it?
+
+- [ ] review all the limits - aggregate to a private header.
+
+blosc chunk headers are parsed on gpu but that is probably a mistake. Just
+parse on cpu w a threadpool avoids the d2h, error handling better.
+
 ## 2026-05-06
 
-4.8 GB/s on the cluster
+4.8 GB/s on the cluster. Should be faster.
 
 They tried the python side but ran into the lack of blosc support.
 
 Adding that on the cpu side is depressing; waves could be mixed.
 
 Looking into blosc1 on gpu. might not be that bad.
+
+There's an awkward sync that needs to happen for blosc so that nvdecomp gets
+the right input. Later I might need to take a look at the kernel primitives
+for nvcomp.
 
 ## 2026-05-05
 
@@ -26,9 +46,9 @@ beginning so we now what the downstream bottlenecks are as we go.
 Focus on making the benchmarking nice first though. Reviewing for accuracy
 and then: 
 
-- [ ] refine bench scenario(s)
-- [ ] need to do a better multi-zarr setup for bench/test
-- [ ] benchmark output as json
+- [x] refine bench scenario(s)
+- [x] need to do a better multi-zarr setup for bench/test
+- [x] benchmark output as json
 
 Working on specing scenarios as json, making benchmark out json, and refining
 the base scenario. I'd like 256kB chunks before compression. 3d zarrs with at
@@ -36,7 +56,7 @@ least 4 shards each, maybe 512x512x512 each. sample random in bounds aabb. For
 building the batches, I want each "Sample" to be 64x64x64. Batch of about 1 GB.
 
 - [ ] deal with the "max chunks per batch" - wrong parameterization
-- [ ] review/reduce comments
+- [x] review/reduce comments
 
 Need to speed up a`assemble.cu`.
 
