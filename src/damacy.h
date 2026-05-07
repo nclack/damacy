@@ -105,6 +105,15 @@ extern "C"
 
     // Output dtype expected from all pushed samples; mismatched zarrs error.
     enum damacy_dtype dtype;
+
+    // Largest dtype size (bytes) the pipeline will accept across pushed
+    // zarrs. Bounds the blosc1-lz4 substream split and so sizes the LZ4
+    // fanout SOA + nvcomp temp scratch tighter than the
+    // DAMACY_BLOSC_MAX_TYPESIZE compile-time ceiling. 0 means "use the
+    // ceiling"; values > DAMACY_BLOSC_MAX_TYPESIZE are rejected at
+    // create time. Typical values: 2 (u16/i16/f16-only), 4 (32-bit),
+    // 8 (64-bit, the ceiling).
+    uint8_t max_bytes_per_element;
   };
 
   struct damacy;

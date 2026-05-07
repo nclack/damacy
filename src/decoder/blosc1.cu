@@ -33,6 +33,7 @@ __global__ void
 blosc1_parse_and_count_kernel(const struct blosc1_chunk_input* __restrict__ in,
                               struct blosc1_chunk_hdr* __restrict__ hdrs,
                               struct blosc1_chunk_counts* __restrict__ counts,
+                              struct blosc1_totals* __restrict__ totals,
                               uint32_t n_chunks)
 {
   // bstarts/sorted live in shared memory (one block per chunk; only
@@ -58,7 +59,7 @@ blosc1_parse_and_count_kernel(const struct blosc1_chunk_input* __restrict__ in,
              chunk.codec_id == CODEC_BLOSC_ZSTD) {
     if (chunk.compressed_nbytes < kHeaderBytes) {
       h.err = 1;
-      goto done;
+      goto Done;
     }
     const uint8_t* p = (const uint8_t*)chunk.d_compressed;
     const uint8_t flags = p[2];
@@ -72,29 +73,29 @@ blosc1_parse_and_count_kernel(const struct blosc1_chunk_input* __restrict__ in,
     h.cbytes = read_u32_le(p + 12);
     if (h.blocksize == 0) {
       h.err = 2;
-      goto done;
+      goto Done;
     }
     h.nblocks = (h.nbytes + h.blocksize - 1) / h.blocksize;
 
     if (h.nbytes != chunk.decompressed_nbytes) {
       h.err = 3;
-      goto done;
+      goto Done;
     }
     if (h.cbytes != chunk.compressed_nbytes) {
       h.err = 4;
-      goto done;
+      goto Done;
     }
     if (h.nblocks > DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK) {
       h.err = 5;
-      goto done;
+      goto Done;
     }
     if (h.typesize == 0 || h.typesize > DAMACY_BLOSC_MAX_TYPESIZE) {
       h.err = 6;
-      goto done;
+      goto Done;
     }
     if (h.compformat != inner_codec_compformat(chunk.codec_id)) {
       h.err = 7;
-      goto done;
+      goto Done;
     }
 
     if (h.memcpyed) {
@@ -155,9 +156,11 @@ blosc1_parse_and_count_kernel(const struct blosc1_chunk_input* __restrict__ in,
     h.err = 8;
   }
 
-done:
+Done:
   hdrs[i] = h;
   counts[i] = c;
+  if (h.err != 0)
+    atomicAdd(&totals->n_parse_errors, 1u);
 }
 
 // Block size of blosc1_scan_offsets_kernel. Sized to cover one full
@@ -200,6 +203,10 @@ blosc1_scan_offsets_kernel(
   const uint32_t lane = tid & 31u;
   const uint32_t warp = tid >> 5u;
 
+  // c is zero-initialized for tid >= n_chunks; the lane-31 writes that
+  // populate warp_z[..] therefore land 0 in those warps. So even if
+  // n_chunks is not a multiple of 32, every warp slot in warp_z[..] is
+  // written before warp 0's second-pass scan reads it — no garbage.
   struct blosc1_chunk_counts c = { 0, 0, 0, 0, 0 };
   if (tid < n_chunks)
     c = counts[tid];
@@ -482,16 +489,18 @@ blosc1_parse_and_count_launch(CUstream stream,
                               const struct blosc1_chunk_input* d_inputs,
                               struct blosc1_chunk_hdr* d_hdrs,
                               struct blosc1_chunk_counts* d_counts,
+                              struct blosc1_totals* d_totals,
                               uint32_t n_chunks)
 {
+  // Zero unconditionally so callers don't have to track which fields
+  // have stale state. Cheap (28 bytes); covers n_parse_errors,
+  // n_codec_errors, and the count fields the scan kernel will repopulate.
+  cudaMemsetAsync(d_totals, 0, sizeof(*d_totals), (cudaStream_t)stream);
   if (n_chunks == 0)
     return 0;
   blosc1_parse_and_count_kernel<<<n_chunks, 32, 0, (cudaStream_t)stream>>>(
-    d_inputs, d_hdrs, d_counts, n_chunks);
-  return decoder_launch_status_check("blosc1_parse_and_count_launch") ==
-             cudaSuccess
-           ? 0
-           : 1;
+    d_inputs, d_hdrs, d_counts, d_totals, n_chunks);
+  return decoder_launch_status_check("blosc1_parse_and_count_launch");
 }
 
 extern "C" int
@@ -501,10 +510,10 @@ blosc1_scan_offsets_launch(CUstream stream,
                            struct blosc1_totals* d_totals,
                            uint32_t n_chunks)
 {
-  if (n_chunks == 0) {
-    cudaMemsetAsync(d_totals, 0, sizeof(*d_totals), (cudaStream_t)stream);
+  // n_chunks==0: parse_launch's memset already zeroed the count fields;
+  // nothing to do here.
+  if (n_chunks == 0)
     return 0;
-  }
   if (n_chunks > kScanBlockSize) {
     log_error(
       "blosc1_scan_offsets_launch: n_chunks=%u > %u", n_chunks, kScanBlockSize);
@@ -512,10 +521,7 @@ blosc1_scan_offsets_launch(CUstream stream,
   }
   blosc1_scan_offsets_kernel<<<1, kScanBlockSize, 0, (cudaStream_t)stream>>>(
     d_counts, d_offsets, d_totals, n_chunks);
-  return decoder_launch_status_check("blosc1_scan_offsets_launch") ==
-             cudaSuccess
-           ? 0
-           : 1;
+  return decoder_launch_status_check("blosc1_scan_offsets_launch");
 }
 
 extern "C" int
@@ -544,7 +550,5 @@ blosc1_emit_fanout_launch(CUstream stream,
                                                       d_unshuffle_ops,
                                                       d_bitunshuffle_ops,
                                                       n_chunks);
-  return decoder_launch_status_check("blosc1_emit_fanout_launch") == cudaSuccess
-           ? 0
-           : 1;
+  return decoder_launch_status_check("blosc1_emit_fanout_launch");
 }

@@ -85,6 +85,12 @@ extern "C"
     uint32_t bitunshuffle_off;
   };
 
+  // Wave-level totals + error counters. n_parse_errors is set by the
+  // parse kernel via atomicAdd (one per chunk with a non-zero h.err);
+  // n_codec_errors is set by decoder_status_reduce_launch after each
+  // nvcomp batch. The host zeroes the whole struct before parse via
+  // cudaMemsetAsync; the scan kernel writes only the five count fields,
+  // leaving the error counters untouched.
   struct blosc1_totals
   {
     uint32_t n_zstd;
@@ -92,12 +98,18 @@ extern "C"
     uint32_t n_memcpy;
     uint32_t n_unshuffle;
     uint32_t n_bitunshuffle;
+    uint32_t n_parse_errors;
+    uint32_t n_codec_errors;
   };
 
+  // d_totals is zeroed by the launcher before the parse kernel runs;
+  // the kernel atomicAdds into d_totals->n_parse_errors for each chunk
+  // it rejects, and the scan kernel later fills the count fields.
   int blosc1_parse_and_count_launch(CUstream stream,
                                     const struct blosc1_chunk_input* d_inputs,
                                     struct blosc1_chunk_hdr* d_hdrs,
                                     struct blosc1_chunk_counts* d_counts,
+                                    struct blosc1_totals* d_totals,
                                     uint32_t n_chunks);
 
   int blosc1_scan_offsets_launch(CUstream stream,

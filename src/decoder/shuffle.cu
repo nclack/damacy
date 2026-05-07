@@ -75,6 +75,5 @@ gpu_unshuffle_launch(CUstream stream,
   dim3 grid(DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK, n_ops, 1);
   gpu_unshuffle_kernel<<<grid, kThreadsPerBlock, 0, (cudaStream_t)stream>>>(
     d_ops, (const uint8_t*)dev_decompressed_base, (uint8_t*)scratch_base);
-  return decoder_launch_status_check("gpu_unshuffle_launch") == cudaSuccess ? 0
-                                                                            : 1;
+  return decoder_launch_status_check("gpu_unshuffle_launch");
 }

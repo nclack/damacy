@@ -1,7 +1,6 @@
 #include "decoder/decoder_memcpy.h"
 
-#include "decoder/decoder_check.h"
-#include "log/log.h"
+#include "decoder/launch_check.h"
 
 #include <cuda_runtime.h>
 #include <stdint.h>
@@ -49,10 +48,5 @@ decoder_memcpy_launch(CUstream stream,
     return 0;
   gpu_memcpy_kernel<<<n_ops, kThreadsPerBlock, 0, (cudaStream_t)stream>>>(
     d_ops);
-  cudaError_t e = cudaGetLastError();
-  if (e != cudaSuccess) {
-    log_error("decoder_memcpy_launch: %s", cudaGetErrorString(e));
-    return 1;
-  }
-  return 0;
+  return decoder_launch_status_check("decoder_memcpy_launch");
 }

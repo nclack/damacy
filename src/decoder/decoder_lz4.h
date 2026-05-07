@@ -29,6 +29,10 @@ extern "C"
                                const size_t* d_uncompressed_sizes,
                                size_t n);
 
+  // Pointer to the decoder's per-batch nvcompStatus_t array. See
+  // decoder_zstd_d_statuses for rationale.
+  const int* decoder_lz4_d_statuses(const struct decoder_lz4*);
+
 #ifdef __cplusplus
 }
 #endif

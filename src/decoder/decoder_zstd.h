@@ -34,6 +34,12 @@ extern "C"
                                 const size_t* d_uncompressed_sizes,
                                 size_t n);
 
+  // Pointer to the decoder's per-batch nvcompStatus_t array (sized for
+  // max_batch). Returned as `const int*` to keep nvcomp out of consumer
+  // headers; nvcompStatus_t fits in int. Hand to
+  // decoder_status_reduce_launch after a successful batch_device call.
+  const int* decoder_zstd_d_statuses(const struct decoder_zstd*);
+
 #ifdef __cplusplus
 }
 #endif

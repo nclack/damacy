@@ -142,6 +142,7 @@ run_one(const struct fixture* fx, CUstream stream)
            (const struct blosc1_chunk_input*)(uintptr_t)d_in,
            (struct blosc1_chunk_hdr*)(uintptr_t)d_hdrs,
            (struct blosc1_chunk_counts*)(uintptr_t)d_counts,
+           (struct blosc1_totals*)(uintptr_t)d_totals,
            1) == 0);
   EXPECT(blosc1_scan_offsets_launch(
            stream,

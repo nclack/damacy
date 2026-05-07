@@ -7,6 +7,11 @@
 
 #include <stdlib.h>
 
+// nvcompStatus_t is reported via decoder_zstd_d_statuses as `const int*`;
+// guard against an ABI surprise.
+_Static_assert(sizeof(nvcompStatus_t) == sizeof(int),
+               "nvcompStatus_t must be int-sized for status_reduce");
+
 // Per-batch nvcomp output arrays (actual sizes, statuses) and the temp
 // workspace are owned here. The four input arrays come from the caller's
 // device-side fanout (populated by the blosc1 emit kernel).
@@ -75,6 +80,15 @@ decoder_zstd_create(size_t max_batch_size,
 Fail:
   decoder_zstd_destroy(d);
   return NULL;
+}
+
+const int*
+decoder_zstd_d_statuses(const struct decoder_zstd* d)
+{
+  // nvcompStatus_t is an enum; layout-compatible with int across the
+  // platforms nvcomp ships for. Static-asserting elsewhere avoids
+  // dragging nvcomp into the public header.
+  return d ? (const int*)d->d_statuses : NULL;
 }
 
 int

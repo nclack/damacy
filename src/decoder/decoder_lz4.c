@@ -7,6 +7,9 @@
 
 #include <stdlib.h>
 
+_Static_assert(sizeof(nvcompStatus_t) == sizeof(int),
+               "nvcompStatus_t must be int-sized for status_reduce");
+
 // Per-batch nvcomp output arrays (actual sizes, statuses) and the temp
 // workspace are owned here. The four input arrays come from the caller's
 // device-side fanout (populated by the blosc1 emit kernel).
@@ -75,6 +78,12 @@ decoder_lz4_create(size_t max_batch_size,
 Fail:
   decoder_lz4_destroy(d);
   return NULL;
+}
+
+const int*
+decoder_lz4_d_statuses(const struct decoder_lz4* d)
+{
+  return d ? (const int*)d->d_statuses : NULL;
 }
 
 int
