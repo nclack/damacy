@@ -94,14 +94,56 @@ blosc1_parse_and_count_kernel(const struct blosc1_chunk_input* __restrict__ in,
     if (h.memcpyed) {
       c.n_memcpy = 1;
     } else {
-      uint32_t nstreams_per_block = 1;
-      if (chunk.codec_id == CODEC_BLOSC_LZ4 && h.typesize > 1)
-        nstreams_per_block = h.typesize;
-      const uint32_t total = h.nblocks * nstreams_per_block;
+      // Walk the bstarts + per-substream int32 prefix chain. blosc1
+      // stores a substream raw (cbytes_prefix == per_stream_dst) when
+      // its codec output couldn't beat the uncompressed size; the
+      // decoder must memcpy those instead of handing them to nvcomp.
+      const uint8_t* p = (const uint8_t*)chunk.d_compressed;
+      const uint32_t nstreams_per_block =
+        (chunk.codec_id == CODEC_BLOSC_LZ4 && h.typesize > 1) ? h.typesize : 1u;
+      const uint32_t per_stream_dst =
+        (nstreams_per_block == 1) ? h.blocksize : (h.blocksize / h.typesize);
+
+      uint32_t bstarts[DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK];
+      uint32_t sorted[DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK];
+      for (uint32_t bi = 0; bi < h.nblocks; ++bi)
+        bstarts[bi] = read_u32_le(p + kHeaderBytes + 4u * bi);
+      for (uint32_t bi = 0; bi < h.nblocks; ++bi) {
+        uint32_t r = 0;
+        for (uint32_t j = 0; j < h.nblocks; ++j)
+          if (bstarts[j] < bstarts[bi] || (bstarts[j] == bstarts[bi] && j < bi))
+            ++r;
+        sorted[r] = bstarts[bi];
+      }
+
+      uint32_t n_codec = 0;
+      uint32_t n_raw = 0;
+      for (uint32_t bi = 0; bi < h.nblocks; ++bi) {
+        uint32_t r = 0;
+        for (uint32_t j = 0; j < h.nblocks; ++j)
+          if (bstarts[j] < bstarts[bi] || (bstarts[j] == bstarts[bi] && j < bi))
+            ++r;
+        const uint32_t end = (r + 1u < h.nblocks) ? sorted[r + 1u] : h.cbytes;
+        uint32_t cur = bstarts[bi];
+        for (uint32_t k = 0; k < nstreams_per_block; ++k) {
+          if (cur + 4u > end)
+            break;
+          const uint32_t cb = read_u32_le(p + cur);
+          cur += 4u;
+          if (cur + cb > end)
+            break;
+          if (cb == per_stream_dst)
+            ++n_raw;
+          else
+            ++n_codec;
+          cur += cb;
+        }
+      }
       if (chunk.codec_id == CODEC_BLOSC_LZ4)
-        c.n_lz4 = total;
+        c.n_lz4 = n_codec;
       else
-        c.n_zstd = total;
+        c.n_zstd = n_codec;
+      c.n_memcpy = n_raw;
       c.has_unshuffle = h.shuffle;
       c.has_bitunshuffle = h.bitshuffle;
     }
@@ -343,12 +385,46 @@ blosc1_emit_fanout_kernel(
     (nstreams == 1u) ? s.hdr.blocksize : (s.hdr.blocksize / s.hdr.typesize);
   const uint32_t block_dst_off = t * s.hdr.blocksize;
   struct nvcomp_fanout fan = (codec == CODEC_BLOSC_LZ4) ? lz4 : zstd;
-  const uint32_t fanout_base =
-    (codec == CODEC_BLOSC_LZ4 ? s.offsets.lz4_off : s.offsets.zstd_off) +
-    t * nstreams;
 
-  // Walk int32-prefixed sub-streams within [my_off, block_end).
+  // Per-block local counters: how many compressed and raw substreams
+  // came BEFORE this block (in block-index order). The count kernel
+  // produced per-chunk totals; here we recompute the per-block split
+  // so threads know where to write within the chunk's slice.
+  uint32_t prior_codec = 0;
+  uint32_t prior_raw = 0;
+  for (uint32_t b = 0; b < t; ++b) {
+    uint32_t br = 0;
+    for (uint32_t j = 0; j < nblocks; ++j)
+      if (s.bstarts[j] < s.bstarts[b] ||
+          (s.bstarts[j] == s.bstarts[b] && j < b))
+        ++br;
+    const uint32_t b_end =
+      (br + 1u < nblocks) ? s.sorted_offsets[br + 1u] : s.hdr.cbytes;
+    uint32_t bc = s.bstarts[b];
+    for (uint32_t k = 0; k < nstreams; ++k) {
+      if (bc + 4u > b_end)
+        break;
+      const uint32_t cb = read_u32_le(d_comp + bc);
+      bc += 4u;
+      if (bc + cb > b_end)
+        break;
+      if (cb == per_stream_dst)
+        ++prior_raw;
+      else
+        ++prior_codec;
+      bc += cb;
+    }
+  }
+
+  const uint32_t codec_base =
+    (codec == CODEC_BLOSC_LZ4 ? s.offsets.lz4_off : s.offsets.zstd_off) +
+    prior_codec;
+  const uint32_t memcpy_base = s.offsets.memcpy_off + prior_raw;
+
+  // Walk this block's substreams; route each to nvcomp or memcpy.
   uint32_t cur = my_off;
+  uint32_t k_codec = 0;
+  uint32_t k_raw = 0;
   for (uint32_t k = 0; k < nstreams; ++k) {
     if (cur + 4u > block_end)
       break;
@@ -356,12 +432,18 @@ blosc1_emit_fanout_kernel(
     cur += 4u;
     if (cur + cb > block_end)
       break;
-    emit_substream(fan,
-                   fanout_base + k,
-                   d_comp + cur,
-                   d_decomp + block_dst_off + k * per_stream_dst,
-                   cb,
-                   per_stream_dst);
+    void* dst = d_decomp + block_dst_off + k * per_stream_dst;
+    if (cb == per_stream_dst) {
+      struct gpu_memcpy_op* slot = &memcpy_ops[memcpy_base + k_raw];
+      slot->d_src = d_comp + cur;
+      slot->d_dst = dst;
+      slot->nbytes = per_stream_dst;
+      ++k_raw;
+    } else {
+      emit_substream(
+        fan, codec_base + k_codec, d_comp + cur, dst, cb, per_stream_dst);
+      ++k_codec;
+    }
     cur += cb;
   }
 

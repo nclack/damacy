@@ -1,0 +1,233 @@
+// End-to-end smoke test for damacy with blosc-encoded zarr inputs.
+// Mirrors test_damacy.c but drives the blosc1 GPU pipeline path
+// (parse + scan + emit + nvcomp + (un)shuffle + assemble).
+//
+// Test cases:
+//   test_full_array_blosc_zstd          — single zarr, blosc(zstd) codec
+//   test_full_array_blosc_lz4           — single zarr, blosc(lz4) codec
+//   test_partial_crossing_chunks_blosc  — sub-window across 4 blosc-lz4 chunks
+//   test_mixed_codec_batch              — raw-zstd + blosc-lz4 in one batch
+
+#include "damacy.h"
+#include "fixture.h"
+
+#include <cuda_runtime.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+static uint16_t
+expected_u16_2d(int64_t y, int64_t x, int64_t cols, int64_t off)
+{
+  return (uint16_t)((uint64_t)(y * cols + x + off) & 0xFFFFu);
+}
+
+static struct damacy_config
+mk_cfg(const char* root, uint32_t batch_size)
+{
+  return (struct damacy_config){
+    .store_root = root,
+    .batch_size = batch_size,
+    .lookahead_batches = 2,
+    .n_io_threads = 1,
+    .host_buffer_bytes = 1ull << 20,
+    .device_buffer_bytes = 1ull << 20,
+    .n_zarrs_meta_cache = 4,
+    .n_shards_meta_cache = 4,
+    .dtype = DAMACY_U16,
+  };
+}
+
+static struct damacy_sample
+mk_sample(const char* uri, int64_t y0, int64_t y1, int64_t x0, int64_t x1)
+{
+  struct damacy_sample s = { .uri = uri, .aabb = { .rank = 2 } };
+  s.aabb.dims[0] = (struct damacy_interval){ .beg = y0, .end = y1 };
+  s.aabb.dims[1] = (struct damacy_interval){ .beg = x0, .end = x1 };
+  return s;
+}
+
+static int
+mkdtemp_root(char* root, size_t cap)
+{
+  if (cap < sizeof "/tmp/damacy_blosc_XXXXXX")
+    return 1;
+  strcpy(root, "/tmp/damacy_blosc_XXXXXX");
+  return mkdtemp(root) ? 0 : 1;
+}
+
+// Push one sample, pop the resulting size-1 batch, copy to host.
+static int
+run_one(struct damacy* d,
+        struct damacy_sample s,
+        uint16_t* out,
+        size_t out_capacity_elements,
+        size_t* out_n_elements)
+{
+  struct damacy_sample_slice slice = { .beg = &s, .end = &s + 1 };
+  struct damacy_push_result pr = damacy_push(d, slice);
+  EXPECT(pr.status == DAMACY_OK);
+
+  struct damacy_batch* b = NULL;
+  EXPECT(damacy_pop(d, &b) == DAMACY_OK);
+
+  struct damacy_batch_info info;
+  damacy_batch_info(b, &info);
+  EXPECT(info.rank == 3);
+  EXPECT(info.dtype == DAMACY_U16);
+  EXPECT(info.shape[0] == 1);
+  size_t n_elements = (size_t)info.shape[1] * (size_t)info.shape[2];
+  EXPECT(n_elements <= out_capacity_elements);
+  EXPECT(cudaMemcpy(out,
+                    info.device_ptr,
+                    n_elements * sizeof(uint16_t),
+                    cudaMemcpyDeviceToHost) == cudaSuccess);
+  *out_n_elements = n_elements;
+  damacy_release(d, b);
+  return 0;
+}
+
+// Drive the full damacy pipeline against a zarr written with `codec`,
+// reading the entire array as a single sample and verifying byte content.
+static int
+run_full_array(const char* codec)
+{
+  char root[64];
+  EXPECT(mkdtemp_root(root, sizeof root) == 0);
+  char p[256];
+  snprintf(p, sizeof p, "%s/foo", root);
+  // 16×32 uint16 = 1 KB; inner 8×16 = 256 B per chunk; 4 chunks per
+  // shard. Big enough that blosc compresses with shuffle+lz4/zstd.
+  int64_t shape[2] = { 16, 32 }, inner[2] = { 8, 16 }, shard[2] = { 16, 32 };
+  EXPECT(fixture_write_zarr_codec(
+           p, shape, inner, shard, 2, "uint16", 0, codec) == 0);
+
+  struct damacy_config cfg = mk_cfg(root, 1);
+  struct damacy* d = NULL;
+  EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
+
+  uint16_t out[16 * 32] = { 0 };
+  size_t got = 0;
+  if (run_one(d, mk_sample("foo", 0, 16, 0, 32), out, 16 * 32, &got))
+    return 1;
+  EXPECT(got == 16 * 32);
+  for (int y = 0; y < 16; ++y)
+    for (int x = 0; x < 32; ++x)
+      EXPECT(out[y * 32 + x] == expected_u16_2d(y, x, 32, 0));
+
+  damacy_destroy(d);
+  fixture_rm_tree(root);
+  return 0;
+}
+
+static int
+test_full_array_blosc_zstd(void)
+{
+  return run_full_array("blosc-zstd");
+}
+
+static int
+test_full_array_blosc_lz4(void)
+{
+  return run_full_array("blosc-lz4");
+}
+
+// Sub-window y[3,11) x[5,27) crosses the 2x2 inner-chunk grid;
+// exercises the blosc-lz4 + shuffle path with partial intersections.
+static int
+test_partial_crossing_chunks_blosc(void)
+{
+  char root[64];
+  EXPECT(mkdtemp_root(root, sizeof root) == 0);
+  char p[256];
+  snprintf(p, sizeof p, "%s/foo", root);
+  int64_t shape[2] = { 16, 32 }, inner[2] = { 8, 16 }, shard[2] = { 16, 32 };
+  EXPECT(fixture_write_zarr_codec(
+           p, shape, inner, shard, 2, "uint16", 0, "blosc-lz4") == 0);
+
+  struct damacy_config cfg = mk_cfg(root, 1);
+  struct damacy* d = NULL;
+  EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
+
+  const int H = 8, W = 22;
+  uint16_t out[8 * 22] = { 0 };
+  size_t got = 0;
+  if (run_one(d, mk_sample("foo", 3, 11, 5, 27), out, H * W, &got))
+    return 1;
+  EXPECT(got == (size_t)(H * W));
+  for (int y = 0; y < H; ++y)
+    for (int x = 0; x < W; ++x)
+      EXPECT(out[y * W + x] == expected_u16_2d(3 + y, 5 + x, 32, 0));
+
+  damacy_destroy(d);
+  fixture_rm_tree(root);
+  return 0;
+}
+
+// Two zarrs with different codecs (raw-zstd, blosc-lz4); one sample
+// from each in a batch_size=2 batch. The wave will mix codec_ids; the
+// blosc1 GPU pipeline must dispatch both to the unified Zstd batch and
+// LZ4 batch on parallel streams.
+static int
+test_mixed_codec_batch(void)
+{
+  char root[64];
+  EXPECT(mkdtemp_root(root, sizeof root) == 0);
+  char pa[256], pb[256];
+  snprintf(pa, sizeof pa, "%s/a", root);
+  snprintf(pb, sizeof pb, "%s/b", root);
+  int64_t shape[2] = { 16, 32 }, inner[2] = { 8, 16 }, shard[2] = { 16, 32 };
+  EXPECT(fixture_write_zarr_codec(
+           pa, shape, inner, shard, 2, "uint16", 0, "zstd") == 0);
+  EXPECT(fixture_write_zarr_codec(
+           pb, shape, inner, shard, 2, "uint16", 1000, "blosc-lz4") == 0);
+
+  struct damacy_config cfg = mk_cfg(root, 2);
+  struct damacy* d = NULL;
+  EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
+
+  struct damacy_sample s[2] = {
+    mk_sample("a", 0, 16, 0, 32),
+    mk_sample("b", 0, 16, 0, 32),
+  };
+  struct damacy_sample_slice slice = { .beg = s, .end = s + 2 };
+  struct damacy_push_result pr = damacy_push(d, slice);
+  EXPECT(pr.status == DAMACY_OK);
+
+  struct damacy_batch* b = NULL;
+  EXPECT(damacy_pop(d, &b) == DAMACY_OK);
+  struct damacy_batch_info info;
+  damacy_batch_info(b, &info);
+  EXPECT(info.shape[0] == 2);
+  EXPECT(info.shape[1] == 16);
+  EXPECT(info.shape[2] == 32);
+
+  uint16_t out[2 * 16 * 32] = { 0 };
+  EXPECT(cudaMemcpy(out, info.device_ptr, sizeof out, cudaMemcpyDeviceToHost) ==
+         cudaSuccess);
+  for (int y = 0; y < 16; ++y) {
+    for (int x = 0; x < 32; ++x) {
+      EXPECT(out[0 * 16 * 32 + y * 32 + x] == expected_u16_2d(y, x, 32, 0));
+      EXPECT(out[1 * 16 * 32 + y * 32 + x] == expected_u16_2d(y, x, 32, 1000));
+    }
+  }
+  damacy_release(d, b);
+
+  damacy_destroy(d);
+  fixture_rm_tree(root);
+  return 0;
+}
+
+int
+main(void)
+{
+  RUN(test_full_array_blosc_zstd);
+  RUN(test_full_array_blosc_lz4);
+  RUN(test_partial_crossing_chunks_blosc);
+  RUN(test_mixed_codec_batch);
+  log_info("all tests passed");
+  return 0;
+}
