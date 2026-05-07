@@ -24,16 +24,5 @@
 // records too much.
 #define DAMACY_MAX_PATH 224
 
-// Per-chunk blosc1 caps. The blosc1 wrapper splits each chunk into 1+
-// blocks of fixed `blocksize` (encoder picks; typically 64 KB). With our
-// chunk-size cap of ~1 MB and a 64 KB lower-bound blocksize, 16 blocks
-// covers any chunk we'll see in practice. Bumped guardrails kick in if a
-// real-world dataset blows past either; the GPU parser rejects with
-// DAMACY_DECODE.
-#define DAMACY_MAX_BLOCKS_PER_CHUNK 16u
-
-// Maximum element size used by blosc shuffle/bitshuffle. Values beyond
-// 8 don't appear in the codec wild (blosc1 stores typesize in a uint8
-// header byte but in practice it's 1, 2, 4, or 8 — element sizes of
-// common dtypes). Sized so the lz4 split factor stays bounded.
-#define DAMACY_MAX_TYPESIZE 8u
+#define DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK 16u
+#define DAMACY_BLOSC_MAX_TYPESIZE 8u

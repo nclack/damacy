@@ -6,19 +6,12 @@
 
 #include <stdint.h>
 
-// Inner-codec subset we actually parse out of zarr.json. The blosc
-// variants are inner-codec-resolved at parse time from the
-// `configuration.cname` of a "blosc" codec entry — by the time the tag
-// reaches the decoder we already know which nvcomp batched call to
-// dispatch. Per-chunk blosc parameters (typesize, shuffle, blocksize)
-// are NOT carried here; they live in the chunk's blosc1 header bytes
-// and are read at wave-decode time.
 enum compression_codec
 {
   CODEC_NONE = 0,
   CODEC_ZSTD = 1,
-  CODEC_BLOSC_LZ4 = 2,  // blosc1 wrapper, inner = lz4 / lz4hc (compformat 1)
-  CODEC_BLOSC_ZSTD = 3, // blosc1 wrapper, inner = zstd          (compformat 4)
+  CODEC_BLOSC_LZ4 = 2,
+  CODEC_BLOSC_ZSTD = 3,
 };
 
 struct codec_config

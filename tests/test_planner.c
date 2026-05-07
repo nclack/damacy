@@ -43,11 +43,7 @@ static const char* MINIMAL_ZARR_JSON =
   "\"index_location\":\"end\"}}]"
   "}";
 
-// Same shape/layout as MINIMAL_ZARR_JSON but the inner codec is "blosc"
-// with a configurable cname. %s is the cname ("lz4", "lz4hc", "zstd").
-// Used by test_codec_id_blosc_* to verify parse_inner_codec resolves
-// the inner cname into a CODEC_BLOSC_* tag and the planner propagates
-// it to chunk_plan.codec_id.
+// Same as MINIMAL_ZARR_JSON but inner codec is "blosc"; %s is the cname.
 static const char* BLOSC_ZARR_JSON_FMT =
   "{"
   "\"zarr_format\":3,"
@@ -200,7 +196,6 @@ test_single_chunk_aligned(void)
   EXPECT(chunks[0].read_op_idx == 0);
   EXPECT(chunks[0].sample_idx_in_batch == 0);
   EXPECT(chunks[0].chunk_d[0] == 0 && chunks[0].chunk_d[1] == 0);
-  // Fixture zarr.json declares the inner codec as "zstd" → CODEC_ZSTD.
   EXPECT(chunks[0].codec_id == CODEC_ZSTD);
 
   // Sample plan: rank 2, N=[1,1] (one chunk), S=[2,4], aabb_extent=[2,4],
@@ -413,8 +408,6 @@ test_page_alignment(void)
   return 0;
 }
 
-// Verify parse_inner_codec maps blosc cname → CODEC_BLOSC_* and the
-// planner stamps the resolved tag onto every chunk_plan it emits.
 static int
 run_blosc_codec_id_case(const char* cname, uint8_t expected_codec_id)
 {

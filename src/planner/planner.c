@@ -147,7 +147,7 @@ struct emit_ctx
   const uint64_t* chunk_lo;            // [meta->rank], first chunk for sample
   uint32_t sample_idx_in_batch;
   uint16_t batch_pool_slot;
-  uint8_t codec_id;              // enum compression_codec, copied from meta
+  uint8_t codec_id;
   uint32_t decompressed_n_bytes; // == inner_chunk_bytes(meta) (validated)
   uint64_t page_alignment_bytes;
   // per-shard

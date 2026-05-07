@@ -47,9 +47,6 @@ parse_data_type(struct json_node n, enum dtype* out)
   return dtype_from_zarr_string(n.s.beg, cslice_len(n.s), out);
 }
 
-// Read the "cname" string out of a blosc codec configuration and map
-// it to the inner-codec-resolved tag. Unsupported cnames (zlib, snappy)
-// or anything we can't decode on the GPU return 1.
 static int
 resolve_blosc_cname(struct json_node codec_obj, struct codec_config* out)
 {
@@ -70,14 +67,11 @@ resolve_blosc_cname(struct json_node codec_obj, struct codec_config* out)
     out->id = CODEC_BLOSC_ZSTD;
     return 0;
   }
-  return 1; // zlib / snappy / unknown — not GPU-decodable
+  return 1;
 }
 
 // Find the inner codec inside the sharding_indexed codec's "codecs"
-// array. Skips "bytes" entries. Recognizes:
-//   - "zstd"   → CODEC_ZSTD
-//   - "blosc"  → CODEC_BLOSC_LZ4 / CODEC_BLOSC_ZSTD via configuration.cname
-// Returns 0 on success.
+// array. Skips "bytes" entries. Returns 0 on success.
 static int
 parse_inner_codec(struct json_node codecs_arr, struct codec_config* out)
 {

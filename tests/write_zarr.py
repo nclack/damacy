@@ -12,13 +12,7 @@ Content is a deterministic row-major linearization (data[i] = (i + offset)
 masked to the dtype's range) so C tests can reconstruct the expected
 value at any (y, x, ...) without needing a shared RNG.
 
-Used by tests/test_damacy.c (and tests/test_damacy_blosc.c, when added)
-via tests/fixture.c::fixture_write_zarr.
-
---codec selects the inner codec inside the sharding_indexed wrapper:
-  zstd        zarr.codecs.ZstdCodec         (default, matches existing tests)
-  blosc-zstd  zarr.codecs.BloscCodec(cname="zstd")
-  blosc-lz4   zarr.codecs.BloscCodec(cname="lz4")
+Used by tests/test_damacy.c via tests/fixture.c::fixture_write_zarr.
 """
 import argparse
 import sys
