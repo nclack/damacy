@@ -15,9 +15,9 @@
   },
   "sampling": {
     "sample_shape": [128, 128, 128],
-    "n_batches": 50,
-    "n_warmup_batches": 5,
-    "batch_size": 256,
+    "n_batches": 10,
+    "n_warmup_batches": 2,
+    "batch_size": 32,
     "seed": 1234
   },
   "pipeline": {
