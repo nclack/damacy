@@ -41,7 +41,11 @@ def main() -> int:
     args = ap.parse_args()
 
     scenario = args.scenario or args.results.parent.parent.name
-    prefix = f"{args.runner}/{scenario}" if args.runner else scenario
+    # Reject empty/whitespace runner explicitly so we never publish
+    # leading-slash metric names like "/default/throughput", which would
+    # pollute the gh-pages history with un-segregable rows.
+    runner = (args.runner or "").strip() or None
+    prefix = f"{runner}/{scenario}" if runner else scenario
     r = json.loads(args.results.read_text())
     timings = r.get("timings_ms", {})
     derived = r.get("derived", {})
@@ -51,7 +55,7 @@ def main() -> int:
         s = stages.get(name)
         if s is None or s.get("count", 0) == 0:
             return None
-        return s["ms_avg"]
+        return s.get("ms_avg")
 
     smaller: list[dict] = []
     for key in ("init", "time_to_first_batch", "wall"):
@@ -61,7 +65,15 @@ def main() -> int:
                 "unit": "ms",
                 "value": timings[key],
             })
-    for stage in ("io", "h2d", "decompress", "assemble"):
+    # Aggregate decompress + per-codec sub-stages. The mixed scenario
+    # exercises zstd and blosc-zstd; tracking only the aggregate would
+    # hide codec-specific regressions.
+    tracked_stages = (
+        "io", "h2d", "decompress", "assemble",
+        "decompress.parse", "decompress.zstd",
+        "decompress.lz4", "decompress.post",
+    )
+    for stage in tracked_stages:
         v = stage_avg(stage)
         if v is not None:
             smaller.append({
