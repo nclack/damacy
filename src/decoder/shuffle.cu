@@ -1,6 +1,7 @@
 #include "decoder/shuffle.h"
 
 #include "damacy_limits.h"
+#include "decoder/launch_check.h"
 #include "log/log.h"
 
 #include <cuda_runtime.h>
@@ -56,15 +57,6 @@ gpu_unshuffle_kernel(const struct gpu_shuffle_op* __restrict__ ops,
   }
 }
 
-cudaError_t
-launch_status_check(const char* tag)
-{
-  cudaError_t e = cudaGetLastError();
-  if (e != cudaSuccess)
-    log_error("%s: %s", tag, cudaGetErrorString(e));
-  return e;
-}
-
 } // namespace
 
 extern "C" int
@@ -83,5 +75,6 @@ gpu_unshuffle_launch(CUstream stream,
   dim3 grid(DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK, n_ops, 1);
   gpu_unshuffle_kernel<<<grid, kThreadsPerBlock, 0, (cudaStream_t)stream>>>(
     d_ops, (const uint8_t*)dev_decompressed_base, (uint8_t*)scratch_base);
-  return launch_status_check("gpu_unshuffle_launch") == cudaSuccess ? 0 : 1;
+  return decoder_launch_status_check("gpu_unshuffle_launch") == cudaSuccess ? 0
+                                                                            : 1;
 }

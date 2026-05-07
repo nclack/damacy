@@ -63,13 +63,17 @@ extern "C"
     uint32_t nblocks;
   };
 
+  // Per-chunk op counts. n_unshuffle / n_bitunshuffle are 0 or 1; the
+  // others can grow to substream counts. The exclusive scan in
+  // blosc1_scan_offsets_kernel sums these into blosc1_totals (which uses
+  // matching n_* names).
   struct blosc1_chunk_counts
   {
     uint32_t n_zstd;
     uint32_t n_lz4;
     uint32_t n_memcpy;
-    uint32_t has_unshuffle;
-    uint32_t has_bitunshuffle;
+    uint32_t n_unshuffle;
+    uint32_t n_bitunshuffle;
   };
 
   struct blosc1_chunk_offsets

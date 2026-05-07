@@ -1,7 +1,7 @@
 #include "decoder/blosc1.h"
 
 #include "damacy_limits.h"
-#include "log/log.h"
+#include "decoder/launch_check.h"
 #include "zarr/zarr_metadata.h"
 
 #include <cuda_runtime.h>
@@ -148,8 +148,8 @@ blosc1_parse_and_count_kernel(const struct blosc1_chunk_input* __restrict__ in,
       else
         c.n_zstd = n_codec;
       c.n_memcpy = n_raw;
-      c.has_unshuffle = h.shuffle;
-      c.has_bitunshuffle = h.bitshuffle;
+      c.n_unshuffle = h.shuffle;
+      c.n_bitunshuffle = h.bitshuffle;
     }
   } else {
     h.err = 8;
@@ -207,15 +207,15 @@ blosc1_scan_offsets_kernel(
   uint32_t z_ex = warp_exclusive_scan_u32(c.n_zstd, lane);
   uint32_t l_ex = warp_exclusive_scan_u32(c.n_lz4, lane);
   uint32_t m_ex = warp_exclusive_scan_u32(c.n_memcpy, lane);
-  uint32_t u_ex = warp_exclusive_scan_u32(c.has_unshuffle, lane);
-  uint32_t b_ex = warp_exclusive_scan_u32(c.has_bitunshuffle, lane);
+  uint32_t u_ex = warp_exclusive_scan_u32(c.n_unshuffle, lane);
+  uint32_t b_ex = warp_exclusive_scan_u32(c.n_bitunshuffle, lane);
 
   if (lane == 31u) {
     warp_z[warp] = z_ex + c.n_zstd;
     warp_l[warp] = l_ex + c.n_lz4;
     warp_m[warp] = m_ex + c.n_memcpy;
-    warp_u[warp] = u_ex + c.has_unshuffle;
-    warp_b[warp] = b_ex + c.has_bitunshuffle;
+    warp_u[warp] = u_ex + c.n_unshuffle;
+    warp_b[warp] = b_ex + c.n_bitunshuffle;
   }
   __syncthreads();
 
@@ -261,8 +261,8 @@ blosc1_scan_offsets_kernel(
     totals->n_zstd = z_ex + c.n_zstd;
     totals->n_lz4 = l_ex + c.n_lz4;
     totals->n_memcpy = m_ex + c.n_memcpy;
-    totals->n_unshuffle = u_ex + c.has_unshuffle;
-    totals->n_bitunshuffle = b_ex + c.has_bitunshuffle;
+    totals->n_unshuffle = u_ex + c.n_unshuffle;
+    totals->n_bitunshuffle = b_ex + c.n_bitunshuffle;
   }
 }
 
@@ -475,15 +475,6 @@ blosc1_emit_fanout_kernel(
   }
 }
 
-cudaError_t
-launch_status_check(const char* tag)
-{
-  cudaError_t e = cudaGetLastError();
-  if (e != cudaSuccess)
-    log_error("%s: %s", tag, cudaGetErrorString(e));
-  return e;
-}
-
 } // namespace
 
 extern "C" int
@@ -497,7 +488,8 @@ blosc1_parse_and_count_launch(CUstream stream,
     return 0;
   blosc1_parse_and_count_kernel<<<n_chunks, 32, 0, (cudaStream_t)stream>>>(
     d_inputs, d_hdrs, d_counts, n_chunks);
-  return launch_status_check("blosc1_parse_and_count_launch") == cudaSuccess
+  return decoder_launch_status_check("blosc1_parse_and_count_launch") ==
+             cudaSuccess
            ? 0
            : 1;
 }
@@ -520,8 +512,10 @@ blosc1_scan_offsets_launch(CUstream stream,
   }
   blosc1_scan_offsets_kernel<<<1, kScanBlockSize, 0, (cudaStream_t)stream>>>(
     d_counts, d_offsets, d_totals, n_chunks);
-  return launch_status_check("blosc1_scan_offsets_launch") == cudaSuccess ? 0
-                                                                          : 1;
+  return decoder_launch_status_check("blosc1_scan_offsets_launch") ==
+             cudaSuccess
+           ? 0
+           : 1;
 }
 
 extern "C" int
@@ -550,6 +544,7 @@ blosc1_emit_fanout_launch(CUstream stream,
                                                       d_unshuffle_ops,
                                                       d_bitunshuffle_ops,
                                                       n_chunks);
-  return launch_status_check("blosc1_emit_fanout_launch") == cudaSuccess ? 0
-                                                                         : 1;
+  return decoder_launch_status_check("blosc1_emit_fanout_launch") == cudaSuccess
+           ? 0
+           : 1;
 }
