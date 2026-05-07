@@ -18,6 +18,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Serialize against bench / test on the shared self-hosted GPU runner —
+# concurrent CUDA work contaminates bench throughput measurements.
+concurrency:
+  group: gpu-runner
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: [self-hosted, gpu]
