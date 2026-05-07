@@ -6,24 +6,50 @@
 #   "zarr>=3",
 # ]
 # ///
-"""Write a synthetic sharded zstd zarr v3 array for damacy tests.
+"""Write a synthetic sharded zarr v3 array for damacy tests.
 
 Content is a deterministic row-major linearization (data[i] = (i + offset)
 masked to the dtype's range) so C tests can reconstruct the expected
 value at any (y, x, ...) without needing a shared RNG.
 
-Used by tests/test_damacy.c via tests/fixture.c::fixture_write_zarr.
+Used by tests/test_damacy.c (and tests/test_damacy_blosc.c, when added)
+via tests/fixture.c::fixture_write_zarr.
+
+--codec selects the inner codec inside the sharding_indexed wrapper:
+  zstd        zarr.codecs.ZstdCodec         (default, matches existing tests)
+  blosc-zstd  zarr.codecs.BloscCodec(cname="zstd")
+  blosc-lz4   zarr.codecs.BloscCodec(cname="lz4")
 """
 import argparse
 import sys
 
 import numpy as np
 import zarr
-from zarr.codecs import ZstdCodec
+from zarr.codecs import BloscCname, BloscCodec, BloscShuffle, ZstdCodec
 
 
 def parse_shape(s: str) -> tuple[int, ...]:
     return tuple(int(x) for x in s.split(","))
+
+
+def make_compressors(codec: str, dtype: np.dtype):
+    if codec == "zstd":
+        return [ZstdCodec(level=3, checksum=False)]
+    if codec == "blosc-zstd":
+        return [BloscCodec(
+            cname=BloscCname.zstd,
+            clevel=3,
+            shuffle=BloscShuffle.shuffle,
+            typesize=int(dtype.itemsize),
+        )]
+    if codec == "blosc-lz4":
+        return [BloscCodec(
+            cname=BloscCname.lz4,
+            clevel=3,
+            shuffle=BloscShuffle.shuffle,
+            typesize=int(dtype.itemsize),
+        )]
+    raise SystemExit(f"unknown --codec {codec!r}")
 
 
 def main() -> int:
@@ -37,6 +63,9 @@ def main() -> int:
     ap.add_argument("--dtype", default="uint16")
     ap.add_argument("--offset", type=int, default=0,
                     help="added to each element before dtype masking")
+    ap.add_argument("--codec", default="zstd",
+                    choices=["zstd", "blosc-zstd", "blosc-lz4"],
+                    help="inner codec inside the sharding wrapper")
     args = ap.parse_args()
 
     if not (len(args.shape) == len(args.inner) == len(args.shard)):
@@ -63,7 +92,7 @@ def main() -> int:
         dtype=np_dtype,
         chunks=args.inner,
         shards=args.shard,
-        compressors=[ZstdCodec(level=3, checksum=False)],
+        compressors=make_compressors(args.codec, np_dtype),
     )
     arr[...] = data
     return 0

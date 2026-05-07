@@ -147,6 +147,7 @@ struct emit_ctx
   const uint64_t* chunk_lo;            // [meta->rank], first chunk for sample
   uint32_t sample_idx_in_batch;
   uint16_t batch_pool_slot;
+  uint8_t codec_id;              // enum compression_codec, copied from meta
   uint32_t decompressed_n_bytes; // == inner_chunk_bytes(meta) (validated)
   uint64_t page_alignment_bytes;
   // per-shard
@@ -217,6 +218,7 @@ emit_chunk(const struct emit_ctx* ctx,
     .decompressed_nbytes = ctx->decompressed_n_bytes,
     .batch_pool_slot = ctx->batch_pool_slot,
     .sample_idx_in_batch = (uint16_t)ctx->sample_idx_in_batch,
+    .codec_id = ctx->codec_id,
   };
   for (uint8_t d = 0; d < meta->rank; ++d)
     cp->chunk_d[d] = (uint32_t)(chunk_coord[d] - ctx->chunk_lo[d]);
@@ -313,6 +315,7 @@ planner_plan(struct planner* self,
       .chunk_lo = chunk_lo,
       .sample_idx_in_batch = sample_idx,
       .batch_pool_slot = batch_pool_slot,
+      .codec_id = (uint8_t)meta->inner_codec.id,
       .decompressed_n_bytes = (uint32_t)decompressed_n_bytes,
       .page_alignment_bytes = self->cfg.page_alignment,
     };

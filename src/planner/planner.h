@@ -65,6 +65,12 @@ extern "C"
   // Per-chunk plan. Carries IO/decompress fields plus assemble-side
   // chunk_d (grid position within sample, 0..N[d]) and sample_idx so
   // the kernel can look up the sample_plan.
+  //
+  // codec_id holds enum compression_codec resolved from zarr.json at
+  // planner time (raw zstd vs blosc-lz4 vs blosc-zstd vs raw bytes).
+  // The decoder dispatches per-chunk on this tag; per-chunk blosc
+  // parameters (typesize, shuffle, blocksize) come from the chunk's
+  // own blosc1 header at wave-decode time.
   struct chunk_plan
   {
     uint32_t read_op_idx;
@@ -73,7 +79,9 @@ extern "C"
     uint32_t decompressed_nbytes;
     uint32_t dev_decompressed_offset; // scheduler-assigned (per wave)
     uint16_t batch_pool_slot;
-    uint16_t sample_idx_in_batch;      // index into planner_output.sample_plans
+    uint16_t sample_idx_in_batch; // index into planner_output.sample_plans
+    uint8_t codec_id;             // enum compression_codec
+    uint8_t _pad[3];
     uint32_t chunk_d[DAMACY_MAX_RANK]; // grid position within sample (0..N)
   };
 

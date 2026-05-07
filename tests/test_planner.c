@@ -8,6 +8,7 @@
 #include "planner/planner.h"
 #include "store/store.h"
 #include "zarr/zarr_meta_cache.h"
+#include "zarr/zarr_metadata.h"
 #include "zarr/zarr_shard_cache.h"
 #include "zarr/zarr_shard_index.h"
 
@@ -42,6 +43,33 @@ static const char* MINIMAL_ZARR_JSON =
   "\"index_location\":\"end\"}}]"
   "}";
 
+// Same shape/layout as MINIMAL_ZARR_JSON but the inner codec is "blosc"
+// with a configurable cname. %s is the cname ("lz4", "lz4hc", "zstd").
+// Used by test_codec_id_blosc_* to verify parse_inner_codec resolves
+// the inner cname into a CODEC_BLOSC_* tag and the planner propagates
+// it to chunk_plan.codec_id.
+static const char* BLOSC_ZARR_JSON_FMT =
+  "{"
+  "\"zarr_format\":3,"
+  "\"node_type\":\"array\","
+  "\"shape\":[4,8],"
+  "\"data_type\":\"uint16\","
+  "\"chunk_grid\":{\"name\":\"regular\",\"configuration\":{"
+  "\"chunk_shape\":[4,8]}},"
+  "\"chunk_key_encoding\":{\"name\":\"default\",\"configuration\":{"
+  "\"separator\":\"/\"}},"
+  "\"fill_value\":0,"
+  "\"codecs\":[{\"name\":\"sharding_indexed\",\"configuration\":{"
+  "\"chunk_shape\":[2,4],"
+  "\"codecs\":[{\"name\":\"bytes\",\"configuration\":{\"endian\":\"little\"}},"
+  "{\"name\":\"blosc\",\"configuration\":{"
+  "\"cname\":\"%s\",\"clevel\":3,\"shuffle\":\"shuffle\","
+  "\"typesize\":2,\"blocksize\":0}}],"
+  "\"index_codecs\":[{\"name\":\"bytes\",\"configuration\":{"
+  "\"endian\":\"little\"}},{\"name\":\"crc32c\"}],"
+  "\"index_location\":\"end\"}}]"
+  "}";
+
 // Common fixture: tmpdir + foo array + one shard with 4 entries.
 struct fixture
 {
@@ -53,7 +81,10 @@ struct fixture
 };
 
 static int
-fixture_init(struct fixture* f, const uint64_t* offsets, const uint64_t* nbytes)
+fixture_init_with_json(struct fixture* f,
+                       const char* zarr_json,
+                       const uint64_t* offsets,
+                       const uint64_t* nbytes)
 {
   strcpy(f->root, "/tmp/damacy_planner_XXXXXX");
   EXPECT(mkdtemp(f->root));
@@ -61,7 +92,7 @@ fixture_init(struct fixture* f, const uint64_t* offsets, const uint64_t* nbytes)
   snprintf(p, sizeof p, "%s/foo", f->root);
   EXPECT(mkdir(p, 0755) == 0);
   snprintf(p, sizeof p, "%s/foo/zarr.json", f->root);
-  EXPECT(fixture_write_file(p, MINIMAL_ZARR_JSON) == 0);
+  EXPECT(fixture_write_file(p, zarr_json) == 0);
   snprintf(p, sizeof p, "%s/foo/c", f->root);
   EXPECT(mkdir(p, 0755) == 0);
   snprintf(p, sizeof p, "%s/foo/c/0", f->root);
@@ -85,6 +116,12 @@ fixture_init(struct fixture* f, const uint64_t* offsets, const uint64_t* nbytes)
   };
   EXPECT(planner_create(&pcfg, &f->planner) == DAMACY_OK);
   return 0;
+}
+
+static int
+fixture_init(struct fixture* f, const uint64_t* offsets, const uint64_t* nbytes)
+{
+  return fixture_init_with_json(f, MINIMAL_ZARR_JSON, offsets, nbytes);
 }
 
 static void
@@ -163,6 +200,8 @@ test_single_chunk_aligned(void)
   EXPECT(chunks[0].read_op_idx == 0);
   EXPECT(chunks[0].sample_idx_in_batch == 0);
   EXPECT(chunks[0].chunk_d[0] == 0 && chunks[0].chunk_d[1] == 0);
+  // Fixture zarr.json declares the inner codec as "zstd" → CODEC_ZSTD.
+  EXPECT(chunks[0].codec_id == CODEC_ZSTD);
 
   // Sample plan: rank 2, N=[1,1] (one chunk), S=[2,4], aabb_extent=[2,4],
   // aabb_lo_relative=[0,0] (sample starts at chunk grid origin).
@@ -374,6 +413,63 @@ test_page_alignment(void)
   return 0;
 }
 
+// Verify parse_inner_codec maps blosc cname → CODEC_BLOSC_* and the
+// planner stamps the resolved tag onto every chunk_plan it emits.
+static int
+run_blosc_codec_id_case(const char* cname, uint8_t expected_codec_id)
+{
+  char json[1024];
+  int n = snprintf(json, sizeof json, BLOSC_ZARR_JSON_FMT, cname);
+  EXPECT(n > 0 && (size_t)n < sizeof json);
+
+  const uint64_t offsets[4] = { 0, 100, 200, 300 };
+  const uint64_t nbytes[4] = { 32, 32, 32, 32 };
+  struct fixture f = { 0 };
+  if (fixture_init_with_json(&f, json, offsets, nbytes))
+    return 1;
+
+  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  int64_t dst_strides[3];
+  mk_dst_strides_2d(1, 4, 8, dst_strides);
+
+  struct read_op reads[8] = { 0 };
+  struct chunk_plan chunks[8] = { 0 };
+  struct sample_plan samples[4] = { 0 };
+  struct planner_output out = {
+    .read_ops = reads,
+    .read_ops_cap = 8,
+    .chunk_plans = chunks,
+    .chunk_plans_cap = 8,
+    .sample_plans = samples,
+    .sample_plans_cap = 4,
+  };
+  EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
+  EXPECT(out.n_chunk_plans == 4);
+  for (uint32_t i = 0; i < out.n_chunk_plans; ++i)
+    EXPECT(chunks[i].codec_id == expected_codec_id);
+
+  fixture_destroy(&f);
+  return 0;
+}
+
+static int
+test_codec_id_blosc_lz4(void)
+{
+  return run_blosc_codec_id_case("lz4", CODEC_BLOSC_LZ4);
+}
+
+static int
+test_codec_id_blosc_lz4hc(void)
+{
+  return run_blosc_codec_id_case("lz4hc", CODEC_BLOSC_LZ4);
+}
+
+static int
+test_codec_id_blosc_zstd(void)
+{
+  return run_blosc_codec_id_case("zstd", CODEC_BLOSC_ZSTD);
+}
+
 int
 main(void)
 {
@@ -382,6 +478,9 @@ main(void)
   RUN(test_two_samples_indices);
   RUN(test_empty_chunks_fail);
   RUN(test_page_alignment);
+  RUN(test_codec_id_blosc_lz4);
+  RUN(test_codec_id_blosc_lz4hc);
+  RUN(test_codec_id_blosc_zstd);
   log_info("all tests passed");
   return 0;
 }
