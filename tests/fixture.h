@@ -46,6 +46,17 @@ extern "C"
                          const char* dtype,
                          int64_t fill_offset);
 
+  // Same, but with a configurable inner codec. `codec` is one of "zstd",
+  // "blosc-zstd", "blosc-lz4" (matching tests/write_zarr.py --codec).
+  int fixture_write_zarr_codec(const char* path,
+                               const int64_t* shape,
+                               const int64_t* inner,
+                               const int64_t* shard,
+                               uint8_t rank,
+                               const char* dtype,
+                               int64_t fill_offset,
+                               const char* codec);
+
   // Best-effort recursive rmdir via "rm -rf". Caller must ensure `dir`
   // is a tmpdir under their control — there is no path sanitisation.
   void fixture_rm_tree(const char* dir);

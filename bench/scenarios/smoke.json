@@ -9,7 +9,8 @@
     "chunk_shape": [32, 128, 128],
     "shard_shape": [64, 512, 512],
     "dtype": "u16",
-    "zstd_level": 3,
+    "codecs": ["zstd"],
+    "clevel": 3,
     "entropy": 0.5,
     "seed": 42
   },

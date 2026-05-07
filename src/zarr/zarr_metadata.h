@@ -6,12 +6,12 @@
 
 #include <stdint.h>
 
-// Inner-codec subset we actually parse out of zarr.json. Extend as more
-// codecs are taught to the parser; today only NONE / ZSTD are recognized.
 enum compression_codec
 {
-  CODEC_NONE,
-  CODEC_ZSTD,
+  CODEC_NONE = 0,
+  CODEC_ZSTD = 1,
+  CODEC_BLOSC_LZ4 = 2,
+  CODEC_BLOSC_ZSTD = 3,
 };
 
 struct codec_config

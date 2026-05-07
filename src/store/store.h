@@ -6,9 +6,9 @@
 // Two access patterns:
 //   - store_read_submit / store_event_wait: positional reads for
 //     compressed chunk bytes. Runs on the store's io_queue with
-//     configurable concurrency. Internally the FS backend may use
-//     O_DIRECT and page-aligned coalescing; callers see only the logical
-//     reads they submitted.
+//     configurable concurrency. Each submitted read currently maps 1:1
+//     to a `pread` on a cached FD; planner-side coalescing of adjacent
+//     reads is on the roadmap (plan.md step 7).
 //   - store_map / store_unmap: whole-resource read-only view, intended
 //     for metadata (zarr.json) where a parser wants a contiguous buffer.
 #pragma once

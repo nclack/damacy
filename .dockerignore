@@ -40,6 +40,3 @@ docs/devlog.md
 # Docker self-references
 Dockerfile
 .dockerignore
-
-# Experiments tree (not part of the bench surface; keeps the context lean)
-experiments

@@ -99,12 +99,21 @@ extern "C"
     uint64_t host_buffer_bytes;   // pinned staging; sized for IO bw
     uint64_t device_buffer_bytes; // device decompress scratch
 
-    // LRU caps (no FD cache; FDs are open/close per read_op)
+    // LRU caps (FDs are cached per-key by the fs store; not bounded here).
     uint32_t n_zarrs_meta_cache;
     uint32_t n_shards_meta_cache;
 
     // Output dtype expected from all pushed samples; mismatched zarrs error.
     enum damacy_dtype dtype;
+
+    // Largest dtype size (bytes) the pipeline will accept across pushed
+    // zarrs. Bounds the blosc1-lz4 substream split and so sizes the LZ4
+    // fanout SOA + nvcomp temp scratch tighter than the
+    // DAMACY_BLOSC_MAX_TYPESIZE compile-time ceiling. 0 means "use the
+    // ceiling"; values > DAMACY_BLOSC_MAX_TYPESIZE are rejected at
+    // create time. Typical values: 2 (u16/i16/f16-only), 4 (32-bit),
+    // 8 (64-bit, the ceiling).
+    uint8_t max_bytes_per_element;
   };
 
   struct damacy;
@@ -191,6 +200,15 @@ extern "C"
     struct damacy_metric io;
     struct damacy_metric h2d;
     struct damacy_metric decompress;
+    // Sub-stages of decompress, summing to ~decompress.ms in the
+    // common case. parse: blosc1 parse + scan + emit + D2H of totals.
+    // zstd / lz4: per-codec nvcomp batch on its dedicated stream
+    // (only when n_zstd / n_lz4 > 0). post: memcpy + (bit)unshuffle on
+    // stream_compute after re-joining the parallel streams.
+    struct damacy_metric decompress_parse;
+    struct damacy_metric decompress_zstd;
+    struct damacy_metric decompress_lz4;
+    struct damacy_metric decompress_post;
     struct damacy_metric assemble;
     struct damacy_metric pop_wait_io;
     struct damacy_metric pop_wait_compute;

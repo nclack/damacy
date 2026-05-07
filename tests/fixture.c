@@ -85,15 +85,16 @@ append_csv_i64(char* dst, size_t cap, const int64_t* vals, uint8_t rank)
 }
 
 int
-fixture_write_zarr(const char* path,
-                   const int64_t* shape,
-                   const int64_t* inner,
-                   const int64_t* shard,
-                   uint8_t rank,
-                   const char* dtype,
-                   int64_t fill_offset)
+fixture_write_zarr_codec(const char* path,
+                         const int64_t* shape,
+                         const int64_t* inner,
+                         const int64_t* shard,
+                         uint8_t rank,
+                         const char* dtype,
+                         int64_t fill_offset,
+                         const char* codec)
 {
-  if (!path || !shape || !inner || !shard || !dtype || rank == 0)
+  if (!path || !shape || !inner || !shard || !dtype || !codec || rank == 0)
     return 1;
 
   char shape_csv[128] = { 0 };
@@ -108,17 +109,31 @@ fixture_write_zarr(const char* path,
   int n = snprintf(cmd,
                    sizeof cmd,
                    "uv run --script %s --out %s --shape %s --inner %s "
-                   "--shard %s --dtype %s --offset %lld",
+                   "--shard %s --dtype %s --offset %lld --codec %s",
                    WRITE_ZARR_SCRIPT,
                    path,
                    shape_csv,
                    inner_csv,
                    shard_csv,
                    dtype,
-                   (long long)fill_offset);
+                   (long long)fill_offset,
+                   codec);
   if (n < 0 || (size_t)n >= sizeof cmd)
     return 1;
   return system(cmd);
+}
+
+int
+fixture_write_zarr(const char* path,
+                   const int64_t* shape,
+                   const int64_t* inner,
+                   const int64_t* shard,
+                   uint8_t rank,
+                   const char* dtype,
+                   int64_t fill_offset)
+{
+  return fixture_write_zarr_codec(
+    path, shape, inner, shard, rank, dtype, fill_offset, "zstd");
 }
 
 void

@@ -73,7 +73,9 @@ extern "C"
     uint32_t decompressed_nbytes;
     uint32_t dev_decompressed_offset; // scheduler-assigned (per wave)
     uint16_t batch_pool_slot;
-    uint16_t sample_idx_in_batch;      // index into planner_output.sample_plans
+    uint16_t sample_idx_in_batch; // index into planner_output.sample_plans
+    uint8_t codec_id;
+    uint8_t _pad[3];
     uint32_t chunk_d[DAMACY_MAX_RANK]; // grid position within sample (0..N)
   };
 
