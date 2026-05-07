@@ -34,6 +34,7 @@ add_damacy_test(test_planner planner zarr_meta_cache zarr_shard_cache zarr store
 if(NOT DAMACY_FUZZ)
     add_damacy_test(test_damacy damacy test_fixture)
     add_damacy_test(test_damacy_blosc damacy test_fixture)
+    add_damacy_test(test_damacy_caps damacy decoder test_fixture CUDA::cuda_driver)
     add_damacy_test(test_assemble assemble CUDA::cuda_driver CUDA::cudart_static)
     add_damacy_test(test_decoder decoder CUDA::cuda_driver)
     add_damacy_test(test_blosc1 decoder zarr CUDA::cuda_driver)

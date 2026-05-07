@@ -92,6 +92,29 @@ decoder_zstd_d_statuses(const struct decoder_zstd* d)
 }
 
 int
+decoder_zstd_query_temp_bytes(size_t max_batch_size,
+                              size_t max_chunk_uncompressed_bytes,
+                              size_t max_total_uncompressed_bytes,
+                              size_t* out_bytes)
+{
+  CHECK(Fail, out_bytes);
+  CHECK(Fail, max_batch_size > 0);
+  CHECK(Fail, max_chunk_uncompressed_bytes > 0);
+  *out_bytes = 0;
+  nvcompBatchedZstdDecompressOpts_t opts =
+    nvcompBatchedZstdDecompressDefaultOpts;
+  NV(Fail,
+     nvcompBatchedZstdDecompressGetTempSizeAsync(max_batch_size,
+                                                 max_chunk_uncompressed_bytes,
+                                                 opts,
+                                                 out_bytes,
+                                                 max_total_uncompressed_bytes));
+  return 0;
+Fail:
+  return 1;
+}
+
+int
 decoder_zstd_batch_device(struct decoder_zstd* d,
                           CUstream stream,
                           const void* const* d_compressed,

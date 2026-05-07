@@ -87,6 +87,29 @@ decoder_lz4_d_statuses(const struct decoder_lz4* d)
 }
 
 int
+decoder_lz4_query_temp_bytes(size_t max_batch_size,
+                             size_t max_substream_uncompressed_bytes,
+                             size_t max_total_uncompressed_bytes,
+                             size_t* out_bytes)
+{
+  CHECK(Fail, out_bytes);
+  CHECK(Fail, max_batch_size > 0);
+  CHECK(Fail, max_substream_uncompressed_bytes > 0);
+  *out_bytes = 0;
+  nvcompBatchedLZ4DecompressOpts_t opts = nvcompBatchedLZ4DecompressDefaultOpts;
+  NV(
+    Fail,
+    nvcompBatchedLZ4DecompressGetTempSizeAsync(max_batch_size,
+                                               max_substream_uncompressed_bytes,
+                                               opts,
+                                               out_bytes,
+                                               max_total_uncompressed_bytes));
+  return 0;
+Fail:
+  return 1;
+}
+
+int
 decoder_lz4_batch_device(struct decoder_lz4* d,
                          CUstream stream,
                          const void* const* d_compressed,

@@ -114,6 +114,22 @@ extern "C"
     // create time. Typical values: 2 (u16/i16/f16-only), 4 (32-bit),
     // 8 (64-bit, the ceiling).
     uint8_t max_bytes_per_element;
+
+    // Largest uncompressed chunk size damacy will accept. nvcomp temp
+    // scratch is sized for this; chunks exceeding this at planner are
+    // rejected with DAMACY_INVAL. 0 means "use
+    // DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES (512 KB)"; values
+    // exceeding DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES (the kernel-array
+    // ceiling, 2 MB) are rejected at create time.
+    uint32_t max_chunk_uncompressed_bytes;
+
+    // Hard cap on total GPU memory damacy will allocate for wave-resident
+    // buffers and per-batch metadata. damacy_create returns DAMACY_OOM
+    // (with a log_error breakdown) if the wave config would exceed this.
+    // damacy_push returns DAMACY_OOM if the lazily-sized batch-output
+    // pool, computed from the first sample's AABB, would push past it.
+    // 0 = no cap (driver OOM, current behaviour).
+    uint64_t max_gpu_memory_bytes;
   };
 
   struct damacy;
