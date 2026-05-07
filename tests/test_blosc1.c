@@ -174,7 +174,9 @@ run_one(const struct fixture* fx, CUstream stream)
          CUDA_SUCCESS);
   EXPECT(cuMemAlloc(&d_lz4_decomp_sizes, kMaxSubs * sizeof(size_t)) ==
          CUDA_SUCCESS);
-  EXPECT(cuMemAlloc(&d_memcpy_ops, sizeof(struct gpu_memcpy_op)) ==
+  // memcpy ops can be emitted per-substream (any cb == per_stream_dst);
+  // size for the worst case rather than a single slot.
+  EXPECT(cuMemAlloc(&d_memcpy_ops, kMaxSubs * sizeof(struct gpu_memcpy_op)) ==
          CUDA_SUCCESS);
   EXPECT(cuMemAlloc(&d_unsh, sizeof(struct gpu_shuffle_op)) == CUDA_SUCCESS);
   EXPECT(cuMemAlloc(&d_bitunsh, sizeof(struct gpu_shuffle_op)) == CUDA_SUCCESS);
@@ -212,6 +214,23 @@ run_one(const struct fixture* fx, CUstream stream)
          CUDA_SUCCESS);
   EXPECT(cuStreamSynchronize(stream) == CUDA_SUCCESS);
   EXPECT(h_hdr.err == 0);
+
+  // Cross-check that the parser pulled the filter flags. Strings are
+  // load-bearing here: a flag-extraction bug would otherwise show up
+  // only as a wrong final memcmp, which is harder to localise.
+  if (strstr(fx->name, "_shuffle_")) {
+    EXPECT(h_hdr.shuffle == 1);
+    EXPECT(h_hdr.bitshuffle == 0);
+  } else if (strstr(fx->name, "_bitshuffle_")) {
+    EXPECT(h_hdr.shuffle == 0);
+    EXPECT(h_hdr.bitshuffle == 1);
+  } else {
+    EXPECT(h_hdr.shuffle == 0);
+    EXPECT(h_hdr.bitshuffle == 0);
+  }
+  // Pure-codec fixtures (no per-block raw fallback expected at clevel=5
+  // on this low-entropy data).
+  EXPECT(h_totals.n_memcpy == 0);
 
   size_t max_substream_uncompressed = h_hdr.blocksize ? h_hdr.blocksize : raw_n;
 
@@ -291,8 +310,7 @@ run_one(const struct fixture* fx, CUstream stream)
   cuMemFree(d_memcpy_ops);
   cuMemFree(d_unsh);
   cuMemFree(d_bitunsh);
-  if (d_scratch)
-    cuMemFree(d_scratch);
+  cuMemFree(d_scratch); // cuMemFree(0) is a no-op
   return 0;
 }
 

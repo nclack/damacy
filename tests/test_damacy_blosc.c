@@ -6,7 +6,7 @@
 //   test_full_array_blosc_zstd          — single zarr, blosc(zstd) codec
 //   test_full_array_blosc_lz4           — single zarr, blosc(lz4) codec
 //   test_partial_crossing_chunks_blosc  — sub-window across 4 blosc-lz4 chunks
-//   test_mixed_codec_batch              — raw-zstd + blosc-lz4 in one batch
+//   test_four_codecs_mixed_batch        — none + zstd + blosc-zstd + blosc-lz4
 
 #include "damacy.h"
 #include "fixture.h"
@@ -167,60 +167,6 @@ test_partial_crossing_chunks_blosc(void)
   return 0;
 }
 
-// Two zarrs with different codecs (raw-zstd, blosc-lz4); one sample
-// from each in a batch_size=2 batch. The wave will mix codec_ids; the
-// blosc1 GPU pipeline must dispatch both to the unified Zstd batch and
-// LZ4 batch on parallel streams.
-static int
-test_mixed_codec_batch(void)
-{
-  char root[64];
-  EXPECT(mkdtemp_root(root, sizeof root) == 0);
-  char pa[256], pb[256];
-  snprintf(pa, sizeof pa, "%s/a", root);
-  snprintf(pb, sizeof pb, "%s/b", root);
-  int64_t shape[2] = { 16, 32 }, inner[2] = { 8, 16 }, shard[2] = { 16, 32 };
-  EXPECT(fixture_write_zarr_codec(
-           pa, shape, inner, shard, 2, "uint16", 0, "zstd") == 0);
-  EXPECT(fixture_write_zarr_codec(
-           pb, shape, inner, shard, 2, "uint16", 1000, "blosc-lz4") == 0);
-
-  struct damacy_config cfg = mk_cfg(root, 2);
-  struct damacy* d = NULL;
-  EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
-
-  struct damacy_sample s[2] = {
-    mk_sample("a", 0, 16, 0, 32),
-    mk_sample("b", 0, 16, 0, 32),
-  };
-  struct damacy_sample_slice slice = { .beg = s, .end = s + 2 };
-  struct damacy_push_result pr = damacy_push(d, slice);
-  EXPECT(pr.status == DAMACY_OK);
-
-  struct damacy_batch* b = NULL;
-  EXPECT(damacy_pop(d, &b) == DAMACY_OK);
-  struct damacy_batch_info info;
-  damacy_batch_info(b, &info);
-  EXPECT(info.shape[0] == 2);
-  EXPECT(info.shape[1] == 16);
-  EXPECT(info.shape[2] == 32);
-
-  uint16_t out[2 * 16 * 32] = { 0 };
-  EXPECT(cudaMemcpy(out, info.device_ptr, sizeof out, cudaMemcpyDeviceToHost) ==
-         cudaSuccess);
-  for (int y = 0; y < 16; ++y) {
-    for (int x = 0; x < 32; ++x) {
-      EXPECT(out[0 * 16 * 32 + y * 32 + x] == expected_u16_2d(y, x, 32, 0));
-      EXPECT(out[1 * 16 * 32 + y * 32 + x] == expected_u16_2d(y, x, 32, 1000));
-    }
-  }
-  damacy_release(d, b);
-
-  damacy_destroy(d);
-  fixture_rm_tree(root);
-  return 0;
-}
-
 // Four zarrs (none, zstd, blosc-zstd, blosc-lz4), one sample each in a
 // batch_size=4 batch. All four codecs route through the unified blosc1
 // GPU pipeline; the wave dispatches to memcpy + nvcomp_zstd + nvcomp_lz4
@@ -270,6 +216,16 @@ test_four_codecs_mixed_batch(void)
                expected_u16_2d(y, x, 32, offsets[i]));
   damacy_release(d, b);
 
+  // Sub-stage metrics: blosc1 GPU pipeline must have stamped each
+  // wave's parse and post events. zstd and lz4 are codec-conditional
+  // but this batch contains both.
+  struct damacy_stats st;
+  damacy_stats_get(d, &st);
+  EXPECT(st.decompress_parse.count > 0);
+  EXPECT(st.decompress_zstd.count > 0);
+  EXPECT(st.decompress_lz4.count > 0);
+  EXPECT(st.decompress_post.count > 0);
+
   damacy_destroy(d);
   fixture_rm_tree(root);
   return 0;
@@ -281,7 +237,6 @@ main(void)
   RUN(test_full_array_blosc_zstd);
   RUN(test_full_array_blosc_lz4);
   RUN(test_partial_crossing_chunks_blosc);
-  RUN(test_mixed_codec_batch);
   RUN(test_four_codecs_mixed_batch);
   log_info("all tests passed");
   return 0;

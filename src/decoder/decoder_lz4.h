@@ -19,17 +19,8 @@ extern "C"
 
   // Stream-async batched LZ4 decompress. The "batch" elements are
   // sub-streams: with blosc1's typesize-split, one source chunk produces
-  // typesize sub-streams per block.
-  int decoder_lz4_batch(struct decoder_lz4*,
-                        CUstream stream,
-                        const void* const* compressed,
-                        const size_t* compressed_sizes,
-                        void* const* decompressed,
-                        const size_t* uncompressed_sizes,
-                        size_t n);
-
-  // Same as decoder_lz4_batch but the four input arrays are already on
-  // the device.
+  // typesize sub-streams per block. The four input arrays are already
+  // on the device — populated by an upstream GPU kernel (blosc1 emit).
   int decoder_lz4_batch_device(struct decoder_lz4*,
                                CUstream stream,
                                const void* const* d_compressed,

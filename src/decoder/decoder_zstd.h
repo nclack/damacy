@@ -22,19 +22,9 @@ extern "C"
 
   void decoder_zstd_destroy(struct decoder_zstd*);
 
-  // Stream-async batched zstd decompress. All pointers are device pointers;
-  // host-side arrays are staged through internal pinned host buffers.
-  int decoder_zstd_batch(struct decoder_zstd*,
-                         CUstream stream,
-                         const void* const* compressed,
-                         const size_t* compressed_sizes,
-                         void* const* decompressed,
-                         const size_t* uncompressed_sizes,
-                         size_t n);
-
-  // Same as decoder_zstd_batch but the four input arrays are already on
-  // the device. Used when an upstream GPU kernel populated the fanout
-  // directly (blosc1 emit). The decoder still owns the temp workspace,
+  // Stream-async batched zstd decompress. The four input arrays are
+  // already on the device — typically populated by an upstream GPU
+  // kernel (blosc1 emit). The decoder still owns the temp workspace,
   // actual-size and status output arrays.
   int decoder_zstd_batch_device(struct decoder_zstd*,
                                 CUstream stream,

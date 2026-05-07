@@ -43,6 +43,27 @@ static const char* MINIMAL_ZARR_JSON =
   "\"index_location\":\"end\"}}]"
   "}";
 
+// Same as MINIMAL_ZARR_JSON but inner codec list contains only "bytes"
+// (no compressor) — the path that yields CODEC_NONE.
+static const char* NONE_ZARR_JSON =
+  "{"
+  "\"zarr_format\":3,"
+  "\"node_type\":\"array\","
+  "\"shape\":[4,8],"
+  "\"data_type\":\"uint16\","
+  "\"chunk_grid\":{\"name\":\"regular\",\"configuration\":{"
+  "\"chunk_shape\":[4,8]}},"
+  "\"chunk_key_encoding\":{\"name\":\"default\",\"configuration\":{"
+  "\"separator\":\"/\"}},"
+  "\"fill_value\":0,"
+  "\"codecs\":[{\"name\":\"sharding_indexed\",\"configuration\":{"
+  "\"chunk_shape\":[2,4],"
+  "\"codecs\":[{\"name\":\"bytes\",\"configuration\":{\"endian\":\"little\"}}],"
+  "\"index_codecs\":[{\"name\":\"bytes\",\"configuration\":{"
+  "\"endian\":\"little\"}},{\"name\":\"crc32c\"}],"
+  "\"index_location\":\"end\"}}]"
+  "}";
+
 // Same as MINIMAL_ZARR_JSON but inner codec is "blosc"; %s is the cname.
 static const char* BLOSC_ZARR_JSON_FMT =
   "{"
@@ -463,6 +484,75 @@ test_codec_id_blosc_zstd(void)
   return run_blosc_codec_id_case("zstd", CODEC_BLOSC_ZSTD);
 }
 
+static int
+test_codec_id_none(void)
+{
+  const uint64_t offsets[4] = { 0, 100, 200, 300 };
+  const uint64_t nbytes[4] = { 32, 32, 32, 32 };
+  struct fixture f = { 0 };
+  if (fixture_init_with_json(&f, NONE_ZARR_JSON, offsets, nbytes))
+    return 1;
+
+  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  int64_t dst_strides[3];
+  mk_dst_strides_2d(1, 4, 8, dst_strides);
+
+  struct read_op reads[8] = { 0 };
+  struct chunk_plan chunks[8] = { 0 };
+  struct sample_plan samples[4] = { 0 };
+  struct planner_output out = {
+    .read_ops = reads,
+    .read_ops_cap = 8,
+    .chunk_plans = chunks,
+    .chunk_plans_cap = 8,
+    .sample_plans = samples,
+    .sample_plans_cap = 4,
+  };
+  EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
+  EXPECT(out.n_chunk_plans == 4);
+  for (uint32_t i = 0; i < out.n_chunk_plans; ++i)
+    EXPECT(chunks[i].codec_id == CODEC_NONE);
+
+  fixture_destroy(&f);
+  return 0;
+}
+
+// Unknown blosc cname must propagate as a non-OK status; the resolver
+// only accepts {lz4, lz4hc, zstd}.
+static int
+test_codec_id_blosc_unknown_cname(void)
+{
+  char json[1024];
+  int n = snprintf(json, sizeof json, BLOSC_ZARR_JSON_FMT, "bzip2");
+  EXPECT(n > 0 && (size_t)n < sizeof json);
+
+  const uint64_t offsets[4] = { 0, 100, 200, 300 };
+  const uint64_t nbytes[4] = { 32, 32, 32, 32 };
+  struct fixture f = { 0 };
+  if (fixture_init_with_json(&f, json, offsets, nbytes))
+    return 1;
+
+  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  int64_t dst_strides[3];
+  mk_dst_strides_2d(1, 4, 8, dst_strides);
+
+  struct read_op reads[8] = { 0 };
+  struct chunk_plan chunks[8] = { 0 };
+  struct sample_plan samples[4] = { 0 };
+  struct planner_output out = {
+    .read_ops = reads,
+    .read_ops_cap = 8,
+    .chunk_plans = chunks,
+    .chunk_plans_cap = 8,
+    .sample_plans = samples,
+    .sample_plans_cap = 4,
+  };
+  EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) != DAMACY_OK);
+
+  fixture_destroy(&f);
+  return 0;
+}
+
 int
 main(void)
 {
@@ -474,6 +564,8 @@ main(void)
   RUN(test_codec_id_blosc_lz4);
   RUN(test_codec_id_blosc_lz4hc);
   RUN(test_codec_id_blosc_zstd);
+  RUN(test_codec_id_none);
+  RUN(test_codec_id_blosc_unknown_cname);
   log_info("all tests passed");
   return 0;
 }
