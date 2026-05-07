@@ -1,0 +1,125 @@
+# Run damacy_bench on the self-hosted GPU runner, convert results.json
+# to the github-action-benchmark format, and publish to gh-pages so we
+# can chart performance over time. Two scenarios run sequentially in one
+# job (cheaper than a matrix: one docker build, dataset cache shared).
+#
+# Dashboard:  https://<owner>.github.io/<repo>/bench/
+#
+# Required one-time setup (see bench/README-tracking.md):
+#   - gh-pages branch must exist
+#   - Settings → Pages → source = gh-pages branch / root
+#   - Settings → Actions → Workflow permissions = read & write
+#     (or rely on the explicit `permissions:` block below)
+
+name: bench
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write       # auto-push commits to gh-pages
+  pull-requests: write  # comment-on-alert
+  deployments: write    # gh-pages deployment status
+
+# One bench at a time. The self-hosted GPU runner can only honestly
+# measure perf with the GPU to itself.
+concurrency:
+  group: bench
+  cancel-in-progress: false
+
+jobs:
+  bench:
+    runs-on: [self-hosted, gpu]
+    env:
+      IMAGE: damacy:${{ github.sha }}-bench
+      CONTAINER: damacy-bench-${{ github.run_id }}-${{ github.run_attempt }}
+      # Persisted on the runner host so dataset gen (~2GB per scenario)
+      # only happens once. bench/run.py only regenerates missing zarrs.
+      BENCH_DATA: ${{ github.workspace }}/../damacy-bench-data
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build docker image (Release)
+        run: docker build --tag "$IMAGE" .
+
+      - name: Run bench scenarios + adapt to GHA-bench format
+        env:
+          # Prefix every metric with the runner name so histories from
+          # different self-hosted machines stay separable on the dashboard.
+          # ${{ runner.name }} is the runner's registered name in GitHub.
+          BENCH_RUNNER: ${{ runner.name }}
+        run: |
+          mkdir -p "$BENCH_DATA"
+          docker run --name "$CONTAINER" --device=nvidia.com/gpu=all \
+            -e BENCH_RUNNER \
+            -v "$BENCH_DATA":/workspace/damacy/bench/data \
+            "$IMAGE" \
+            bash -c '
+              set -e
+              for scenario in default mixed; do
+                echo "::group::scenario=$scenario"
+                uv run bench/run.py "bench/scenarios/${scenario}.json" --no-report
+                latest=$(ls -1d bench/runs/${scenario}/*/ | tail -1)
+                uv run bench/to_gha_bench.py "${latest}results.json" \
+                  --runner "${BENCH_RUNNER}" \
+                  --out-smaller "bench-${scenario}-smaller.json" \
+                  --out-bigger  "bench-${scenario}-bigger.json"
+                echo "::endgroup::"
+              done
+              # Merge across scenarios so we publish two files total
+              # (one per is-better direction). The action takes one tool
+              # format per call, so we make two publish steps below.
+              python3 -c "
+              import json
+              for kind in (\"smaller\", \"bigger\"):
+                  merged = []
+                  for sc in (\"default\", \"mixed\"):
+                      with open(f\"bench-{sc}-{kind}.json\") as f:
+                          merged.extend(json.load(f))
+                  with open(f\"bench-{kind}.json\", \"w\") as f:
+                      json.dump(merged, f, indent=2)
+              "
+            '
+          docker cp "$CONTAINER":/workspace/damacy/bench-smaller.json ./
+          docker cp "$CONTAINER":/workspace/damacy/bench-bigger.json  ./
+          docker rm "$CONTAINER"
+
+      - name: Publish (smaller is better — timings)
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: damacy timings
+          tool: customSmallerIsBetter
+          output-file-path: bench-smaller.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: bench/timings
+          # Loose threshold while we're collecting baseline noise data;
+          # tighten once we have ~20 points and know the variance.
+          alert-threshold: '150%'
+          comment-on-alert: true
+          fail-on-alert: false
+          max-items-in-chart: 200
+
+      - name: Publish (bigger is better — throughput)
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: damacy throughput
+          tool: customBiggerIsBetter
+          output-file-path: bench-bigger.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: bench/throughput
+          alert-threshold: '150%'
+          comment-on-alert: true
+          fail-on-alert: false
+          max-items-in-chart: 200
+
+      - name: Cleanup container
+        if: always()
+        run: docker rm -f "$CONTAINER" 2>/dev/null || true
