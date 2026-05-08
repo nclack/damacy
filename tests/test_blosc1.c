@@ -1,10 +1,15 @@
+// blosc1_host_parse → nvcomp → (bit)unshuffle → memcmp against .raw.
+
+#include "damacy_limits.h"
 #include "decoder/bitshuffle.h"
 #include "decoder/blosc1.h"
+#include "decoder/blosc1_host.h"
 #include "decoder/decoder_lz4.h"
 #include "decoder/decoder_memcpy.h"
 #include "decoder/decoder_zstd.h"
 #include "decoder/shuffle.h"
 #include "expect.h"
+#include "threadpool/threadpool.h"
 #include "zarr/zarr_metadata.h"
 
 #include <cuda.h>
@@ -100,7 +105,7 @@ slurp_file(const char* path, uint8_t** out_bytes, size_t* out_n)
 }
 
 static int
-run_one(const struct fixture* fx, CUstream stream)
+run_one(const struct fixture* fx, struct threadpool* pool, CUstream stream)
 {
   char comp_path[512], raw_path[512];
   snprintf(
@@ -120,100 +125,74 @@ run_one(const struct fixture* fx, CUstream stream)
   EXPECT(cuMemcpyHtoDAsync(d_comp, h_comp, comp_n, stream) == CUDA_SUCCESS);
   EXPECT(cuMemsetD8Async(d_decomp, 0, raw_n, stream) == CUDA_SUCCESS);
 
-  struct blosc1_chunk_input h_in = { 0 };
-  h_in.d_compressed = (const void*)(uintptr_t)d_comp;
-  h_in.d_decompressed = (void*)(uintptr_t)d_decomp;
-  h_in.compressed_nbytes = (uint32_t)comp_n;
-  h_in.decompressed_nbytes = (uint32_t)raw_n;
-  h_in.codec_id = fx->codec_id;
-
-  CUdeviceptr d_in = 0, d_hdrs = 0, d_counts = 0, d_offsets = 0, d_totals = 0;
-  EXPECT(cuMemAlloc(&d_in, sizeof h_in) == CUDA_SUCCESS);
-  EXPECT(cuMemAlloc(&d_hdrs, sizeof(struct blosc1_chunk_hdr)) == CUDA_SUCCESS);
-  EXPECT(cuMemAlloc(&d_counts, sizeof(struct blosc1_chunk_counts)) ==
-         CUDA_SUCCESS);
-  EXPECT(cuMemAlloc(&d_offsets, sizeof(struct blosc1_chunk_offsets)) ==
-         CUDA_SUCCESS);
-  EXPECT(cuMemAlloc(&d_totals, sizeof(struct blosc1_totals)) == CUDA_SUCCESS);
-  EXPECT(cuMemcpyHtoDAsync(d_in, &h_in, sizeof h_in, stream) == CUDA_SUCCESS);
-
-  EXPECT(blosc1_parse_and_count_launch(
-           stream,
-           (const struct blosc1_chunk_input*)(uintptr_t)d_in,
-           (struct blosc1_chunk_hdr*)(uintptr_t)d_hdrs,
-           (struct blosc1_chunk_counts*)(uintptr_t)d_counts,
-           (struct blosc1_totals*)(uintptr_t)d_totals,
-           1) == 0);
-  EXPECT(blosc1_scan_offsets_launch(
-           stream,
-           (const struct blosc1_chunk_counts*)(uintptr_t)d_counts,
-           (struct blosc1_chunk_offsets*)(uintptr_t)d_offsets,
-           (struct blosc1_totals*)(uintptr_t)d_totals,
-           1) == 0);
-
-  // SOA fanout: nvcomp wants 4 device arrays per codec. Worst-case
-  // substream count for one chunk: nblocks ≤ 16, nstreams_per_block ≤ 8.
-  const size_t kMaxSubs = 128;
-  CUdeviceptr d_zstd_comp_ptrs = 0, d_zstd_comp_sizes = 0;
-  CUdeviceptr d_zstd_decomp_ptrs = 0, d_zstd_decomp_sizes = 0;
-  CUdeviceptr d_lz4_comp_ptrs = 0, d_lz4_comp_sizes = 0;
-  CUdeviceptr d_lz4_decomp_ptrs = 0, d_lz4_decomp_sizes = 0;
-  CUdeviceptr d_memcpy_ops = 0, d_unsh = 0, d_bitunsh = 0;
-  EXPECT(cuMemAlloc(&d_zstd_comp_ptrs, kMaxSubs * sizeof(void*)) ==
-         CUDA_SUCCESS);
-  EXPECT(cuMemAlloc(&d_zstd_comp_sizes, kMaxSubs * sizeof(size_t)) ==
-         CUDA_SUCCESS);
-  EXPECT(cuMemAlloc(&d_zstd_decomp_ptrs, kMaxSubs * sizeof(void*)) ==
-         CUDA_SUCCESS);
-  EXPECT(cuMemAlloc(&d_zstd_decomp_sizes, kMaxSubs * sizeof(size_t)) ==
-         CUDA_SUCCESS);
-  EXPECT(cuMemAlloc(&d_lz4_comp_ptrs, kMaxSubs * sizeof(void*)) ==
-         CUDA_SUCCESS);
-  EXPECT(cuMemAlloc(&d_lz4_comp_sizes, kMaxSubs * sizeof(size_t)) ==
-         CUDA_SUCCESS);
-  EXPECT(cuMemAlloc(&d_lz4_decomp_ptrs, kMaxSubs * sizeof(void*)) ==
-         CUDA_SUCCESS);
-  EXPECT(cuMemAlloc(&d_lz4_decomp_sizes, kMaxSubs * sizeof(size_t)) ==
-         CUDA_SUCCESS);
-  // memcpy ops can be emitted per-substream (any cb == per_stream_dst);
-  // size for the worst case rather than a single slot.
-  EXPECT(cuMemAlloc(&d_memcpy_ops, kMaxSubs * sizeof(struct gpu_memcpy_op)) ==
-         CUDA_SUCCESS);
-  EXPECT(cuMemAlloc(&d_unsh, sizeof(struct gpu_shuffle_op)) == CUDA_SUCCESS);
-  EXPECT(cuMemAlloc(&d_bitunsh, sizeof(struct gpu_shuffle_op)) == CUDA_SUCCESS);
-
-  struct nvcomp_fanout zstd_fan = {
-    .d_comp_ptrs = (const void**)(uintptr_t)d_zstd_comp_ptrs,
-    .d_comp_sizes = (size_t*)(uintptr_t)d_zstd_comp_sizes,
-    .d_decomp_ptrs = (void**)(uintptr_t)d_zstd_decomp_ptrs,
-    .d_decomp_buf_sizes = (size_t*)(uintptr_t)d_zstd_decomp_sizes,
-  };
-  struct nvcomp_fanout lz4_fan = {
-    .d_comp_ptrs = (const void**)(uintptr_t)d_lz4_comp_ptrs,
-    .d_comp_sizes = (size_t*)(uintptr_t)d_lz4_comp_sizes,
-    .d_decomp_ptrs = (void**)(uintptr_t)d_lz4_decomp_ptrs,
-    .d_decomp_buf_sizes = (size_t*)(uintptr_t)d_lz4_decomp_sizes,
+  struct blosc1_host_chunk h_chunk = {
+    .h_compressed = h_comp,
+    .d_compressed = (void*)(uintptr_t)d_comp,
+    .d_decompressed = (void*)(uintptr_t)d_decomp,
+    .compressed_nbytes = (uint32_t)comp_n,
+    .decompressed_nbytes = (uint32_t)raw_n,
+    .codec_id = fx->codec_id,
   };
 
-  EXPECT(blosc1_emit_fanout_launch(
-           stream,
-           (const struct blosc1_chunk_input*)(uintptr_t)d_in,
-           (const struct blosc1_chunk_hdr*)(uintptr_t)d_hdrs,
-           (const struct blosc1_chunk_offsets*)(uintptr_t)d_offsets,
-           zstd_fan,
-           lz4_fan,
-           (struct gpu_memcpy_op*)(uintptr_t)d_memcpy_ops,
-           (struct gpu_shuffle_op*)(uintptr_t)d_unsh,
-           (struct gpu_shuffle_op*)(uintptr_t)d_bitunsh,
-           1) == 0);
-
-  struct blosc1_totals h_totals = { 0 };
-  EXPECT(cuMemcpyDtoHAsync(&h_totals, d_totals, sizeof h_totals, stream) ==
-         CUDA_SUCCESS);
   struct blosc1_chunk_hdr h_hdr = { 0 };
-  EXPECT(cuMemcpyDtoHAsync(&h_hdr, d_hdrs, sizeof h_hdr, stream) ==
-         CUDA_SUCCESS);
-  EXPECT(cuStreamSynchronize(stream) == CUDA_SUCCESS);
+  struct blosc1_chunk_counts h_counts = { 0 };
+  struct blosc1_chunk_offsets h_offsets = { 0 };
+  uint32_t bstarts_slot[DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK] = { 0 };
+  uint32_t block_ends_slot[DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK] = { 0 };
+  struct blosc1_host_scratch scratch = {
+    .hdrs = &h_hdr,
+    .counts = &h_counts,
+    .offsets = &h_offsets,
+    .bstarts = bstarts_slot,
+    .block_ends = block_ends_slot,
+  };
+
+  // Worst-case substream count for one chunk: nblocks ≤ 16,
+  // nstreams_per_block ≤ 8.
+  const size_t kMaxSubs = 128;
+  const void** zstd_comp_ptrs =
+    (const void**)calloc(kMaxSubs, sizeof(*zstd_comp_ptrs));
+  size_t* zstd_comp_sizes = (size_t*)calloc(kMaxSubs, sizeof(*zstd_comp_sizes));
+  void** zstd_decomp_ptrs = (void**)calloc(kMaxSubs, sizeof(*zstd_decomp_ptrs));
+  size_t* zstd_decomp_sizes =
+    (size_t*)calloc(kMaxSubs, sizeof(*zstd_decomp_sizes));
+  const void** lz4_comp_ptrs =
+    (const void**)calloc(kMaxSubs, sizeof(*lz4_comp_ptrs));
+  size_t* lz4_comp_sizes = (size_t*)calloc(kMaxSubs, sizeof(*lz4_comp_sizes));
+  void** lz4_decomp_ptrs = (void**)calloc(kMaxSubs, sizeof(*lz4_decomp_ptrs));
+  size_t* lz4_decomp_sizes =
+    (size_t*)calloc(kMaxSubs, sizeof(*lz4_decomp_sizes));
+  struct gpu_memcpy_op* memcpy_ops =
+    (struct gpu_memcpy_op*)calloc(kMaxSubs, sizeof(*memcpy_ops));
+  struct gpu_shuffle_op unsh = { 0 };
+  struct gpu_shuffle_op bitunsh = { 0 };
+  struct blosc1_totals h_totals = { 0 };
+
+  struct blosc1_host_fanout host_zstd = {
+    .comp_ptrs = zstd_comp_ptrs,
+    .comp_sizes = zstd_comp_sizes,
+    .decomp_ptrs = zstd_decomp_ptrs,
+    .decomp_buf_sizes = zstd_decomp_sizes,
+  };
+  struct blosc1_host_fanout host_lz4 = {
+    .comp_ptrs = lz4_comp_ptrs,
+    .comp_sizes = lz4_comp_sizes,
+    .decomp_ptrs = lz4_decomp_ptrs,
+    .decomp_buf_sizes = lz4_decomp_sizes,
+  };
+
+  EXPECT(blosc1_host_parse(&(struct blosc1_host_parse_args){
+           .pool = pool,
+           .chunks = &h_chunk,
+           .n_chunks = 1,
+           .scratch = scratch,
+           .zstd = host_zstd,
+           .lz4 = host_lz4,
+           .memcpy_ops = memcpy_ops,
+           .unshuffle_ops = &unsh,
+           .bitunshuffle_ops = &bitunsh,
+           .out_totals = &h_totals,
+         }) == 0);
   EXPECT(h_hdr.err == 0);
 
   // Cross-check that the parser pulled the filter flags. Strings are
@@ -229,9 +208,68 @@ run_one(const struct fixture* fx, CUstream stream)
     EXPECT(h_hdr.shuffle == 0);
     EXPECT(h_hdr.bitshuffle == 0);
   }
-  // Pure-codec fixtures (no per-block raw fallback expected at clevel=5
-  // on this low-entropy data).
+  // Fixtures are clevel=5 on low-entropy data; no raw fallback expected.
   EXPECT(h_totals.n_memcpy == 0);
+
+  CUdeviceptr d_zstd_cp = 0, d_zstd_cs = 0, d_zstd_dp = 0, d_zstd_ds = 0;
+  CUdeviceptr d_lz4_cp = 0, d_lz4_cs = 0, d_lz4_dp = 0, d_lz4_ds = 0;
+  CUdeviceptr d_memcpy_ops = 0, d_unsh = 0, d_bitunsh = 0;
+  EXPECT(cuMemAlloc(&d_zstd_cp, kMaxSubs * sizeof(void*)) == CUDA_SUCCESS);
+  EXPECT(cuMemAlloc(&d_zstd_cs, kMaxSubs * sizeof(size_t)) == CUDA_SUCCESS);
+  EXPECT(cuMemAlloc(&d_zstd_dp, kMaxSubs * sizeof(void*)) == CUDA_SUCCESS);
+  EXPECT(cuMemAlloc(&d_zstd_ds, kMaxSubs * sizeof(size_t)) == CUDA_SUCCESS);
+  EXPECT(cuMemAlloc(&d_lz4_cp, kMaxSubs * sizeof(void*)) == CUDA_SUCCESS);
+  EXPECT(cuMemAlloc(&d_lz4_cs, kMaxSubs * sizeof(size_t)) == CUDA_SUCCESS);
+  EXPECT(cuMemAlloc(&d_lz4_dp, kMaxSubs * sizeof(void*)) == CUDA_SUCCESS);
+  EXPECT(cuMemAlloc(&d_lz4_ds, kMaxSubs * sizeof(size_t)) == CUDA_SUCCESS);
+  EXPECT(cuMemAlloc(&d_memcpy_ops, kMaxSubs * sizeof(struct gpu_memcpy_op)) ==
+         CUDA_SUCCESS);
+  EXPECT(cuMemAlloc(&d_unsh, sizeof(struct gpu_shuffle_op)) == CUDA_SUCCESS);
+  EXPECT(cuMemAlloc(&d_bitunsh, sizeof(struct gpu_shuffle_op)) == CUDA_SUCCESS);
+  if (h_totals.n_zstd > 0) {
+    EXPECT(cuMemcpyHtoDAsync(d_zstd_cp,
+                             zstd_comp_ptrs,
+                             h_totals.n_zstd * sizeof(void*),
+                             stream) == CUDA_SUCCESS);
+    EXPECT(cuMemcpyHtoDAsync(d_zstd_cs,
+                             zstd_comp_sizes,
+                             h_totals.n_zstd * sizeof(size_t),
+                             stream) == CUDA_SUCCESS);
+    EXPECT(cuMemcpyHtoDAsync(d_zstd_dp,
+                             zstd_decomp_ptrs,
+                             h_totals.n_zstd * sizeof(void*),
+                             stream) == CUDA_SUCCESS);
+    EXPECT(cuMemcpyHtoDAsync(d_zstd_ds,
+                             zstd_decomp_sizes,
+                             h_totals.n_zstd * sizeof(size_t),
+                             stream) == CUDA_SUCCESS);
+  }
+  if (h_totals.n_lz4 > 0) {
+    EXPECT(cuMemcpyHtoDAsync(
+             d_lz4_cp, lz4_comp_ptrs, h_totals.n_lz4 * sizeof(void*), stream) ==
+           CUDA_SUCCESS);
+    EXPECT(cuMemcpyHtoDAsync(d_lz4_cs,
+                             lz4_comp_sizes,
+                             h_totals.n_lz4 * sizeof(size_t),
+                             stream) == CUDA_SUCCESS);
+    EXPECT(cuMemcpyHtoDAsync(d_lz4_dp,
+                             lz4_decomp_ptrs,
+                             h_totals.n_lz4 * sizeof(void*),
+                             stream) == CUDA_SUCCESS);
+    EXPECT(cuMemcpyHtoDAsync(d_lz4_ds,
+                             lz4_decomp_sizes,
+                             h_totals.n_lz4 * sizeof(size_t),
+                             stream) == CUDA_SUCCESS);
+  }
+  if (h_hdr.shuffle) {
+    EXPECT(cuMemcpyHtoDAsync(d_unsh, &unsh, sizeof unsh, stream) ==
+           CUDA_SUCCESS);
+  }
+  if (h_hdr.bitshuffle) {
+    EXPECT(cuMemcpyHtoDAsync(d_bitunsh, &bitunsh, sizeof bitunsh, stream) ==
+           CUDA_SUCCESS);
+  }
+  EXPECT(cuStreamSynchronize(stream) == CUDA_SUCCESS);
 
   size_t max_substream_uncompressed = h_hdr.blocksize ? h_hdr.blocksize : raw_n;
 
@@ -241,10 +279,10 @@ run_one(const struct fixture* fx, CUstream stream)
     EXPECT(z);
     EXPECT(decoder_zstd_batch_device(z,
                                      stream,
-                                     zstd_fan.d_comp_ptrs,
-                                     zstd_fan.d_comp_sizes,
-                                     zstd_fan.d_decomp_ptrs,
-                                     zstd_fan.d_decomp_buf_sizes,
+                                     (const void**)(uintptr_t)d_zstd_cp,
+                                     (size_t*)(uintptr_t)d_zstd_cs,
+                                     (void**)(uintptr_t)d_zstd_dp,
+                                     (size_t*)(uintptr_t)d_zstd_ds,
                                      h_totals.n_zstd) == 0);
     EXPECT(cuStreamSynchronize(stream) == CUDA_SUCCESS);
     decoder_zstd_destroy(z);
@@ -255,10 +293,10 @@ run_one(const struct fixture* fx, CUstream stream)
     EXPECT(l);
     EXPECT(decoder_lz4_batch_device(l,
                                     stream,
-                                    lz4_fan.d_comp_ptrs,
-                                    lz4_fan.d_comp_sizes,
-                                    lz4_fan.d_decomp_ptrs,
-                                    lz4_fan.d_decomp_buf_sizes,
+                                    (const void**)(uintptr_t)d_lz4_cp,
+                                    (size_t*)(uintptr_t)d_lz4_cs,
+                                    (void**)(uintptr_t)d_lz4_dp,
+                                    (size_t*)(uintptr_t)d_lz4_ds,
                                     h_totals.n_lz4) == 0);
     EXPECT(cuStreamSynchronize(stream) == CUDA_SUCCESS);
     decoder_lz4_destroy(l);
@@ -293,21 +331,25 @@ run_one(const struct fixture* fx, CUstream stream)
 
   free(h_comp);
   free(h_raw);
+  free(zstd_comp_ptrs);
+  free(zstd_comp_sizes);
+  free(zstd_decomp_ptrs);
+  free(zstd_decomp_sizes);
+  free(lz4_comp_ptrs);
+  free(lz4_comp_sizes);
+  free(lz4_decomp_ptrs);
+  free(lz4_decomp_sizes);
+  free(memcpy_ops);
   cuMemFree(d_comp);
   cuMemFree(d_decomp);
-  cuMemFree(d_in);
-  cuMemFree(d_hdrs);
-  cuMemFree(d_counts);
-  cuMemFree(d_offsets);
-  cuMemFree(d_totals);
-  cuMemFree(d_zstd_comp_ptrs);
-  cuMemFree(d_zstd_comp_sizes);
-  cuMemFree(d_zstd_decomp_ptrs);
-  cuMemFree(d_zstd_decomp_sizes);
-  cuMemFree(d_lz4_comp_ptrs);
-  cuMemFree(d_lz4_comp_sizes);
-  cuMemFree(d_lz4_decomp_ptrs);
-  cuMemFree(d_lz4_decomp_sizes);
+  cuMemFree(d_zstd_cp);
+  cuMemFree(d_zstd_cs);
+  cuMemFree(d_zstd_dp);
+  cuMemFree(d_zstd_ds);
+  cuMemFree(d_lz4_cp);
+  cuMemFree(d_lz4_cs);
+  cuMemFree(d_lz4_dp);
+  cuMemFree(d_lz4_ds);
   cuMemFree(d_memcpy_ops);
   cuMemFree(d_unsh);
   cuMemFree(d_bitunsh);
@@ -315,15 +357,153 @@ run_one(const struct fixture* fx, CUstream stream)
   return 0;
 }
 
+// Build a minimal blosc1 chunk header in h[0..16) with compformat
+// matching codec_id. Caller mutates fields after to trigger err codes.
+static void
+build_blosc1_header(uint8_t* h,
+                    uint8_t codec_id,
+                    uint32_t nbytes,
+                    uint32_t blocksize,
+                    uint32_t cbytes,
+                    uint8_t typesize)
+{
+  h[0] = 0;
+  h[1] = 0;
+  uint8_t compformat = (codec_id == CODEC_BLOSC_LZ4) ? 1u : 4u;
+  h[2] = (uint8_t)((compformat & 0x07u) << 5);
+  h[3] = typesize;
+  for (int i = 0; i < 4; ++i)
+    h[4 + i] = (uint8_t)((nbytes >> (8 * i)) & 0xffu);
+  for (int i = 0; i < 4; ++i)
+    h[8 + i] = (uint8_t)((blocksize >> (8 * i)) & 0xffu);
+  for (int i = 0; i < 4; ++i)
+    h[12 + i] = (uint8_t)((cbytes >> (8 * i)) & 0xffu);
+}
+
+// Run blosc1_host_parse over a single synthetic chunk and assert it
+// returns the expected err code in totals.n_parse_errors and hdrs[0].err.
+// Op buffers are unused on the failure path so single-slot stack arrays
+// are sufficient.
+static int
+expect_parse_err(uint8_t codec_id,
+                 const uint8_t* hdr,
+                 uint32_t compressed_nbytes,
+                 uint32_t decompressed_nbytes,
+                 uint8_t expected_err,
+                 struct threadpool* pool)
+{
+  struct blosc1_host_chunk chunk = {
+    .h_compressed = hdr,
+    .d_compressed = NULL,
+    .d_decompressed = NULL,
+    .compressed_nbytes = compressed_nbytes,
+    .decompressed_nbytes = decompressed_nbytes,
+    .codec_id = codec_id,
+  };
+  struct blosc1_chunk_hdr h = { 0 };
+  struct blosc1_chunk_counts c = { 0 };
+  struct blosc1_chunk_offsets o = { 0 };
+  uint32_t bstarts_slot[DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK] = { 0 };
+  uint32_t block_ends_slot[DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK] = { 0 };
+  struct blosc1_host_scratch scratch = {
+    .hdrs = &h,
+    .counts = &c,
+    .offsets = &o,
+    .bstarts = bstarts_slot,
+    .block_ends = block_ends_slot,
+  };
+  const void* zcp = NULL;
+  size_t zcs = 0;
+  void* zdp = NULL;
+  size_t zds = 0;
+  const void* lcp = NULL;
+  size_t lcs = 0;
+  void* ldp = NULL;
+  size_t lds = 0;
+  struct blosc1_host_fanout zfan = { &zcp, &zcs, &zdp, &zds };
+  struct blosc1_host_fanout lfan = { &lcp, &lcs, &ldp, &lds };
+  struct gpu_memcpy_op mop = { 0 };
+  struct gpu_shuffle_op sop = { 0 };
+  struct gpu_shuffle_op bop = { 0 };
+  struct blosc1_totals tot = { 0 };
+  int rc = blosc1_host_parse(&(struct blosc1_host_parse_args){
+    .pool = pool,
+    .chunks = &chunk,
+    .n_chunks = 1,
+    .scratch = scratch,
+    .zstd = zfan,
+    .lz4 = lfan,
+    .memcpy_ops = &mop,
+    .unshuffle_ops = &sop,
+    .bitunshuffle_ops = &bop,
+    .out_totals = &tot,
+  });
+  EXPECT(rc != 0);
+  EXPECT(tot.n_parse_errors == 1);
+  EXPECT(h.err == expected_err);
+  return 0;
+}
+
+// Spot-check the err-code surface (1..8). Comprehensive coverage is
+// expected to come from the fuzz harness tracked in the issue.
+static int
+test_bad_header(void)
+{
+  struct threadpool* pool = threadpool_new(0);
+  EXPECT(pool);
+  uint8_t hdr[16];
+
+  // err=1: compressed_nbytes < 16 (header read short-circuits)
+  build_blosc1_header(hdr, CODEC_BLOSC_LZ4, 4096, 1024, 100, 4);
+  EXPECT(expect_parse_err(CODEC_BLOSC_LZ4, hdr, 8, 4096, 1, pool) == 0);
+
+  // err=2: header.blocksize == 0
+  build_blosc1_header(hdr, CODEC_BLOSC_LZ4, 4096, 0, 100, 4);
+  EXPECT(expect_parse_err(CODEC_BLOSC_LZ4, hdr, 100, 4096, 2, pool) == 0);
+
+  // err=3: header.nbytes != decompressed_nbytes
+  build_blosc1_header(hdr, CODEC_BLOSC_LZ4, 4096, 1024, 100, 4);
+  EXPECT(expect_parse_err(CODEC_BLOSC_LZ4, hdr, 100, 8192, 3, pool) == 0);
+
+  // err=4: header.cbytes != compressed_nbytes
+  build_blosc1_header(hdr, CODEC_BLOSC_LZ4, 4096, 1024, 100, 4);
+  EXPECT(expect_parse_err(CODEC_BLOSC_LZ4, hdr, 200, 4096, 4, pool) == 0);
+
+  // err=6: typesize == 0
+  build_blosc1_header(hdr, CODEC_BLOSC_LZ4, 4096, 1024, 100, 0);
+  EXPECT(expect_parse_err(CODEC_BLOSC_LZ4, hdr, 100, 4096, 6, pool) == 0);
+
+  // err=7: compformat (zstd's 4) doesn't match BLOSC_LZ4 codec
+  build_blosc1_header(hdr, CODEC_BLOSC_ZSTD, 4096, 1024, 100, 4);
+  EXPECT(expect_parse_err(CODEC_BLOSC_LZ4, hdr, 100, 4096, 7, pool) == 0);
+
+  // err=8: unsupported codec_id
+  build_blosc1_header(hdr, CODEC_BLOSC_LZ4, 4096, 1024, 100, 4);
+  EXPECT(expect_parse_err(99u, hdr, 100, 4096, 8, pool) == 0);
+
+  // Spot-check the stringifier surface too.
+  EXPECT(strcmp(blosc1_host_parse_err_str(0), "ok") == 0);
+  EXPECT(strcmp(blosc1_host_parse_err_str(99), "unknown") == 0);
+
+  threadpool_free(pool);
+  return 0;
+}
+
+// Single deterministic path: pool=0 (serial). Multi-worker behavior is
+// not exercised here — see threadpool's own tests for that — to avoid
+// false confidence from a non-determ smoke test of the fork-join.
 static int
 test_all_fixtures(void)
 {
   CUstream stream = 0;
   EXPECT(cuStreamCreate(&stream, CU_STREAM_DEFAULT) == CUDA_SUCCESS);
+  struct threadpool* pool = threadpool_new(0);
+  EXPECT(pool);
   for (size_t i = 0; i < sizeof k_fixtures / sizeof *k_fixtures; ++i) {
     log_info("fixture: %s", k_fixtures[i].name);
-    EXPECT(run_one(&k_fixtures[i], stream) == 0);
+    EXPECT(run_one(&k_fixtures[i], pool, stream) == 0);
   }
+  threadpool_free(pool);
   cuStreamDestroy(stream);
   return 0;
 }
@@ -338,6 +518,7 @@ main(void)
   EXPECT(cuDevicePrimaryCtxRetain(&ctx, dev) == CUDA_SUCCESS);
   EXPECT(cuCtxSetCurrent(ctx) == CUDA_SUCCESS);
 
+  RUN(test_bad_header);
   EXPECT(ensure_fixtures() == 0);
   RUN(test_all_fixtures);
 

@@ -119,11 +119,15 @@ Most `Config` knobs apply per rank. Aggregate cost on a node is
 | `host_buffer_bytes` | pinned RAM staging pool |
 | `device_buffer_bytes` | device decompress scratch |
 | `n_io_threads` | I/O worker threads |
+| `n_compute_threads` | host blosc1 parse workers |
 
 Tune `n_io_threads` to your storage tier (NVMe pool, parallel
-filesystem, object store). When stacking multiple ranks on one GPU
-(uncommon, but valid), divide the device-side budgets so the per-GPU
-total fits below `max_gpu_memory_bytes`.
+filesystem, object store). `n_compute_threads` defaults to `0`
+(parse runs serially on the calling thread, which is fine when waves
+are small); raise it when chunks-per-wave is large enough that the
+parse shows up in `stats.decompress_parse`. When stacking multiple
+ranks on one GPU (uncommon, but valid), divide the device-side
+budgets so the per-GPU total fits below `max_gpu_memory_bytes`.
 
 ## CUDA streams
 

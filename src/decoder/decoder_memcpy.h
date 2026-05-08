@@ -1,7 +1,8 @@
 #pragma once
 
-#include <cuda.h>
 #include <stdint.h>
+
+typedef struct CUstream_st* CUstream;
 
 #ifdef __cplusplus
 extern "C"

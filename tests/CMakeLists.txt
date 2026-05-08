@@ -38,7 +38,7 @@ if(NOT DAMACY_FUZZ)
     add_damacy_test(test_damacy_ctx damacy test_fixture CUDA::cuda_driver)
     add_damacy_test(test_assemble assemble CUDA::cuda_driver CUDA::cudart_static)
     add_damacy_test(test_decoder decoder CUDA::cuda_driver)
-    add_damacy_test(test_blosc1 decoder zarr CUDA::cuda_driver)
+    add_damacy_test(test_blosc1 blosc1_host decoder threadpool zarr CUDA::cuda_driver)
     set(_BLOSC1_DIR ${PROJECT_SOURCE_DIR}/experiments/blosc1-gpu)
     target_compile_definitions(
         test_blosc1

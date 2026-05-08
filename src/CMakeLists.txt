@@ -7,7 +7,6 @@ add_src_lib(log SOURCES log/log.h log/log.c ${PROJECT_SOURCE_DIR}/src/damacy_log
 
 # Foundational types
 add_src_lib(dtype     SOURCES dtype/dtype.c dtype/dtype.h)
-add_src_lib(dimension SOURCES dimension/dimension.c dimension/dimension.h)
 
 # Utilities
 add_src_lib(slice  SOURCES util/slice.c  util/slice.h)
@@ -68,11 +67,19 @@ add_cuda_lib(decoder
             decoder/decoder_zstd.h decoder/decoder_zstd.c
             decoder/decoder_lz4.h  decoder/decoder_lz4.c
             decoder/decoder_memcpy.h decoder/decoder_memcpy.cu
-            decoder/blosc1.h decoder/blosc1.cu
+            decoder/blosc1.h
             decoder/shuffle.h decoder/shuffle.cu
             decoder/bitshuffle.h decoder/bitshuffle.cu
             decoder/status_reduce.h decoder/status_reduce.cu
     LINKS CUDA::cudart_static CUDA::cuda_driver nvcomp::nvcomp log zarr
+)
+
+# Host-side blosc1 chunk-header parse. Pure C; no CUDA. Consumes the
+# struct definitions in decoder/blosc1.h (unmodified) and writes into
+# pinned-host fanout / op arrays the caller subsequently H2D's.
+add_src_lib(blosc1_host
+    SOURCES decoder/blosc1_host.h decoder/blosc1_host.c
+    LINKS threadpool zarr log
 )
 
 # Bytewise gather kernel: chunk windows → output batch tensor.
@@ -89,6 +96,6 @@ add_cuda_lib(assemble SOURCES assemble/assemble.h assemble/assemble.cu
 # launch in assemble.cu).
 add_cuda_lib(damacy SOURCES damacy.h damacy.c damacy_status.c
     LINKS platform planner zarr_meta_cache zarr_shard_cache zarr store
-          decoder assemble dtype log strbuf
+          decoder blosc1_host assemble dtype log strbuf threadpool
           CUDA::cuda_driver
 )

@@ -345,6 +345,10 @@ class Config:
         dtype: Destination dtype for assembled batches.
         lookahead_batches: User-side push-queue depth (>= 2).
         n_io_threads: IO worker threads (>= 1).
+        n_compute_threads: Background workers for blosc1 chunk-header
+            parsing (>= 0). 0 runs parsing serially on the calling
+            thread; > 0 spawns a fork-join pool. Total parallelism is
+            ``n_compute_threads + 1`` (caller participates as tid 0).
         n_zarrs_meta_cache: LRU cap for zarr-metadata entries.
         n_shards_meta_cache: LRU cap for shard-index entries.
         max_chunk_uncompressed_bytes: Largest uncompressed chunk size
@@ -367,6 +371,7 @@ class Config:
     dtype: Dtype
     lookahead_batches: int
     n_io_threads: int
+    n_compute_threads: int
     n_zarrs_meta_cache: int
     n_shards_meta_cache: int
     max_chunk_uncompressed_bytes: int
@@ -383,6 +388,7 @@ class Config:
         dtype: Dtype | str | int = Dtype.F32,
         lookahead_batches: int = 2,
         n_io_threads: int = 4,
+        n_compute_threads: int = 0,
         n_zarrs_meta_cache: int = 64,
         n_shards_meta_cache: int = 256,
         max_chunk_uncompressed_bytes: int = 0,
@@ -402,6 +408,10 @@ class Config:
             )
         if n_io_threads < 1:
             raise ValueError(f"n_io_threads must be >= 1 (got {n_io_threads})")
+        if n_compute_threads < 0:
+            raise ValueError(
+                f"n_compute_threads must be >= 0 (got {n_compute_threads})"
+            )
         if host_buffer_bytes <= 0 or device_buffer_bytes <= 0:
             raise ValueError("host/device_buffer_bytes must be positive")
         if max_chunk_uncompressed_bytes < 0:
@@ -413,6 +423,7 @@ class Config:
         set_(self, "dtype", Dtype.coerce(dtype))
         set_(self, "lookahead_batches", lookahead_batches)
         set_(self, "n_io_threads", n_io_threads)
+        set_(self, "n_compute_threads", n_compute_threads)
         set_(self, "n_zarrs_meta_cache", n_zarrs_meta_cache)
         set_(self, "n_shards_meta_cache", n_shards_meta_cache)
         set_(self, "max_chunk_uncompressed_bytes", max_chunk_uncompressed_bytes)
@@ -675,6 +686,7 @@ class Pipeline:
                 batch_size=config.batch_size,
                 lookahead_batches=config.lookahead_batches,
                 n_io_threads=config.n_io_threads,
+                n_compute_threads=config.n_compute_threads,
                 host_buffer_bytes=config.host_buffer_bytes,
                 device_buffer_bytes=config.device_buffer_bytes,
                 n_zarrs_meta_cache=config.n_zarrs_meta_cache,

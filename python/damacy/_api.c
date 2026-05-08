@@ -525,6 +525,7 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                          "max_gpu_memory_bytes",
                          "max_bytes_per_element",
                          "device",
+                         "n_compute_threads",
                          NULL };
   unsigned int batch_size = 0;
   unsigned int lookahead = 2;
@@ -538,9 +539,10 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   unsigned long long max_gpu_bytes = 0;
   unsigned char max_bytes_per_element = 0;
   int device = -1;
+  unsigned int n_compute = 0;
   if (!PyArg_ParseTupleAndKeywords(args,
                                    kw,
-                                   "IIIKKIIOI|KBi",
+                                   "IIIKKIIOI|KBiI",
                                    kws,
                                    &batch_size,
                                    &lookahead,
@@ -553,7 +555,8 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                                    &max_chunk_uncompressed,
                                    &max_gpu_bytes,
                                    &max_bytes_per_element,
-                                   &device))
+                                   &device,
+                                   &n_compute))
     return -1;
 
   enum damacy_dtype dt;
@@ -573,6 +576,7 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
     .max_gpu_memory_bytes = (uint64_t)max_gpu_bytes,
     .max_bytes_per_element = max_bytes_per_element,
     .device = device,
+    .n_compute_threads = n_compute,
   };
 
   struct damacy* d = NULL;

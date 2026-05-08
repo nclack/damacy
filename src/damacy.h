@@ -85,6 +85,9 @@ extern "C"
     uint32_t batch_size;        // samples per batch
     uint32_t lookahead_batches; // user-push queue depth (>= 2)
     uint32_t n_io_threads;
+    // Workers for host-side blosc1 chunk-header parsing. 0 = serial on
+    // the calling thread; total parallelism is n_compute_threads + 1.
+    uint32_t n_compute_threads;
 
     // Streaming buffers (split in half across two wave slots internally)
     uint64_t host_buffer_bytes;   // pinned staging; sized for IO bw
@@ -219,11 +222,10 @@ extern "C"
     struct damacy_metric io;
     struct damacy_metric h2d;
     struct damacy_metric decompress;
-    // Sub-stages of decompress, summing to ~decompress.ms in the
-    // common case. parse: blosc1 parse + scan + emit + D2H of totals.
-    // zstd / lz4: per-codec nvcomp batch on its dedicated stream
-    // (only when n_zstd / n_lz4 > 0). post: memcpy + (bit)unshuffle on
-    // stream_compute after re-joining the parallel streams.
+    // Sub-stages summing to ~decompress.ms. parse is host wall-clock
+    // around the blosc1 chunk-header parse (overlaps the bulk H2D);
+    // zstd / lz4 are per-codec nvcomp batches; post is memcpy +
+    // (bit)unshuffle.
     struct damacy_metric decompress_parse;
     struct damacy_metric decompress_zstd;
     struct damacy_metric decompress_lz4;
