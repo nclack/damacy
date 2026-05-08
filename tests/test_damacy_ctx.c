@@ -1,15 +1,14 @@
-// Regression test for issue #12: damacy_create must capture the
-// caller's current CUDA context, not stomp it with dev 0's primary.
-// Pre-fix, every rank under torchrun --nproc-per-node=N piled onto
-// dev 0's primary and silently re-pointed the caller's context — DDP
-// segfaulted on the next DLPack import. On a single-GPU box the same
-// invariant is observable: make a non-primary CUcontext current,
-// damacy_create / damacy_destroy must leave it current.
+// Regression tests for issue #12: damacy_create's CUDA context
+// contract. damacy_create captures the caller's current CUcontext;
+// pre-fix it stomped dev 0's primary, segfaulting DDP on the next
+// DLPack import.
 //
 // Test cases:
 //   test_create_preserves_caller_ctx — caller has a non-primary ctx
 //                                      current; create + destroy
 //                                      must not change it.
+//   test_create_no_ctx_returns_inval — no CUcontext current; create
+//                                      must return DAMACY_INVAL.
 
 #include "damacy.h"
 #include "fixture.h"
@@ -44,10 +43,9 @@ mk_cfg(const char* root)
   };
 }
 
-// Caller has a non-primary CUcontext current. The pre-fix code would
-// have made dev 0's primary current here — observable as identity
-// change in cuCtxGetCurrent. The fix retains the primary but leaves
-// the caller's ctx current.
+// Caller has a non-primary CUcontext current. damacy_create captures
+// it and damacy_destroy leaves it current — pre-fix, dev 0's primary
+// would have replaced it (observable as a CUcontext identity change).
 static int
 test_create_preserves_caller_ctx(void)
 {
@@ -94,10 +92,32 @@ test_create_preserves_caller_ctx(void)
   return 0;
 }
 
+// No CUcontext current — damacy_create must reject with INVAL.
+static int
+test_create_no_ctx_returns_inval(void)
+{
+  EXPECT(cuInit(0) == CUDA_SUCCESS);
+  EXPECT(cuCtxSetCurrent(NULL) == CUDA_SUCCESS);
+
+  CUcontext cur = (CUcontext)0x1; // sentinel
+  EXPECT(cuCtxGetCurrent(&cur) == CUDA_SUCCESS);
+  EXPECT(cur == NULL);
+
+  char root[64];
+  EXPECT(mkdtemp_root(root, sizeof root) == 0);
+  struct damacy_config cfg = mk_cfg(root);
+  struct damacy* d = NULL;
+  EXPECT(damacy_create(&cfg, &d) == DAMACY_INVAL);
+  EXPECT(d == NULL);
+  fixture_rm_tree(root);
+  return 0;
+}
+
 int
 main(void)
 {
   RUN(test_create_preserves_caller_ctx);
+  RUN(test_create_no_ctx_returns_inval);
   log_info("all tests passed");
   return 0;
 }

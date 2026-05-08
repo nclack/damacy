@@ -14,6 +14,7 @@
 //   test_chunk_cap_shrinks_nvcomp   — smaller runtime cap → smaller nvcomp
 //                                     temp scratch (queried directly)
 
+#include "cuda_init.h"
 #include "damacy.h"
 #include "decoder/decoder_lz4.h"
 #include "decoder/decoder_zstd.h"
@@ -193,6 +194,7 @@ test_chunk_cap_shrinks_nvcomp(void)
 int
 main(void)
 {
+  EXPECT(cuda_init_primary() == 0);
   RUN(test_create_default_caps);
   RUN(test_oversize_chunk_rejected);
   RUN(test_chunk_cap_too_high);
