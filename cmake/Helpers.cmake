@@ -55,9 +55,9 @@ function(add_damacy_test NAME)
     add_test(NAME ${NAME} COMMAND ${NAME})
 endfunction()
 
-# tests/fuzz/<NAME>.c → libFuzzer harness with sanitizer flags. Linked
-# against `json` (the only target the harnesses currently exercise);
-# extend if more get fuzzed.
+# tests/fuzz/<NAME>.c → libFuzzer harness with sanitizer flags. Extra
+# args are forwarded as PRIVATE link libraries so each harness pulls in
+# only the targets it exercises.
 function(add_damacy_fuzzer NAME)
     set(_FUZZ_FLAGS
         -fsanitize=fuzzer,address,undefined
@@ -66,7 +66,7 @@ function(add_damacy_fuzzer NAME)
         -O1
     )
     add_executable(${NAME} ${NAME}.c)
-    target_link_libraries(${NAME} PRIVATE warnings json)
+    target_link_libraries(${NAME} PRIVATE warnings ${ARGN})
     target_compile_options(${NAME} PRIVATE ${_FUZZ_FLAGS})
     target_link_options(${NAME} PRIVATE ${_FUZZ_FLAGS})
 endfunction()

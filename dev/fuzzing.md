@@ -1,12 +1,13 @@
-# Fuzzing util/json
+# Fuzzing the host-side parsers
 
-The JSON reader is the only attacker-reachable parser in the tree (zarr
-metadata is loaded from arbitrary on-disk bytes), so it gets a libFuzzer
-harness. Two harnesses, actually: one stresses the lexer with arbitrary
-input bytes, the other stresses the query evaluator with arbitrary
-`json_query` shapes.
+libFuzzer harnesses for the host-side parsers:
 
-Both live under `tests/fuzz/` and only build when `DAMACY_FUZZ=ON`,
+- `fuzz_json_input` — lexer driven by arbitrary input bytes
+- `fuzz_json_query` — query evaluator driven by arbitrary `json_query` shapes
+- `fuzz_shard_index` — shard-index footer parser
+- `fuzz_zarr_metadata` — zarr v3 metadata semantic-layer validation
+
+All live under `tests/fuzz/` and only build when `DAMACY_FUZZ=ON`,
 which also gates out the CUDA-dependent slice of the tree (decoder,
 pipeline, bench). Requires clang — gcc has no libFuzzer.
 
@@ -54,6 +55,16 @@ Bounds on decoded queries:
 | key / rhs literal    | 8     | enough to cover real key shapes              |
 | arena size           | 4 KiB | one fuzz iteration of decoded parts           |
 
+### `fuzz_shard_index` — shard-index footer parser
+
+Drives `zarr_shard_index_parse` with both length-derived and
+intentionally-mismatched `n_entries`.
+
+### `fuzz_zarr_metadata` — semantic-layer fuzzer
+
+Splices selector-driven value substrings into a templated zarr v3
+document, then drives `zarr_metadata_parse` and `zarr_metadata_inner_per_shard`.
+
 ## Build
 
 ```fish
@@ -70,12 +81,16 @@ The first directory is where new findings are saved; subsequent dirs
 are read-only seeds. Mixing the two in one directory pollutes the seeds
 with whatever the fuzzer discovers, so we keep them separate:
 
-- `tests/fuzz/seeds/{input,query}/` — hand-crafted seeds, checked in.
-- `build-fuzz/corpus/{input,query}/` — runtime corpus, gitignored via
-  the `build-*` entry in `.gitignore`.
+- `tests/fuzz/seeds/{input,query,shard_index,zarr_metadata}/` —
+  hand-crafted seeds, checked in.
+- `build-fuzz/corpus/{input,query,shard_index,zarr_metadata}/` —
+  runtime corpus, gitignored via the `build-*` entry in `.gitignore`.
 
 ```fish
-mkdir -p build-fuzz/corpus/input build-fuzz/corpus/query
+mkdir -p build-fuzz/corpus/input \
+         build-fuzz/corpus/query \
+         build-fuzz/corpus/shard_index \
+         build-fuzz/corpus/zarr_metadata
 
 ./build-fuzz/tests/fuzz/fuzz_json_input \
   build-fuzz/corpus/input \
@@ -84,6 +99,14 @@ mkdir -p build-fuzz/corpus/input build-fuzz/corpus/query
 ./build-fuzz/tests/fuzz/fuzz_json_query \
   build-fuzz/corpus/query \
   tests/fuzz/seeds/query
+
+./build-fuzz/tests/fuzz/fuzz_shard_index \
+  build-fuzz/corpus/shard_index \
+  tests/fuzz/seeds/shard_index
+
+./build-fuzz/tests/fuzz/fuzz_zarr_metadata \
+  build-fuzz/corpus/zarr_metadata \
+  tests/fuzz/seeds/zarr_metadata
 ```
 
 Useful libFuzzer flags:
@@ -203,4 +226,7 @@ re-exercise it. Same for query-fuzzer regressions in
 For the input fuzzer the seeds are JSON files (any valid JSON). For
 the query fuzzer the seeds are raw bytes interpreted by the
 `decode_parts` tape format in `fuzz_json_query.c` — see that file for
-the byte layout.
+the byte layout. The metadata fuzzer takes either valid zarr v3
+documents (which become near-valid after mutation) or raw bytes; the
+shard-index fuzzer takes either a valid `(offsets,nbytes)+crc32c` blob
+or raw bytes.

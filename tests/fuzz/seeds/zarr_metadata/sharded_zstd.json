@@ -1,0 +1,1 @@
+{"node_type":"array","zarr_format":3,"shape":[1024,1024,128],"data_type":"uint16","chunk_grid":{"name":"regular","configuration":{"chunk_shape":[1024,1024,128]}},"codecs":[{"name":"sharding_indexed","configuration":{"chunk_shape":[64,64,16],"codecs":[{"name":"bytes"},{"name":"zstd","configuration":{"level":3}}],"index_location":"end"}}]}
