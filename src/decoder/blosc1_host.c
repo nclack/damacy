@@ -382,18 +382,11 @@ scan_offsets(const struct blosc1_chunk_counts* counts,
 }
 
 int
-blosc1_host_parse(struct threadpool* pool,
-                  const struct blosc1_host_chunk* chunks,
-                  uint32_t n_chunks,
-                  struct blosc1_host_scratch scratch,
-                  struct blosc1_host_fanout zstd,
-                  struct blosc1_host_fanout lz4,
-                  struct gpu_memcpy_op* memcpy_ops,
-                  struct gpu_shuffle_op* unshuffle_ops,
-                  struct gpu_shuffle_op* bitunshuffle_ops,
-                  struct blosc1_totals* out_totals)
+blosc1_host_parse(const struct blosc1_host_parse_args* args)
 {
-  CHECK(Fail, out_totals);
+  CHECK(Fail, args);
+  CHECK(Fail, args->out_totals);
+  struct blosc1_totals* out_totals = args->out_totals;
 
   // n_codec_errors is set by decoder_status_reduce after nvcomp; leave
   // it alone here. Other fields are fully written below.
@@ -403,43 +396,43 @@ blosc1_host_parse(struct threadpool* pool,
   out_totals->n_unshuffle = 0;
   out_totals->n_bitunshuffle = 0;
   out_totals->n_parse_errors = 0;
-  if (n_chunks == 0)
+  if (args->n_chunks == 0)
     return 0;
 
   // Per-wave scratch + the destination arrays must be sized for the
   // worst-case substream count of the wave. Fanout SOAs may be empty
   // for codecs that aren't present in this wave but the SOA pointer
   // arrays must still be valid (phase_emit indexes them by codec).
-  CHECK(Fail, chunks);
-  CHECK(Fail, scratch.hdrs);
-  CHECK(Fail, scratch.counts);
-  CHECK(Fail, scratch.offsets);
-  CHECK(Fail, zstd.comp_ptrs);
-  CHECK(Fail, zstd.comp_sizes);
-  CHECK(Fail, zstd.decomp_ptrs);
-  CHECK(Fail, zstd.decomp_buf_sizes);
-  CHECK(Fail, lz4.comp_ptrs);
-  CHECK(Fail, lz4.comp_sizes);
-  CHECK(Fail, lz4.decomp_ptrs);
-  CHECK(Fail, lz4.decomp_buf_sizes);
-  CHECK(Fail, memcpy_ops);
-  CHECK(Fail, unshuffle_ops);
-  CHECK(Fail, bitunshuffle_ops);
+  CHECK(Fail, args->chunks);
+  CHECK(Fail, args->scratch.hdrs);
+  CHECK(Fail, args->scratch.counts);
+  CHECK(Fail, args->scratch.offsets);
+  CHECK(Fail, args->zstd.comp_ptrs);
+  CHECK(Fail, args->zstd.comp_sizes);
+  CHECK(Fail, args->zstd.decomp_ptrs);
+  CHECK(Fail, args->zstd.decomp_buf_sizes);
+  CHECK(Fail, args->lz4.comp_ptrs);
+  CHECK(Fail, args->lz4.comp_sizes);
+  CHECK(Fail, args->lz4.decomp_ptrs);
+  CHECK(Fail, args->lz4.decomp_buf_sizes);
+  CHECK(Fail, args->memcpy_ops);
+  CHECK(Fail, args->unshuffle_ops);
+  CHECK(Fail, args->bitunshuffle_ops);
 
   struct parse_ctx ctx = {
-    .chunks = chunks,
-    .hdrs = scratch.hdrs,
-    .counts = scratch.counts,
-    .offsets = scratch.offsets,
-    .zstd = zstd,
-    .lz4 = lz4,
-    .memcpy_ops = memcpy_ops,
-    .unshuffle_ops = unshuffle_ops,
-    .bitunshuffle_ops = bitunshuffle_ops,
+    .chunks = args->chunks,
+    .hdrs = args->scratch.hdrs,
+    .counts = args->scratch.counts,
+    .offsets = args->scratch.offsets,
+    .zstd = args->zstd,
+    .lz4 = args->lz4,
+    .memcpy_ops = args->memcpy_ops,
+    .unshuffle_ops = args->unshuffle_ops,
+    .bitunshuffle_ops = args->bitunshuffle_ops,
   };
   atomic_store_explicit(&ctx.n_parse_errors, 0u, memory_order_relaxed);
 
-  threadpool_for_n_dynamic(pool, n_chunks, phase_count, &ctx);
+  threadpool_for_n_dynamic(args->pool, args->n_chunks, phase_count, &ctx);
 
   out_totals->n_parse_errors =
     atomic_load_explicit(&ctx.n_parse_errors, memory_order_relaxed);
@@ -449,9 +442,10 @@ blosc1_host_parse(struct threadpool* pool,
     return 1;
   }
 
-  scan_offsets(scratch.counts, scratch.offsets, n_chunks, out_totals);
+  scan_offsets(
+    args->scratch.counts, args->scratch.offsets, args->n_chunks, out_totals);
 
-  threadpool_for_n_dynamic(pool, n_chunks, phase_emit, &ctx);
+  threadpool_for_n_dynamic(args->pool, args->n_chunks, phase_emit, &ctx);
   return 0;
 Fail:
   return 1;

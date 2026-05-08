@@ -187,16 +187,18 @@ run_one(const struct fixture* fx, struct threadpool* pool, CUstream stream)
     .decomp_buf_sizes = lz4_decomp_sizes,
   };
 
-  EXPECT(blosc1_host_parse(pool,
-                           &h_chunk,
-                           1,
-                           scratch,
-                           host_zstd,
-                           host_lz4,
-                           memcpy_ops,
-                           &unsh,
-                           &bitunsh,
-                           &h_totals) == 0);
+  EXPECT(blosc1_host_parse(&(struct blosc1_host_parse_args){
+           .pool = pool,
+           .chunks = &h_chunk,
+           .n_chunks = 1,
+           .scratch = scratch,
+           .zstd = host_zstd,
+           .lz4 = host_lz4,
+           .memcpy_ops = memcpy_ops,
+           .unshuffle_ops = &unsh,
+           .bitunshuffle_ops = &bitunsh,
+           .out_totals = &h_totals,
+         }) == 0);
   EXPECT(h_hdr.err == 0);
 
   // Cross-check that the parser pulled the filter flags. Strings are

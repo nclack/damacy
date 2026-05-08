@@ -1290,16 +1290,18 @@ kick_h2d(struct damacy* self, struct damacy_wave* wave)
   build_blosc1_host_chunks(self, wave);
 
   uint64_t parse_t0 = monotonic_ns();
-  int rc = blosc1_host_parse(self->compute_pool,
-                             wave->h_chunks,
-                             wave->n_chunks,
-                             wave->scratch,
-                             wave->h_zstd_fan,
-                             wave->h_lz4_fan,
-                             wave->h_memcpy_ops,
-                             wave->h_unshuffle_ops,
-                             wave->h_bitunshuffle_ops,
-                             wave->h_blosc1_totals);
+  int rc = blosc1_host_parse(&(struct blosc1_host_parse_args){
+    .pool = self->compute_pool,
+    .chunks = wave->h_chunks,
+    .n_chunks = wave->n_chunks,
+    .scratch = wave->scratch,
+    .zstd = wave->h_zstd_fan,
+    .lz4 = wave->h_lz4_fan,
+    .memcpy_ops = wave->h_memcpy_ops,
+    .unshuffle_ops = wave->h_unshuffle_ops,
+    .bitunshuffle_ops = wave->h_bitunshuffle_ops,
+    .out_totals = wave->h_blosc1_totals,
+  });
   wave->parse_ms = (float)((monotonic_ns() - parse_t0) / 1.0e6);
   if (rc) {
     // Still record h2d_end so any wave-state cleanup gated on it drains.

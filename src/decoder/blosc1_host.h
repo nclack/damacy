@@ -60,30 +60,52 @@ extern "C"
     struct blosc1_chunk_offsets* offsets;
   };
 
-  // Parse n_chunks blosc1 chunks on `pool`, fill the fanout / ops arrays,
-  // produce wave-level totals.
+  // Inputs + outputs for blosc1_host_parse. Designated-initializer
+  // construction at the call site keeps the names visible:
   //
-  // pool may be NULL (or have nworkers == 0) — both fall through to
-  // serial execution on the calling thread.
+  //   blosc1_host_parse(&(struct blosc1_host_parse_args){
+  //       .pool = compute_pool,
+  //       .chunks = h_chunks, .n_chunks = n,
+  //       .scratch = wave->scratch,
+  //       .zstd = h_zstd_fan, .lz4 = h_lz4_fan,
+  //       .memcpy_ops = h_memcpy_ops,
+  //       .unshuffle_ops = h_unshuffle_ops,
+  //       .bitunshuffle_ops = h_bitunshuffle_ops,
+  //       .out_totals = h_blosc1_totals,
+  //   });
+  struct blosc1_host_parse_args
+  {
+    // Inputs.
+    struct threadpool* pool; // NULL or nworkers==0 → serial on caller
+    const struct blosc1_host_chunk* chunks;
+    uint32_t n_chunks;
+
+    // Per-wave scratch (allocated once at wave_init, reused).
+    struct blosc1_host_scratch scratch;
+
+    // Outputs filled in-place. Pointer slots in the SOAs hold device
+    // addresses (chunks[i].d_compressed / d_decompressed + offset).
+    struct blosc1_host_fanout zstd;
+    struct blosc1_host_fanout lz4;
+    struct gpu_memcpy_op* memcpy_ops;
+    struct gpu_shuffle_op* unshuffle_ops;
+    struct gpu_shuffle_op* bitunshuffle_ops;
+
+    // Totals are fully written: count fields from the per-chunk scan
+    // and n_parse_errors from the count of chunks that failed
+    // validation. n_codec_errors is left untouched (still set on
+    // device by decoder_status_reduce after nvcomp).
+    struct blosc1_totals* out_totals;
+  };
+
+  // Parse args->n_chunks blosc1 chunks on args->pool, fill the fanout /
+  // ops arrays, produce wave-level totals.
   //
-  // out_totals is fully written: count fields from the per-chunk scan
-  // and n_parse_errors from the count of chunks that failed validation.
-  // n_codec_errors is left untouched (still set on device by
-  // decoder_status_reduce after nvcomp).
-  //
-  // Returns 0 on success (no parse errors); non-zero if any chunk failed
-  // header validation. Callers should also inspect
-  // out_totals->n_parse_errors and surface the wave as DAMACY_DECODE.
-  int blosc1_host_parse(struct threadpool* pool,
-                        const struct blosc1_host_chunk* chunks,
-                        uint32_t n_chunks,
-                        struct blosc1_host_scratch scratch,
-                        struct blosc1_host_fanout zstd,
-                        struct blosc1_host_fanout lz4,
-                        struct gpu_memcpy_op* memcpy_ops,
-                        struct gpu_shuffle_op* unshuffle_ops,
-                        struct gpu_shuffle_op* bitunshuffle_ops,
-                        struct blosc1_totals* out_totals);
+  // Returns 0 on success (no parse errors); non-zero if any chunk
+  // failed header validation. Callers should also inspect
+  // args->out_totals->n_parse_errors and surface the wave as
+  // DAMACY_DECODE.
+  int blosc1_host_parse(const struct blosc1_host_parse_args* args);
 
 #ifdef __cplusplus
 }
