@@ -266,7 +266,10 @@ parse_scenario(struct cslice src, struct scenario* sc)
       return 1;
   }
   {
-    static const struct json_query p[] = { { QUERY_KEY, .key = "dataset" },
+    // Destination dtype lives on `pipeline.dtype` now; per-zarr source
+    // dtypes are written by gen_dataset.py and the loader picks them up
+    // from each zarr's metadata.
+    static const struct json_query p[] = { { QUERY_KEY, .key = "pipeline" },
                                            { QUERY_KEY, .key = "dtype" } };
     if (parse_dtype(src, p, countof(p), &sc->dtype))
       return 1;

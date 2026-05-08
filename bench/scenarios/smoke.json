@@ -8,7 +8,7 @@
     "zarr_shape": [64, 1024, 1024],
     "chunk_shape": [32, 128, 128],
     "shard_shape": [64, 512, 512],
-    "dtype": "u16",
+    "dtypes": ["u16"],
     "codecs": ["zstd"],
     "clevel": 3,
     "entropy": 0.5,
@@ -22,6 +22,7 @@
     "seed": 1234
   },
   "pipeline": {
+    "dtype": "f32",
     "lookahead_batches": 4,
     "n_io_threads": 4,
     "host_buffer_mb": 64,

@@ -10,7 +10,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-DType = Literal["u8", "u16", "i16", "u32", "f16", "f32"]
+SrcDType = Literal["u8", "u16", "i16", "u32", "i32", "f16", "f32"]
+DstDType = Literal["f32", "bf16"]
 Codec = Literal["none", "zstd", "blosc-zstd", "blosc-lz4"]
 
 NUMPY_DTYPE = {
@@ -18,6 +19,7 @@ NUMPY_DTYPE = {
     "u16": "uint16",
     "i16": "int16",
     "u32": "uint32",
+    "i32": "int32",
     "f16": "float16",
     "f32": "float32",
 }
@@ -31,7 +33,9 @@ class Dataset(BaseModel):
     zarr_shape: list[int]
     chunk_shape: list[int]
     shard_shape: list[int]
-    dtype: DType
+    # Source dtype assigned per-zarr cycling through this list. Length
+    # must be >= 1 and ideally divide n_zarrs.
+    dtypes: list[SrcDType]
     # Codec assigned per-zarr cycling through this list. Length must
     # divide n_zarrs (or be 1). `["zstd"]` reproduces the original
     # single-codec scenario.
@@ -47,15 +51,18 @@ class Dataset(BaseModel):
             raise ValueError("shape entries must be positive")
         return v
 
-    @field_validator("codecs")
+    @field_validator("codecs", "dtypes")
     @classmethod
     def _nonempty(cls, v: list[str]) -> list[str]:
         if not v:
-            raise ValueError("codecs must be non-empty")
+            raise ValueError("must be non-empty")
         return v
 
     def codec_for(self, zarr_idx: int) -> Codec:
         return self.codecs[zarr_idx % len(self.codecs)]
+
+    def dtype_for(self, zarr_idx: int) -> SrcDType:
+        return self.dtypes[zarr_idx % len(self.dtypes)]
 
 
 class Sampling(BaseModel):
@@ -67,6 +74,8 @@ class Sampling(BaseModel):
 
 
 class Pipeline(BaseModel):
+    # Destination dtype on the assembled batch. Sources cast to this.
+    dtype: DstDType = "f32"
     lookahead_batches: int = Field(gt=0)
     n_io_threads: int = Field(gt=0)
     host_buffer_mb: int = Field(gt=0)

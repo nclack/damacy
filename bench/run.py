@@ -49,7 +49,9 @@ def resolve_path(p: str) -> Path:
     return pp if pp.is_absolute() else REPO_ROOT / pp
 
 
-def gen_one_zarr(out: Path, sc: Scenario, seed: int, codec: str) -> int:
+def gen_one_zarr(
+    out: Path, sc: Scenario, seed: int, codec: str, dtype: str
+) -> int:
     ds = sc.dataset
     csv = lambda xs: ",".join(str(x) for x in xs)
     cmd = [
@@ -58,7 +60,7 @@ def gen_one_zarr(out: Path, sc: Scenario, seed: int, codec: str) -> int:
         "--shape", csv(ds.zarr_shape),
         "--inner", csv(ds.chunk_shape),
         "--shard", csv(ds.shard_shape),
-        "--dtype", NUMPY_DTYPE[ds.dtype],
+        "--dtype", NUMPY_DTYPE[dtype],
         "--codec", codec,
         "--clevel", str(ds.clevel),
         "--entropy", str(ds.entropy),
@@ -101,11 +103,15 @@ def ensure_zarrs(sc: Scenario, regen: bool) -> None:
         for i, zarr_root in pending:
             zarr_root.parent.mkdir(parents=True, exist_ok=True)
             codec = ds.codec_for(i)
+            dtype = ds.dtype_for(i)
             prog.update(
                 task,
-                description=f"[cyan]{zarr_root.name}[/cyan] [dim]({codec})[/dim]",
+                description=(
+                    f"[cyan]{zarr_root.name}[/cyan] "
+                    f"[dim]({codec}, {dtype})[/dim]"
+                ),
             )
-            rc = gen_one_zarr(zarr_root, sc, ds.seed + i, codec)
+            rc = gen_one_zarr(zarr_root, sc, ds.seed + i, codec, dtype)
             if rc != 0:
                 raise typer.Exit(rc)
             prog.advance(task)
