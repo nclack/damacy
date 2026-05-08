@@ -6,6 +6,7 @@ libFuzzer harnesses for the host-side parsers:
 - `fuzz_json_query` — query evaluator driven by arbitrary `json_query` shapes
 - `fuzz_shard_index` — shard-index footer parser
 - `fuzz_zarr_metadata` — zarr v3 metadata semantic-layer validation
+- `fuzz_blosc1_host` — blosc1 chunk-header parser (`blosc1_host_parse`)
 
 All live under `tests/fuzz/` and only build when `DAMACY_FUZZ=ON`,
 which also gates out the CUDA-dependent slice of the tree (decoder,
@@ -65,6 +66,14 @@ intentionally-mismatched `n_entries`.
 Splices selector-driven value substrings into a templated zarr v3
 document, then drives `zarr_metadata_parse` and `zarr_metadata_inner_per_shard`.
 
+### `fuzz_blosc1_host` — blosc1 chunk-header parser
+
+Drives `blosc1_host_parse` over a single synthetic chunk for each of
+the supported codec ids (`CODEC_BLOSC_LZ4`, `CODEC_BLOSC_ZSTD`,
+`CODEC_NONE`, `CODEC_ZSTD`, plus an unsupported sentinel) with a
+header-derived `decompressed_nbytes` and a small set of adversarial
+mismatched values to exercise the err=3..9 reject branches.
+
 ## Build
 
 ```fish
@@ -81,9 +90,9 @@ The first directory is where new findings are saved; subsequent dirs
 are read-only seeds. Mixing the two in one directory pollutes the seeds
 with whatever the fuzzer discovers, so we keep them separate:
 
-- `tests/fuzz/seeds/{input,query,shard_index,zarr_metadata}/` —
+- `tests/fuzz/seeds/{input,query,shard_index,zarr_metadata,blosc1_host}/` —
   hand-crafted seeds, checked in.
-- `build-fuzz/corpus/{input,query,shard_index,zarr_metadata}/` —
+- `build-fuzz/corpus/{input,query,shard_index,zarr_metadata,blosc1_host}/` —
   runtime corpus, gitignored via the `build-*` entry in `.gitignore`.
 
 ```fish
@@ -107,6 +116,10 @@ mkdir -p build-fuzz/corpus/input \
 ./build-fuzz/tests/fuzz/fuzz_zarr_metadata \
   build-fuzz/corpus/zarr_metadata \
   tests/fuzz/seeds/zarr_metadata
+
+./build-fuzz/tests/fuzz/fuzz_blosc1_host \
+  build-fuzz/corpus/blosc1_host \
+  tests/fuzz/seeds/blosc1_host
 ```
 
 Useful libFuzzer flags:
