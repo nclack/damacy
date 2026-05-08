@@ -37,9 +37,6 @@ concurrency:
 jobs:
   bench:
     runs-on: [self-hosted, gpu]
-    # Cap the whole job at 30 min. Healthy run is ~2 min; a stuck
-    # damacy_bench (see #20) used to sit until GHA's 6h default kicked
-    # in or the user canceled, blocking the gpu-runner concurrency group.
     timeout-minutes: 30
     env:
       IMAGE: damacy:${{ github.sha }}-bench
@@ -56,9 +53,6 @@ jobs:
         run: docker build --tag "$IMAGE" .
 
       - name: Run bench scenarios + adapt to GHA-bench format
-        # Healthy bench step finishes in ~1 min. Cap at 20 min so a
-        # hung damacy_bench (#20) fails fast with logs intact instead
-        # of riding the GHA default 6h or sitting until cancellation.
         timeout-minutes: 20
         env:
           # Prefix every metric with the runner name so histories from
@@ -76,10 +70,6 @@ jobs:
               cd /workspace/damacy
               for scenario in default mixed; do
                 echo "::group::scenario=$scenario"
-                # Inner per-scenario cap: a healthy scenario runs in
-                # ~10s. SIGTERM at 5 min, SIGKILL 30s later if it does
-                # not exit. Surfaces a hung damacy_bench scenario with
-                # a non-zero rc and the partial stdout in the log.
                 timeout --kill-after=30s 5m \
                   uv run bench/run.py "bench/scenarios/${scenario}.json" --no-report
                 latest=$(ls -1d bench/runs/${scenario}/*/ | tail -1)
