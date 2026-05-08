@@ -24,7 +24,11 @@ comment:
   require_changes: false
 
 # Mirror gcovr's exclusions in test.yml so the report and the gate agree.
+# python/tests is the pytest harness for damacy._native (issue #10);
+# excluded for the same reason as tests/** — test code shouldn't be
+# counted against patch coverage.
 ignore:
   - "tests/**"
+  - "python/tests/**"
   - "experiments/**"
   - "build/**"
