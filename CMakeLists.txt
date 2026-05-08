@@ -55,9 +55,12 @@ if(
     add_subdirectory(experiments/asm)
 endif()
 
+# CTest before python/ so python/CMakeLists.txt can register its
+# pytest target alongside the C tests under a single BUILD_TESTING gate.
+include(CTest)
+
 if(DAMACY_PYTHON)
     add_subdirectory(python)
 endif()
 
-include(CTest)
 add_subdirectory(tests)

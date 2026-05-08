@@ -2066,6 +2066,7 @@ damacy_stats_get(const struct damacy* self, struct damacy_stats* out)
     out->shard_idx_hits = ss.counters.hits;
     out->shard_idx_misses = ss.counters.misses;
   }
+  out->gpu_bytes_committed = self->gpu_bytes_committed;
 }
 
 void

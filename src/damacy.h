@@ -240,6 +240,12 @@ extern "C"
     uint64_t batches_truncated;
     uint64_t waves_emitted;
     uint64_t chunks_dispatched;
+
+    // Total GPU bytes currently committed to wave-resident buffers and
+    // batch-output pools, counted against max_gpu_memory_bytes. Grows from
+    // wave-init to the first damacy_pop (lazy batch pool sizing) and stays
+    // flat after that. Useful for surfacing the runtime budget to callers.
+    uint64_t gpu_bytes_committed;
   };
 
   void damacy_stats_get(const struct damacy* d, struct damacy_stats* out);

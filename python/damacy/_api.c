@@ -496,6 +496,9 @@ Damacy_init(DamacyObj* self, PyObject* args, PyObject* kw)
                          "n_zarrs_meta_cache",
                          "n_shards_meta_cache",
                          "dtype",
+                         "max_chunk_uncompressed_bytes",
+                         "max_gpu_memory_bytes",
+                         "max_bytes_per_element",
                          NULL };
   const char* store_root = NULL;
   unsigned int batch_size = 0;
@@ -506,9 +509,12 @@ Damacy_init(DamacyObj* self, PyObject* args, PyObject* kw)
   unsigned int n_zarrs_meta = 64;
   unsigned int n_shards_meta = 256;
   PyObject* dtype_obj = NULL;
+  unsigned int max_chunk_uncompressed = 0;
+  unsigned long long max_gpu_bytes = 0;
+  unsigned char max_bytes_per_element = 0;
   if (!PyArg_ParseTupleAndKeywords(args,
                                    kw,
-                                   "sIIIKKIIO",
+                                   "sIIIKKIIOI|KB",
                                    kws,
                                    &store_root,
                                    &batch_size,
@@ -518,7 +524,10 @@ Damacy_init(DamacyObj* self, PyObject* args, PyObject* kw)
                                    &dev_bytes,
                                    &n_zarrs_meta,
                                    &n_shards_meta,
-                                   &dtype_obj))
+                                   &dtype_obj,
+                                   &max_chunk_uncompressed,
+                                   &max_gpu_bytes,
+                                   &max_bytes_per_element))
     return -1;
 
   enum damacy_dtype dt;
@@ -535,6 +544,9 @@ Damacy_init(DamacyObj* self, PyObject* args, PyObject* kw)
     .n_zarrs_meta_cache = n_zarrs_meta,
     .n_shards_meta_cache = n_shards_meta,
     .dtype = dt,
+    .max_chunk_uncompressed_bytes = max_chunk_uncompressed,
+    .max_gpu_memory_bytes = (uint64_t)max_gpu_bytes,
+    .max_bytes_per_element = max_bytes_per_element,
   };
 
   struct damacy* d = NULL;
@@ -702,7 +714,7 @@ Damacy_stats(DamacyObj* self, PyObject* Py_UNUSED(ignored))
   struct damacy_stats st;
   damacy_stats_get(self->handle, &st);
   return Py_BuildValue("{s:N,s:N,s:N,s:N,s:N,s:N,s:N,s:N,"
-                       "s:K,s:K,s:K,s:K,s:K,s:K,s:K}",
+                       "s:K,s:K,s:K,s:K,s:K,s:K,s:K,s:K}",
                        "plan",
                        metric_to_dict(&st.plan),
                        "io",
@@ -732,7 +744,9 @@ Damacy_stats(DamacyObj* self, PyObject* Py_UNUSED(ignored))
                        "batches_truncated",
                        (unsigned long long)st.batches_truncated,
                        "waves_emitted",
-                       (unsigned long long)st.waves_emitted);
+                       (unsigned long long)st.waves_emitted,
+                       "gpu_bytes_committed",
+                       (unsigned long long)st.gpu_bytes_committed);
 }
 
 static PyObject*
