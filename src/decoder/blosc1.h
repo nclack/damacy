@@ -1,8 +1,10 @@
+// blosc1 type definitions shared by the host parse (decoder/blosc1_host.{h,c})
+// and the device-side fanout consumers (nvcomp + memcpy + (bit)unshuffle).
+// The host parse fills the per-chunk hdr / counts / offsets and writes
+// device pointers into the SOA fanout slots; the count totals drive the
+// nvcomp batch sizes.
 #pragma once
 
-#include "decoder/decoder_memcpy.h"
-
-#include <cuda.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -31,22 +33,9 @@ extern "C"
     uint32_t tail_nbytes;
   };
 
-  // One per chunk in the wave. Driven by the planner output (codec_id,
-  // sizes) and resolved device pointers into the wave's compressed and
-  // decompressed arenas.
-  struct blosc1_chunk_input
-  {
-    const void* d_compressed;
-    void* d_decompressed;
-    uint32_t compressed_nbytes;
-    uint32_t decompressed_nbytes;
-    uint8_t codec_id;
-    uint8_t _pad[7];
-  };
-
-  // Parsed-out blosc1 chunk header. Filled by blosc1_parse_and_count for
-  // CODEC_BLOSC_*; left mostly-zero (with codec_id stamped) for non-blosc
-  // codecs. err is non-zero on parse failure for the chunk.
+  // Parsed-out blosc1 chunk header for CODEC_BLOSC_*; left mostly-zero
+  // (with codec_id stamped) for non-blosc codecs. err is non-zero on
+  // parse failure for the chunk (1..8 — see decoder/blosc1_host.c).
   struct blosc1_chunk_hdr
   {
     uint8_t codec_id;
@@ -64,9 +53,8 @@ extern "C"
   };
 
   // Per-chunk op counts. n_unshuffle / n_bitunshuffle are 0 or 1; the
-  // others can grow to substream counts. The exclusive scan in
-  // blosc1_scan_offsets_kernel sums these into blosc1_totals (which uses
-  // matching n_* names).
+  // others can grow to substream counts. The serial scan in the host
+  // parse sums these into blosc1_totals (matching n_* names).
   struct blosc1_chunk_counts
   {
     uint32_t n_zstd;
@@ -86,11 +74,9 @@ extern "C"
   };
 
   // Wave-level totals + error counters. n_parse_errors is set by the
-  // parse kernel via atomicAdd (one per chunk with a non-zero h.err);
-  // n_codec_errors is set by decoder_status_reduce_launch after each
-  // nvcomp batch. The host zeroes the whole struct before parse via
-  // cudaMemsetAsync; the scan kernel writes only the five count fields,
-  // leaving the error counters untouched.
+  // host parse (counted as chunks with a non-zero h.err); n_codec_errors
+  // is set on-device by decoder_status_reduce_launch after each nvcomp
+  // batch and read back via a 4-byte D2H at the end of post_decode.
   struct blosc1_totals
   {
     uint32_t n_zstd;
@@ -101,33 +87,6 @@ extern "C"
     uint32_t n_parse_errors;
     uint32_t n_codec_errors;
   };
-
-  // d_totals is zeroed by the launcher before the parse kernel runs;
-  // the kernel atomicAdds into d_totals->n_parse_errors for each chunk
-  // it rejects, and the scan kernel later fills the count fields.
-  int blosc1_parse_and_count_launch(CUstream stream,
-                                    const struct blosc1_chunk_input* d_inputs,
-                                    struct blosc1_chunk_hdr* d_hdrs,
-                                    struct blosc1_chunk_counts* d_counts,
-                                    struct blosc1_totals* d_totals,
-                                    uint32_t n_chunks);
-
-  int blosc1_scan_offsets_launch(CUstream stream,
-                                 const struct blosc1_chunk_counts* d_counts,
-                                 struct blosc1_chunk_offsets* d_offsets,
-                                 struct blosc1_totals* d_totals,
-                                 uint32_t n_chunks);
-
-  int blosc1_emit_fanout_launch(CUstream stream,
-                                const struct blosc1_chunk_input* d_inputs,
-                                const struct blosc1_chunk_hdr* d_hdrs,
-                                const struct blosc1_chunk_offsets* d_offsets,
-                                struct nvcomp_fanout zstd,
-                                struct nvcomp_fanout lz4,
-                                struct gpu_memcpy_op* d_memcpy_ops,
-                                struct gpu_shuffle_op* d_unshuffle_ops,
-                                struct gpu_shuffle_op* d_bitunshuffle_ops,
-                                uint32_t n_chunks);
 
 #ifdef __cplusplus
 }
