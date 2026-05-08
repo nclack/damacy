@@ -34,6 +34,8 @@ blosc1_host_parse_err_str(uint8_t err)
       return "header.compformat does not match codec_id";
     case 8:
       return "unsupported codec_id";
+    case 9:
+      return "bstart out of range";
     default:
       return "unknown";
   }
@@ -207,8 +209,19 @@ parse_count_one(const struct blosc1_host_chunk* in,
     goto Done;
   }
 
-  for (uint32_t bi = 0; bi < h.nblocks; ++bi)
-    bstarts_slot[bi] = read_u32_le(p + BLOSC1_HEADER_BYTES + 4u * bi);
+  const uint32_t payload_lo = BLOSC1_HEADER_BYTES + 4u * h.nblocks;
+  if (payload_lo > h.cbytes) {
+    h.err = 9;
+    goto Done;
+  }
+  for (uint32_t bi = 0; bi < h.nblocks; ++bi) {
+    const uint32_t bs = read_u32_le(p + BLOSC1_HEADER_BYTES + 4u * bi);
+    if (bs < payload_lo || bs > h.cbytes) {
+      h.err = 9;
+      goto Done;
+    }
+    bstarts_slot[bi] = bs;
+  }
   fill_block_ends(bstarts_slot, block_ends_slot, h.nblocks, h.cbytes);
   walk_count(p, &h, in->codec_id, bstarts_slot, block_ends_slot, &c);
 

@@ -481,6 +481,21 @@ test_bad_header(void)
   build_blosc1_header(hdr, CODEC_BLOSC_LZ4, 4096, 1024, 100, 4);
   EXPECT(expect_parse_err(99u, hdr, 100, 4096, 8, pool) == 0);
 
+  // err=9: bstart out of range. Build a valid 16+4*nblocks header
+  // followed by bstart entries that point past cbytes. nblocks=4 →
+  // cbytes=32 (header 16 + 4 bstarts * 4). bstarts[0] = 0xffffffff
+  // is far past cbytes; the loader must reject before walk_count.
+  uint8_t buf9[32];
+  memset(buf9, 0, sizeof buf9);
+  build_blosc1_header(buf9, CODEC_BLOSC_LZ4, 4096, 1024, 32, 4);
+  for (int i = 0; i < 4; ++i) {
+    buf9[16 + i * 4 + 0] = 0xff;
+    buf9[16 + i * 4 + 1] = 0xff;
+    buf9[16 + i * 4 + 2] = 0xff;
+    buf9[16 + i * 4 + 3] = 0xff;
+  }
+  EXPECT(expect_parse_err(CODEC_BLOSC_LZ4, buf9, 32, 4096, 9, pool) == 0);
+
   // Spot-check the stringifier surface too.
   EXPECT(strcmp(blosc1_host_parse_err_str(0), "ok") == 0);
   EXPECT(strcmp(blosc1_host_parse_err_str(99), "unknown") == 0);
