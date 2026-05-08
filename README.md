@@ -22,7 +22,6 @@ import damacy
 import torch
 
 cfg = damacy.Config(
-    store_root="/data/cells",
     batch_size=8,
     # Resource caps are fixed at construction; nothing grows after.
     host_buffer_bytes=1 << 30,    # pinned host staging pool
@@ -34,14 +33,14 @@ cfg = damacy.Config(
     # https://nclack.github.io/damacy/distributed/
 )
 
-# A Sample names a uri (relative to Config.store_root) and a per-axis
-# half-open AABB into the stored array (np.s_[...] also accepted).
-# Build them however suits — your own sampler, a torch Dataset, a
-# curriculum, a fixed tile grid, ...
-volumes = {  # uri → full ZYX shape
-    "brain-001.zarr":  (512, 4096, 4096),
-    "brain-002.zarr":  (768, 4096, 4096),
-    "kidney-007.zarr": (256, 2048, 2048),
+# A Sample names an absolute uri and a per-axis half-open AABB into
+# the stored array (np.s_[...] also accepted). Build them however
+# suits — your own sampler, a torch Dataset, a curriculum, a fixed
+# tile grid, ...
+volumes = {  # absolute uri → full ZYX shape
+    "/data/cells/brain-001.zarr":  (512, 4096, 4096),
+    "/data/cells/brain-002.zarr":  (768, 4096, 4096),
+    "/data/cells/kidney-007.zarr": (256, 2048, 2048),
 }
 def random_crop(size=(64, 256, 256)):
     uri, full = random.choice(list(volumes.items()))
@@ -70,7 +69,7 @@ def crops():
         yield random_crop()  # from the example above
 
 with damacy.Pipeline(cfg) as p:
-    p.push(crops())                    # bounded memory; pulled on demand
+    p.push(crops())                    # pulled on demand
     for step in range(N_STEPS):
         with p.pop() as t:
             x = torch.from_dlpack(t)

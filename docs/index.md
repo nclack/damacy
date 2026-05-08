@@ -20,15 +20,14 @@ import damacy
 import torch
 
 cfg = damacy.Config(
-    store_root="/data/cells",
     batch_size=8,
     host_buffer_bytes=1 << 30,
     device_buffer_bytes=1 << 30,
     dtype="bf16",
 )
 samples = [
-    damacy.Sample(uri="cell-1.zarr", aabb=[(0, 64), (0, 256), (0, 256)]),
-    damacy.Sample(uri="cell-2.zarr", aabb=[(0, 64), (0, 256), (0, 256)]),
+    damacy.Sample(uri="/data/cells/cell-1.zarr", aabb=[(0, 64), (0, 256), (0, 256)]),
+    damacy.Sample(uri="/data/cells/cell-2.zarr", aabb=[(0, 64), (0, 256), (0, 256)]),
 ]
 
 with damacy.Pipeline(cfg) as d:

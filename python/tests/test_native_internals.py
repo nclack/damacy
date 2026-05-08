@@ -52,11 +52,10 @@ def test_log_sink_routes_to_python_logger(caplog):
     assert any("pytest-smoke" in m for m in msgs), msgs
 
 
-def test_native_damacy_error_carries_status_and_what(tmp_path):
+def test_native_damacy_error_carries_status_and_what():
     # Cheapest INVAL trigger: bad max_chunk on construction.
     with pytest.raises(_native.DamacyError) as excinfo:
         _native.Pipeline(
-            store_root=str(tmp_path),
             batch_size=1,
             lookahead_batches=2,
             n_io_threads=1,

@@ -9,12 +9,27 @@ ruff + pyright.
 - [x] autodoc
 - [ ] wheel
 - [x] readme examples
-- [ ] !double check context binding behavior.
+- [x] !double check context binding behavior.
 - [ ] readme should show some non-trivial crops. mention all crops have to
       be same size
 - [ ] does the api need to be able to take a (cuda0 stream as input
+- [ ] !FIX store root in the python api
+- [x] !FIX python users expect all pushed input to get consumed
 
 I forgot about nvidia's DALI. I need to evaluate positioning wrt that.
+Added a TODO about comparative benchmarking. Looks like there have been some
+hackathon projects wrt zarr on DALI. Should look at that.
+
+- [ ] think about caller supplied memory. Batch memory reuse. The pointer might
+      pin the device so there's no ambiguity.
+- [ ] maybe move different ddp examples to docs and off the readme
+
+Ran `try-nvcomp` on this machine, and I get 42 GB/s, so we've got lots of
+headroom on this machine.
+
+cleanup
+
+- [ ] refactor long files
 
 ## 2026-05-07
 

@@ -12,7 +12,6 @@ from __future__ import annotations
 import dataclasses
 import shutil
 import subprocess
-from pathlib import Path
 
 import damacy
 import pytest
@@ -32,7 +31,7 @@ from damacy import (
 )
 
 
-def _base_config(store_root: Path, dtype: str | int | damacy.Dtype = "f32") -> Config:
+def _base_config(dtype: str | int | damacy.Dtype = "f32") -> Config:
     """Minimum-viable Config for tests.
 
     Mirrors the defaults used by tests/test_damacy_caps.c::mk_cfg.
@@ -40,7 +39,6 @@ def _base_config(store_root: Path, dtype: str | int | damacy.Dtype = "f32") -> C
     zarrs cast in-kernel; tiny_zarr is u16 → f32 here.
     """
     return Config(
-        store_root=str(store_root),
         batch_size=1,
         host_buffer_bytes=1 << 20,
         device_buffer_bytes=1 << 20,
@@ -86,9 +84,9 @@ def test_dtype_coerce():
 # ---- construction & validation ------------------------------------------
 
 
-def test_oversize_max_chunk_raises_invalid_argument(tmp_path):
+def test_oversize_max_chunk_raises_invalid_argument():
     cfg = dataclasses.replace(
-        _base_config(tmp_path),
+        _base_config(),
         max_chunk_uncompressed_bytes=_native.MAX_CHUNK_UNCOMPRESSED_BYTES + 1,
     )
     with pytest.raises(InvalidArgument) as excinfo:
@@ -100,8 +98,8 @@ def test_oversize_max_chunk_raises_invalid_argument(tmp_path):
     assert isinstance(excinfo.value, RuntimeError)
 
 
-def test_max_gpu_memory_too_small_raises_oom(tmp_path):
-    cfg = dataclasses.replace(_base_config(tmp_path), max_gpu_memory_bytes=64)
+def test_max_gpu_memory_too_small_raises_oom():
+    cfg = dataclasses.replace(_base_config(), max_gpu_memory_bytes=64)
     with pytest.raises(OutOfMemory) as excinfo:
         Pipeline(cfg)
     assert excinfo.value.status is Status.OOM
@@ -109,30 +107,30 @@ def test_max_gpu_memory_too_small_raises_oom(tmp_path):
 
 @pytest.mark.parametrize("dtype", ["f32", "bf16", "float32", "bfloat16"])
 def test_dtype_string_form_accepted(tiny_zarr, dtype):
-    root, _ = tiny_zarr
-    with Pipeline(_base_config(root, dtype=dtype)) as d:
+    _ = tiny_zarr
+    with Pipeline(_base_config(dtype=dtype)) as d:
         assert isinstance(d, Pipeline)
         assert d.config.dtype is damacy.Dtype.coerce(dtype)
 
 
 def test_dtype_int_form_accepted(tiny_zarr):
-    root, _ = tiny_zarr
-    with Pipeline(_base_config(root, dtype=damacy.Dtype.BF16)) as d:
+    _ = tiny_zarr
+    with Pipeline(_base_config(dtype=damacy.Dtype.BF16)) as d:
         assert d.config.dtype is damacy.Dtype.BF16
 
 
-def test_dtype_unknown_string_raises(tmp_path):
+def test_dtype_unknown_string_raises():
     # Validation runs in Config.__post_init__ — fails before we touch CUDA.
     with pytest.raises(ValueError, match="unknown dtype"):
-        _base_config(tmp_path, dtype="u16")
+        _base_config(dtype="u16")
 
 
 # ---- end-to-end push / pop / release ------------------------------------
 
 
 def test_push_pop_release_via_context_managers(tiny_zarr):
-    root, uri = tiny_zarr
-    with Pipeline(_base_config(root)) as d:
+    uri = tiny_zarr
+    with Pipeline(_base_config()) as d:
         d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
 
         with d.pop() as batch:
@@ -146,16 +144,16 @@ def test_push_pop_release_via_context_managers(tiny_zarr):
 
 
 def test_unknown_uri_raises_notfound(tiny_zarr):
-    root, _ = tiny_zarr
-    with Pipeline(_base_config(root)) as d:
+    _ = tiny_zarr
+    with Pipeline(_base_config()) as d:
         with pytest.raises(NotFound) as excinfo:
             d.push([Sample(uri="not_a_zarr", aabb=[(0, 8), (0, 16)])])
         assert excinfo.value.status is Status.NOTFOUND
 
 
 def test_unsupported_src_dtype_raises_dtype_mismatch(tiny_zarr_no_cast):
-    root, uri = tiny_zarr_no_cast
-    with Pipeline(_base_config(root, dtype="f32")) as d:
+    uri = tiny_zarr_no_cast
+    with Pipeline(_base_config(dtype="f32")) as d:
         with pytest.raises(DtypeMismatch) as excinfo:
             d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
         assert excinfo.value.status is Status.DTYPE
@@ -175,11 +173,11 @@ def test_oversize_chunk_surfaces_at_pop(tmp_path, write_zarr_script):
         pytest.skip(f"write_zarr.py failed: {r.stderr}")
 
     cfg = dataclasses.replace(
-        _base_config(tmp_path),
+        _base_config(),
         max_chunk_uncompressed_bytes=128,  # 8x16 u16 = 256 B → over
     )
     with Pipeline(cfg) as d:
-        d.push([Sample(uri="foo", aabb=[(0, 8), (0, 16)])])
+        d.push([Sample(uri=str(out), aabb=[(0, 8), (0, 16)])])
         with pytest.raises(InvalidArgument):
             d.pop()
 
@@ -188,11 +186,11 @@ def test_oversize_chunk_surfaces_at_pop(tmp_path, write_zarr_script):
 
 
 def test_batches_iterator_yields_n(tiny_zarr):
-    root, uri = tiny_zarr
+    uri = tiny_zarr
     samples = [Sample(uri=uri, aabb=[(0, 8), (0, 16)]) for _ in range(3)]
     # Default lookahead (= 2 with batch_size=1, capacity=2) is now smaller
     # than the push; the wrapper queues the overflow and drains as we pop.
-    with Pipeline(_base_config(root)) as d:
+    with Pipeline(_base_config()) as d:
         d.push(samples)
         ids: list[int] = []
         for batch in d.batches(3):
@@ -202,8 +200,8 @@ def test_batches_iterator_yields_n(tiny_zarr):
 
 
 def test_push_returns_none(tiny_zarr):
-    root, uri = tiny_zarr
-    with Pipeline(_base_config(root)) as d:
+    uri = tiny_zarr
+    with Pipeline(_base_config()) as d:
         assert d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])]) is None
 
 
@@ -218,10 +216,10 @@ def _drain_ids(d: Pipeline, n: int) -> list[int]:
 def test_push_overflows_queue_into_pending(tiny_zarr):
     """Pushing more samples than the native lookahead holds is silently
     handled by the Python-side queue; pop drives the drain."""
-    root, uri = tiny_zarr
+    uri = tiny_zarr
     # default lookahead=2, batch_size=1 → capacity=2; we push 5.
     samples = [Sample(uri=uri, aabb=[(0, 8), (0, 16)]) for _ in range(5)]
-    with Pipeline(_base_config(root)) as d:
+    with Pipeline(_base_config()) as d:
         d.push(samples)
         assert d.pending  # 3 samples > capacity sitting in the deque
         assert _drain_ids(d, 5) == [0, 1, 2, 3, 4]
@@ -229,13 +227,13 @@ def test_push_overflows_queue_into_pending(tiny_zarr):
 
 
 def test_push_accepts_generator(tiny_zarr):
-    root, uri = tiny_zarr
+    uri = tiny_zarr
 
     def gen():
         for _ in range(4):
             yield Sample(uri=uri, aabb=[(0, 8), (0, 16)])
 
-    with Pipeline(_base_config(root)) as d:
+    with Pipeline(_base_config()) as d:
         d.push(gen())  # generator, not a list
         assert _drain_ids(d, 4) == [0, 1, 2, 3]
 
@@ -243,22 +241,22 @@ def test_push_accepts_generator(tiny_zarr):
 def test_push_accepts_infinite_generator(tiny_zarr):
     """Infinite generator must not be materialized; we pull only what fits
     and what each pop frees."""
-    root, uri = tiny_zarr
+    uri = tiny_zarr
 
     def forever():
         while True:
             yield Sample(uri=uri, aabb=[(0, 8), (0, 16)])
 
-    with Pipeline(_base_config(root)) as d:
+    with Pipeline(_base_config()) as d:
         d.push(forever())  # would OOM if eagerly materialized
         assert _drain_ids(d, 3) == [0, 1, 2]
         assert d.pending  # generator still has more
 
 
 def test_push_chains_multiple_calls(tiny_zarr):
-    root, uri = tiny_zarr
+    uri = tiny_zarr
     s = Sample(uri=uri, aabb=[(0, 8), (0, 16)])
-    with Pipeline(_base_config(root)) as d:
+    with Pipeline(_base_config()) as d:
         d.push([s, s])
         d.push([s, s, s])
         assert _drain_ids(d, 5) == [0, 1, 2, 3, 4]
@@ -267,10 +265,10 @@ def test_push_chains_multiple_calls(tiny_zarr):
 def test_push_error_drops_offending_iterator(tiny_zarr):
     """A NotFound mid-iterator drops *that* iterator's tail but earlier
     queued iterators still resolve."""
-    root, uri = tiny_zarr
+    uri = tiny_zarr
     good = Sample(uri=uri, aabb=[(0, 8), (0, 16)])
     bad = Sample(uri="not_a_zarr", aabb=[(0, 8), (0, 16)])
-    with Pipeline(_base_config(root)) as d:
+    with Pipeline(_base_config()) as d:
         d.push([good])  # this one queues + drains cleanly
         with pytest.raises(NotFound):
             d.push([bad, good])  # raises mid-drain; bad's tail discarded
@@ -285,14 +283,12 @@ def test_push_error_drops_offending_iterator(tiny_zarr):
 def test_config_validates_eagerly():
     with pytest.raises(ValueError, match="batch_size"):
         Config(
-            store_root="/tmp",
             batch_size=0,
             host_buffer_bytes=1 << 20,
             device_buffer_bytes=1 << 20,
         )
     with pytest.raises(ValueError, match="lookahead_batches"):
         Config(
-            store_root="/tmp",
             batch_size=1,
             host_buffer_bytes=1 << 20,
             device_buffer_bytes=1 << 20,
@@ -300,7 +296,6 @@ def test_config_validates_eagerly():
         )
     with pytest.raises(ValueError, match="n_io_threads"):
         Config(
-            store_root="/tmp",
             batch_size=1,
             host_buffer_bytes=1 << 20,
             device_buffer_bytes=1 << 20,
@@ -308,14 +303,12 @@ def test_config_validates_eagerly():
         )
     with pytest.raises(ValueError, match="host/device_buffer_bytes"):
         Config(
-            store_root="/tmp",
             batch_size=1,
             host_buffer_bytes=0,
             device_buffer_bytes=1 << 20,
         )
     with pytest.raises(ValueError, match="max_chunk_uncompressed_bytes"):
         Config(
-            store_root="/tmp",
             batch_size=1,
             host_buffer_bytes=1 << 20,
             device_buffer_bytes=1 << 20,
@@ -323,13 +316,13 @@ def test_config_validates_eagerly():
         )
 
 
-def test_config_dtype_coerced(tmp_path):
-    cfg = _base_config(tmp_path, dtype="bf16")
+def test_config_dtype_coerced():
+    cfg = _base_config(dtype="bf16")
     assert cfg.dtype is damacy.Dtype.BF16
 
 
-def test_config_replace_for_variants(tmp_path):
-    base = _base_config(tmp_path)
+def test_config_replace_for_variants():
+    base = _base_config()
     big = dataclasses.replace(base, batch_size=4)
     assert base.batch_size == 1 and big.batch_size == 4
     # frozen
@@ -341,8 +334,8 @@ def test_config_replace_for_variants(tmp_path):
 
 
 def test_stats_returns_typed_dataclass(tiny_zarr):
-    root, _ = tiny_zarr
-    with Pipeline(_base_config(root)) as d:
+    _ = tiny_zarr
+    with Pipeline(_base_config()) as d:
         s = d.stats()
         assert isinstance(s, Stats)
         assert s.gpu_bytes_committed > 0
@@ -350,8 +343,8 @@ def test_stats_returns_typed_dataclass(tiny_zarr):
 
 
 def test_stats_gpu_bytes_grows_after_first_pop(tiny_zarr):
-    root, uri = tiny_zarr
-    with Pipeline(_base_config(root)) as d:
+    uri = tiny_zarr
+    with Pipeline(_base_config()) as d:
         before = d.stats().gpu_bytes_committed
         d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
         with d.pop():
@@ -364,8 +357,8 @@ def test_stats_gpu_bytes_grows_after_first_pop(tiny_zarr):
 
 
 def test_flush_and_stats_reset_are_idempotent(tiny_zarr):
-    root, uri = tiny_zarr
-    with Pipeline(_base_config(root)) as d:
+    uri = tiny_zarr
+    with Pipeline(_base_config()) as d:
         d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
         d.flush()
         d.flush()  # idempotent
@@ -384,8 +377,8 @@ def test_flush_and_stats_reset_are_idempotent(tiny_zarr):
 
 
 def test_batch_dlpack_export_smoke(tiny_zarr):
-    root, uri = tiny_zarr
-    with Pipeline(_base_config(root)) as d:
+    uri = tiny_zarr
+    with Pipeline(_base_config()) as d:
         d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
         with d.pop() as batch:
             # __dlpack_device__ → (kDLCUDA=2, ordinal).
@@ -414,8 +407,8 @@ def test_set_log_level_and_quiet_passthrough():
 
 
 def test_batch_repr_handles_released_state(tiny_zarr):
-    root, uri = tiny_zarr
-    with Pipeline(_base_config(root)) as d:
+    uri = tiny_zarr
+    with Pipeline(_base_config()) as d:
         d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
         b = d.pop()
         assert "Batch(batch_id=" in repr(b)
@@ -427,8 +420,8 @@ def test_batch_repr_handles_released_state(tiny_zarr):
 
 
 def test_use_after_close_raises(tiny_zarr):
-    root, _ = tiny_zarr
-    d = Pipeline(_base_config(root))
+    _ = tiny_zarr
+    d = Pipeline(_base_config())
     d.close()
     d.close()  # idempotent
     with pytest.raises(AttributeError):
@@ -438,10 +431,10 @@ def test_use_after_close_raises(tiny_zarr):
 # ---- exception hierarchy ------------------------------------------------
 
 
-def test_per_status_exceptions_share_base(tmp_path):
+def test_per_status_exceptions_share_base():
     # Cheap construction-time error: oversize max_chunk → INVAL.
     cfg = dataclasses.replace(
-        _base_config(tmp_path),
+        _base_config(),
         max_chunk_uncompressed_bytes=_native.MAX_CHUNK_UNCOMPRESSED_BYTES + 1,
     )
     with pytest.raises(DamacyError) as excinfo:
@@ -455,46 +448,46 @@ def test_per_status_exceptions_share_base(tmp_path):
 
 
 def test_pipeline_exposes_bound_device(tiny_zarr):
-    root, _ = tiny_zarr
-    with Pipeline(_base_config(root)) as p:
+    _ = tiny_zarr
+    with Pipeline(_base_config()) as p:
         assert p.device == 0  # pytest fixture binds dev 0
 
 
 def test_explicit_device_zero_succeeds(tiny_zarr):
-    root, _ = tiny_zarr
-    cfg = dataclasses.replace(_base_config(root), device=0)
+    _ = tiny_zarr
+    cfg = dataclasses.replace(_base_config(), device=0)
     with Pipeline(cfg) as p:
         assert p.device == 0
 
 
 def test_local_rank_disagreement_warns(tiny_zarr, monkeypatch):
-    root, _ = tiny_zarr
+    _ = tiny_zarr
     monkeypatch.setenv("LOCAL_RANK", "3")  # bound dev is 0; rank claims 3
     with pytest.warns(UserWarning, match="LOCAL_RANK=3"):
-        Pipeline(_base_config(root)).close()
+        Pipeline(_base_config()).close()
 
 
 def test_local_rank_match_is_quiet(tiny_zarr, monkeypatch, recwarn):
-    root, _ = tiny_zarr
+    _ = tiny_zarr
     monkeypatch.setenv("LOCAL_RANK", "0")
-    Pipeline(_base_config(root)).close()
+    Pipeline(_base_config()).close()
     # No UserWarning from our heuristic; other libs may warn — filter ours.
     ours = [w for w in recwarn.list if "LOCAL_RANK" in str(w.message)]
     assert ours == []
 
 
 def test_explicit_device_suppresses_local_rank_warning(tiny_zarr, monkeypatch, recwarn):
-    root, _ = tiny_zarr
+    _ = tiny_zarr
     monkeypatch.setenv("LOCAL_RANK", "3")
-    cfg = dataclasses.replace(_base_config(root), device=0)
+    cfg = dataclasses.replace(_base_config(), device=0)
     Pipeline(cfg).close()
     ours = [w for w in recwarn.list if "LOCAL_RANK" in str(w.message)]
     assert ours == []
 
 
 def test_local_rank_non_int_is_quiet(tiny_zarr, monkeypatch, recwarn):
-    root, _ = tiny_zarr
+    _ = tiny_zarr
     monkeypatch.setenv("LOCAL_RANK", "not-a-number")
-    Pipeline(_base_config(root)).close()
+    Pipeline(_base_config()).close()
     ours = [w for w in recwarn.list if "LOCAL_RANK" in str(w.message)]
     assert ours == []

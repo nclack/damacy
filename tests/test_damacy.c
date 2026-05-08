@@ -43,8 +43,8 @@ expected_f32_from_u16_2d(int64_t y, int64_t x, int64_t cols, int64_t off)
 static struct damacy_config
 mk_cfg(const char* root, uint32_t batch_size)
 {
+  (void)root;
   return (struct damacy_config){
-    .store_root = root,
     .batch_size = batch_size,
     .lookahead_batches = 2,
     .n_io_threads = 1,
@@ -126,7 +126,7 @@ test_full_array(void)
 
   float out[4 * 8] = { 0 };
   size_t got = 0;
-  if (run_one(d, mk_sample("foo", 0, 4, 0, 8), out, 4 * 8, &got))
+  if (run_one(d, mk_sample(p, 0, 4, 0, 8), out, 4 * 8, &got))
     return 1;
   EXPECT(got == 4 * 8);
   for (int y = 0; y < 4; ++y)
@@ -156,7 +156,7 @@ test_partial_crossing_chunks(void)
 
   float out[2 * 5] = { 0 };
   size_t got = 0;
-  if (run_one(d, mk_sample("foo", 1, 3, 2, 7), out, 2 * 5, &got))
+  if (run_one(d, mk_sample(p, 1, 3, 2, 7), out, 2 * 5, &got))
     return 1;
   EXPECT(got == 2 * 5);
   for (int y = 0; y < 2; ++y)
@@ -195,12 +195,12 @@ test_multi_batch(void)
 
   for (int batch = 0; batch < 3; ++batch) {
     struct damacy_sample s[2] = {
-      mk_sample("foo",
+      mk_sample(p,
                 aabbs[batch * 2][0],
                 aabbs[batch * 2][1],
                 aabbs[batch * 2][2],
                 aabbs[batch * 2][3]),
-      mk_sample("foo",
+      mk_sample(p,
                 aabbs[batch * 2 + 1][0],
                 aabbs[batch * 2 + 1][1],
                 aabbs[batch * 2 + 1][2],
@@ -266,8 +266,8 @@ test_multi_zarr(void)
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
   struct damacy_sample s[2] = {
-    mk_sample("a", 0, 4, 0, 8),
-    mk_sample("b", 0, 4, 0, 8),
+    mk_sample(pa, 0, 4, 0, 8),
+    mk_sample(pb, 0, 4, 0, 8),
   };
   struct damacy_sample_slice slice = { .beg = s, .end = s + 2 };
   struct damacy_push_result pr = damacy_push(d, slice);
@@ -318,8 +318,8 @@ test_heterogeneous_dtype(void)
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
   struct damacy_sample s[2] = {
-    mk_sample("a", 0, 4, 0, 8),
-    mk_sample("b", 0, 4, 0, 8),
+    mk_sample(pa, 0, 4, 0, 8),
+    mk_sample(pb, 0, 4, 0, 8),
   };
   struct damacy_sample_slice slice = { .beg = s, .end = s + 2 };
   struct damacy_push_result pr = damacy_push(d, slice);
@@ -387,7 +387,7 @@ test_pipelined(void)
   struct damacy_sample samples[8];
   for (int i = 0; i < 8; ++i)
     samples[i] =
-      mk_sample("foo", aabbs[i][0], aabbs[i][1], aabbs[i][2], aabbs[i][3]);
+      mk_sample(p, aabbs[i][0], aabbs[i][1], aabbs[i][2], aabbs[i][3]);
 
   // Push all 8 in one shot.
   struct damacy_sample_slice slice = { .beg = samples, .end = samples + 8 };
@@ -451,9 +451,9 @@ test_lookahead_backpressure(void)
 
   // Try to push 3 samples; only 2 should land before AGAIN.
   struct damacy_sample samples[3] = {
-    mk_sample("foo", 0, 4, 0, 8),
-    mk_sample("foo", 0, 4, 0, 8),
-    mk_sample("foo", 0, 4, 0, 8),
+    mk_sample(p, 0, 4, 0, 8),
+    mk_sample(p, 0, 4, 0, 8),
+    mk_sample(p, 0, 4, 0, 8),
   };
   struct damacy_sample_slice slice = { .beg = samples, .end = samples + 3 };
   struct damacy_push_result pr = damacy_push(d, slice);

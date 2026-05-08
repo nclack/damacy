@@ -32,8 +32,8 @@ expected_f32_from_u16_2d(int64_t y, int64_t x, int64_t cols, int64_t off)
 static struct damacy_config
 mk_cfg(const char* root, uint32_t batch_size)
 {
+  (void)root;
   return (struct damacy_config){
-    .store_root = root,
     .batch_size = batch_size,
     .lookahead_batches = 2,
     .n_io_threads = 1,
@@ -116,7 +116,7 @@ run_full_array(const char* codec)
 
   float out[16 * 32] = { 0 };
   size_t got = 0;
-  if (run_one(d, mk_sample("foo", 0, 16, 0, 32), out, 16 * 32, &got))
+  if (run_one(d, mk_sample(p, 0, 16, 0, 32), out, 16 * 32, &got))
     return 1;
   EXPECT(got == 16 * 32);
   for (int y = 0; y < 16; ++y)
@@ -160,7 +160,7 @@ test_partial_crossing_chunks_blosc(void)
   const int H = 8, W = 22;
   float out[8 * 22] = { 0 };
   size_t got = 0;
-  if (run_one(d, mk_sample("foo", 3, 11, 5, 27), out, H * W, &got))
+  if (run_one(d, mk_sample(p, 3, 11, 5, 27), out, H * W, &got))
     return 1;
   EXPECT(got == (size_t)(H * W));
   for (int y = 0; y < H; ++y)
@@ -185,11 +185,13 @@ test_four_codecs_mixed_batch(void)
   const char* codecs[4] = { "none", "zstd", "blosc-zstd", "blosc-lz4" };
   const int64_t offsets[4] = { 0, 1000, 2000, 3000 };
   int64_t shape[2] = { 16, 32 }, inner[2] = { 8, 16 }, shard[2] = { 16, 32 };
+  char paths[4][256];
   for (int i = 0; i < 4; ++i) {
-    char p[256];
-    snprintf(p, sizeof p, "%s/%s", root, names[i]);
-    EXPECT(fixture_write_zarr_codec(
-             p, shape, inner, shard, 2, "uint16", offsets[i], codecs[i]) == 0);
+    snprintf(paths[i], sizeof paths[i], "%s/%s", root, names[i]);
+    EXPECT(
+      fixture_write_zarr_codec(
+        paths[i], shape, inner, shard, 2, "uint16", offsets[i], codecs[i]) ==
+      0);
   }
 
   struct damacy_config cfg = mk_cfg(root, 4);
@@ -198,7 +200,7 @@ test_four_codecs_mixed_batch(void)
 
   struct damacy_sample s[4];
   for (int i = 0; i < 4; ++i)
-    s[i] = mk_sample(names[i], 0, 16, 0, 32);
+    s[i] = mk_sample(paths[i], 0, 16, 0, 32);
   struct damacy_sample_slice slice = { .beg = s, .end = s + 4 };
   struct damacy_push_result pr = damacy_push(d, slice);
   EXPECT(pr.status == DAMACY_OK);
@@ -256,11 +258,13 @@ test_multi_wave_per_batch(void)
   const char* codecs[4] = { "blosc-lz4", "blosc-zstd", "zstd", "blosc-lz4" };
   const int64_t offsets[4] = { 0, 1000, 2000, 3000 };
   int64_t shape[2] = { 16, 32 }, inner[2] = { 8, 16 }, shard[2] = { 16, 32 };
+  char paths[4][256];
   for (int i = 0; i < 4; ++i) {
-    char p[256];
-    snprintf(p, sizeof p, "%s/%s", root, names[i]);
-    EXPECT(fixture_write_zarr_codec(
-             p, shape, inner, shard, 2, "uint16", offsets[i], codecs[i]) == 0);
+    snprintf(paths[i], sizeof paths[i], "%s/%s", root, names[i]);
+    EXPECT(
+      fixture_write_zarr_codec(
+        paths[i], shape, inner, shard, 2, "uint16", offsets[i], codecs[i]) ==
+      0);
   }
 
   // peel_wave's per-chunk read_op is page-aligned (typically 4 KiB), so
@@ -268,7 +272,6 @@ test_multi_wave_per_batch(void)
   // page. We pick host = 64 KiB → 32 KiB/wave → ~8 chunks/wave; the
   // 16-chunk batch spills into 2 waves of the same batch slot.
   struct damacy_config cfg = {
-    .store_root = root,
     .batch_size = 4,
     .lookahead_batches = 2,
     .n_io_threads = 1,
@@ -284,7 +287,7 @@ test_multi_wave_per_batch(void)
 
   struct damacy_sample s[4];
   for (int i = 0; i < 4; ++i)
-    s[i] = mk_sample(names[i], 0, 16, 0, 32);
+    s[i] = mk_sample(paths[i], 0, 16, 0, 32);
   struct damacy_sample_slice slice = { .beg = s, .end = s + 4 };
   struct damacy_push_result pr = damacy_push(d, slice);
   EXPECT(pr.status == DAMACY_OK);

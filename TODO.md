@@ -44,6 +44,7 @@
       - system's virtual page cache may obviate this for host mem
 - [x] how to add back blosc support - add gpu support
 - [ ] codegen for h100s
+- [ ] comparitive benchmark against other libs/solns: tensorstore, kvikio, DALI?
 
 ## Fuzzing
 

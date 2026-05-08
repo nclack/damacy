@@ -300,7 +300,6 @@ struct damacy_wave
 struct damacy
 {
   struct damacy_config cfg;
-  char* store_root;
   enum damacy_status failed_status;
   uint64_t next_batch_id;
   uint64_t page_alignment;
@@ -381,7 +380,6 @@ static enum damacy_status
 validate_config(const struct damacy_config* cfg)
 {
   CHECK_SILENT(Invalid, cfg);
-  CHECK_SILENT(Invalid, cfg->store_root);
   CHECK_SILENT(Invalid, cfg->batch_size > 0);
   CHECK_SILENT(Invalid, cfg->lookahead_batches >= 2);
   CHECK_SILENT(Invalid, cfg->n_io_threads > 0);
@@ -1701,9 +1699,6 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   self->page_alignment = (uint64_t)platform_page_alignment();
   stats_init(&self->stats);
 
-  self->store_root = strdup(cfg->store_root);
-  CHECK(Fail, self->store_root);
-
   s = DAMACY_CUDA;
   CR(Fail, cuInit(0));
 
@@ -1778,8 +1773,10 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   }
 
   s = DAMACY_OOM;
+  // Sample.uri is absolute; the fs store joins root+key, so empty root
+  // turns join into a pass-through.
   struct store_fs_config sc = {
-    .root = self->store_root,
+    .root = "",
     .nthreads = (int)cfg->n_io_threads,
   };
   self->store = store_fs_create(&sc);
@@ -1877,7 +1874,6 @@ damacy_destroy(struct damacy* self)
   zarr_meta_cache_destroy(self->meta_cache);
   store_destroy(self->store);
 
-  free(self->store_root);
   if (self->retained_primary_device >= 0) {
     cuCtxPopCurrent(NULL);
     cuDevicePrimaryCtxRelease((CUdevice)self->retained_primary_device);

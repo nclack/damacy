@@ -513,8 +513,7 @@ batch_new(PipelineObj* parent, struct damacy_batch* handle)
 static int
 Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
 {
-  static char* kws[] = { "store_root",
-                         "batch_size",
+  static char* kws[] = { "batch_size",
                          "lookahead_batches",
                          "n_io_threads",
                          "host_buffer_bytes",
@@ -527,7 +526,6 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                          "max_bytes_per_element",
                          "device",
                          NULL };
-  const char* store_root = NULL;
   unsigned int batch_size = 0;
   unsigned int lookahead = 2;
   unsigned int n_io = 4;
@@ -542,9 +540,8 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   int device = -1;
   if (!PyArg_ParseTupleAndKeywords(args,
                                    kw,
-                                   "sIIIKKIIOI|KBi",
+                                   "IIIKKIIOI|KBi",
                                    kws,
-                                   &store_root,
                                    &batch_size,
                                    &lookahead,
                                    &n_io,
@@ -564,7 +561,6 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
     return -1;
 
   struct damacy_config cfg = {
-    .store_root = store_root,
     .batch_size = batch_size,
     .lookahead_batches = lookahead,
     .n_io_threads = n_io,

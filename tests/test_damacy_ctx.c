@@ -31,8 +31,8 @@ mkdtemp_root(char* root, size_t cap)
 static struct damacy_config
 mk_cfg(const char* root)
 {
+  (void)root;
   return (struct damacy_config){
-    .store_root = root,
     .batch_size = 1,
     .lookahead_batches = 2,
     .n_io_threads = 1,

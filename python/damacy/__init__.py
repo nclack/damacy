@@ -10,15 +10,14 @@ Typical use::
     import damacy, torch
 
     cfg = damacy.Config(
-        store_root="/data/cells",
         batch_size=8,
         host_buffer_bytes=1 << 30,
         device_buffer_bytes=1 << 30,
         dtype="bf16",
     )
     samples = [
-        damacy.Sample(uri="cell-1.zarr", aabb=[(0, 64), (0, 256), (0, 256)]),
-        damacy.Sample(uri="cell-2.zarr", aabb=[(0, 64), (0, 256), (0, 256)]),
+        damacy.Sample(uri="/data/cells/cell-1.zarr", aabb=[(0, 64), (0, 256), (0, 256)]),
+        damacy.Sample(uri="/data/cells/cell-2.zarr", aabb=[(0, 64), (0, 256), (0, 256)]),
     ]
 
     with damacy.Pipeline(cfg) as p:
@@ -318,7 +317,7 @@ class Config:
     Build variants with :func:`dataclasses.replace`:
 
     >>> import dataclasses
-    >>> base = Config(store_root="/data", batch_size=8,
+    >>> base = Config(batch_size=8,
     ...               host_buffer_bytes=1 << 30, device_buffer_bytes=1 << 30)
     >>> base.dtype is Dtype.F32
     True
@@ -329,14 +328,13 @@ class Config:
     we touch CUDA. The dtype field accepts :class:`Dtype`, an int, or
     one of ``"f32"`` / ``"float32"`` / ``"bf16"`` / ``"bfloat16"``.
 
-    >>> Config(store_root="/data", batch_size=0,
+    >>> Config(batch_size=0,
     ...        host_buffer_bytes=1, device_buffer_bytes=1)
     Traceback (most recent call last):
         ...
     ValueError: batch_size must be >= 1 (got 0)
 
     Attributes:
-        store_root: Filesystem root that resolves :attr:`Sample.uri`.
         batch_size: Samples per batch (>= 1).
         host_buffer_bytes: Pinned-host staging budget; sized for IO bw.
         device_buffer_bytes: Device decompress-scratch budget.
@@ -359,7 +357,6 @@ class Config:
             context internally — recommended under torchrun / MPI.
     """
 
-    store_root: str
     batch_size: int
     host_buffer_bytes: int
     device_buffer_bytes: int
@@ -613,7 +610,7 @@ class Pipeline:
 
     Constructed from a :class:`Config`::
 
-        cfg = damacy.Config(store_root=..., batch_size=8, ...)
+        cfg = damacy.Config(batch_size=8, ...)
         with damacy.Pipeline(cfg) as p:
             ...
 
@@ -625,7 +622,6 @@ class Pipeline:
     def __init__(self, config: Config) -> None:
         try:
             self._native = _native.Pipeline(
-                store_root=str(config.store_root),
                 batch_size=config.batch_size,
                 lookahead_batches=config.lookahead_batches,
                 n_io_threads=config.n_io_threads,

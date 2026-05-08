@@ -72,7 +72,6 @@ def main() -> None:
     torch.cuda.set_device(local_rank)
 
     cfg = damacy.Config(
-        store_root="/data/cells",
         batch_size=8,
         host_buffer_bytes=1 << 30,    # per-rank
         device_buffer_bytes=1 << 30,  # per-rank
@@ -84,7 +83,8 @@ def main() -> None:
     # Shard work by rank — strided so adjacent samples stay co-located
     # within their wave on each rank.
     all_samples = [
-        damacy.Sample(uri=f"cell-{i}.zarr", aabb=[(0, 64), (0, 256), (0, 256)])
+        damacy.Sample(uri=f"/data/cells/cell-{i}.zarr",
+                      aabb=[(0, 64), (0, 256), (0, 256)])
         for i in range(8192)
     ]
     my_samples = all_samples[local_rank::world_size]

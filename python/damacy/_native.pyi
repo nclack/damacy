@@ -88,7 +88,6 @@ class Pipeline:
 
     def __init__(
         self,
-        store_root: str,
         batch_size: int,
         lookahead_batches: int,
         n_io_threads: int,

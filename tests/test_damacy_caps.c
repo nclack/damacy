@@ -37,8 +37,8 @@ mkdtemp_root(char* root, size_t cap)
 static struct damacy_config
 mk_cfg(const char* root, uint32_t batch_size)
 {
+  (void)root;
   return (struct damacy_config){
-    .store_root = root,
     .batch_size = batch_size,
     .lookahead_batches = 2,
     .n_io_threads = 1,
@@ -82,7 +82,7 @@ test_create_default_caps(void)
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
-  struct damacy_sample s = mk_sample("foo", 0, 8, 0, 16);
+  struct damacy_sample s = mk_sample(p, 0, 8, 0, 16);
   struct damacy_sample_slice slice = { .beg = &s, .end = &s + 1 };
   EXPECT(damacy_push(d, slice).status == DAMACY_OK);
   struct damacy_batch* b = NULL;
@@ -114,7 +114,7 @@ test_oversize_chunk_rejected(void)
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
-  struct damacy_sample s = mk_sample("foo", 0, 8, 0, 16);
+  struct damacy_sample s = mk_sample(p, 0, 8, 0, 16);
   struct damacy_sample_slice slice = { .beg = &s, .end = &s + 1 };
   // push validates dtype/rank only; the planner rejection lands at pop.
   EXPECT(damacy_push(d, slice).status == DAMACY_OK);
