@@ -60,7 +60,10 @@ ENV PATH=/opt/venv/bin:${PATH} \
 # scikit-build-core is the build backend declared in pyproject.toml. We
 # install it ahead of time so the editable install below (run with
 # --no-build-isolation) can find it.
-RUN uv pip install scikit-build-core
+# pytest drives python/tests/* via the python_pytest ctest target;
+# installed alongside scikit-build-core so the cmake configure can
+# detect it and register the test.
+RUN uv pip install scikit-build-core pytest
 
 # ----- build configuration ---------------------------------------------------
 # Override at `docker build` time via --build-arg to produce a coverage
@@ -100,9 +103,10 @@ RUN cmake -S . -B build -G Ninja \
 RUN cmake --build build
 
 # Build-time sanity (CPU-only subset; the two CUDA tests need a GPU at
-# runtime, which the Docker builder typically lacks). Cluster smoke is
-# the real validation.
-RUN ctest --test-dir build --output-on-failure -E "test_damacy|test_assemble" \
+# runtime, which the Docker builder typically lacks). python_pytest
+# also needs the editable install (done below), so it is excluded
+# here too. Cluster smoke is the real validation.
+RUN ctest --test-dir build --output-on-failure -E "test_damacy|test_assemble|python_pytest" \
  || (echo "WARN: ctest reported failures; continuing so the image still ships" >&2; true)
 
 # Editable install of the Python package. The .so was just built by cmake
