@@ -656,8 +656,10 @@ Error:
   return 1;
 }
 
+// cuda_skip=1 leaks GPU resources (e.g. when ctx is no longer valid)
+// but still releases CPU heap.
 static void
-batch_slot_destroy(struct damacy_batch_slot* slot)
+batch_slot_destroy(struct damacy_batch_slot* slot, int cuda_skip)
 {
   if (!slot)
     return;
@@ -665,22 +667,20 @@ batch_slot_destroy(struct damacy_batch_slot* slot)
   free(slot->read_ops);
   free(slot->chunk_plans);
   free(slot->sample_plans);
-  if (slot->d_sample_plans)
+  if (!cuda_skip && slot->d_sample_plans)
     cuMemFree(CUDPTR(slot->d_sample_plans));
   memset(slot, 0, sizeof(*slot));
 }
 
-// Tear down both batch slots' device tensors and per-slot heap. Safe on
-// a zero-initialized pool.
 static void
-batch_pool_destroy(struct damacy_batch_pool* pool)
+batch_pool_destroy(struct damacy_batch_pool* pool, int cuda_skip)
 {
   if (!pool)
     return;
   for (int s = 0; s < 2; ++s) {
-    if (pool->slots[s].dev_ptr)
+    if (!cuda_skip && pool->slots[s].dev_ptr)
       cuMemFree(CUDPTR(pool->slots[s].dev_ptr));
-    batch_slot_destroy(&pool->slots[s]);
+    batch_slot_destroy(&pool->slots[s], cuda_skip);
   }
   memset(pool, 0, sizeof(*pool));
 }
@@ -991,70 +991,76 @@ Error:
   return 1;
 }
 
+// cuda_skip=1: leak device buffers, pinned-host slabs, decoders, and
+// CUevents whose destruction would touch the (now-invalid) driver. CPU
+// heap is still released so the same call covers both teardown paths.
 static void
-wave_destroy(struct damacy_wave* wave)
+wave_destroy(struct damacy_wave* wave, int cuda_skip)
 {
   if (!wave)
     return;
-  decoder_zstd_destroy(wave->zstd_decoder);
-  decoder_lz4_destroy(wave->lz4_decoder);
-  // cuMemFreeHost(NULL) is invalid; guard each.
-  void* const host_ptrs[] = {
-    wave->host_slab,
-    wave->h_chunks,
-    wave->scratch.hdrs,
-    wave->scratch.counts,
-    wave->scratch.offsets,
-    wave->scratch.bstarts,
-    wave->scratch.block_ends,
-    wave->h_blosc1_totals,
-    (void*)wave->h_zstd_fan.comp_ptrs,
-    wave->h_zstd_fan.comp_sizes,
-    wave->h_zstd_fan.decomp_ptrs,
-    wave->h_zstd_fan.decomp_buf_sizes,
-    (void*)wave->h_lz4_fan.comp_ptrs,
-    wave->h_lz4_fan.comp_sizes,
-    wave->h_lz4_fan.decomp_ptrs,
-    wave->h_lz4_fan.decomp_buf_sizes,
-    wave->h_memcpy_ops,
-    wave->h_unshuffle_ops,
-    wave->h_bitunshuffle_ops,
-  };
-  for (size_t i = 0; i < countof(host_ptrs); ++i)
-    if (host_ptrs[i])
-      cuMemFreeHost(host_ptrs[i]);
-  // Bulk device-pointer free. cuMemFree(0) returns CUDA_ERROR_INVALID_VALUE,
-  // so we do guard, but the loop pattern keeps this to a single branch.
-  void* const dev_ptrs[] = {
-    wave->dev_compressed,
-    wave->dev_decompressed,
-    wave->d_assemble_chunks,
-    wave->d_blosc1_totals,
-    (void*)wave->zstd_fan.d_comp_ptrs,
-    wave->zstd_fan.d_comp_sizes,
-    wave->zstd_fan.d_decomp_ptrs,
-    wave->zstd_fan.d_decomp_buf_sizes,
-    (void*)wave->lz4_fan.d_comp_ptrs,
-    wave->lz4_fan.d_comp_sizes,
-    wave->lz4_fan.d_decomp_ptrs,
-    wave->lz4_fan.d_decomp_buf_sizes,
-    wave->d_memcpy_ops,
-    wave->d_unshuffle_ops,
-    wave->d_bitunshuffle_ops,
-    wave->dev_unshuffle_scratch,
-  };
-  for (size_t i = 0; i < countof(dev_ptrs); ++i)
-    if (dev_ptrs[i])
-      cuMemFree(CUDPTR(dev_ptrs[i]));
-  // cuEventDestroy is not no-op on NULL; guard each.
-  CUevent* const events[] = { &wave->ev.h2d_start,  &wave->ev.bulk_h2d_end,
-                              &wave->ev.h2d_end,    &wave->ev.decomp_start,
-                              &wave->ev.zstd_done,  &wave->ev.lz4_done,
-                              &wave->ev.post_start, &wave->ev.decomp_end,
-                              &wave->ev.asm_start,  &wave->ev.asm_end };
-  for (size_t i = 0; i < countof(events); ++i)
-    if (*events[i])
-      cuEventDestroy_v2(*events[i]);
+  if (!cuda_skip) {
+    decoder_zstd_destroy(wave->zstd_decoder);
+    decoder_lz4_destroy(wave->lz4_decoder);
+    // cuMemFreeHost(NULL) is invalid; guard each.
+    void* const host_ptrs[] = {
+      wave->host_slab,
+      wave->h_chunks,
+      wave->scratch.hdrs,
+      wave->scratch.counts,
+      wave->scratch.offsets,
+      wave->scratch.bstarts,
+      wave->scratch.block_ends,
+      wave->h_blosc1_totals,
+      (void*)wave->h_zstd_fan.comp_ptrs,
+      wave->h_zstd_fan.comp_sizes,
+      wave->h_zstd_fan.decomp_ptrs,
+      wave->h_zstd_fan.decomp_buf_sizes,
+      (void*)wave->h_lz4_fan.comp_ptrs,
+      wave->h_lz4_fan.comp_sizes,
+      wave->h_lz4_fan.decomp_ptrs,
+      wave->h_lz4_fan.decomp_buf_sizes,
+      wave->h_memcpy_ops,
+      wave->h_unshuffle_ops,
+      wave->h_bitunshuffle_ops,
+    };
+    for (size_t i = 0; i < countof(host_ptrs); ++i)
+      if (host_ptrs[i])
+        cuMemFreeHost(host_ptrs[i]);
+    // Bulk device-pointer free. cuMemFree(0) returns
+    // CUDA_ERROR_INVALID_VALUE, so we do guard, but the loop pattern
+    // keeps this to a single branch.
+    void* const dev_ptrs[] = {
+      wave->dev_compressed,
+      wave->dev_decompressed,
+      wave->d_assemble_chunks,
+      wave->d_blosc1_totals,
+      (void*)wave->zstd_fan.d_comp_ptrs,
+      wave->zstd_fan.d_comp_sizes,
+      wave->zstd_fan.d_decomp_ptrs,
+      wave->zstd_fan.d_decomp_buf_sizes,
+      (void*)wave->lz4_fan.d_comp_ptrs,
+      wave->lz4_fan.d_comp_sizes,
+      wave->lz4_fan.d_decomp_ptrs,
+      wave->lz4_fan.d_decomp_buf_sizes,
+      wave->d_memcpy_ops,
+      wave->d_unshuffle_ops,
+      wave->d_bitunshuffle_ops,
+      wave->dev_unshuffle_scratch,
+    };
+    for (size_t i = 0; i < countof(dev_ptrs); ++i)
+      if (dev_ptrs[i])
+        cuMemFree(CUDPTR(dev_ptrs[i]));
+    // cuEventDestroy is not no-op on NULL; guard each.
+    CUevent* const events[] = { &wave->ev.h2d_start,  &wave->ev.bulk_h2d_end,
+                                &wave->ev.h2d_end,    &wave->ev.decomp_start,
+                                &wave->ev.zstd_done,  &wave->ev.lz4_done,
+                                &wave->ev.post_start, &wave->ev.decomp_end,
+                                &wave->ev.asm_start,  &wave->ev.asm_end };
+    for (size_t i = 0; i < countof(events); ++i)
+      if (*events[i])
+        cuEventDestroy_v2(*events[i]);
+  }
   free(wave->h_assemble_chunks);
   free(wave->store_reads);
   memset(wave, 0, sizeof(*wave));
@@ -1830,31 +1836,30 @@ kick_new_waves(struct damacy* self)
 
 // --- public API: create / destroy ----------------------------------------
 
-// CUDA teardown for a damacy. Caller owns the ctx (push it first); this
-// only handles the in-ctx pieces and the CPU-side state. The retained
-// primary release and free(self) happen at the call sites.
+// Single teardown list shared by every destroy path. cuda_skip=1 leaks
+// CUDA-owned state and skips driver calls; CPU heap is always released.
 static void
-destroy_inner(struct damacy* self)
+destroy_inner(struct damacy* self, int cuda_skip)
 {
   if (!self)
     return;
 
-  // NULL/0 is the legacy default stream — sync+destroy on it would
-  // either be a no-op-on-the-wrong-thing or invalid; the per-stream
-  // guard distinguishes "we created this" from "never set in a
-  // partially-failed create".
-  CUstream* const streams[] = {
-    &self->stream_compute,
-    &self->stream_h2d,
-    &self->stream_zstd,
-    &self->stream_lz4,
-  };
-  for (size_t i = 0; i < countof(streams); ++i)
-    if (*streams[i]) {
-      cuStreamSynchronize(*streams[i]);
-      cuStreamDestroy(*streams[i]);
-      *streams[i] = NULL;
-    }
+  if (!cuda_skip) {
+    // NULL stream is the legacy default; the per-stream guard separates
+    // "we created this" from "never set in a partially-failed create".
+    CUstream* const streams[] = {
+      &self->stream_compute,
+      &self->stream_h2d,
+      &self->stream_zstd,
+      &self->stream_lz4,
+    };
+    for (size_t i = 0; i < countof(streams); ++i)
+      if (*streams[i]) {
+        cuStreamSynchronize(*streams[i]);
+        cuStreamDestroy(*streams[i]);
+        *streams[i] = NULL;
+      }
+  }
 
   threadpool_free(self->compute_pool);
   self->compute_pool = NULL;
@@ -1865,8 +1870,8 @@ destroy_inner(struct damacy* self)
   self->batch_samples = NULL;
   lookahead_destroy(&self->lookahead);
   for (int w = 0; w < 2; ++w)
-    wave_destroy(&self->waves[w]);
-  batch_pool_destroy(&self->batch_pool);
+    wave_destroy(&self->waves[w], cuda_skip);
+  batch_pool_destroy(&self->batch_pool, cuda_skip);
 
   planner_destroy(self->planner);
   self->planner = NULL;
@@ -2053,7 +2058,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
 
 Fail:
   if (self) {
-    destroy_inner(self);
+    destroy_inner(self, 0);
     ctx_guard_exit(&cg);
     if (self->retained_primary_device >= 0)
       cuDevicePrimaryCtxRelease((CUdevice)self->retained_primary_device);
@@ -2074,24 +2079,15 @@ damacy_destroy(struct damacy* self)
   struct ctx_guard cg = { 0 };
   enum damacy_status gs = ctx_guard_enter(self, &cg);
   if (gs != DAMACY_OK) {
-    // Push failed (e.g. device reset, primary released elsewhere).
-    // Skip CUDA teardown — without the ctx current the cuMemFree /
-    // cuStreamDestroy calls would error out anyway. CPU-only state
-    // and the primary handle still get released; destroy must remain
-    // infallible from the caller's POV.
+    // ctx no longer pushable (device reset, primary released elsewhere).
+    // Leak CUDA-owned state and walk the same teardown list with skip=1
+    // so any new resource added to destroy_inner is covered here too.
     log_warn("damacy_destroy: ctx_guard_enter failed (status=%d); "
-             "skipping CUDA teardown",
+             "leaking CUDA resources",
              (int)gs);
-    threadpool_free(self->compute_pool);
-    free(self->batch_stage);
-    free(self->batch_samples);
-    lookahead_destroy(&self->lookahead);
-    planner_destroy(self->planner);
-    zarr_shard_cache_destroy(self->shard_cache);
-    zarr_meta_cache_destroy(self->meta_cache);
-    store_destroy(self->store);
+    destroy_inner(self, 1);
   } else {
-    destroy_inner(self);
+    destroy_inner(self, 0);
     ctx_guard_exit(&cg);
   }
   if (self->retained_primary_device >= 0)
@@ -2123,29 +2119,22 @@ damacy_push(struct damacy* self, struct damacy_sample_slice samples)
     r.status = DAMACY_INVAL;
     return r;
   }
-  struct ctx_guard cg = { 0 };
-  enum damacy_status gs = ctx_guard_enter(self, &cg);
-  if (gs != DAMACY_OK) {
-    r.status = gs;
-    return r;
-  }
+  // No ctx_guard: SPSC enqueue + sync zarr metadata I/O only; no CUDA
+  // driver calls reach this path (see issue #21).
   for (const struct damacy_sample* s = samples.beg; s != samples.end; ++s) {
     if (self->lookahead.size == self->lookahead.cap) {
       r.unconsumed.beg = s;
       r.status = DAMACY_AGAIN;
-      ctx_guard_exit(&cg);
       return r;
     }
     enum damacy_status ps = push_one(self, s);
     if (ps != DAMACY_OK) {
       r.unconsumed.beg = s;
       r.status = ps;
-      ctx_guard_exit(&cg);
       return r;
     }
   }
   r.unconsumed.beg = samples.end;
-  ctx_guard_exit(&cg);
   return r;
 }
 

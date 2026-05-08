@@ -11,8 +11,8 @@
 //                            — cfg.device != current ctx's device -> INVAL
 //   test_explicit_device_does_not_leak_ctx_between_calls
 //                            — push/pop/release/flush/destroy restore caller
-//   test_error_path_restores_caller_ctx
-//                            — push of a bad sample still restores caller
+//   test_pop_error_path_restores_caller_ctx
+//                            — pop failing inside the guard still pops ctx
 
 #include "damacy.h"
 #include "fixture.h"
@@ -231,11 +231,12 @@ test_explicit_device_does_not_leak_ctx_between_calls(void)
   return 0;
 }
 
-// A wrapped public call that fails partway through must still pop the
-// pushed ctx on the way out. Push a sample with a non-existent URI so
-// damacy_push returns non-OK after ctx_guard_enter has succeeded.
+// damacy_pop fails after ctx_guard_enter has succeeded: an out-of-bounds
+// AABB is accepted by push (which doesn't validate against meta shape)
+// but rejected by the planner inside kick_new_waves. Verify the guard
+// still pops the caller ctx on the failure path.
 static int
-test_error_path_restores_caller_ctx(void)
+test_pop_error_path_restores_caller_ctx(void)
 {
   EXPECT(cuInit(0) == CUDA_SUCCESS);
   CUdevice dev = 0;
@@ -246,14 +247,11 @@ test_error_path_restores_caller_ctx(void)
 
   char root[64];
   EXPECT(mkdtemp_root(root, sizeof root) == 0);
-  // Create a real array so damacy_create succeeds; the sample we push
-  // afterwards points at a non-existent sibling URI to provoke the
-  // post-guard error path inside damacy_push.
-  char ok_path[256];
-  snprintf(ok_path, sizeof ok_path, "%s/ok", root);
+  char p[256];
+  snprintf(p, sizeof p, "%s/foo", root);
   int64_t shape[2] = { 4, 8 }, inner[2] = { 2, 4 }, shard[2] = { 4, 8 };
   EXPECT(fixture_write_zarr_codec(
-           ok_path, shape, inner, shard, 2, "uint16", 0, "blosc-lz4") == 0);
+           p, shape, inner, shard, 2, "uint16", 0, "blosc-lz4") == 0);
 
   struct damacy_config cfg = mk_cfg(root);
   cfg.device = 0;
@@ -264,14 +262,17 @@ test_error_path_restores_caller_ctx(void)
   EXPECT(cuCtxGetCurrent(&cur) == CUDA_SUCCESS);
   EXPECT(cur == caller);
 
-  char missing[256];
-  snprintf(missing, sizeof missing, "%s/does_not_exist", root);
-  struct damacy_sample bad = { .uri = missing, .aabb = { .rank = 2 } };
-  bad.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 4 };
-  bad.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 8 };
-  struct damacy_sample_slice slice = { .beg = &bad, .end = &bad + 1 };
+  // Push succeeds (push_one doesn't bounds-check), pop's planner
+  // rejects the AABB with DAMACY_INVAL after ctx_guard_enter.
+  struct damacy_sample oob = { .uri = p, .aabb = { .rank = 2 } };
+  oob.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 4 };
+  oob.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 9999 };
+  struct damacy_sample_slice slice = { .beg = &oob, .end = &oob + 1 };
   struct damacy_push_result pr = damacy_push(d, slice);
-  EXPECT(pr.status != DAMACY_OK);
+  EXPECT(pr.status == DAMACY_OK);
+
+  struct damacy_batch* b = NULL;
+  EXPECT(damacy_pop(d, &b) != DAMACY_OK);
   EXPECT(cuCtxGetCurrent(&cur) == CUDA_SUCCESS);
   EXPECT(cur == caller);
 
@@ -293,7 +294,7 @@ main(void)
   RUN(test_create_explicit_device_no_ctx);
   RUN(test_create_explicit_device_mismatch);
   RUN(test_explicit_device_does_not_leak_ctx_between_calls);
-  RUN(test_error_path_restores_caller_ctx);
+  RUN(test_pop_error_path_restores_caller_ctx);
   log_info("all tests passed");
   return 0;
 }
