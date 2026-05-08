@@ -45,7 +45,6 @@ extern "C"
     uint8_t memcpyed;
     uint8_t compformat;
     uint8_t err;
-    uint8_t _pad;
     uint32_t nbytes;
     uint32_t blocksize;
     uint32_t cbytes;
