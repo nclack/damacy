@@ -82,9 +82,9 @@ jobs:
               python3 -c "import damacy; print(\"damacy\", damacy.__version__); damacy._native.set_log_quiet(True); print(\"api-ok\")"
               mkdir -p coverage-html
               # negative_hits.warn: gcc bug 68080 produces negative branch
-              # counters for atomic ops (e.g. threadpool's epoch / counter
-              # primitives). Warn instead of fail; the line counts are
-              # still accurate.
+              # counters for atomic ops (e.g. threadpool epoch / counter
+              # primitives). Warn instead of fail; line counts are still
+              # accurate.
               gcovr --root . \
                 --xml-pretty --output coverage.xml \
                 --html-details coverage-html/index.html \
