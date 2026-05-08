@@ -1737,10 +1737,12 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     CR(Fail, cuCtxGetDevice(&dev));
     self->cuda_device = (int)dev;
   }
-  CR(Fail, cuStreamCreate(&self->stream_h2d, CU_STREAM_DEFAULT));
-  CR(Fail, cuStreamCreate(&self->stream_compute, CU_STREAM_DEFAULT));
-  CR(Fail, cuStreamCreate(&self->stream_zstd, CU_STREAM_DEFAULT));
-  CR(Fail, cuStreamCreate(&self->stream_lz4, CU_STREAM_DEFAULT));
+  // Non-blocking so damacy doesn't force-serialize against the legacy
+  // default stream that some user code still lands on.
+  CR(Fail, cuStreamCreate(&self->stream_h2d, CU_STREAM_NON_BLOCKING));
+  CR(Fail, cuStreamCreate(&self->stream_compute, CU_STREAM_NON_BLOCKING));
+  CR(Fail, cuStreamCreate(&self->stream_zstd, CU_STREAM_NON_BLOCKING));
+  CR(Fail, cuStreamCreate(&self->stream_lz4, CU_STREAM_NON_BLOCKING));
 
   // Predict wave-resident GPU bytes and reject early if over budget.
   // Batch-output tensors (sized from the first AABB) are checked

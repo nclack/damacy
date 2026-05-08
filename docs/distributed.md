@@ -50,6 +50,34 @@ bound device disagrees — that's almost always a missing `set_device`.
 | `device=local_rank` | DDP, FSDP, accelerate, Lightning, anything launched via torchrun / mpirun / srun |
 | `device=None` | single-GPU scripts, notebooks, tests, anything where there is exactly one GPU in play |
 
+## Concurrency
+
+The pipeline is built to overlap with your training compute and to
+share a GPU with sibling work without explicit coordination.
+
+- **Non-default, non-blocking streams.** Damacy creates four CUDA
+  streams internally (`h2d`, `compute`, `zstd`, `lz4`) with the
+  `CU_STREAM_NON_BLOCKING` flag. Wave decompress + assemble overlaps
+  with H2D for the next wave, and nothing serializes against the
+  legacy default stream that some user code still lands on.
+- **DLPack stream-aware hand-off.** `Batch.__dlpack__(stream=...)`
+  follows the DLPack v1 protocol: damacy records an event on its
+  output stream and makes the consumer's stream wait on it.
+  `torch.from_dlpack(batch)` passes the current PyTorch stream
+  automatically, so train-step kernels are fenced against the
+  assembled tensor without you doing anything. Pass `stream=None` to
+  block-synchronize; pass `stream=-1` to skip the fence entirely.
+- **Multiple pipelines on one GPU.** Each `Pipeline` owns its own
+  four streams. Two pipelines on the same device run concurrently up
+  to GPU compute capacity — useful for train + validation overlap,
+  or two ranks pinned to one GPU. No extra knobs.
+- **Manual fences for non-DLPack consumers.** `BatchInfo.ready_stream`
+  is the producer stream as an int handle; consumers that bypass
+  DLPack can synchronize against it directly.
+
+Streams are not user-supplied — the DLPack hand-off (or
+`BatchInfo.ready_stream` if you must) is the integration boundary.
+
 ## torchrun example (8 GPUs)
 
 ```python
