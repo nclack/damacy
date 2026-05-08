@@ -352,6 +352,134 @@ run_one(const struct fixture* fx, struct threadpool* pool, CUstream stream)
   return 0;
 }
 
+// Build a minimal blosc1 chunk header in h[0..16) with compformat
+// matching codec_id. Caller mutates fields after to trigger err codes.
+static void
+build_blosc1_header(uint8_t* h,
+                    uint8_t codec_id,
+                    uint32_t nbytes,
+                    uint32_t blocksize,
+                    uint32_t cbytes,
+                    uint8_t typesize)
+{
+  h[0] = 0;
+  h[1] = 0;
+  uint8_t compformat = (codec_id == CODEC_BLOSC_LZ4) ? 1u : 4u;
+  h[2] = (uint8_t)((compformat & 0x07u) << 5);
+  h[3] = typesize;
+  for (int i = 0; i < 4; ++i)
+    h[4 + i] = (uint8_t)((nbytes >> (8 * i)) & 0xffu);
+  for (int i = 0; i < 4; ++i)
+    h[8 + i] = (uint8_t)((blocksize >> (8 * i)) & 0xffu);
+  for (int i = 0; i < 4; ++i)
+    h[12 + i] = (uint8_t)((cbytes >> (8 * i)) & 0xffu);
+}
+
+// Run blosc1_host_parse over a single synthetic chunk and assert it
+// returns the expected err code in totals.n_parse_errors and hdrs[0].err.
+// Op buffers are unused on the failure path so single-slot stack arrays
+// are sufficient.
+static int
+expect_parse_err(uint8_t codec_id,
+                 const uint8_t* hdr,
+                 uint32_t compressed_nbytes,
+                 uint32_t decompressed_nbytes,
+                 uint8_t expected_err,
+                 struct threadpool* pool)
+{
+  struct blosc1_host_chunk chunk = {
+    .h_compressed = hdr,
+    .d_compressed = NULL,
+    .d_decompressed = NULL,
+    .compressed_nbytes = compressed_nbytes,
+    .decompressed_nbytes = decompressed_nbytes,
+    .codec_id = codec_id,
+  };
+  struct blosc1_chunk_hdr h = { 0 };
+  struct blosc1_chunk_counts c = { 0 };
+  struct blosc1_chunk_offsets o = { 0 };
+  struct blosc1_host_scratch scratch = {
+    .hdrs = &h,
+    .counts = &c,
+    .offsets = &o,
+  };
+  const void* zcp = NULL;
+  size_t zcs = 0;
+  void* zdp = NULL;
+  size_t zds = 0;
+  const void* lcp = NULL;
+  size_t lcs = 0;
+  void* ldp = NULL;
+  size_t lds = 0;
+  struct blosc1_host_fanout zfan = { &zcp, &zcs, &zdp, &zds };
+  struct blosc1_host_fanout lfan = { &lcp, &lcs, &ldp, &lds };
+  struct gpu_memcpy_op mop = { 0 };
+  struct gpu_shuffle_op sop = { 0 };
+  struct gpu_shuffle_op bop = { 0 };
+  struct blosc1_totals tot = { 0 };
+  int rc = blosc1_host_parse(&(struct blosc1_host_parse_args){
+    .pool = pool,
+    .chunks = &chunk,
+    .n_chunks = 1,
+    .scratch = scratch,
+    .zstd = zfan,
+    .lz4 = lfan,
+    .memcpy_ops = &mop,
+    .unshuffle_ops = &sop,
+    .bitunshuffle_ops = &bop,
+    .out_totals = &tot,
+  });
+  EXPECT(rc != 0);
+  EXPECT(tot.n_parse_errors == 1);
+  EXPECT(h.err == expected_err);
+  return 0;
+}
+
+// Spot-check the err-code surface (1..8). Comprehensive coverage is
+// expected to come from the fuzz harness tracked in the issue.
+static int
+test_bad_header(void)
+{
+  struct threadpool* pool = threadpool_new(0);
+  EXPECT(pool);
+  uint8_t hdr[16];
+
+  // err=1: compressed_nbytes < 16 (header read short-circuits)
+  build_blosc1_header(hdr, CODEC_BLOSC_LZ4, 4096, 1024, 100, 4);
+  EXPECT(expect_parse_err(CODEC_BLOSC_LZ4, hdr, 8, 4096, 1, pool) == 0);
+
+  // err=2: header.blocksize == 0
+  build_blosc1_header(hdr, CODEC_BLOSC_LZ4, 4096, 0, 100, 4);
+  EXPECT(expect_parse_err(CODEC_BLOSC_LZ4, hdr, 100, 4096, 2, pool) == 0);
+
+  // err=3: header.nbytes != decompressed_nbytes
+  build_blosc1_header(hdr, CODEC_BLOSC_LZ4, 4096, 1024, 100, 4);
+  EXPECT(expect_parse_err(CODEC_BLOSC_LZ4, hdr, 100, 8192, 3, pool) == 0);
+
+  // err=4: header.cbytes != compressed_nbytes
+  build_blosc1_header(hdr, CODEC_BLOSC_LZ4, 4096, 1024, 100, 4);
+  EXPECT(expect_parse_err(CODEC_BLOSC_LZ4, hdr, 200, 4096, 4, pool) == 0);
+
+  // err=6: typesize == 0
+  build_blosc1_header(hdr, CODEC_BLOSC_LZ4, 4096, 1024, 100, 0);
+  EXPECT(expect_parse_err(CODEC_BLOSC_LZ4, hdr, 100, 4096, 6, pool) == 0);
+
+  // err=7: compformat (zstd's 4) doesn't match BLOSC_LZ4 codec
+  build_blosc1_header(hdr, CODEC_BLOSC_ZSTD, 4096, 1024, 100, 4);
+  EXPECT(expect_parse_err(CODEC_BLOSC_LZ4, hdr, 100, 4096, 7, pool) == 0);
+
+  // err=8: unsupported codec_id
+  build_blosc1_header(hdr, CODEC_BLOSC_LZ4, 4096, 1024, 100, 4);
+  EXPECT(expect_parse_err(99u, hdr, 100, 4096, 8, pool) == 0);
+
+  // Spot-check the stringifier surface too.
+  EXPECT(strcmp(blosc1_host_parse_err_str(0), "ok") == 0);
+  EXPECT(strcmp(blosc1_host_parse_err_str(99), "unknown") == 0);
+
+  threadpool_free(pool);
+  return 0;
+}
+
 // Three pool sizes to flush any phase-A / phase-C race.
 static int
 test_all_fixtures(void)
@@ -383,6 +511,7 @@ main(void)
   EXPECT(cuDevicePrimaryCtxRetain(&ctx, dev) == CUDA_SUCCESS);
   EXPECT(cuCtxSetCurrent(ctx) == CUDA_SUCCESS);
 
+  RUN(test_bad_header);
   EXPECT(ensure_fixtures() == 0);
   RUN(test_all_fixtures);
 

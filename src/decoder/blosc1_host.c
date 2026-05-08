@@ -12,6 +12,33 @@
 
 #define BLOSC1_HEADER_BYTES 16u
 
+const char*
+blosc1_host_parse_err_str(uint8_t err)
+{
+  switch (err) {
+    case 0:
+      return "ok";
+    case 1:
+      return "compressed_nbytes < 16";
+    case 2:
+      return "blocksize == 0";
+    case 3:
+      return "header.nbytes != decompressed_nbytes";
+    case 4:
+      return "header.cbytes != compressed_nbytes";
+    case 5:
+      return "nblocks > DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK";
+    case 6:
+      return "typesize out of range";
+    case 7:
+      return "header.compformat does not match codec_id";
+    case 8:
+      return "unsupported codec_id";
+    default:
+      return "unknown";
+  }
+}
+
 static inline uint32_t
 read_u32_le(const uint8_t* p)
 {

@@ -38,6 +38,7 @@
 #include "zarr/zarr_shard_cache.h"
 
 #include <cuda.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -1252,6 +1253,43 @@ build_blosc1_host_chunks(struct damacy* self, struct damacy_wave* wave)
   }
 }
 
+// Walk this wave's per-chunk hdrs and emit one log line per failing
+// chunk so the user can map errors back to a specific sample. The
+// blosc1_host layer logs only the count; this fills in sample_idx +
+// chunk_d coords + the err-code string.
+static void
+log_blosc1_parse_errors(struct damacy* self, struct damacy_wave* wave)
+{
+  struct damacy_batch_slot* slot =
+    &self->batch_pool.slots[wave->batch_pool_slot];
+  char coords[160];
+  for (uint32_t i = 0; i < wave->n_chunks; ++i) {
+    const struct blosc1_chunk_hdr* h = &wave->scratch.hdrs[i];
+    if (h->err == 0)
+      continue;
+    const struct chunk_plan* c =
+      &slot->chunk_plans[wave->batch_chunk_offset + i];
+    const struct sample_plan* sp = &slot->sample_plans[c->sample_idx_in_batch];
+    int n = 0;
+    n += snprintf(coords + n, sizeof(coords) - (size_t)n, "[");
+    for (uint8_t d = 0; d < sp->rank && (size_t)n < sizeof(coords); ++d)
+      n += snprintf(coords + n,
+                    sizeof(coords) - (size_t)n,
+                    d == 0 ? "%u" : ",%u",
+                    c->chunk_d[d]);
+    if ((size_t)n < sizeof(coords))
+      snprintf(coords + n, sizeof(coords) - (size_t)n, "]");
+    log_error("blosc1: parse failed: batch_id=%llu sample=%u chunk_d=%s "
+              "codec_id=%u err=%u (%s)",
+              (unsigned long long)slot->batch_id,
+              (unsigned)c->sample_idx_in_batch,
+              coords,
+              (unsigned)c->codec_id,
+              (unsigned)h->err,
+              blosc1_host_parse_err_str(h->err));
+  }
+}
+
 // Bulk H2D, host parse overlapping the DMA, fanout/op H2Ds, then
 // h2d_end. Codec streams + stream_compute gate on h2d_end.
 static enum damacy_status
@@ -1286,6 +1324,7 @@ kick_h2d(struct damacy* self, struct damacy_wave* wave)
   });
   wave->parse_ms = (float)((monotonic_ns() - parse_t0) / 1.0e6);
   if (rc) {
+    log_blosc1_parse_errors(self, wave);
     // Record h2d_end so cleanup paths gated on it can drain.
     cuEventRecord(wave->ev.h2d_end, self->stream_h2d);
     self->failed_status = DAMACY_DECODE;
