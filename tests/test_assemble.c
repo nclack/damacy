@@ -42,17 +42,40 @@ bf16_to_f32(uint16_t b)
   return v;
 }
 
-// Deterministic source value at (chunk_idx, elem_in_chunk). Held in
-// u32 so each src_dtype can mask/cast it down without losing
-// information for the small test sizes here.
-static uint32_t
-expected_src_u32(uint32_t chunk_idx, uint64_t elem_in_chunk)
+// f32 → f16 (binary16, RNE) for finite values. Mirrors __float2half for
+// the small-magnitude integers this test feeds through.
+static uint16_t
+f32_to_f16(float v)
 {
-  return chunk_idx * 17u + (uint32_t)elem_in_chunk;
+  uint32_t bits;
+  memcpy(&bits, &v, sizeof bits);
+  uint32_t sign = (bits >> 31) & 1u;
+  int32_t exp = (int32_t)((bits >> 23) & 0xFFu) - 127;
+  uint32_t mant = bits & 0x7FFFFFu;
+  if ((bits & 0x7FFFFFFFu) == 0)
+    return (uint16_t)(sign << 15);
+  if (exp > 15)
+    return (uint16_t)((sign << 15) | (31u << 10));
+  if (exp < -14)
+    return (uint16_t)(sign << 15);
+  uint32_t lsb = (mant >> 13) & 1u;
+  uint32_t rounded = mant + 0xFFFu + lsb;
+  int32_t exp_out = exp + (int32_t)(rounded >> 23) + 15;
+  if (exp_out >= 31)
+    return (uint16_t)((sign << 15) | (31u << 10));
+  return (uint16_t)((sign << 15) | ((uint32_t)exp_out << 10) |
+                    ((rounded >> 13) & 0x3FFu));
 }
 
-// Compute dst float value from src_u32 + src_dtype: matches the
-// kernel's load_src_as_float promotion path.
+// Deterministic source value, XOR'd with `xor_mask` so a scenario can
+// push values into negative ranges of signed src dtypes.
+static uint32_t
+expected_src_u32(uint32_t chunk_idx, uint64_t elem_in_chunk, uint32_t xor_mask)
+{
+  return (chunk_idx * 17u + (uint32_t)elem_in_chunk) ^ xor_mask;
+}
+
+// Mirrors the kernel's load_src_as_float promotion path.
 static float
 src_to_float(uint32_t src_u32, enum dtype src_dtype)
 {
@@ -67,10 +90,12 @@ src_to_float(uint32_t src_u32, enum dtype src_dtype)
       return (float)src_u32;
     case dtype_i32:
       return (float)(int32_t)src_u32;
+    case dtype_f16:
+      return (float)(uint16_t)src_u32; // exact for our small ints
     case dtype_f32:
       return (float)src_u32;
     default:
-      return 0.0f; // unsupported in this test
+      return 0.0f;
   }
 }
 
@@ -82,6 +107,7 @@ src_dtype_bpe(enum dtype src_dtype)
       return 1;
     case dtype_u16:
     case dtype_i16:
+    case dtype_f16:
       return 2;
     case dtype_u32:
     case dtype_i32:
@@ -104,7 +130,6 @@ dst_dtype_bpe(enum damacy_dtype dst)
   return 0;
 }
 
-// Pack a u32 into the arena's typed slot.
 static void
 write_src_value(uint8_t* slot, uint32_t v, enum dtype src_dtype)
 {
@@ -124,6 +149,9 @@ write_src_value(uint8_t* slot, uint32_t v, enum dtype src_dtype)
     case dtype_i32:
       *(int32_t*)slot = (int32_t)v;
       return;
+    case dtype_f16:
+      *(uint16_t*)slot = f32_to_f16((float)(uint16_t)v);
+      return;
     case dtype_f32:
       *(float*)slot = (float)v;
       return;
@@ -132,7 +160,6 @@ write_src_value(uint8_t* slot, uint32_t v, enum dtype src_dtype)
   }
 }
 
-// Read a destination value back as float for comparison.
 static float
 read_dst_as_float(const uint8_t* slot, enum damacy_dtype dst)
 {
@@ -155,8 +182,6 @@ ravel(const uint32_t* coord, const uint32_t* extents, int rank)
   return lin;
 }
 
-// Run one (rank, S, N, aabb_lo_relative, aabb_extent, src_dtype, dst_dtype)
-// scenario. Returns 0 on success.
 static int
 run_scenario(int rank,
              const uint32_t* S,
@@ -164,7 +189,8 @@ run_scenario(int rank,
              const int64_t* aabb_lo_relative,
              const int64_t* aabb_extent,
              enum dtype src_dtype,
-             enum damacy_dtype dst_dtype)
+             enum damacy_dtype dst_dtype,
+             uint32_t value_xor)
 {
   const uint32_t sbpe = src_dtype_bpe(src_dtype);
   const uint32_t dbpe = dst_dtype_bpe(dst_dtype);
@@ -192,7 +218,8 @@ run_scenario(int rank,
   for (uint32_t cidx = 0; cidx < n_chunks; ++cidx) {
     uint8_t* base = h_arena + (size_t)cidx * chunk_bytes;
     for (uint64_t e = 0; e < chunk_volume_elems; ++e)
-      write_src_value(base + e * sbpe, expected_src_u32(cidx, e), src_dtype);
+      write_src_value(
+        base + e * sbpe, expected_src_u32(cidx, e, value_xor), src_dtype);
   }
 
   // Row-major dst strides over [aabb_extent[0..rank-1]].
@@ -293,7 +320,8 @@ run_scenario(int rank,
     }
     uint32_t cidx = (uint32_t)ravel(chunk_d, N, rank);
     uint64_t elem_idx = ravel(intra, S, rank);
-    float want_f = src_to_float(expected_src_u32(cidx, elem_idx), src_dtype);
+    float want_f =
+      src_to_float(expected_src_u32(cidx, elem_idx, value_xor), src_dtype);
     if (dst_dtype == DAMACY_BF16)
       want_f = bf16_to_f32(f32_to_bf16(want_f));
 
@@ -340,7 +368,6 @@ run_scenario(int rank,
   return 0;
 }
 
-// rank-3 full AABB, u16 → f32.
 static int
 test_rank3_full(void)
 {
@@ -349,10 +376,9 @@ test_rank3_full(void)
   int64_t aabb_lo_relative[3] = { 0, 0, 0 };
   int64_t aabb_extent[3] = { 8, 8, 8 };
   return run_scenario(
-    3, S, N, aabb_lo_relative, aabb_extent, dtype_u16, DAMACY_F32);
+    3, S, N, aabb_lo_relative, aabb_extent, dtype_u16, DAMACY_F32, 0);
 }
 
-// rank-3 partial AABB crossing chunk boundaries, u16 → f32.
 static int
 test_rank3_partial(void)
 {
@@ -361,10 +387,9 @@ test_rank3_partial(void)
   int64_t aabb_lo_relative[3] = { 1, 2, 3 };
   int64_t aabb_extent[3] = { 9, 8, 7 };
   return run_scenario(
-    3, S, N, aabb_lo_relative, aabb_extent, dtype_u16, DAMACY_F32);
+    3, S, N, aabb_lo_relative, aabb_extent, dtype_u16, DAMACY_F32, 0);
 }
 
-// u8 → f32.
 static int
 test_rank3_u8_to_f32(void)
 {
@@ -373,10 +398,9 @@ test_rank3_u8_to_f32(void)
   int64_t aabb_lo_relative[3] = { 1, 0, 2 };
   int64_t aabb_extent[3] = { 6, 8, 5 };
   return run_scenario(
-    3, S, N, aabb_lo_relative, aabb_extent, dtype_u8, DAMACY_F32);
+    3, S, N, aabb_lo_relative, aabb_extent, dtype_u8, DAMACY_F32, 0);
 }
 
-// u32 → f32.
 static int
 test_rank3_u32_to_f32(void)
 {
@@ -385,10 +409,9 @@ test_rank3_u32_to_f32(void)
   int64_t aabb_lo_relative[3] = { 0, 1, 0 };
   int64_t aabb_extent[3] = { 8, 6, 7 };
   return run_scenario(
-    3, S, N, aabb_lo_relative, aabb_extent, dtype_u32, DAMACY_F32);
+    3, S, N, aabb_lo_relative, aabb_extent, dtype_u32, DAMACY_F32, 0);
 }
 
-// f32 identity.
 static int
 test_rank3_f32_to_f32(void)
 {
@@ -397,10 +420,9 @@ test_rank3_f32_to_f32(void)
   int64_t aabb_lo_relative[3] = { 0, 0, 0 };
   int64_t aabb_extent[3] = { 8, 8, 8 };
   return run_scenario(
-    3, S, N, aabb_lo_relative, aabb_extent, dtype_f32, DAMACY_F32);
+    3, S, N, aabb_lo_relative, aabb_extent, dtype_f32, DAMACY_F32, 0);
 }
 
-// u16 → bf16 (lossy near 2^15 but fine for our small test indices).
 static int
 test_rank3_u16_to_bf16(void)
 {
@@ -409,10 +431,44 @@ test_rank3_u16_to_bf16(void)
   int64_t aabb_lo_relative[3] = { 0, 0, 0 };
   int64_t aabb_extent[3] = { 8, 8, 8 };
   return run_scenario(
-    3, S, N, aabb_lo_relative, aabb_extent, dtype_u16, DAMACY_BF16);
+    3, S, N, aabb_lo_relative, aabb_extent, dtype_u16, DAMACY_BF16, 0);
 }
 
-// One-voxel-wider boundary case.
+// XOR with 0xFF80 forces the i16 sign bit and high mantissa bits high,
+// producing values like 0xFF91→-111, exercising signed promotion.
+static int
+test_rank3_i16_neg_to_f32(void)
+{
+  uint32_t S[3] = { 4, 4, 4 };
+  uint32_t N[3] = { 2, 2, 2 };
+  int64_t aabb_lo_relative[3] = { 0, 0, 0 };
+  int64_t aabb_extent[3] = { 8, 8, 8 };
+  return run_scenario(
+    3, S, N, aabb_lo_relative, aabb_extent, dtype_i16, DAMACY_F32, 0xFF80u);
+}
+
+static int
+test_rank3_f16_to_f32(void)
+{
+  uint32_t S[3] = { 4, 4, 4 };
+  uint32_t N[3] = { 2, 2, 2 };
+  int64_t aabb_lo_relative[3] = { 0, 0, 0 };
+  int64_t aabb_extent[3] = { 8, 8, 8 };
+  return run_scenario(
+    3, S, N, aabb_lo_relative, aabb_extent, dtype_f16, DAMACY_F32, 0);
+}
+
+static int
+test_rank3_f32_to_bf16(void)
+{
+  uint32_t S[3] = { 4, 4, 4 };
+  uint32_t N[3] = { 2, 2, 2 };
+  int64_t aabb_lo_relative[3] = { 0, 0, 0 };
+  int64_t aabb_extent[3] = { 8, 8, 8 };
+  return run_scenario(
+    3, S, N, aabb_lo_relative, aabb_extent, dtype_f32, DAMACY_BF16, 0);
+}
+
 static int
 test_rank3_boundary_one_voxel(void)
 {
@@ -421,7 +477,7 @@ test_rank3_boundary_one_voxel(void)
   int64_t aabb_lo_relative[3] = { 0, 0, 0 };
   int64_t aabb_extent[3] = { 5, 5, 5 };
   return run_scenario(
-    3, S, N, aabb_lo_relative, aabb_extent, dtype_u16, DAMACY_F32);
+    3, S, N, aabb_lo_relative, aabb_extent, dtype_u16, DAMACY_F32, 0);
 }
 
 static int
@@ -432,7 +488,7 @@ test_rank4(void)
   int64_t aabb_lo_relative[4] = { 1, 0, 1, 2 };
   int64_t aabb_extent[4] = { 3, 7, 6, 5 };
   return run_scenario(
-    4, S, N, aabb_lo_relative, aabb_extent, dtype_u16, DAMACY_F32);
+    4, S, N, aabb_lo_relative, aabb_extent, dtype_u16, DAMACY_F32, 0);
 }
 
 static int
@@ -443,7 +499,7 @@ test_rank5(void)
   int64_t aabb_lo_relative[5] = { 0, 1, 0, 2, 1 };
   int64_t aabb_extent[5] = { 3, 3, 7, 5, 6 };
   return run_scenario(
-    5, S, N, aabb_lo_relative, aabb_extent, dtype_u16, DAMACY_F32);
+    5, S, N, aabb_lo_relative, aabb_extent, dtype_u16, DAMACY_F32, 0);
 }
 
 static int
@@ -454,7 +510,7 @@ test_rank3_non_pow2(void)
   int64_t aabb_lo_relative[3] = { 1, 2, 3 };
   int64_t aabb_extent[3] = { 5, 7, 10 };
   return run_scenario(
-    3, S, N, aabb_lo_relative, aabb_extent, dtype_u16, DAMACY_F32);
+    3, S, N, aabb_lo_relative, aabb_extent, dtype_u16, DAMACY_F32, 0);
 }
 
 int
@@ -485,6 +541,9 @@ main(void)
   RUN(test_rank3_u32_to_f32);
   RUN(test_rank3_f32_to_f32);
   RUN(test_rank3_u16_to_bf16);
+  RUN(test_rank3_i16_neg_to_f32);
+  RUN(test_rank3_f16_to_f32);
+  RUN(test_rank3_f32_to_bf16);
   RUN(test_rank3_boundary_one_voxel);
   RUN(test_rank3_non_pow2);
   RUN(test_rank4);

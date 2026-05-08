@@ -103,8 +103,9 @@ extern "C"
 
     // Destination dtype of assembled batches. Source zarrs may carry any
     // supported integer or float type; the assemble kernel casts each
-    // element to this dtype. Sources without a cast path error with
-    // DAMACY_DTYPE at push.
+    // element to this dtype (RNE float-promote, no overflow handling —
+    // precision is bounded by the destination's mantissa). Sources
+    // without a cast path error with DAMACY_DTYPE at push.
     enum damacy_dtype dtype;
 
     // Largest dtype size (bytes) the pipeline will accept across pushed
