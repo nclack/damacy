@@ -320,7 +320,7 @@ struct damacy
   CUstream stream_compute;
   CUstream stream_zstd;  // nvcomp Zstd batch
   CUstream stream_lz4;   // nvcomp LZ4 batch
-  CUcontext primary_ctx; // retained for the device's lifetime
+  CUcontext primary_ctx; // retained iff we set it current; NULL otherwise
 
   struct damacy_lookahead lookahead;
   struct damacy_batch_pool batch_pool;
@@ -1703,9 +1703,8 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   CHECK(Fail, self->store_root);
 
   s = DAMACY_CUDA;
-  // Driver-API context model: capture the caller's current context if
-  // any (PyTorch/DDP path), otherwise fall back to dev 0's primary and
-  // make it current on this thread (pure-C tests, bench).
+  // Capture caller's ctx if any; else retain dev 0's primary and make
+  // it current. primary_ctx stays NULL on the caller path.
   CR(Fail, cuInit(0));
 
   CUcontext caller_ctx = NULL;
@@ -1714,7 +1713,6 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   CUdevice dev;
   if (caller_ctx) {
     CR(Fail, cuCtxGetDevice(&dev));
-    CR(Fail, cuDevicePrimaryCtxRetain(&self->primary_ctx, dev));
   } else {
     CR(Fail, cuDeviceGet(&dev, 0));
     CR(Fail, cuDevicePrimaryCtxRetain(&self->primary_ctx, dev));
@@ -1856,9 +1854,8 @@ damacy_destroy(struct damacy* self)
   zarr_meta_cache_destroy(self->meta_cache);
   store_destroy(self->store);
 
-  // Release matches the Retain in damacy_create; only call when we
-  // actually retained, to keep the device's primary-context refcount
-  // balanced if create failed before Retain.
+  // Matches the Retain in damacy_create; NULL on caller-ctx and
+  // pre-Retain failure paths.
   if (self->primary_ctx)
     cuDevicePrimaryCtxRelease(self->cuda_device);
 

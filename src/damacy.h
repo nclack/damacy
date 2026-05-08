@@ -135,9 +135,9 @@ extern "C"
   struct damacy;
   struct damacy_batch;
 
-  // Create a damacy instance. The current CUcontext is captured and
-  // bound for the instance's lifetime; the calling thread is expected
-  // to keep that context current across subsequent calls.
+  // Create a damacy instance. The current CUcontext is captured if
+  // any; otherwise dev 0's primary is retained and made current. The
+  // captured ctx is expected to stay current on the calling thread.
   enum damacy_status damacy_create(const struct damacy_config* cfg,
                                    struct damacy** out);
 

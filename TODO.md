@@ -32,6 +32,7 @@
 
 ## To triage
 
+- [ ] thread-safe public API (push/pop/flush)
 - [ ] support for bf16 fp16
 - [ ] testing the hashmap/lru
 - [ ] add ngff and multiscale
