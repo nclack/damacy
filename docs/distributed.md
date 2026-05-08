@@ -1,84 +1,35 @@
-# Multi-GPU & distributed training
+# Distributed training
 
-Damacy is single-rank-aware: one pipeline binds to one GPU. For DDP /
-FSDP / accelerate / Lightning, instantiate one pipeline per rank and
-pass `device=local_rank`. There is no cross-rank coordination inside
-the pipeline; throughput scales linearly with rank count provided the
-storage layer keeps up.
+Damacy is single-rank-aware: each rank constructs its own `Pipeline`,
+bound to its own GPU, draining its own slice of the sample list.
+There is no cross-rank coordination inside the pipeline. Throughput
+scales linearly with rank count when the storage layer keeps up.
 
-## Device binding model
+## Binding each rank to its GPU
 
-`Config.device` selects how the pipeline acquires its CUDA context.
-
-### `device=N` (recommended for multi-GPU)
+A multi-rank launch needs two lines that do two different things:
 
 ```python
-damacy.Config(..., device=local_rank)
+torch.cuda.set_device(local_rank)              # for PyTorch
+cfg = damacy.Config(..., device=local_rank)    # for damacy
 ```
 
-The pipeline retains device `N`'s primary context internally and
-pushes it on the calling thread for its lifetime. The caller does not
-need to call `cuCtxSetCurrent` (or `torch.cuda.set_device`) *for
-damacy's sake* — though PyTorch needs `set_device(local_rank)` for its
-own tensor placement.
+`torch.cuda.set_device(local_rank)` tells **PyTorch** where new
+tensors land. Without it, every rank's training tensors go to GPU 0.
 
-If a CUDA context is also current on a different device when
-`Pipeline(cfg)` runs, construction fails with
-`damacy.InvalidArgument`. That combination is almost always a bug
-(e.g. `set_device(0)` paired with `Config(device=3)`); failing fast
-beats silently landing pipeline buffers on a different GPU than your
-training tensors.
+`Config(device=local_rank)` tells **damacy** to retain that device's
+primary CUDA context internally and run all pipeline work there.
+Without `device=...`, damacy captures whatever `CUcontext` is current
+on the calling thread — which silently lands every rank on GPU 0 if
+`set_device` was forgotten.
 
-### `device=None` (default)
+Pass `local_rank` to both. The two settings are cross-checked at
+construction: `Pipeline(cfg)` raises `damacy.InvalidArgument` if
+`Config.device` and the already-current context disagree on a device,
+and emits a `UserWarning` when `LOCAL_RANK` is set in the environment
+but the bound device differs.
 
-The pipeline captures whatever `CUcontext` is current on the calling
-thread. PyTorch sets one up implicitly on first allocation; bare-Python
-users can call `damacy._native.cuda_init_primary()` once to prime the
-primary context on device 0. With no context current, construction
-raises `damacy.InvalidArgument`.
-
-This is ergonomic for single-GPU PyTorch and for tests, but dangerous
-under torchrun: forgetting `set_device(local_rank)` lets every rank's
-pipeline silently bind to device 0. As a guard, damacy emits a
-`UserWarning` when `LOCAL_RANK` is set in the environment but the
-bound device disagrees — that's almost always a missing `set_device`.
-
-### Which to use
-
-| setting | when |
-|---|---|
-| `device=local_rank` | DDP, FSDP, accelerate, Lightning, anything launched via torchrun / mpirun / srun |
-| `device=None` | single-GPU scripts, notebooks, tests, anything where there is exactly one GPU in play |
-
-## Concurrency
-
-The pipeline is built to overlap with your training compute and to
-share a GPU with sibling work without explicit coordination.
-
-- **Non-default, non-blocking streams.** Damacy creates four CUDA
-  streams internally (`h2d`, `compute`, `zstd`, `lz4`) with the
-  `CU_STREAM_NON_BLOCKING` flag. Wave decompress + assemble overlaps
-  with H2D for the next wave, and nothing serializes against the
-  legacy default stream that some user code still lands on.
-- **DLPack stream-aware hand-off.** `Batch.__dlpack__(stream=...)`
-  follows the DLPack v1 protocol: damacy records an event on its
-  output stream and makes the consumer's stream wait on it.
-  `torch.from_dlpack(batch)` passes the current PyTorch stream
-  automatically, so train-step kernels are fenced against the
-  assembled tensor without you doing anything. Pass `stream=None` to
-  block-synchronize; pass `stream=-1` to skip the fence entirely.
-- **Multiple pipelines on one GPU.** Each `Pipeline` owns its own
-  four streams. Two pipelines on the same device run concurrently up
-  to GPU compute capacity — useful for train + validation overlap,
-  or two ranks pinned to one GPU. No extra knobs.
-- **Manual fences for non-DLPack consumers.** `BatchInfo.ready_stream`
-  is the producer stream as an int handle; consumers that bypass
-  DLPack can synchronize against it directly.
-
-Streams are not user-supplied — the DLPack hand-off (or
-`BatchInfo.ready_stream` if you must) is the integration boundary.
-
-## torchrun example (8 GPUs)
+## A complete torchrun example
 
 ```python
 # train.py — launch with:
@@ -94,22 +45,20 @@ def main() -> None:
     local_rank = int(os.environ["LOCAL_RANK"])
     world_size = dist.get_world_size()
 
-    # PyTorch needs this for its own tensor placement; pass the same
-    # rank to Config(device=...) below so damacy retains *that* device's
-    # primary context internally and can't end up on the wrong GPU.
+    # See "Binding each rank to its GPU" above for why both lines.
     torch.cuda.set_device(local_rank)
 
     cfg = damacy.Config(
         batch_size=8,
-        host_buffer_bytes=1 << 30,    # per-rank
+        host_buffer_bytes=1 << 30,    # per-rank; see "Sizing per rank"
         device_buffer_bytes=1 << 30,  # per-rank
         dtype="bf16",
-        n_io_threads=4,
+        n_io_threads=4,                # per-rank
         device=local_rank,
     )
 
-    # Shard work by rank — strided so adjacent samples stay co-located
-    # within their wave on each rank.
+    # Each rank consumes a strided slice of the sample list — see
+    # "Sharding samples across ranks" below.
     all_samples = [
         damacy.Sample(uri=f"/data/cells/cell-{i}.zarr",
                       aabb=[(0, 64), (0, 256), (0, 256)])
@@ -132,5 +81,67 @@ if __name__ == "__main__":
     main()
 ```
 
-`n_io_threads` is per-rank; tune to your storage tier (NVMe pool,
-parallel filesystem, or object store).
+## Sharding samples across ranks
+
+The example slices with stride:
+
+```python
+my_samples = all_samples[local_rank::world_size]
+```
+
+Strided sharding keeps each rank's consecutive batches drawing from
+nearby URIs, which preserves shard-index and zarr-metadata cache
+reuse between adjacent batches on the same rank. Contiguous sharding
+(`all_samples[local_rank * n : (local_rank + 1) * n]`) also works —
+use it when the original order encodes a curriculum you don't want
+to interleave away.
+
+Damacy itself doesn't enforce a sharding policy; it just consumes
+whatever each rank pushes.
+
+## Sizing per rank
+
+Most `Config` knobs apply per rank. Aggregate cost on a node is
+`(ranks per node) × (per-rank value)`:
+
+| knob | per-rank cost |
+|---|---|
+| `host_buffer_bytes` | pinned RAM staging pool |
+| `device_buffer_bytes` | device decompress scratch |
+| `n_io_threads` | I/O worker threads |
+
+Tune `n_io_threads` to your storage tier (NVMe pool, parallel
+filesystem, object store). When stacking multiple ranks on one GPU
+(uncommon, but valid), divide the device-side budgets so the per-GPU
+total fits below `max_gpu_memory_bytes`.
+
+## How damacy uses CUDA streams
+
+Damacy creates four non-blocking CUDA streams internally (H2D,
+compute, zstd, lz4) and overlaps wave-level work across them.
+Nothing for you to configure, but a few facts are worth knowing:
+
+- The streams are non-blocking, so damacy never serialises against
+  the legacy default stream that some user code still lands on.
+- `Batch.__dlpack__` follows the DLPack stream protocol:
+  `torch.from_dlpack(batch)` passes its current PyTorch stream and
+  damacy records an event/wait so the assembled tensor is fenced
+  against the consuming kernels automatically. No manual events
+  needed in the common case.
+- For non-DLPack consumers, `BatchInfo.ready_stream` is the producer
+  stream as an int handle — synchronize against it directly.
+- Two pipelines on the same GPU each own their own four streams, so
+  train + validation (for example) overlap up to GPU compute
+  capacity without coordination.
+
+Streams are not user-supplied. The DLPack hand-off (or
+`BatchInfo.ready_stream`) is the integration boundary.
+
+## Common failures
+
+| symptom | likely cause |
+|---|---|
+| ~1/N throughput, training otherwise looks fine | missing `torch.cuda.set_device(local_rank)`. Damacy warns when `LOCAL_RANK` is set but its bound device disagrees. |
+| `damacy.InvalidArgument` at `Pipeline(cfg)` with "Config.device=N but … current on device M" | `Config(device=N)` and `set_device(M)` were called for different N and M. Make them match. |
+| `damacy.InvalidArgument` ("no CUcontext is current") | `Config.device` not set *and* no CUDA context primed yet. Either pass `device=local_rank` or do a `torch.empty(1, device="cuda")` first. |
+| Pipeline construction succeeds but the first `pop` blocks forever | The push didn't reach the lookahead, or the consumer never frees a slot. The Python wrapper queues overflow on `push`; check `pipeline.pending` and that you're popping at the rate you push. |
