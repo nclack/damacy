@@ -13,6 +13,7 @@
 #include "util/slice.h"
 #include "util/strbuf.h"
 
+#include <cuda.h>
 #include <cuda_runtime.h>
 #include <errno.h>
 #include <stdint.h>
@@ -703,6 +704,24 @@ main(int argc, char** argv)
   };
 
   struct rng rng = { .s = sc.sampling_seed ? sc.sampling_seed : 0xdeadbeefULL };
+
+  // damacy_create requires a CUcontext current. Retain dev 0's primary.
+  if (cuInit(0) != CUDA_SUCCESS) {
+    fprintf(stderr, "cuInit failed\n");
+    uri_table_free(&uris);
+    free(json_buf);
+    return 1;
+  }
+  CUdevice cu_dev = 0;
+  CUcontext cu_ctx = NULL;
+  if (cuDeviceGet(&cu_dev, 0) != CUDA_SUCCESS ||
+      cuDevicePrimaryCtxRetain(&cu_ctx, cu_dev) != CUDA_SUCCESS ||
+      cuCtxSetCurrent(cu_ctx) != CUDA_SUCCESS) {
+    fprintf(stderr, "primary ctx setup failed\n");
+    uri_table_free(&uris);
+    free(json_buf);
+    return 1;
+  }
 
   double t_init_a = now_seconds();
   struct damacy* d = NULL;

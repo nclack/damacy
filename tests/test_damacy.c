@@ -19,6 +19,7 @@
 //   test_lookahead_backpressure  — push past lookahead cap, expect AGAIN,
 //                                  pop one, push remaining
 
+#include "cuda_init.h"
 #include "damacy.h"
 #include "fixture.h"
 
@@ -483,6 +484,7 @@ test_lookahead_backpressure(void)
 int
 main(void)
 {
+  EXPECT(cuda_init_primary() == 0);
   RUN(test_full_array);
   RUN(test_partial_crossing_chunks);
   RUN(test_multi_batch);

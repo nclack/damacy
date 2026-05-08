@@ -11,6 +11,7 @@
 //                                         caps; pipeline must split it
 //                                         into ≥2 waves of the same batch
 
+#include "cuda_init.h"
 #include "damacy.h"
 #include "fixture.h"
 
@@ -320,6 +321,7 @@ test_multi_wave_per_batch(void)
 int
 main(void)
 {
+  EXPECT(cuda_init_primary() == 0);
   RUN(test_full_array_blosc_zstd);
   RUN(test_full_array_blosc_lz4);
   RUN(test_partial_crossing_chunks_blosc);
