@@ -293,6 +293,7 @@ planner_plan(struct planner* self,
       .batch_pool_slot = batch_pool_slot,
       .sample_idx_in_batch = (uint16_t)sample_idx,
       .rank = meta->rank,
+      .src_dtype = (uint8_t)meta->dtype,
       .sample_dst_off_elems = (int64_t)sample_idx * dst_strides[0],
       .chunk_offset = out->n_chunk_plans,
       .chunk_count = 0, // filled after the chunk emit loop

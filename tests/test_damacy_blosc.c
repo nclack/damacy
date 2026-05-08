@@ -22,10 +22,10 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-static uint16_t
-expected_u16_2d(int64_t y, int64_t x, int64_t cols, int64_t off)
+static float
+expected_f32_from_u16_2d(int64_t y, int64_t x, int64_t cols, int64_t off)
 {
-  return (uint16_t)((uint64_t)(y * cols + x + off) & 0xFFFFu);
+  return (float)(uint16_t)((uint64_t)(y * cols + x + off) & 0xFFFFu);
 }
 
 static struct damacy_config
@@ -40,7 +40,7 @@ mk_cfg(const char* root, uint32_t batch_size)
     .device_buffer_bytes = 1ull << 20,
     .n_zarrs_meta_cache = 4,
     .n_shards_meta_cache = 4,
-    .dtype = DAMACY_U16,
+    .dtype = DAMACY_F32,
   };
 }
 
@@ -66,7 +66,7 @@ mkdtemp_root(char* root, size_t cap)
 static int
 run_one(struct damacy* d,
         struct damacy_sample s,
-        uint16_t* out,
+        float* out,
         size_t out_capacity_elements,
         size_t* out_n_elements)
 {
@@ -80,13 +80,13 @@ run_one(struct damacy* d,
   struct damacy_batch_info info;
   damacy_batch_info(b, &info);
   EXPECT(info.rank == 3);
-  EXPECT(info.dtype == DAMACY_U16);
+  EXPECT(info.dtype == DAMACY_F32);
   EXPECT(info.shape[0] == 1);
   size_t n_elements = (size_t)info.shape[1] * (size_t)info.shape[2];
   EXPECT(n_elements <= out_capacity_elements);
   EXPECT(cudaMemcpy(out,
                     info.device_ptr,
-                    n_elements * sizeof(uint16_t),
+                    n_elements * sizeof(float),
                     cudaMemcpyDeviceToHost) == cudaSuccess);
   *out_n_elements = n_elements;
   damacy_release(d, b);
@@ -112,14 +112,14 @@ run_full_array(const char* codec)
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
-  uint16_t out[16 * 32] = { 0 };
+  float out[16 * 32] = { 0 };
   size_t got = 0;
   if (run_one(d, mk_sample("foo", 0, 16, 0, 32), out, 16 * 32, &got))
     return 1;
   EXPECT(got == 16 * 32);
   for (int y = 0; y < 16; ++y)
     for (int x = 0; x < 32; ++x)
-      EXPECT(out[y * 32 + x] == expected_u16_2d(y, x, 32, 0));
+      EXPECT(out[y * 32 + x] == expected_f32_from_u16_2d(y, x, 32, 0));
 
   damacy_destroy(d);
   fixture_rm_tree(root);
@@ -156,14 +156,14 @@ test_partial_crossing_chunks_blosc(void)
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
   const int H = 8, W = 22;
-  uint16_t out[8 * 22] = { 0 };
+  float out[8 * 22] = { 0 };
   size_t got = 0;
   if (run_one(d, mk_sample("foo", 3, 11, 5, 27), out, H * W, &got))
     return 1;
   EXPECT(got == (size_t)(H * W));
   for (int y = 0; y < H; ++y)
     for (int x = 0; x < W; ++x)
-      EXPECT(out[y * W + x] == expected_u16_2d(3 + y, 5 + x, 32, 0));
+      EXPECT(out[y * W + x] == expected_f32_from_u16_2d(3 + y, 5 + x, 32, 0));
 
   damacy_destroy(d);
   fixture_rm_tree(root);
@@ -209,14 +209,14 @@ test_four_codecs_mixed_batch(void)
   EXPECT(info.shape[1] == 16);
   EXPECT(info.shape[2] == 32);
 
-  uint16_t out[4 * 16 * 32] = { 0 };
+  float out[4 * 16 * 32] = { 0 };
   EXPECT(cudaMemcpy(out, info.device_ptr, sizeof out, cudaMemcpyDeviceToHost) ==
          cudaSuccess);
   for (int i = 0; i < 4; ++i)
     for (int y = 0; y < 16; ++y)
       for (int x = 0; x < 32; ++x)
         EXPECT(out[i * 16 * 32 + y * 32 + x] ==
-               expected_u16_2d(y, x, 32, offsets[i]));
+               expected_f32_from_u16_2d(y, x, 32, offsets[i]));
   damacy_release(d, b);
 
   // Sub-stage metrics: blosc1 GPU pipeline must have stamped each
@@ -274,7 +274,7 @@ test_multi_wave_per_batch(void)
     .device_buffer_bytes = 64ull << 10,
     .n_zarrs_meta_cache = 4,
     .n_shards_meta_cache = 4,
-    .dtype = DAMACY_U16,
+    .dtype = DAMACY_F32,
   };
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
@@ -294,14 +294,14 @@ test_multi_wave_per_batch(void)
   EXPECT(info.shape[1] == 16);
   EXPECT(info.shape[2] == 32);
 
-  uint16_t out[4 * 16 * 32] = { 0 };
+  float out[4 * 16 * 32] = { 0 };
   EXPECT(cudaMemcpy(out, info.device_ptr, sizeof out, cudaMemcpyDeviceToHost) ==
          cudaSuccess);
   for (int i = 0; i < 4; ++i)
     for (int y = 0; y < 16; ++y)
       for (int x = 0; x < 32; ++x)
         EXPECT(out[i * 16 * 32 + y * 32 + x] ==
-               expected_u16_2d(y, x, 32, offsets[i]));
+               expected_f32_from_u16_2d(y, x, 32, offsets[i]));
   damacy_release(d, b);
 
   // Splitting evidence: the four-sample batch produced at least two

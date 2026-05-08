@@ -1,13 +1,16 @@
 // Assemble kernel: scatter from per-chunk decompressed buffers in a
-// device arena into the output batch tensor.
+// device arena into the output batch tensor, casting source elements to
+// the destination dtype on the fly.
 //
 // The kernel iterates the union of chunks for each sample (a single
 // rectangle per sample, U[d] = N[d] * S[d]) and culls voxels outside
 // the sample's tight AABB at write time. Per-sample constants live in
 // `struct sample_plan` (planner.h); per-wave-chunk records carry the
-// arena offset and the chunk's grid position.
+// arena offset and the chunk's grid position. Source dtype is read off
+// the sample_plan; destination dtype is fixed for the launch.
 #pragma once
 
+#include "damacy.h" // enum damacy_dtype (destination)
 #include "damacy_limits.h"
 #include "planner/planner.h"
 
@@ -34,7 +37,9 @@ extern "C"
   //                    (1..DAMACY_MAX_RANK supported; ranks 1..8 use a
   //                    compile-time-templated kernel, higher ranks use
   //                    the runtime-rank fallback)
-  //   d_samples      — sample_plan[] for the batch slot (size n_samples)
+  //   d_samples      — sample_plan[] for the batch slot (size n_samples).
+  //                    Each carries src_dtype (enum dtype) used to pick
+  //                    the typed read+cast at thread time.
   //   n_samples      — number of samples in the batch slot
   //   d_chunks       — assemble_chunk[] for the wave (size n_chunks)
   //   n_chunks       — number of chunks in the wave
@@ -43,7 +48,8 @@ extern "C"
   //                          side; chunks with fewer blocks early-return
   //                          on the surplus.
   //   arena_base / output_base — base device pointers
-  //   bpe            — bytes per element (1, 2, 4, or 8)
+  //   dst_dtype      — destination dtype (DAMACY_F32 or DAMACY_BF16);
+  //                    sets the kernel's write type
   //
   // Returns 0 on success, non-zero on launch error.
   int assemble_launch(CUstream stream,
@@ -55,7 +61,7 @@ extern "C"
                       uint32_t max_blocks_per_chunk,
                       const void* arena_base,
                       void* output_base,
-                      uint32_t bpe);
+                      enum damacy_dtype dst_dtype);
 
   // Compute blocks-per-chunk for a sample given its dims and the kernel's
   // block-tile shape. Host-side helper used by damacy.c when packing the

@@ -1,9 +1,12 @@
 #include "assemble/assemble.h"
 
 #include "damacy_limits.h"
+#include "dtype/dtype.h"
 #include "log/log.h"
 #include "util/prelude.h"
 
+#include <cuda_bf16.h>
+#include <cuda_fp16.h>
 #include <stdint.h>
 
 namespace {
@@ -36,8 +39,6 @@ tile_T(int rank, int d)
 }
 
 // Decode a 1D thread index into per-dim coordinates within the block tile.
-// For rank R >= 2: tid % 32 → dim R-1, (tid / 32) % 8 → dim R-2, 0
-// elsewhere. For rank 1 the whole thread index maps to the single dim.
 __device__ __forceinline__ uint32_t
 thread_dim(int rank, uint32_t tid, int d)
 {
@@ -56,13 +57,83 @@ ceil_div_u32(uint32_t a, uint32_t b)
   return (a + b - 1u) / b;
 }
 
+// --- per-element read+cast --------------------------------------------------
+//
+// The cast is a per-thread switch on src_dtype. The branch is uniform
+// per block (one chunk → one sample → one src_dtype), so warp divergence
+// stays at the kernel-grid boundary, not within a warp.
+
+template<typename dst_t>
+__device__ __forceinline__ dst_t
+cast_to_dst(float v);
+
+template<>
+__device__ __forceinline__ float
+cast_to_dst<float>(float v)
+{
+  return v;
+}
+
+template<>
+__device__ __forceinline__ __nv_bfloat16
+cast_to_dst<__nv_bfloat16>(float v)
+{
+  return __float2bfloat16(v);
+}
+
+// Load one source element as float, given src_dtype. Reads exactly
+// sizeof(src_t) bytes from `src` and promotes to float for the cast
+// path. Unsupported src_dtype values are treated as zero — the host
+// side is expected to reject them at push.
+__device__ __forceinline__ float
+load_src_as_float(const uint8_t* src, uint8_t src_dtype)
+{
+  switch ((enum dtype)src_dtype) {
+    case dtype_u8:
+      return (float)(*src);
+    case dtype_u16:
+      return (float)(*(const uint16_t*)src);
+    case dtype_i16:
+      return (float)(*(const int16_t*)src);
+    case dtype_u32:
+      return (float)(*(const uint32_t*)src);
+    case dtype_i32:
+      return (float)(*(const int32_t*)src);
+    case dtype_f16:
+      return __half2float(*(const __half*)src);
+    case dtype_f32:
+      return *(const float*)src;
+    default:
+      return 0.0f;
+  }
+}
+
+// Bytes per source element for stride math. Mirrors dtype_bpe but as a
+// device-side constexpr-friendly helper. Only the supported casts appear.
+__device__ __forceinline__ uint32_t
+src_bpe(uint8_t src_dtype)
+{
+  switch ((enum dtype)src_dtype) {
+    case dtype_u8:
+      return 1u;
+    case dtype_u16:
+    case dtype_i16:
+    case dtype_f16:
+      return 2u;
+    case dtype_u32:
+    case dtype_i32:
+    case dtype_f32:
+      return 4u;
+    default:
+      return 0u;
+  }
+}
+
 // Per-thread copy. The decode of blockIdx.x → tile-in-chunk and the
 // per-dim accumulation of src/dst offsets and bounds fuse into one
 // reverse loop: the accumulators commute across d, so the row-major
 // modulus chain (innermost dim first) doesn't constrain the order.
-// After the loop, rem != 0 iff blockIdx.x >= ∏ tiles_per_chunk[d] —
-// the surplus blocks gridDim.x emits because it's the wave-wide max.
-template<typename copy_t>
+template<typename dst_t>
 __device__ __forceinline__ void
 assemble_body(int rank,
               const struct sample_plan& s,
@@ -95,15 +166,16 @@ assemble_body(int rank,
   if (rem != 0 || !in_bounds)
     return;
 
+  const uint32_t sbpe = src_bpe(s.src_dtype);
   const uint8_t* src =
-    arena_base + c.src_base_byte_off + src_off_elems * (int64_t)sizeof(copy_t);
-  uint8_t* dst = output_base + dst_off_elems * (int64_t)sizeof(copy_t);
-  *(copy_t*)dst = *(const copy_t*)src;
+    arena_base + c.src_base_byte_off + src_off_elems * (int64_t)sbpe;
+  dst_t* dst = (dst_t*)(output_base + dst_off_elems * (int64_t)sizeof(dst_t));
+  *dst = cast_to_dst<dst_t>(load_src_as_float(src, s.src_dtype));
 }
 
 // Single kernel template covering both the templated-rank fast path
 // (RANK_TPL > 0) and the runtime-rank fallback (RANK_TPL == 0).
-template<int RANK_TPL, typename copy_t>
+template<int RANK_TPL, typename dst_t>
 __global__ void
 assemble_kernel(const struct sample_plan* __restrict__ d_samples,
                 const struct assemble_chunk* __restrict__ d_chunks,
@@ -113,30 +185,25 @@ assemble_kernel(const struct sample_plan* __restrict__ d_samples,
   const struct assemble_chunk c = d_chunks[blockIdx.y];
   const struct sample_plan& s = d_samples[c.sample_idx_in_batch];
   const int rank = (RANK_TPL == 0) ? (int)s.rank : RANK_TPL;
-  assemble_body<copy_t>(rank, s, c, arena_base, output_base);
+  assemble_body<dst_t>(rank, s, c, arena_base, output_base);
 }
 
-// Dispatch kernel launch over bpe ∈ {1,2,4,8}. RANK_TPL_VAL == 0 selects
-// the runtime-rank kernel; otherwise it's the compile-time rank.
-// Embedded in a function: the default arm returns 1 from the caller.
-// Uses identifiers (bpe, grid, block, stream, d_samples, d_chunks,
-// arena_b, output_b) from the enclosing scope.
-#define BPE_CASE(BPE_VAL, COPY_T)                                              \
-  case BPE_VAL:                                                                \
-    assemble_kernel<kRankTpl, COPY_T>                                          \
+// Dispatch kernel launch over destination dtype. RANK_TPL_VAL == 0
+// selects the runtime-rank kernel; otherwise it's the compile-time rank.
+#define DST_CASE(DST_VAL, DST_T)                                               \
+  case DST_VAL:                                                                \
+    assemble_kernel<kRankTpl, DST_T>                                           \
       <<<grid, block, 0, stream>>>(d_samples, d_chunks, arena_b, output_b);    \
     break
 
-#define DISPATCH_BPE(RANK_TPL_VAL)                                             \
+#define DISPATCH_DST(RANK_TPL_VAL)                                             \
   do {                                                                         \
     constexpr int kRankTpl = (RANK_TPL_VAL);                                   \
-    switch (bpe) {                                                             \
-      BPE_CASE(1, uint8_t);                                                    \
-      BPE_CASE(2, uint16_t);                                                   \
-      BPE_CASE(4, uint32_t);                                                   \
-      BPE_CASE(8, uint64_t);                                                   \
+    switch (dst_dtype) {                                                       \
+      DST_CASE(DAMACY_F32, float);                                             \
+      DST_CASE(DAMACY_BF16, __nv_bfloat16);                                    \
       default:                                                                 \
-        log_error("assemble: unsupported bpe=%u", bpe);                        \
+        log_error("assemble: unsupported dst_dtype=%d", (int)dst_dtype);       \
         return 1;                                                              \
     }                                                                          \
   } while (0)
@@ -153,12 +220,12 @@ assemble_launch(CUstream stream,
                 uint32_t max_blocks_per_chunk,
                 const void* arena_base,
                 void* output_base,
-                uint32_t bpe)
+                enum damacy_dtype dst_dtype)
 {
   (void)n_samples;
   if (n_chunks == 0 || max_blocks_per_chunk == 0)
     return 0;
-  if (!d_samples || !d_chunks || !arena_base || !output_base || bpe == 0)
+  if (!d_samples || !d_chunks || !arena_base || !output_base)
     return 1;
   if (rank == 0 || rank > DAMACY_MAX_RANK) {
     log_error("assemble: unsupported rank=%u (1..%u supported)",
@@ -174,7 +241,7 @@ assemble_launch(CUstream stream,
 
 #define LAUNCH_RANK(R)                                                         \
   case R:                                                                      \
-    DISPATCH_BPE(R);                                                           \
+    DISPATCH_DST(R);                                                           \
     break
 
   static_assert(kMaxTemplateRank == 8, "update LAUNCH_RANK case list");
@@ -189,7 +256,7 @@ assemble_launch(CUstream stream,
     LAUNCH_RANK(8);
     default:
       // Runtime-rank fallback for ranks 9..DAMACY_MAX_RANK.
-      DISPATCH_BPE(0);
+      DISPATCH_DST(0);
       break;
   }
 #undef LAUNCH_RANK

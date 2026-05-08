@@ -31,11 +31,12 @@
 #include <unistd.h>
 
 // Expected u16 value at a given (y, x) within a shape-(rows, cols)
-// linear-fill zarr written with `--offset off`.
-static uint16_t
-expected_u16_2d(int64_t y, int64_t x, int64_t cols, int64_t off)
+// linear-fill zarr written with `--offset off`. Returned as float
+// since the configured destination dtype is f32.
+static float
+expected_f32_from_u16_2d(int64_t y, int64_t x, int64_t cols, int64_t off)
 {
-  return (uint16_t)((uint64_t)(y * cols + x + off) & 0xFFFFu);
+  return (float)(uint16_t)((uint64_t)(y * cols + x + off) & 0xFFFFu);
 }
 
 static struct damacy_config
@@ -50,7 +51,7 @@ mk_cfg(const char* root, uint32_t batch_size)
     .device_buffer_bytes = 64ull << 10,
     .n_zarrs_meta_cache = 4,
     .n_shards_meta_cache = 4,
-    .dtype = DAMACY_U16,
+    .dtype = DAMACY_F32,
   };
 }
 
@@ -74,12 +75,12 @@ mkdtemp_root(char* root, size_t cap)
 
 // Push one sample, pop the resulting (size-1) batch, copy its device
 // buffer to host. Caller-owned `out` must hold at least
-// out_capacity_elements u16s; the batch's element count is returned in
+// out_capacity_elements floats; the batch's element count is returned in
 // *out_n_elements.
 static int
 run_one(struct damacy* d,
         struct damacy_sample s,
-        uint16_t* out,
+        float* out,
         size_t out_capacity_elements,
         size_t* out_n_elements)
 {
@@ -93,13 +94,13 @@ run_one(struct damacy* d,
   struct damacy_batch_info info;
   damacy_batch_info(b, &info);
   EXPECT(info.rank == 3);
-  EXPECT(info.dtype == DAMACY_U16);
+  EXPECT(info.dtype == DAMACY_F32);
   EXPECT(info.shape[0] == 1);
   size_t n_elements = (size_t)info.shape[1] * (size_t)info.shape[2];
   EXPECT(n_elements <= out_capacity_elements);
   EXPECT(cudaMemcpy(out,
                     info.device_ptr,
-                    n_elements * sizeof(uint16_t),
+                    n_elements * sizeof(float),
                     cudaMemcpyDeviceToHost) == cudaSuccess);
   *out_n_elements = n_elements;
   damacy_release(d, b);
@@ -121,14 +122,14 @@ test_full_array(void)
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
-  uint16_t out[4 * 8] = { 0 };
+  float out[4 * 8] = { 0 };
   size_t got = 0;
   if (run_one(d, mk_sample("foo", 0, 4, 0, 8), out, 4 * 8, &got))
     return 1;
   EXPECT(got == 4 * 8);
   for (int y = 0; y < 4; ++y)
     for (int x = 0; x < 8; ++x)
-      EXPECT(out[y * 8 + x] == expected_u16_2d(y, x, 8, 0));
+      EXPECT(out[y * 8 + x] == expected_f32_from_u16_2d(y, x, 8, 0));
 
   damacy_destroy(d);
   fixture_rm_tree(root);
@@ -151,14 +152,14 @@ test_partial_crossing_chunks(void)
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
-  uint16_t out[2 * 5] = { 0 };
+  float out[2 * 5] = { 0 };
   size_t got = 0;
   if (run_one(d, mk_sample("foo", 1, 3, 2, 7), out, 2 * 5, &got))
     return 1;
   EXPECT(got == 2 * 5);
   for (int y = 0; y < 2; ++y)
     for (int x = 0; x < 5; ++x)
-      EXPECT(out[y * 5 + x] == expected_u16_2d(1 + y, 2 + x, 8, 0));
+      EXPECT(out[y * 5 + x] == expected_f32_from_u16_2d(1 + y, 2 + x, 8, 0));
 
   damacy_destroy(d);
   fixture_rm_tree(root);
@@ -217,7 +218,7 @@ test_multi_batch(void)
     EXPECT(info.shape[2] == 8);
     EXPECT(info.batch_id == (uint64_t)batch);
 
-    uint16_t out[2 * 4 * 8] = { 0 };
+    float out[2 * 4 * 8] = { 0 };
     EXPECT(
       cudaMemcpy(out, info.device_ptr, sizeof out, cudaMemcpyDeviceToHost) ==
       cudaSuccess);
@@ -227,8 +228,8 @@ test_multi_batch(void)
       int64_t x0 = aabbs[batch * 2 + sample_idx][2];
       for (int y = 0; y < 4; ++y) {
         for (int x = 0; x < 8; ++x) {
-          uint16_t got = out[sample_idx * 32 + y * 8 + x];
-          uint16_t want = expected_u16_2d(y0 + y, x0 + x, 16, 0);
+          float got = out[sample_idx * 32 + y * 8 + x];
+          float want = expected_f32_from_u16_2d(y0 + y, x0 + x, 16, 0);
           EXPECT(got == want);
         }
       }
@@ -278,13 +279,70 @@ test_multi_zarr(void)
   EXPECT(info.shape[1] == 4);
   EXPECT(info.shape[2] == 8);
 
-  uint16_t out[2 * 4 * 8] = { 0 };
+  float out[2 * 4 * 8] = { 0 };
   EXPECT(cudaMemcpy(out, info.device_ptr, sizeof out, cudaMemcpyDeviceToHost) ==
          cudaSuccess);
   for (int y = 0; y < 4; ++y) {
     for (int x = 0; x < 8; ++x) {
-      EXPECT(out[0 * 32 + y * 8 + x] == expected_u16_2d(y, x, 8, 0));
-      EXPECT(out[1 * 32 + y * 8 + x] == expected_u16_2d(y, x, 8, 1000));
+      EXPECT(out[0 * 32 + y * 8 + x] == expected_f32_from_u16_2d(y, x, 8, 0));
+      EXPECT(out[1 * 32 + y * 8 + x] ==
+             expected_f32_from_u16_2d(y, x, 8, 1000));
+    }
+  }
+  damacy_release(d, b);
+
+  damacy_destroy(d);
+  fixture_rm_tree(root);
+  return 0;
+}
+
+// Mixed source dtypes within one batch: one u8 zarr and one u16 zarr,
+// both cast to the configured f32 destination. Verifies the per-block
+// src_dtype dispatch in the assemble kernel.
+static int
+test_heterogeneous_dtype(void)
+{
+  char root[64];
+  EXPECT(mkdtemp_root(root, sizeof root) == 0);
+  char pa[256], pb[256];
+  snprintf(pa, sizeof pa, "%s/a", root);
+  snprintf(pb, sizeof pb, "%s/b", root);
+  int64_t shape[2] = { 4, 8 }, inner[2] = { 2, 4 }, shard[2] = { 4, 8 };
+  EXPECT(fixture_write_zarr(pa, shape, inner, shard, 2, "uint8", 0) == 0);
+  EXPECT(fixture_write_zarr(pb, shape, inner, shard, 2, "uint16", 1000) == 0);
+
+  struct damacy_config cfg = mk_cfg(root, 2);
+  struct damacy* d = NULL;
+  EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
+
+  struct damacy_sample s[2] = {
+    mk_sample("a", 0, 4, 0, 8),
+    mk_sample("b", 0, 4, 0, 8),
+  };
+  struct damacy_sample_slice slice = { .beg = s, .end = s + 2 };
+  struct damacy_push_result pr = damacy_push(d, slice);
+  EXPECT(pr.status == DAMACY_OK);
+
+  struct damacy_batch* b = NULL;
+  EXPECT(damacy_pop(d, &b) == DAMACY_OK);
+  struct damacy_batch_info info;
+  damacy_batch_info(b, &info);
+  EXPECT(info.shape[0] == 2);
+  EXPECT(info.shape[1] == 4);
+  EXPECT(info.shape[2] == 8);
+  EXPECT(info.dtype == DAMACY_F32);
+
+  float out[2 * 4 * 8] = { 0 };
+  EXPECT(cudaMemcpy(out, info.device_ptr, sizeof out, cudaMemcpyDeviceToHost) ==
+         cudaSuccess);
+  for (int y = 0; y < 4; ++y) {
+    for (int x = 0; x < 8; ++x) {
+      // sample 0: u8 source, fill offset 0 → value masked to u8 range.
+      uint8_t want_u8 = (uint8_t)((uint64_t)(y * 8 + x + 0) & 0xFFu);
+      EXPECT(out[0 * 32 + y * 8 + x] == (float)want_u8);
+      // sample 1: u16 source, fill offset 1000.
+      EXPECT(out[1 * 32 + y * 8 + x] ==
+             expected_f32_from_u16_2d(y, x, 8, 1000));
     }
   }
   damacy_release(d, b);
@@ -346,7 +404,7 @@ test_pipelined(void)
     EXPECT(info.shape[1] == 4);
     EXPECT(info.shape[2] == 8);
 
-    uint16_t out[2 * 4 * 8] = { 0 };
+    float out[2 * 4 * 8] = { 0 };
     EXPECT(
       cudaMemcpy(out, info.device_ptr, sizeof out, cudaMemcpyDeviceToHost) ==
       cudaSuccess);
@@ -356,8 +414,8 @@ test_pipelined(void)
       int64_t x0 = aabbs[batch * 2 + sample_idx][2];
       for (int y = 0; y < 4; ++y) {
         for (int x = 0; x < 8; ++x) {
-          uint16_t got = out[sample_idx * 32 + y * 8 + x];
-          uint16_t want = expected_u16_2d(y0 + y, x0 + x, 16, 0);
+          float got = out[sample_idx * 32 + y * 8 + x];
+          float want = expected_f32_from_u16_2d(y0 + y, x0 + x, 16, 0);
           EXPECT(got == want);
         }
       }
@@ -429,6 +487,7 @@ main(void)
   RUN(test_partial_crossing_chunks);
   RUN(test_multi_batch);
   RUN(test_multi_zarr);
+  RUN(test_heterogeneous_dtype);
   RUN(test_pipelined);
   RUN(test_lookahead_backpressure);
   log_info("all tests passed");

@@ -340,35 +340,36 @@ static uint32_t
 damacy_dtype_bpe(enum damacy_dtype dt)
 {
   switch (dt) {
-    case DAMACY_U8:
-      return 1;
-    case DAMACY_U16:
-    case DAMACY_I16:
-    case DAMACY_F16:
+    case DAMACY_BF16:
       return 2;
-    case DAMACY_U32:
     case DAMACY_F32:
       return 4;
   }
   return 0;
 }
 
+// Cast support matrix: zarr source dtype → cfg destination dtype. Sources
+// are restricted to the common image types; integer→float and float→float
+// casts are valid for both bf16 and f32 destinations. Returns 1 if the
+// (src, dst) pair has a cast path the assemble kernel will accept.
 static int
-damacy_dtype_match(enum damacy_dtype d, enum dtype z)
+cast_path_supported(enum damacy_dtype dst, enum dtype src)
 {
-  switch (d) {
-    case DAMACY_U8:
-      return z == dtype_u8;
-    case DAMACY_U16:
-      return z == dtype_u16;
-    case DAMACY_I16:
-      return z == dtype_i16;
-    case DAMACY_U32:
-      return z == dtype_u32;
-    case DAMACY_F16:
-      return z == dtype_f16;
+  switch (dst) {
     case DAMACY_F32:
-      return z == dtype_f32;
+    case DAMACY_BF16:
+      switch (src) {
+        case dtype_u8:
+        case dtype_u16:
+        case dtype_i16:
+        case dtype_u32:
+        case dtype_i32:
+        case dtype_f16:
+        case dtype_f32:
+          return 1;
+        default:
+          return 0;
+      }
   }
   return 0;
 }
@@ -1000,7 +1001,7 @@ push_one(struct damacy* self, const struct damacy_sample* sample)
   if (ms != DAMACY_OK)
     return ms;
 
-  if (!damacy_dtype_match(self->cfg.dtype, meta->dtype))
+  if (!cast_path_supported(self->cfg.dtype, meta->dtype))
     return DAMACY_DTYPE;
   if (sample->aabb.rank != meta->rank)
     return DAMACY_RANK;
@@ -1474,7 +1475,7 @@ kick_assemble(struct damacy* self, struct damacy_wave* wave, CUstream s)
                       wave->assemble_max_blocks_per_chunk,
                       wave->dev_decompressed,
                       slot->dev_ptr,
-                      damacy_dtype_bpe(self->cfg.dtype))) {
+                      self->cfg.dtype)) {
     self->failed_status = DAMACY_CUDA;
     return DAMACY_CUDA;
   }
