@@ -681,12 +681,19 @@ deterministic and disjoint.</p>
 <td><code>n_io_threads</code></td>
 <td>I/O worker threads</td>
 </tr>
+<tr>
+<td><code>n_compute_threads</code></td>
+<td>host blosc1 parse workers</td>
+</tr>
 </tbody>
 </table>
 <p>Tune <code>n_io_threads</code> to your storage tier (NVMe pool, parallel
-filesystem, object store). When stacking multiple ranks on one GPU
-(uncommon, but valid), divide the device-side budgets so the per-GPU
-total fits below <code>max_gpu_memory_bytes</code>.</p>
+filesystem, object store). <code>n_compute_threads</code> defaults to <code>0</code>
+(parse runs serially on the calling thread, which is fine when waves
+are small); raise it when chunks-per-wave is large enough that the
+parse shows up in <code>stats.decompress_parse</code>. When stacking multiple
+ranks on one GPU (uncommon, but valid), divide the device-side
+budgets so the per-GPU total fits below <code>max_gpu_memory_bytes</code>.</p>
 <h2 id="cuda-streams">CUDA streams<a class="headerlink" href="#cuda-streams" title="Permanent link">&para;</a></h2>
 <p>DLPack handles synchronization. <code>torch.from_dlpack(batch)</code> records
 an event on damacy's output stream and makes the consuming PyTorch
