@@ -35,9 +35,19 @@ but the bound device differs.
 # train.py — launch with:
 #   torchrun --standalone --nproc_per_node=8 train.py
 import os
+from collections.abc import Iterator
+
+import damacy
 import torch
 import torch.distributed as dist
-import damacy
+
+
+def crops_for_rank(rank: int, world_size: int) -> Iterator[damacy.Sample]:
+    """Yield an indefinite stream of `damacy.Sample` for this rank.
+    Sharding policy lives here — see "Sharding samples across ranks"
+    below. The main README covers sample-construction patterns
+    (random crops, tile grids, curriculums)."""
+    ...
 
 
 def main() -> None:
@@ -57,21 +67,21 @@ def main() -> None:
         device=local_rank,
     )
 
-    # Each rank consumes a strided slice of the sample list — see
-    # "Sharding samples across ranks" below.
-    all_samples = [
-        damacy.Sample(uri=f"/data/cells/cell-{i}.zarr",
-                      aabb=[(0, 64), (0, 256), (0, 256)])
-        for i in range(8192)
-    ]
-    my_samples = all_samples[local_rank::world_size]
+    model = ...        # your DDP-wrapped module
+    optimizer = ...    # your optimizer
+    n_steps = 10_000
 
     with damacy.Pipeline(cfg) as p:
-        p.push(my_samples)
-        for batch in p.batches(len(my_samples) // cfg.batch_size):
-            with batch as t:
-                x = torch.from_dlpack(t)
-                # forward / backward / optimizer step (DDP-wrapped model)
+        # Hand the generator off once; the pipeline pulls lazily as
+        # pops free space, so memory stays bounded even though
+        # crops_for_rank is unbounded.
+        p.push(crops_for_rank(local_rank, world_size))
+
+        for step in range(n_steps):
+            with p.pop() as batch:
+                x = torch.from_dlpack(batch)  # zero-copy, stream-fenced
+                # forward / backward / optimizer step:
+                # loss = model(x).mean(); loss.backward(); optimizer.step()
                 ...
 
     dist.destroy_process_group()
@@ -83,21 +93,21 @@ if __name__ == "__main__":
 
 ## Sharding samples across ranks
 
-The example slices with stride:
+`crops_for_rank` decides which samples each rank sees. Damacy
+doesn't enforce a sharding policy — whatever your generator yields
+is what that rank works on. Two common patterns:
 
-```python
-my_samples = all_samples[local_rank::world_size]
-```
+- **Strided** (`all_samples[rank::world_size]`): each rank's
+  consecutive batches draw from nearby URIs, which preserves
+  shard-index and zarr-metadata cache reuse between adjacent batches
+  on the same rank.
+- **Contiguous** (`all_samples[rank * n : (rank + 1) * n]`): use
+  this when the original order encodes a curriculum you don't want
+  to interleave away.
 
-Strided sharding keeps each rank's consecutive batches drawing from
-nearby URIs, which preserves shard-index and zarr-metadata cache
-reuse between adjacent batches on the same rank. Contiguous sharding
-(`all_samples[local_rank * n : (local_rank + 1) * n]`) also works —
-use it when the original order encodes a curriculum you don't want
-to interleave away.
-
-Damacy itself doesn't enforce a sharding policy; it just consumes
-whatever each rank pushes.
+Generators that draw random crops can shard implicitly by seeding
+their RNG with `(base_seed, rank, epoch)` so each rank's sequence is
+deterministic and disjoint.
 
 ## Sizing per rank
 
