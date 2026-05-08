@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778209400373,
+  "lastUpdate": 1778263026422,
   "repoUrl": "https://github.com/nclack/damacy",
   "entries": {
     "damacy timings": [
@@ -243,6 +243,128 @@ window.BENCHMARK_DATA = {
           {
             "name": "damacy/mixed/decompress.post.ms_avg",
             "value": 0.92438,
+            "unit": "ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Nathan Clack",
+            "username": "nclack",
+            "email": "nclack@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "87ead67d474a7fbde3fef672e0a82d39fe799c79",
+          "message": "python: nice api, doctests, mkdocs site (#19)\n\n- Python API: frozen-dataclass `Config`, typed exception hierarchy,\ncontext-managed `Batch`, `py.typed` + `_native.pyi`\n- Doctests + 33-test pytest suite \n- mkdocs+material+mkdocstrings \n- README: docs badge, Quick start, torchrun 8-GPU example\n\nCloses #18.",
+          "timestamp": "2026-05-08T17:54:32Z",
+          "url": "https://github.com/nclack/damacy/commit/87ead67d474a7fbde3fef672e0a82d39fe799c79"
+        },
+        "date": 1778263025155,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "damacy/default/init",
+            "value": 171.074,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/time_to_first_batch",
+            "value": 562.518,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/wall",
+            "value": 9369.6,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/io.ms_avg",
+            "value": 4.37847,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/h2d.ms_avg",
+            "value": 6.03033,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/decompress.ms_avg",
+            "value": 14.0811,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/assemble.ms_avg",
+            "value": 1.68203,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/decompress.parse.ms_avg",
+            "value": 0.0455955,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/decompress.zstd.ms_avg",
+            "value": 14.0256,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/decompress.post.ms_avg",
+            "value": 0.00447369,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/init",
+            "value": 144.959,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/time_to_first_batch",
+            "value": 531.753,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/wall",
+            "value": 10066.8,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/io.ms_avg",
+            "value": 4.49188,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/h2d.ms_avg",
+            "value": 6.14569,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/decompress.ms_avg",
+            "value": 15.1973,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/assemble.ms_avg",
+            "value": 1.67581,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/decompress.parse.ms_avg",
+            "value": 0.0807012,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/decompress.zstd.ms_avg",
+            "value": 14.179,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/decompress.post.ms_avg",
+            "value": 0.932125,
             "unit": "ms"
           }
         ]
