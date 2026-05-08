@@ -4,8 +4,8 @@
 
 damacy reads sharded [NGFF](https://ngff.openmicroscopy.org/) zarr stores
 straight onto the GPU: per-shard chunk indexing, parallel host I/O,
-in-flight GPU-side decompression (blosc1 / zstd), and a typed assemble
-kernel that lands each batch as a DLPack-ready device tensor.
+in-flight GPU-side decompression (zstd, blosc1-{lz4,zstd}), and a typed
+assemble kernel that lands each batch as a DLPack-ready device tensor.
 
 [![build](https://github.com/nclack/damacy/actions/workflows/build.yml/badge.svg)](https://github.com/nclack/damacy/actions/workflows/build.yml)
 [![test](https://github.com/nclack/damacy/actions/workflows/test.yml/badge.svg)](https://github.com/nclack/damacy/actions/workflows/test.yml)

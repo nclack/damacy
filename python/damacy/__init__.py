@@ -37,6 +37,7 @@ from __future__ import annotations
 import itertools
 import logging
 import os
+import threading
 import warnings
 from collections import deque
 from collections.abc import Iterable, Iterator
@@ -312,7 +313,7 @@ class Sample:
         return {"uri": self.uri, "aabb": list(self.aabb)}
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
+@dataclass(init=False, frozen=True, slots=True)
 class Config:
     """All resource caps and pipeline shape, fixed at create time.
 
@@ -326,9 +327,10 @@ class Config:
     >>> dataclasses.replace(base, batch_size=64).batch_size
     64
 
-    Validation runs in ``__post_init__`` so invalid configs fail before
-    we touch CUDA. The dtype field accepts :class:`Dtype`, an int, or
-    one of ``"f32"`` / ``"float32"`` / ``"bf16"`` / ``"bfloat16"``.
+    Validation runs in ``__init__`` so invalid configs fail before we
+    touch CUDA. The constructor accepts :class:`Dtype`, an int, or one
+    of ``"f32"`` / ``"float32"`` / ``"bf16"`` / ``"bfloat16"`` for the
+    ``dtype`` argument; the stored field is always a :class:`Dtype`.
 
     >>> Config(batch_size=0,
     ...        host_buffer_bytes=1, device_buffer_bytes=1)
@@ -362,32 +364,61 @@ class Config:
     batch_size: int
     host_buffer_bytes: int
     device_buffer_bytes: int
-    dtype: Dtype | str | int = Dtype.F32
-    lookahead_batches: int = 2
-    n_io_threads: int = 4
-    n_zarrs_meta_cache: int = 64
-    n_shards_meta_cache: int = 256
-    max_chunk_uncompressed_bytes: int = 0
-    max_gpu_memory_bytes: int = 0
-    max_bytes_per_element: int = 0
-    device: int | None = None
+    dtype: Dtype
+    lookahead_batches: int
+    n_io_threads: int
+    n_zarrs_meta_cache: int
+    n_shards_meta_cache: int
+    max_chunk_uncompressed_bytes: int
+    max_gpu_memory_bytes: int
+    max_bytes_per_element: int
+    device: int | None
 
-    def __post_init__(self) -> None:
-        # Coerce dtype eagerly so reading .dtype always yields a Dtype.
-        # frozen=True forbids `self.dtype = ...`, hence object.__setattr__.
-        object.__setattr__(self, "dtype", Dtype.coerce(self.dtype))
-        if self.batch_size < 1:
-            raise ValueError(f"batch_size must be >= 1 (got {self.batch_size})")
-        if self.lookahead_batches < 2:
+    def __init__(
+        self,
+        *,
+        batch_size: int,
+        host_buffer_bytes: int,
+        device_buffer_bytes: int,
+        dtype: Dtype | str | int = Dtype.F32,
+        lookahead_batches: int = 2,
+        n_io_threads: int = 4,
+        n_zarrs_meta_cache: int = 64,
+        n_shards_meta_cache: int = 256,
+        max_chunk_uncompressed_bytes: int = 0,
+        max_gpu_memory_bytes: int = 0,
+        max_bytes_per_element: int = 0,
+        device: int | None = None,
+    ) -> None:
+        # Custom __init__ rather than __post_init__ so the constructor
+        # signature accepts the polymorphic dtype input while reads of
+        # `cfg.dtype` always type as Dtype. dataclass(init=False) keeps
+        # the auto-generated __eq__ / __hash__ / __repr__.
+        if batch_size < 1:
+            raise ValueError(f"batch_size must be >= 1 (got {batch_size})")
+        if lookahead_batches < 2:
             raise ValueError(
-                f"lookahead_batches must be >= 2 (got {self.lookahead_batches})"
+                f"lookahead_batches must be >= 2 (got {lookahead_batches})"
             )
-        if self.n_io_threads < 1:
-            raise ValueError(f"n_io_threads must be >= 1 (got {self.n_io_threads})")
-        if self.host_buffer_bytes <= 0 or self.device_buffer_bytes <= 0:
+        if n_io_threads < 1:
+            raise ValueError(f"n_io_threads must be >= 1 (got {n_io_threads})")
+        if host_buffer_bytes <= 0 or device_buffer_bytes <= 0:
             raise ValueError("host/device_buffer_bytes must be positive")
-        if self.max_chunk_uncompressed_bytes < 0:
+        if max_chunk_uncompressed_bytes < 0:
             raise ValueError("max_chunk_uncompressed_bytes must be >= 0")
+        set_ = object.__setattr__  # frozen=True forbids `self.x = ...`
+        set_(self, "batch_size", batch_size)
+        set_(self, "host_buffer_bytes", host_buffer_bytes)
+        set_(self, "device_buffer_bytes", device_buffer_bytes)
+        set_(self, "dtype", Dtype.coerce(dtype))
+        set_(self, "lookahead_batches", lookahead_batches)
+        set_(self, "n_io_threads", n_io_threads)
+        set_(self, "n_zarrs_meta_cache", n_zarrs_meta_cache)
+        set_(self, "n_shards_meta_cache", n_shards_meta_cache)
+        set_(self, "max_chunk_uncompressed_bytes", max_chunk_uncompressed_bytes)
+        set_(self, "max_gpu_memory_bytes", max_gpu_memory_bytes)
+        set_(self, "max_bytes_per_element", max_bytes_per_element)
+        set_(self, "device", device)
 
 
 @dataclass(frozen=True, slots=True)
@@ -577,7 +608,11 @@ class Batch:
 # Pairs of (LOCAL_RANK, bound) we've already warned about in this
 # process. A loop that constructs many Pipelines under the same
 # misconfiguration shouldn't generate one warning per construction.
+# The lock guards against a check-then-add race when several threads
+# construct pipelines concurrently; the dedup is best-effort either
+# way, but with the lock it's deterministic.
 _warned_local_rank_pairs: set[tuple[int, int]] = set()
+_warned_local_rank_lock = threading.Lock()
 
 
 def _warn_if_local_rank_disagrees(cfg_device: int | None, bound: int) -> None:
@@ -598,9 +633,10 @@ def _warn_if_local_rank_disagrees(cfg_device: int | None, bound: int) -> None:
     if local_rank == bound:
         return
     key = (local_rank, bound)
-    if key in _warned_local_rank_pairs:
-        return
-    _warned_local_rank_pairs.add(key)
+    with _warned_local_rank_lock:
+        if key in _warned_local_rank_pairs:
+            return
+        _warned_local_rank_pairs.add(key)
     warnings.warn(
         f"damacy.Pipeline bound to CUDA device {bound} but LOCAL_RANK={local_rank}. "
         f"Did you forget torch.cuda.set_device({local_rank}) before constructing "
@@ -631,7 +667,7 @@ class Pipeline:
     Resource caps are fixed at construction; nothing grows after that.
     """
 
-    __slots__ = ("_closed", "_config", "_native", "_pending")
+    __slots__ = ("_closed", "_config", "_native", "_pending", "_pending_buf")
 
     def __init__(self, config: Config) -> None:
         try:
@@ -643,7 +679,7 @@ class Pipeline:
                 device_buffer_bytes=config.device_buffer_bytes,
                 n_zarrs_meta_cache=config.n_zarrs_meta_cache,
                 n_shards_meta_cache=config.n_shards_meta_cache,
-                dtype=int(config.dtype),  # already coerced in __post_init__
+                dtype=int(config.dtype),  # already coerced by Config.__init__
                 max_chunk_uncompressed_bytes=config.max_chunk_uncompressed_bytes,
                 max_gpu_memory_bytes=config.max_gpu_memory_bytes,
                 max_bytes_per_element=config.max_bytes_per_element,
@@ -657,7 +693,11 @@ class Pipeline:
         # here and best-effort drains; pop()/flush() top up before
         # touching native. This makes push() consume-everything from
         # the user's perspective and lets generators flow naturally.
+        # _pending_buf is the head iterator's already-pulled-but-not-yet-
+        # pushed samples; held flat to avoid wrapping `it` in successive
+        # itertools.chain() layers under sustained backpressure.
         self._pending: deque[Iterator[Sample]] = deque()
+        self._pending_buf: list[Sample] = []
         _warn_if_local_rank_disagrees(config.device, self._native.device)
 
     @property
@@ -733,27 +773,42 @@ class Pipeline:
     def _drain_pending(self) -> None:
         """Move samples from pending iterators into the native lookahead
         until the lookahead is full or all pending iterators are
-        exhausted. Best-effort; safe to call any time."""
+        exhausted. Best-effort; safe to call any time.
+
+        Unconsumed samples sit in ``_pending_buf`` (always sourced from
+        a single head iterator), not re-wrapped onto ``self._pending[0]``
+        — successive backpressure events leave the buffer flat instead
+        of nesting ``itertools.chain`` layers."""
         cap = self._config.lookahead_batches * self._config.batch_size
-        while self._pending:
-            it = self._pending[0]
-            chunk = list(itertools.islice(it, cap))
-            if not chunk:
-                self._pending.popleft()
-                continue
+        while True:
+            # Top up buffer from the head iterator. Buffer is only ever
+            # filled from one iterator at a time, so on push failure we
+            # know exactly which iterator to drop.
+            if not self._pending_buf and self._pending:
+                taken = list(itertools.islice(self._pending[0], cap))
+                if not taken:
+                    self._pending.popleft()
+                    continue
+                self._pending_buf = taken
+            if not self._pending_buf:
+                return
             try:
-                r = self._native.push([s._to_native() for s in chunk])
+                r = self._native.push([s._to_native() for s in self._pending_buf])
             except _native.DamacyError as exc:
-                # Drop the failed iterator; other pending iterators
-                # keep their place and will retry on next drain.
-                self._pending.popleft()
+                # Drop the failed iterator and any leftover items it
+                # had produced; other pending iterators keep their
+                # place and will retry on next drain.
+                self._pending_buf = []
+                if self._pending:
+                    self._pending.popleft()
                 _reraise_typed(exc)
             consumed = int(r["consumed"])
-            if consumed < len(chunk):
-                # Native is full — put the unconsumed back at the head
-                # so the next drain (after a pop) resumes from here.
-                self._pending[0] = itertools.chain(chunk[consumed:], it)
+            if consumed < len(self._pending_buf):
+                # Native is full — keep the unconsumed tail in the
+                # buffer; the next drain (after a pop) resumes here.
+                del self._pending_buf[:consumed]
                 return
+            self._pending_buf = []
 
     def pop(self) -> Batch:
         """Block until the next batch is on-device-ready. Returns a
@@ -784,7 +839,7 @@ class Pipeline:
     def pending(self) -> bool:
         """True if push() has accepted samples that haven't yet entered
         the native lookahead. Becomes False as :meth:`pop` frees space."""
-        return bool(self._pending)
+        return bool(self._pending) or bool(self._pending_buf)
 
     def batches(self, n: int) -> Iterator[Batch]:
         """Pop *n* batches as an iterator. Each call to :meth:`pop`

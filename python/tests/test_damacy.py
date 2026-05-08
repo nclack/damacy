@@ -121,7 +121,7 @@ def test_dtype_int_form_accepted(tiny_zarr):
 
 
 def test_dtype_unknown_string_raises():
-    # Validation runs in Config.__post_init__ — fails before we touch CUDA.
+    # Validation runs in Config.__init__ — fails before we touch CUDA.
     with pytest.raises(ValueError, match="unknown dtype"):
         _base_config(dtype="u16")
 

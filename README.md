@@ -11,8 +11,8 @@ High-speed streamed assembly of tensors from zarr sources to GPU.
 Damacy reads sharded [NGFF](https://ngff.openmicroscopy.org/) [zarr
 v3](https://zarr-specs.readthedocs.io/en/latest/v3/core/index.html) stores
 directly on the GPU: per-shard chunk indexing, parallel host I/O, in-flight
-GPU-side decompression (blosc1 / zstd), and assembly of each batch as a
-DLPack-ready device tensor.
+GPU-side decompression (zstd, blosc1-{lz4,zstd}), and assembly of each batch
+as a DLPack-ready device tensor.
 
 ## Quick start
 
