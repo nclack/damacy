@@ -36,7 +36,7 @@ Variants reuse a base via :func:`dataclasses.replace`::
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from enum import IntEnum
 from types import TracebackType
@@ -208,22 +208,100 @@ def _reraise_typed(exc: _native.DamacyError) -> NoReturn:
 # ---- value types --------------------------------------------------------
 
 
-@dataclass(frozen=True, slots=True)
-class Sample:
-    """One sample request. ``aabb`` is a per-axis half-open interval list
-    in level-0 voxel indices, in the zarr's stored axis order.
+def _normalise_axis(x: object, axis: int) -> tuple[int, int]:
+    """Coerce one AABB axis spec to a canonical ``(start, stop)`` tuple.
+    Slices accept ``start=None`` (defaults to 0) and require an integer
+    ``stop``; ``step`` must be 1 or omitted. Bare ints are *rejected*
+    — in NumPy/zarr indexing an int means "point selection", not
+    "extent from 0", and silently disagreeing with that convention
+    would be a foot-gun for ``np.s_[...]`` users.
 
-    >>> s = Sample(uri="cell.zarr", aabb=[(0, 64), (0, 256), (0, 256)])
-    >>> s.uri
-    'cell.zarr'
-    >>> len(s.aabb)
-    3
-    >>> s == Sample(uri="cell.zarr", aabb=[(0, 64), (0, 256), (0, 256)])
+    The input is typed as ``object`` so the final ``raise TypeError``
+    is a real runtime guard, not unreachable code (callers pass
+    ``slice | tuple[int, int]`` per axis but the protocol can't stop a
+    rogue value)."""
+    if isinstance(x, slice):
+        if x.step not in (None, 1):
+            raise ValueError(
+                f"aabb axis {axis}: slice step must be 1 or omitted (got step={x.step})"
+            )
+        if x.stop is None:
+            raise ValueError(f"aabb axis {axis}: slice stop is required (got {x!r})")
+        return (0 if x.start is None else int(x.start), int(x.stop))
+    if isinstance(x, tuple) and len(x) == 2:
+        return (int(x[0]), int(x[1]))
+    raise TypeError(
+        f"aabb axis {axis}: expected slice or (start, stop) tuple; "
+        f"got {type(x).__name__}"
+    )
+
+
+@dataclass(init=False, frozen=True, slots=True)
+class Sample:
+    """One sample request. ``aabb`` is a per-axis half-open interval
+    list in level-0 voxel indices, in the zarr's stored axis order.
+
+    Each axis may be a ``(start, stop)`` 2-tuple or a Python ``slice``;
+    the tuple of slices that ``numpy.s_[...]`` produces is accepted
+    directly. The stored form is always
+    ``tuple[tuple[int, int], ...]`` regardless of how it was spelled,
+    so equivalent inputs hash and compare equal:
+
+    >>> a = Sample(uri="cell.zarr", aabb=[(0, 64), (0, 256), (0, 256)])
+    >>> b = Sample(
+    ...     uri="cell.zarr",
+    ...     aabb=[slice(0, 64), slice(0, 256), slice(0, 256)],
+    ... )
+    >>> c = Sample(
+    ...     uri="cell.zarr",
+    ...     aabb=[slice(None, 64), slice(None, 256), slice(None, 256)],
+    ... )
+    >>> a == b == c
     True
+    >>> hash(a) == hash(b) == hash(c)
+    True
+    >>> a.aabb
+    ((0, 64), (0, 256), (0, 256))
+
+    Bare ints in ``aabb`` are rejected so the behaviour stays
+    consistent with NumPy/zarr indexing semantics
+    (``np.s_[64]`` means "point 64", not "extent (0, 64)"):
+
+    >>> Sample(uri="cell.zarr", aabb=[64, 256, 256])
+    Traceback (most recent call last):
+        ...
+    TypeError: aabb axis 0: expected slice or (start, stop) tuple; got int
+
+    Slice validation rejects strided slices and unbounded stops:
+
+    >>> Sample(uri="cell.zarr", aabb=[slice(0, 64, 2), slice(0, 256), slice(0, 256)])
+    Traceback (most recent call last):
+        ...
+    ValueError: aabb axis 0: slice step must be 1 or omitted (got step=2)
+    >>> Sample(uri="cell.zarr", aabb=[slice(0, None), slice(0, 256), slice(0, 256)])
+    Traceback (most recent call last):
+        ...
+    ValueError: aabb axis 0: slice stop is required (got slice(0, None, None))
     """
 
     uri: str
-    aabb: Sequence[tuple[int, int]]
+    aabb: tuple[tuple[int, int], ...]
+
+    def __init__(
+        self,
+        uri: str,
+        aabb: Iterable[slice | tuple[int, int]],
+    ) -> None:
+        # Custom __init__ rather than __post_init__ so pyright sees the
+        # polymorphic input shape on construction *and* the precise
+        # canonical shape on field reads. dataclass(init=False) keeps
+        # the auto-generated __eq__ / __hash__ / __repr__.
+        object.__setattr__(self, "uri", uri)
+        object.__setattr__(
+            self,
+            "aabb",
+            tuple(_normalise_axis(x, axis=i) for i, x in enumerate(aabb)),
+        )
 
     def _to_native(self) -> dict[str, Any]:
         return {"uri": self.uri, "aabb": list(self.aabb)}
@@ -475,6 +553,7 @@ class Batch:
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
+        del exc_type, exc, tb  # protocol-required, not consumed
         self.release()
 
     def __repr__(self) -> str:
@@ -553,6 +632,7 @@ class Damacy:
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
+        del exc_type, exc, tb  # protocol-required, not consumed
         # Drain any in-flight work so a clean shutdown doesn't drop a
         # partial last batch silently. flush is a no-op if nothing
         # is queued.

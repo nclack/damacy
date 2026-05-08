@@ -8,10 +8,11 @@
 
 High-speed streamed assembly of tensors from zarr sources to GPU.
 
-Damacy reads sharded [NGFF](https://ngff.openmicroscopy.org/) zarr stores
-straight onto the GPU: per-shard chunk indexing, parallel host I/O,
-in-flight GPU-side decompression (blosc1 / zstd), and a typed assemble
-kernel that lands each batch as a DLPack-ready device tensor.
+Damacy reads sharded [NGFF](https://ngff.openmicroscopy.org/) [zarr
+v3](https://zarr-specs.readthedocs.io/en/latest/v3/core/index.html) stores
+straight onto the GPU: per-shard chunk indexing, parallel host I/O, in-flight
+GPU-side decompression (blosc1 / zstd), and assembly of each batch as a
+DLPack-ready device tensor.
 
 ## Quick start
 
@@ -24,7 +25,7 @@ cfg = damacy.Config(
     batch_size=8,
     host_buffer_bytes=1 << 30,
     device_buffer_bytes=1 << 30,
-    dtype="bf16",
+    dtype="bf16", # source data will be cast to bf16
 )
 samples = [
     damacy.Sample(uri=f"cell-{i}.zarr", aabb=[(0, 64), (0, 256), (0, 256)])
@@ -44,9 +45,12 @@ one up implicitly on first allocation; for bare-Python use call
 `damacy._native.cuda_init_primary()` once first. With no current
 context, `Damacy(cfg)` raises `damacy.NativeCudaError`.
 
+`aabb` accepts ``(start, stop)`` 2-tuples or Python ``slice`` objects
+per axis, so ``aabb=np.s_[0:64, 0:256, 0:256]`` works directly.
+
 ## Distributed (torchrun, 8 GPUs)
 
-Each rank owns its own GPU, its own `Damacy` pipeline, and its own slice
+Each rank owns its own GPU, its own `damacy` pipeline, and its own slice
 of the sample list. Resource caps are per-rank, so `host_buffer_bytes`
 and `device_buffer_bytes` are scaled to a single GPU's budget.
 

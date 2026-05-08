@@ -5,6 +5,14 @@
 Making the python interface nicer. Adding typing, linting and formatting w
 ruff + pyright.
 
+- [x] tests/coverage
+- [x] autodoc
+- [ ] wheel
+- [x] readme examples
+- [ ] !double check context binding behavior.
+- [ ] readme should show some non-trivial crops. mention all crops have to
+      be same size
+
 ## 2026-05-07
 
 continuing on blosc
