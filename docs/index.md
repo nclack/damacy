@@ -42,8 +42,8 @@ with damacy.Pipeline(cfg) as d:
 By default the pipeline captures whatever CUDA context is current on
 the calling thread; PyTorch sets one up implicitly, and bare-Python
 users can call `damacy._native.cuda_init_primary()` once. For
-multi-GPU setups, prefer `Config(..., device=local_rank)` — see
-the [README](https://github.com/nclack/damacy#failure-modes).
+multi-GPU setups, see [Distributed](distributed.md) for the device
+binding model and a torchrun example.
 
 ## Public surface
 
@@ -53,6 +53,8 @@ documented only via its `.pyi` stub.
 
 - [API reference](api.md) — `Pipeline`, `Config`, `Sample`, `Batch`, the
   exception hierarchy, and the `Stats`/`Metric` value types.
+- [Distributed](distributed.md) — device binding model and torchrun /
+  DDP examples.
 
 ## Performance dashboards
 
