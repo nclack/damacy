@@ -37,6 +37,7 @@ concurrency:
 jobs:
   bench:
     runs-on: [self-hosted, gpu]
+    timeout-minutes: 30
     env:
       IMAGE: damacy:${{ github.sha }}-bench
       CONTAINER: damacy-bench-${{ github.run_id }}-${{ github.run_attempt }}
@@ -52,6 +53,7 @@ jobs:
         run: docker build --tag "$IMAGE" .
 
       - name: Run bench scenarios + adapt to GHA-bench format
+        timeout-minutes: 20
         env:
           # Prefix every metric with the runner name so histories from
           # different self-hosted machines stay separable on the dashboard.
@@ -68,7 +70,8 @@ jobs:
               cd /workspace/damacy
               for scenario in default mixed; do
                 echo "::group::scenario=$scenario"
-                uv run bench/run.py "bench/scenarios/${scenario}.json" --no-report
+                timeout --kill-after=30s 5m \
+                  uv run bench/run.py "bench/scenarios/${scenario}.json" --no-report
                 latest=$(ls -1d bench/runs/${scenario}/*/ | tail -1)
                 uv run bench/to_gha_bench.py "${latest}results.json" \
                   --runner "${BENCH_RUNNER}" \
