@@ -34,13 +34,19 @@ extern "C"
     size_t* decomp_buf_sizes;
   };
 
-  // Per-wave scratch, allocated once and reused. Sized for
-  // DAMACY_MAX_CHUNKS_PER_WAVE.
+  // Per-wave scratch, allocated once and reused. The first three arrays
+  // are sized for DAMACY_MAX_CHUNKS_PER_WAVE; bstarts / block_ends are
+  // sized cap * DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK and indexed
+  // [chunk_idx * DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK + block_idx].
+  // bstarts / block_ends are filled by the count phase and consumed by
+  // the emit phase to avoid recomputing the per-block layout.
   struct blosc1_host_scratch
   {
     struct blosc1_chunk_hdr* hdrs;
     struct blosc1_chunk_counts* counts;
     struct blosc1_chunk_offsets* offsets;
+    uint32_t* bstarts;
+    uint32_t* block_ends;
   };
 
   struct blosc1_host_parse_args

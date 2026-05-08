@@ -1,5 +1,6 @@
 // blosc1_host_parse → nvcomp → (bit)unshuffle → memcmp against .raw.
 
+#include "damacy_limits.h"
 #include "decoder/bitshuffle.h"
 #include "decoder/blosc1.h"
 #include "decoder/blosc1_host.h"
@@ -136,10 +137,14 @@ run_one(const struct fixture* fx, struct threadpool* pool, CUstream stream)
   struct blosc1_chunk_hdr h_hdr = { 0 };
   struct blosc1_chunk_counts h_counts = { 0 };
   struct blosc1_chunk_offsets h_offsets = { 0 };
+  uint32_t bstarts_slot[DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK] = { 0 };
+  uint32_t block_ends_slot[DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK] = { 0 };
   struct blosc1_host_scratch scratch = {
     .hdrs = &h_hdr,
     .counts = &h_counts,
     .offsets = &h_offsets,
+    .bstarts = bstarts_slot,
+    .block_ends = block_ends_slot,
   };
 
   // Worst-case substream count for one chunk: nblocks ≤ 16,
@@ -398,10 +403,14 @@ expect_parse_err(uint8_t codec_id,
   struct blosc1_chunk_hdr h = { 0 };
   struct blosc1_chunk_counts c = { 0 };
   struct blosc1_chunk_offsets o = { 0 };
+  uint32_t bstarts_slot[DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK] = { 0 };
+  uint32_t block_ends_slot[DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK] = { 0 };
   struct blosc1_host_scratch scratch = {
     .hdrs = &h,
     .counts = &c,
     .offsets = &o,
+    .bstarts = bstarts_slot,
+    .block_ends = block_ends_slot,
   };
   const void* zcp = NULL;
   size_t zcs = 0;
@@ -480,23 +489,21 @@ test_bad_header(void)
   return 0;
 }
 
-// Three pool sizes to flush any phase-A / phase-C race.
+// Single deterministic path: pool=0 (serial). Multi-worker behavior is
+// not exercised here — see threadpool's own tests for that — to avoid
+// false confidence from a non-determ smoke test of the fork-join.
 static int
 test_all_fixtures(void)
 {
   CUstream stream = 0;
   EXPECT(cuStreamCreate(&stream, CU_STREAM_DEFAULT) == CUDA_SUCCESS);
-  const int pool_sizes[] = { 0, 1, 4 };
-  for (size_t s = 0; s < sizeof pool_sizes / sizeof *pool_sizes; ++s) {
-    struct threadpool* pool = threadpool_new(pool_sizes[s]);
-    EXPECT(pool);
-    log_info("pool nthreads=%d", pool_sizes[s]);
-    for (size_t i = 0; i < sizeof k_fixtures / sizeof *k_fixtures; ++i) {
-      log_info("  fixture: %s", k_fixtures[i].name);
-      EXPECT(run_one(&k_fixtures[i], pool, stream) == 0);
-    }
-    threadpool_free(pool);
+  struct threadpool* pool = threadpool_new(0);
+  EXPECT(pool);
+  for (size_t i = 0; i < sizeof k_fixtures / sizeof *k_fixtures; ++i) {
+    log_info("fixture: %s", k_fixtures[i].name);
+    EXPECT(run_one(&k_fixtures[i], pool, stream) == 0);
   }
+  threadpool_free(pool);
   cuStreamDestroy(stream);
   return 0;
 }

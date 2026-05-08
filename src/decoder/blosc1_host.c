@@ -56,30 +56,51 @@ inner_codec_compformat(uint8_t codec)
   return 0;
 }
 
-// Rank-sort bstarts ascending; ties broken by block index.
+// Compute block_ends[bi] = end-of-payload offset for block bi.
+//
+// blosc1's bstarts[] is in writer-completion order, not file order. To
+// derive a block's extent we need the next bstart in ascending order
+// (or h.cbytes for the last). We do this with an indirect insertion
+// sort over `order[]` (n ≤ 32) and walk it once to populate ends.
 static void
-sort_bstarts(const uint32_t* bstarts, uint32_t* sorted, uint32_t nblocks)
+fill_block_ends(const uint32_t* bstarts,
+                uint32_t* block_ends,
+                uint32_t nblocks,
+                uint32_t cbytes)
 {
-  for (uint32_t bi = 0; bi < nblocks; ++bi) {
-    uint32_t r = 0;
-    for (uint32_t j = 0; j < nblocks; ++j) {
-      const uint32_t a = bstarts[j];
-      const uint32_t b = bstarts[bi];
-      if (a < b || (a == b && j < bi))
-        ++r;
+  // order[] = block indices sorted by (bstarts[i], i) ascending.
+  uint32_t order[DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK];
+  for (uint32_t i = 0; i < nblocks; ++i)
+    order[i] = i;
+  for (uint32_t i = 1; i < nblocks; ++i) {
+    const uint32_t key_idx = order[i];
+    const uint32_t key_off = bstarts[key_idx];
+    uint32_t j = i;
+    while (j > 0) {
+      const uint32_t prev_idx = order[j - 1];
+      const uint32_t prev_off = bstarts[prev_idx];
+      if (prev_off < key_off || (prev_off == key_off && prev_idx < key_idx))
+        break;
+      order[j] = order[j - 1];
+      --j;
     }
-    sorted[r] = bstarts[bi];
+    order[j] = key_idx;
+  }
+  for (uint32_t r = 0; r < nblocks; ++r) {
+    const uint32_t bi = order[r];
+    block_ends[bi] = (r + 1u < nblocks) ? bstarts[order[r + 1u]] : cbytes;
   }
 }
 
-// Walks bstarts + per-substream prefixes for a CODEC_BLOSC_* chunk,
-// filling counts. Caller has validated err == 0 and !memcpyed.
-static uint32_t
+// Walks the per-substream prefix chain for one CODEC_BLOSC_* chunk and
+// fills counts. Caller has validated err == 0 and !memcpyed and has
+// already populated bstarts[] / block_ends[].
+static void
 walk_count(const uint8_t* p,
            const struct blosc1_chunk_hdr* h,
            uint8_t codec,
            const uint32_t* bstarts,
-           const uint32_t* sorted,
+           const uint32_t* block_ends,
            struct blosc1_chunk_counts* c)
 {
   const uint32_t nstreams =
@@ -90,14 +111,7 @@ walk_count(const uint8_t* p,
   uint32_t n_codec = 0;
   uint32_t n_raw = 0;
   for (uint32_t bi = 0; bi < h->nblocks; ++bi) {
-    uint32_t r = 0;
-    for (uint32_t j = 0; j < h->nblocks; ++j) {
-      const uint32_t a = bstarts[j];
-      const uint32_t b = bstarts[bi];
-      if (a < b || (a == b && j < bi))
-        ++r;
-    }
-    const uint32_t end = (r + 1u < h->nblocks) ? sorted[r + 1u] : h->cbytes;
+    const uint32_t end = block_ends[bi];
     uint32_t cur = bstarts[bi];
     for (uint32_t k = 0; k < nstreams; ++k) {
       if (cur + 4u > end)
@@ -120,14 +134,16 @@ walk_count(const uint8_t* p,
   c->n_memcpy = n_raw;
   c->n_unshuffle = h->shuffle;
   c->n_bitunshuffle = h->bitshuffle;
-  return per_stream_dst;
 }
 
-// Returns h.err (0 on success).
+// Returns h.err (0 on success). Populates per-block bstarts / block_ends
+// in scratch on the !memcpyed CODEC_BLOSC_* path so emit can reuse them.
 static uint8_t
 parse_count_one(const struct blosc1_host_chunk* in,
                 struct blosc1_chunk_hdr* out_hdr,
-                struct blosc1_chunk_counts* out_counts)
+                struct blosc1_chunk_counts* out_counts,
+                uint32_t* bstarts_slot,
+                uint32_t* block_ends_slot)
 {
   struct blosc1_chunk_hdr h = { 0 };
   struct blosc1_chunk_counts c = { 0 };
@@ -135,28 +151,20 @@ parse_count_one(const struct blosc1_host_chunk* in,
 
   if (in->codec_id == CODEC_NONE) {
     c.n_memcpy = 1;
-    *out_hdr = h;
-    *out_counts = c;
-    return 0;
+    goto Done;
   }
   if (in->codec_id == CODEC_ZSTD) {
     c.n_zstd = 1;
-    *out_hdr = h;
-    *out_counts = c;
-    return 0;
+    goto Done;
   }
   if (in->codec_id != CODEC_BLOSC_LZ4 && in->codec_id != CODEC_BLOSC_ZSTD) {
     h.err = 8;
-    *out_hdr = h;
-    *out_counts = c;
-    return h.err;
+    goto Done;
   }
 
   if (in->compressed_nbytes < BLOSC1_HEADER_BYTES) {
     h.err = 1;
-    *out_hdr = h;
-    *out_counts = c;
-    return h.err;
+    goto Done;
   }
   const uint8_t* p = in->h_compressed;
   const uint8_t flags = p[2];
@@ -199,12 +207,10 @@ parse_count_one(const struct blosc1_host_chunk* in,
     goto Done;
   }
 
-  uint32_t bstarts[DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK] = { 0 };
-  uint32_t sorted[DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK] = { 0 };
   for (uint32_t bi = 0; bi < h.nblocks; ++bi)
-    bstarts[bi] = read_u32_le(p + BLOSC1_HEADER_BYTES + 4u * bi);
-  sort_bstarts(bstarts, sorted, h.nblocks);
-  walk_count(p, &h, in->codec_id, bstarts, sorted, &c);
+    bstarts_slot[bi] = read_u32_le(p + BLOSC1_HEADER_BYTES + 4u * bi);
+  fill_block_ends(bstarts_slot, block_ends_slot, h.nblocks, h.cbytes);
+  walk_count(p, &h, in->codec_id, bstarts_slot, block_ends_slot, &c);
 
 Done:
   *out_hdr = h;
@@ -216,6 +222,8 @@ static void
 emit_one(const struct blosc1_host_chunk* in,
          const struct blosc1_chunk_hdr* h,
          const struct blosc1_chunk_offsets* o,
+         const uint32_t* bstarts_slot,
+         const uint32_t* block_ends_slot,
          struct blosc1_host_fanout zstd,
          struct blosc1_host_fanout lz4,
          struct gpu_memcpy_op* memcpy_ops,
@@ -252,13 +260,7 @@ emit_one(const struct blosc1_host_chunk* in,
     return;
   }
 
-  uint32_t bstarts[DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK] = { 0 };
-  uint32_t sorted[DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK] = { 0 };
   const uint8_t* p = in->h_compressed;
-  for (uint32_t bi = 0; bi < h->nblocks; ++bi)
-    bstarts[bi] = read_u32_le(p + BLOSC1_HEADER_BYTES + 4u * bi);
-  sort_bstarts(bstarts, sorted, h->nblocks);
-
   const uint8_t codec = in->codec_id;
   const uint32_t nstreams =
     (codec == CODEC_BLOSC_LZ4 && h->typesize > 1) ? (uint32_t)h->typesize : 1u;
@@ -272,16 +274,9 @@ emit_one(const struct blosc1_host_chunk* in,
   uint32_t k_codec = 0;
   uint32_t k_raw = 0;
   for (uint32_t bi = 0; bi < h->nblocks; ++bi) {
-    uint32_t r = 0;
-    for (uint32_t j = 0; j < h->nblocks; ++j) {
-      const uint32_t a = bstarts[j];
-      const uint32_t b = bstarts[bi];
-      if (a < b || (a == b && j < bi))
-        ++r;
-    }
-    const uint32_t end = (r + 1u < h->nblocks) ? sorted[r + 1u] : h->cbytes;
+    const uint32_t end = block_ends_slot[bi];
     const uint32_t block_dst_off = bi * h->blocksize;
-    uint32_t cur = bstarts[bi];
+    uint32_t cur = bstarts_slot[bi];
     for (uint32_t k = 0; k < nstreams; ++k) {
       if (cur + 4u > end)
         break;
@@ -332,6 +327,8 @@ struct parse_ctx
   struct blosc1_chunk_hdr* hdrs;
   struct blosc1_chunk_counts* counts;
   const struct blosc1_chunk_offsets* offsets;
+  uint32_t* bstarts;    // cap * DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK
+  uint32_t* block_ends; // cap * DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK
   struct blosc1_host_fanout zstd;
   struct blosc1_host_fanout lz4;
   struct gpu_memcpy_op* memcpy_ops;
@@ -340,13 +337,22 @@ struct parse_ctx
   _Atomic uint32_t n_parse_errors;
 };
 
+static inline uint32_t*
+chunk_slot(uint32_t* base, size_t i)
+{
+  return base + i * DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK;
+}
+
 static void
 phase_count(size_t i, int tid, void* vctx)
 {
   (void)tid;
   struct parse_ctx* ctx = (struct parse_ctx*)vctx;
-  uint8_t err =
-    parse_count_one(&ctx->chunks[i], &ctx->hdrs[i], &ctx->counts[i]);
+  uint8_t err = parse_count_one(&ctx->chunks[i],
+                                &ctx->hdrs[i],
+                                &ctx->counts[i],
+                                chunk_slot(ctx->bstarts, i),
+                                chunk_slot(ctx->block_ends, i));
   if (err)
     atomic_fetch_add_explicit(&ctx->n_parse_errors, 1u, memory_order_relaxed);
 }
@@ -359,6 +365,8 @@ phase_emit(size_t i, int tid, void* vctx)
   emit_one(&ctx->chunks[i],
            &ctx->hdrs[i],
            &ctx->offsets[i],
+           chunk_slot(ctx->bstarts, i),
+           chunk_slot(ctx->block_ends, i),
            ctx->zstd,
            ctx->lz4,
            ctx->memcpy_ops,
@@ -413,6 +421,8 @@ blosc1_host_parse(const struct blosc1_host_parse_args* args)
   CHECK(Fail, args->scratch.hdrs);
   CHECK(Fail, args->scratch.counts);
   CHECK(Fail, args->scratch.offsets);
+  CHECK(Fail, args->scratch.bstarts);
+  CHECK(Fail, args->scratch.block_ends);
   CHECK(Fail, args->zstd.comp_ptrs);
   CHECK(Fail, args->zstd.comp_sizes);
   CHECK(Fail, args->zstd.decomp_ptrs);
@@ -430,6 +440,8 @@ blosc1_host_parse(const struct blosc1_host_parse_args* args)
     .hdrs = args->scratch.hdrs,
     .counts = args->scratch.counts,
     .offsets = args->scratch.offsets,
+    .bstarts = args->scratch.bstarts,
+    .block_ends = args->scratch.block_ends,
     .zstd = args->zstd,
     .lz4 = args->lz4,
     .memcpy_ops = args->memcpy_ops,

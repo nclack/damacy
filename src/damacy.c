@@ -33,12 +33,12 @@
 #include "store/store.h"
 #include "threadpool/threadpool.h"
 #include "util/prelude.h"
+#include "util/strbuf.h"
 #include "zarr/zarr_meta_cache.h"
 #include "zarr/zarr_metadata.h"
 #include "zarr/zarr_shard_cache.h"
 
 #include <cuda.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -817,6 +817,17 @@ wave_init(struct damacy_wave* wave,
   CR(Error,
      cuMemAllocHost((void**)&wave->scratch.offsets,
                     (size_t)cap * sizeof(struct blosc1_chunk_offsets)));
+  // Pure host scratch, but pinned for consistency with the rest of the
+  // scratch arrays. cap * MAX_BLOCKS uint32_t each (~64 KB per array
+  // at the current caps).
+  CR(Error,
+     cuMemAllocHost((void**)&wave->scratch.bstarts,
+                    (size_t)cap * DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK *
+                      sizeof(uint32_t)));
+  CR(Error,
+     cuMemAllocHost((void**)&wave->scratch.block_ends,
+                    (size_t)cap * DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK *
+                      sizeof(uint32_t)));
   CR(Error,
      cuMemAllocHost((void**)&wave->h_blosc1_totals,
                     sizeof(struct blosc1_totals)));
@@ -963,6 +974,8 @@ wave_destroy(struct damacy_wave* wave)
     wave->scratch.hdrs,
     wave->scratch.counts,
     wave->scratch.offsets,
+    wave->scratch.bstarts,
+    wave->scratch.block_ends,
     wave->h_blosc1_totals,
     (void*)wave->h_zstd_fan.comp_ptrs,
     wave->h_zstd_fan.comp_sizes,
@@ -1262,7 +1275,7 @@ log_blosc1_parse_errors(struct damacy* self, struct damacy_wave* wave)
 {
   struct damacy_batch_slot* slot =
     &self->batch_pool.slots[wave->batch_pool_slot];
-  char coords[160];
+  struct strbuf coords = { 0 };
   for (uint32_t i = 0; i < wave->n_chunks; ++i) {
     const struct blosc1_chunk_hdr* h = &wave->scratch.hdrs[i];
     if (h->err == 0)
@@ -1270,24 +1283,21 @@ log_blosc1_parse_errors(struct damacy* self, struct damacy_wave* wave)
     const struct chunk_plan* c =
       &slot->chunk_plans[wave->batch_chunk_offset + i];
     const struct sample_plan* sp = &slot->sample_plans[c->sample_idx_in_batch];
-    int n = 0;
-    n += snprintf(coords + n, sizeof(coords) - (size_t)n, "[");
-    for (uint8_t d = 0; d < sp->rank && (size_t)n < sizeof(coords); ++d)
-      n += snprintf(coords + n,
-                    sizeof(coords) - (size_t)n,
-                    d == 0 ? "%u" : ",%u",
-                    c->chunk_d[d]);
-    if ((size_t)n < sizeof(coords))
-      snprintf(coords + n, sizeof(coords) - (size_t)n, "]");
+    strbuf_reset(&coords);
+    strbuf_append_cstr(&coords, "[");
+    for (uint8_t d = 0; d < sp->rank; ++d)
+      strbuf_appendf(&coords, d == 0 ? "%u" : ",%u", c->chunk_d[d]);
+    strbuf_append_cstr(&coords, "]");
     log_error("blosc1: parse failed: batch_id=%llu sample=%u chunk_d=%s "
               "codec_id=%u err=%u (%s)",
               (unsigned long long)slot->batch_id,
               (unsigned)c->sample_idx_in_batch,
-              coords,
+              strbuf_cstr(&coords),
               (unsigned)c->codec_id,
               (unsigned)h->err,
               blosc1_host_parse_err_str(h->err));
   }
+  strbuf_free(&coords);
 }
 
 // Bulk H2D, host parse overlapping the DMA, fanout/op H2Ds, then
