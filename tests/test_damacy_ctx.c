@@ -1,4 +1,18 @@
-// Regression tests for damacy_create's CUDA context contract.
+// Regression tests for damacy's per-call CUDA context contract.
+//
+// Test cases:
+//   test_create_preserves_caller_ctx
+//                            — non-primary caller ctx survives create+destroy
+//   test_create_no_ctx_returns_inval
+//                            — no ctx current and cfg.device<0 -> INVAL
+//   test_create_explicit_device_no_ctx
+//                            — cfg.device set, no caller ctx -> retain primary
+//   test_create_explicit_device_mismatch
+//                            — cfg.device != current ctx's device -> INVAL
+//   test_explicit_device_does_not_leak_ctx_between_calls
+//                            — push/pop/release/flush/destroy restore caller
+//   test_error_path_restores_caller_ctx
+//                            — push of a bad sample still restores caller
 
 #include "damacy.h"
 #include "fixture.h"
@@ -46,10 +60,10 @@ test_create_preserves_caller_ctx(void)
 
   // Non-primary ctx with default params — distinct identity from the
   // primary, so any "set primary current" regression is observable as
-  // an identity change in cuCtxGetCurrent.
+  // an identity change in cuCtxGetCurrent. cuCtxCreate already makes
+  // the new ctx current.
   CUcontext caller = NULL;
   EXPECT(cuCtxCreate(&caller, NULL, 0, dev) == CUDA_SUCCESS);
-  EXPECT(cuCtxSetCurrent(caller) == CUDA_SUCCESS);
 
   CUcontext before = NULL;
   EXPECT(cuCtxGetCurrent(&before) == CUDA_SUCCESS);
@@ -145,7 +159,6 @@ test_create_explicit_device_mismatch(void)
   EXPECT(cuDeviceGet(&dev0, 0) == CUDA_SUCCESS);
   CUcontext caller = NULL;
   EXPECT(cuCtxCreate(&caller, NULL, 0, dev0) == CUDA_SUCCESS);
-  EXPECT(cuCtxSetCurrent(caller) == CUDA_SUCCESS);
 
   char root[64];
   EXPECT(mkdtemp_root(root, sizeof root) == 0);
@@ -170,7 +183,6 @@ test_explicit_device_does_not_leak_ctx_between_calls(void)
 
   CUcontext caller = NULL;
   EXPECT(cuCtxCreate(&caller, NULL, 0, dev) == CUDA_SUCCESS);
-  EXPECT(cuCtxSetCurrent(caller) == CUDA_SUCCESS);
 
   char root[64];
   EXPECT(mkdtemp_root(root, sizeof root) == 0);
@@ -219,6 +231,60 @@ test_explicit_device_does_not_leak_ctx_between_calls(void)
   return 0;
 }
 
+// A wrapped public call that fails partway through must still pop the
+// pushed ctx on the way out. Push a sample with a non-existent URI so
+// damacy_push returns non-OK after ctx_guard_enter has succeeded.
+static int
+test_error_path_restores_caller_ctx(void)
+{
+  EXPECT(cuInit(0) == CUDA_SUCCESS);
+  CUdevice dev = 0;
+  EXPECT(cuDeviceGet(&dev, 0) == CUDA_SUCCESS);
+
+  CUcontext caller = NULL;
+  EXPECT(cuCtxCreate(&caller, NULL, 0, dev) == CUDA_SUCCESS);
+
+  char root[64];
+  EXPECT(mkdtemp_root(root, sizeof root) == 0);
+  // Create a real array so damacy_create succeeds; the sample we push
+  // afterwards points at a non-existent sibling URI to provoke the
+  // post-guard error path inside damacy_push.
+  char ok_path[256];
+  snprintf(ok_path, sizeof ok_path, "%s/ok", root);
+  int64_t shape[2] = { 4, 8 }, inner[2] = { 2, 4 }, shard[2] = { 4, 8 };
+  EXPECT(fixture_write_zarr_codec(
+           ok_path, shape, inner, shard, 2, "uint16", 0, "blosc-lz4") == 0);
+
+  struct damacy_config cfg = mk_cfg(root);
+  cfg.device = 0;
+  struct damacy* d = NULL;
+  EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
+
+  CUcontext cur = NULL;
+  EXPECT(cuCtxGetCurrent(&cur) == CUDA_SUCCESS);
+  EXPECT(cur == caller);
+
+  char missing[256];
+  snprintf(missing, sizeof missing, "%s/does_not_exist", root);
+  struct damacy_sample bad = { .uri = missing, .aabb = { .rank = 2 } };
+  bad.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 4 };
+  bad.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 8 };
+  struct damacy_sample_slice slice = { .beg = &bad, .end = &bad + 1 };
+  struct damacy_push_result pr = damacy_push(d, slice);
+  EXPECT(pr.status != DAMACY_OK);
+  EXPECT(cuCtxGetCurrent(&cur) == CUDA_SUCCESS);
+  EXPECT(cur == caller);
+
+  damacy_destroy(d);
+  EXPECT(cuCtxGetCurrent(&cur) == CUDA_SUCCESS);
+  EXPECT(cur == caller);
+
+  EXPECT(cuCtxSetCurrent(NULL) == CUDA_SUCCESS);
+  EXPECT(cuCtxDestroy(caller) == CUDA_SUCCESS);
+  fixture_rm_tree(root);
+  return 0;
+}
+
 int
 main(void)
 {
@@ -227,6 +293,7 @@ main(void)
   RUN(test_create_explicit_device_no_ctx);
   RUN(test_create_explicit_device_mismatch);
   RUN(test_explicit_device_does_not_leak_ctx_between_calls);
+  RUN(test_error_path_restores_caller_ctx);
   log_info("all tests passed");
   return 0;
 }

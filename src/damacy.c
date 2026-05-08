@@ -1830,6 +1830,54 @@ kick_new_waves(struct damacy* self)
 
 // --- public API: create / destroy ----------------------------------------
 
+// CUDA teardown for a damacy. Caller owns the ctx (push it first); this
+// only handles the in-ctx pieces and the CPU-side state. The retained
+// primary release and free(self) happen at the call sites.
+static void
+destroy_inner(struct damacy* self)
+{
+  if (!self)
+    return;
+
+  // NULL/0 is the legacy default stream — sync+destroy on it would
+  // either be a no-op-on-the-wrong-thing or invalid; the per-stream
+  // guard distinguishes "we created this" from "never set in a
+  // partially-failed create".
+  CUstream* const streams[] = {
+    &self->stream_compute,
+    &self->stream_h2d,
+    &self->stream_zstd,
+    &self->stream_lz4,
+  };
+  for (size_t i = 0; i < countof(streams); ++i)
+    if (*streams[i]) {
+      cuStreamSynchronize(*streams[i]);
+      cuStreamDestroy(*streams[i]);
+      *streams[i] = NULL;
+    }
+
+  threadpool_free(self->compute_pool);
+  self->compute_pool = NULL;
+
+  free(self->batch_stage);
+  self->batch_stage = NULL;
+  free(self->batch_samples);
+  self->batch_samples = NULL;
+  lookahead_destroy(&self->lookahead);
+  for (int w = 0; w < 2; ++w)
+    wave_destroy(&self->waves[w]);
+  batch_pool_destroy(&self->batch_pool);
+
+  planner_destroy(self->planner);
+  self->planner = NULL;
+  zarr_shard_cache_destroy(self->shard_cache);
+  self->shard_cache = NULL;
+  zarr_meta_cache_destroy(self->meta_cache);
+  self->meta_cache = NULL;
+  store_destroy(self->store);
+  self->store = NULL;
+}
+
 enum damacy_status
 damacy_create(const struct damacy_config* cfg, struct damacy** out)
 {
@@ -1850,13 +1898,16 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   self->cfg = *cfg;
   self->failed_status = DAMACY_OK;
   self->page_alignment = (uint64_t)platform_page_alignment();
+  // Set before any goto Fail so the cleanup branch doesn't try to
+  // release a primary we never retained (calloc gives 0, which is a
+  // valid CUdevice).
+  self->retained_primary_device = -1;
+  self->retained_primary = NULL;
   stats_init(&self->stats);
 
   s = DAMACY_CUDA;
   CR(Fail, cuInit(0));
 
-  self->retained_primary_device = -1;
-  self->retained_primary = NULL;
   CUcontext caller_ctx = NULL;
   CR(Fail, cuCtxGetCurrent(&caller_ctx));
   if (cfg->device >= 0) {
@@ -2001,8 +2052,13 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   return DAMACY_OK;
 
 Fail:
-  ctx_guard_exit(&cg);
-  damacy_destroy(self);
+  if (self) {
+    destroy_inner(self);
+    ctx_guard_exit(&cg);
+    if (self->retained_primary_device >= 0)
+      cuDevicePrimaryCtxRelease((CUdevice)self->retained_primary_device);
+    free(self);
+  }
   return s;
 
 InvalidArg:
@@ -2016,40 +2072,28 @@ damacy_destroy(struct damacy* self)
     return;
 
   struct ctx_guard cg = { 0 };
-  ctx_guard_enter(self, &cg);
-
-  // The four owned streams. NULL/0 is the legacy default stream — sync
-  // and destroy on it would either be a no-op-on-the-wrong-thing or
-  // outright invalid, so the loop's single guard is structural, not
-  // defensive: it distinguishes "we created this stream" from "this
-  // field never got set in a partially-failed create".
-  CUstream* const streams[] = {
-    &self->stream_compute,
-    &self->stream_h2d,
-    &self->stream_zstd,
-    &self->stream_lz4,
-  };
-  for (size_t i = 0; i < countof(streams); ++i)
-    if (*streams[i]) {
-      cuStreamSynchronize(*streams[i]);
-      cuStreamDestroy(*streams[i]);
-    }
-
-  threadpool_free(self->compute_pool);
-
-  free(self->batch_stage);
-  free(self->batch_samples);
-  lookahead_destroy(&self->lookahead);
-  for (int w = 0; w < 2; ++w)
-    wave_destroy(&self->waves[w]);
-  batch_pool_destroy(&self->batch_pool);
-
-  planner_destroy(self->planner);
-  zarr_shard_cache_destroy(self->shard_cache);
-  zarr_meta_cache_destroy(self->meta_cache);
-  store_destroy(self->store);
-
-  ctx_guard_exit(&cg);
+  enum damacy_status gs = ctx_guard_enter(self, &cg);
+  if (gs != DAMACY_OK) {
+    // Push failed (e.g. device reset, primary released elsewhere).
+    // Skip CUDA teardown — without the ctx current the cuMemFree /
+    // cuStreamDestroy calls would error out anyway. CPU-only state
+    // and the primary handle still get released; destroy must remain
+    // infallible from the caller's POV.
+    log_warn("damacy_destroy: ctx_guard_enter failed (status=%d); "
+             "skipping CUDA teardown",
+             (int)gs);
+    threadpool_free(self->compute_pool);
+    free(self->batch_stage);
+    free(self->batch_samples);
+    lookahead_destroy(&self->lookahead);
+    planner_destroy(self->planner);
+    zarr_shard_cache_destroy(self->shard_cache);
+    zarr_meta_cache_destroy(self->meta_cache);
+    store_destroy(self->store);
+  } else {
+    destroy_inner(self);
+    ctx_guard_exit(&cg);
+  }
   if (self->retained_primary_device >= 0)
     cuDevicePrimaryCtxRelease((CUdevice)self->retained_primary_device);
   free(self);
