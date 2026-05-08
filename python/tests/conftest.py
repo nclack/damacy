@@ -36,6 +36,22 @@ def _have_uv() -> bool:
     return shutil.which("uv") is not None
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _cuda_ctx() -> None:
+    """Make device 0's primary CUcontext current for the test process.
+
+    damacy_create requires a current CUcontext on the calling thread.
+    PyTorch sets one up implicitly; bare pytest doesn't, so we do it
+    once per session. Skips the suite if no CUDA driver is reachable.
+    """
+    from damacy import _native
+
+    try:
+        _native.cuda_init_primary()
+    except RuntimeError as exc:
+        pytest.skip(f"no CUDA available for binding tests: {exc}")
+
+
 @pytest.fixture(scope="session")
 def write_zarr_script() -> Path:
     return _write_zarr_script()

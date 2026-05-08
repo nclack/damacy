@@ -13,6 +13,8 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 
+#include <cuda.h>
+
 #include "damacy.h"
 #include "damacy_limits.h"
 #include "damacy_log.h"
@@ -116,6 +118,43 @@ py_log_emit_from_thread(PyObject* self, PyObject* args)
   Py_RETURN_NONE;
 }
 
+// cuda_init_primary(device=0) — make device's primary CUcontext current
+// on the calling thread. damacy_create requires a current CUcontext;
+// PyTorch sets one up implicitly, but bare-Python callers (and pytest)
+// have to do it themselves. Mirrors tests/cuda_init.h on the C side.
+static PyObject*
+py_cuda_init_primary(PyObject* self, PyObject* args, PyObject* kw)
+{
+  (void)self;
+  static char* kws[] = { "device", NULL };
+  int device = 0;
+  if (!PyArg_ParseTupleAndKeywords(args, kw, "|i", kws, &device))
+    return NULL;
+
+  CUresult r;
+  if ((r = cuInit(0)) != CUDA_SUCCESS) {
+    PyErr_Format(PyExc_RuntimeError, "cuInit failed (%d)", (int)r);
+    return NULL;
+  }
+  CUdevice dev = 0;
+  if ((r = cuDeviceGet(&dev, device)) != CUDA_SUCCESS) {
+    PyErr_Format(
+      PyExc_RuntimeError, "cuDeviceGet(%d) failed (%d)", device, (int)r);
+    return NULL;
+  }
+  CUcontext ctx = NULL;
+  if ((r = cuDevicePrimaryCtxRetain(&ctx, dev)) != CUDA_SUCCESS) {
+    PyErr_Format(
+      PyExc_RuntimeError, "cuDevicePrimaryCtxRetain failed (%d)", (int)r);
+    return NULL;
+  }
+  if ((r = cuCtxSetCurrent(ctx)) != CUDA_SUCCESS) {
+    PyErr_Format(PyExc_RuntimeError, "cuCtxSetCurrent failed (%d)", (int)r);
+    return NULL;
+  }
+  Py_RETURN_NONE;
+}
+
 static PyMethodDef methods[] = {
   { "set_log_level",
     py_set_log_level,
@@ -136,6 +175,12 @@ static PyMethodDef methods[] = {
     METH_VARARGS,
     "Internal: emit a log line from a freshly-spawned C thread "
     "(reproduces the GIL-deadlock scenario the ring-buffered sink avoids)." },
+  { "cuda_init_primary",
+    (PyCFunction)(void (*)(void))py_cuda_init_primary,
+    METH_VARARGS | METH_KEYWORDS,
+    "cuda_init_primary(device=0): make device's primary CUcontext current "
+    "on the calling thread. Required before damacy._native.Damacy(...) when "
+    "the caller (e.g. pytest) hasn't already set up a context." },
   { NULL, NULL, 0, NULL },
 };
 
