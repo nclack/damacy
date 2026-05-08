@@ -345,9 +345,6 @@ struct damacy
 
 // --- ctx guard ------------------------------------------------------------
 
-// Push the retained primary CUcontext for the duration of one public API
-// call and pop on exit. No-op when the pipeline captured the caller's ctx
-// (cfg.device < 0): the caller owns ctx lifetime in that mode.
 struct ctx_guard
 {
   int active;
@@ -1895,9 +1892,6 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     self->cuda_device = (int)dev;
   }
 
-  // Push the retained primary for the rest of create (stream creation,
-  // wave init, ...). Popped via ctx_guard_exit on every return path so
-  // the caller's thread state is restored.
   s = ctx_guard_enter(self, &cg);
   if (s != DAMACY_OK)
     goto Fail;
@@ -2021,8 +2015,6 @@ damacy_destroy(struct damacy* self)
   if (!self)
     return;
 
-  // Push the retained primary for stream/buffer teardown; pop before
-  // releasing the primary handle below.
   struct ctx_guard cg = { 0 };
   ctx_guard_enter(self, &cg);
 

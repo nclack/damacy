@@ -1,19 +1,4 @@
 // Regression tests for damacy_create's CUDA context contract.
-//
-//   test_create_preserves_caller_ctx — capture-current path (cfg.device
-//       < 0): caller has a non-primary ctx current; create + destroy
-//       must leave it unchanged. Pre-fix (issue #12) we stomped dev 0's
-//       primary, segfaulting DDP on the next DLPack import.
-//   test_create_no_ctx_returns_inval — capture-current with no ctx
-//       current must return DAMACY_INVAL.
-//   test_create_explicit_device_no_ctx — explicit cfg.device with no
-//       ctx current succeeds; we retain the primary ourselves.
-//   test_create_explicit_device_mismatch — explicit cfg.device with a
-//       ctx already current on a *different* device returns INVAL.
-//   test_explicit_device_does_not_leak_ctx_between_calls — explicit
-//       cfg.device with a non-primary caller ctx current on the same
-//       device: each public API entry must restore the caller's ctx on
-//       return (issue #21).
 
 #include "damacy.h"
 #include "fixture.h"
@@ -176,9 +161,6 @@ test_create_explicit_device_mismatch(void)
   return 0;
 }
 
-// Explicit cfg.device with a non-primary caller ctx current on the same
-// device: damacy must push/pop the retained primary inside each public
-// API call so the caller's ctx is current on every return.
 static int
 test_explicit_device_does_not_leak_ctx_between_calls(void)
 {
