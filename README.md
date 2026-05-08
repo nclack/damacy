@@ -10,7 +10,7 @@ High-speed streamed assembly of tensors from zarr sources to GPU.
 
 Damacy reads sharded [NGFF](https://ngff.openmicroscopy.org/) [zarr
 v3](https://zarr-specs.readthedocs.io/en/latest/v3/core/index.html) stores
-straight onto the GPU: per-shard chunk indexing, parallel host I/O, in-flight
+directly on the GPU: per-shard chunk indexing, parallel host I/O, in-flight
 GPU-side decompression (blosc1 / zstd), and assembly of each batch as a
 DLPack-ready device tensor.
 
@@ -56,6 +56,25 @@ with damacy.Pipeline(cfg) as p:
         with batch as t:                           # consumer side
             x = torch.from_dlpack(t)               # zero-copy on-device
             ...                                    # train step
+```
+
+## Streaming
+
+For continuous training, push between pops instead of preloading
+the whole sample list — `damacy.Sample` plays nicely with any iterator:
+
+```python
+def crops():
+    while True:
+        yield random_crop()  # from the example above
+
+samples = crops()
+with damacy.Pipeline(cfg) as p:
+    for step in range(N_STEPS):
+        p.push(next(samples) for _ in range(cfg.batch_size))
+        with p.pop() as t:
+            x = torch.from_dlpack(t)
+            ...  # train step
 ```
 
 ## Documentation
