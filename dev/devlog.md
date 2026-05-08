@@ -27,6 +27,8 @@ hackathon projects wrt zarr on DALI. Should look at that.
 Ran `try-nvcomp` on this machine, and I get 42 GB/s, so we've got lots of
 headroom on this machine.
 
+- [ ] get blosc chunk header parsing on to the cpu
+
 cleanup
 
 - [ ] refactor long files
