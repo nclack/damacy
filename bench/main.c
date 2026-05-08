@@ -205,28 +205,12 @@ parse_dtype(struct cslice src,
   struct json_node n;
   if (json_resolve(src, parts, n_parts, &n, NULL) || n.type != JSON_STRING)
     return 1;
-  if (json_str_eq(n, "u8")) {
-    *out = DAMACY_U8;
-    return 0;
-  }
-  if (json_str_eq(n, "u16")) {
-    *out = DAMACY_U16;
-    return 0;
-  }
-  if (json_str_eq(n, "i16")) {
-    *out = DAMACY_I16;
-    return 0;
-  }
-  if (json_str_eq(n, "u32")) {
-    *out = DAMACY_U32;
-    return 0;
-  }
-  if (json_str_eq(n, "f16")) {
-    *out = DAMACY_F16;
-    return 0;
-  }
   if (json_str_eq(n, "f32")) {
     *out = DAMACY_F32;
+    return 0;
+  }
+  if (json_str_eq(n, "bf16")) {
+    *out = DAMACY_BF16;
     return 0;
   }
   return 1;
@@ -237,13 +221,8 @@ static uint64_t
 dtype_bpe(enum damacy_dtype d)
 {
   switch (d) {
-    case DAMACY_U8:
-      return 1;
-    case DAMACY_U16:
-    case DAMACY_I16:
-    case DAMACY_F16:
+    case DAMACY_BF16:
       return 2;
-    case DAMACY_U32:
     case DAMACY_F32:
       return 4;
   }
@@ -288,7 +267,10 @@ parse_scenario(struct cslice src, struct scenario* sc)
       return 1;
   }
   {
-    static const struct json_query p[] = { { QUERY_KEY, .key = "dataset" },
+    // Destination dtype lives on `pipeline.dtype` now; per-zarr source
+    // dtypes are written by gen_dataset.py and the loader picks them up
+    // from each zarr's metadata.
+    static const struct json_query p[] = { { QUERY_KEY, .key = "pipeline" },
                                            { QUERY_KEY, .key = "dtype" } };
     if (parse_dtype(src, p, countof(p), &sc->dtype))
       return 1;

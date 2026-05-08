@@ -20,14 +20,12 @@ extern "C"
 {
 #endif
 
+  // Output dtype of an assembled batch. Sources can vary (per-zarr); the
+  // assemble kernel casts each source element to this destination type.
   enum damacy_dtype
   {
-    DAMACY_U8,
-    DAMACY_U16,
-    DAMACY_I16,
-    DAMACY_U32,
-    DAMACY_F16,
     DAMACY_F32,
+    DAMACY_BF16,
   };
 
   enum damacy_status
@@ -36,7 +34,7 @@ extern "C"
     DAMACY_AGAIN,    // non-blocking call would block (queue full)
     DAMACY_INVAL,    // bad arguments
     DAMACY_NOTFOUND, // uri unresolvable / not a zarr
-    DAMACY_DTYPE,    // zarr dtype != configured dtype
+    DAMACY_DTYPE,    // zarr source dtype has no cast path to cfg.dtype
     DAMACY_RANK,     // sample rank incompatible with zarr rank
     DAMACY_IO,       // read/open failure on a shard file
     DAMACY_DECODE,   // codec parse / decompression failure
@@ -103,7 +101,11 @@ extern "C"
     uint32_t n_zarrs_meta_cache;
     uint32_t n_shards_meta_cache;
 
-    // Output dtype expected from all pushed samples; mismatched zarrs error.
+    // Destination dtype of assembled batches. Source zarrs may carry any
+    // supported integer or float type; the assemble kernel casts each
+    // element to this dtype (RNE float-promote, no overflow handling —
+    // precision is bounded by the destination's mantissa). Sources
+    // without a cast path error with DAMACY_DTYPE at push.
     enum damacy_dtype dtype;
 
     // Largest dtype size (bytes) the pipeline will accept across pushed
@@ -161,7 +163,8 @@ extern "C"
   //             a batch (or wait) and retry with the returned suffix
   //   INVAL     bad arguments (samples.beg > samples.end, null d, etc.)
   //   NOTFOUND  could not resolve a uri; result.unconsumed.beg points at it
-  //   DTYPE     zarr dtype mismatch; result.unconsumed.beg points at the sample
+  //   DTYPE     zarr source dtype has no cast path to cfg.dtype;
+  //             result.unconsumed.beg points at the sample
   //   RANK      sample rank incompatible with the resolved zarr's rank
   //   SHUTDOWN  instance is in a failed state or being destroyed
   // On any non-AGAIN error, the offending sample is at

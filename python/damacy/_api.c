@@ -37,6 +37,7 @@ typedef enum
   kDLInt = 0u,
   kDLUInt = 1u,
   kDLFloat = 2u,
+  kDLBfloat = 4u,
 } DLDataTypeCode;
 
 typedef struct
@@ -88,7 +89,7 @@ parse_dtype(PyObject* obj, enum damacy_dtype* out)
 {
   if (PyLong_Check(obj)) {
     long v = PyLong_AsLong(obj);
-    if (v < 0 || v > DAMACY_F32) {
+    if (v < 0 || v > DAMACY_BF16) {
       PyErr_SetString(PyExc_ValueError, "dtype out of range");
       return -1;
     }
@@ -98,28 +99,12 @@ parse_dtype(PyObject* obj, enum damacy_dtype* out)
   const char* s = PyUnicode_AsUTF8(obj);
   if (!s)
     return -1;
-  if (!strcmp(s, "u8") || !strcmp(s, "uint8")) {
-    *out = DAMACY_U8;
-    return 0;
-  }
-  if (!strcmp(s, "u16") || !strcmp(s, "uint16")) {
-    *out = DAMACY_U16;
-    return 0;
-  }
-  if (!strcmp(s, "i16") || !strcmp(s, "int16")) {
-    *out = DAMACY_I16;
-    return 0;
-  }
-  if (!strcmp(s, "u32") || !strcmp(s, "uint32")) {
-    *out = DAMACY_U32;
-    return 0;
-  }
-  if (!strcmp(s, "f16") || !strcmp(s, "float16")) {
-    *out = DAMACY_F16;
-    return 0;
-  }
   if (!strcmp(s, "f32") || !strcmp(s, "float32")) {
     *out = DAMACY_F32;
+    return 0;
+  }
+  if (!strcmp(s, "bf16") || !strcmp(s, "bfloat16")) {
+    *out = DAMACY_BF16;
     return 0;
   }
   PyErr_Format(PyExc_ValueError, "unknown dtype: %s", s);
@@ -130,18 +115,10 @@ static const char*
 dtype_name(enum damacy_dtype d)
 {
   switch (d) {
-    case DAMACY_U8:
-      return "u8";
-    case DAMACY_U16:
-      return "u16";
-    case DAMACY_I16:
-      return "i16";
-    case DAMACY_U32:
-      return "u32";
-    case DAMACY_F16:
-      return "f16";
     case DAMACY_F32:
       return "f32";
+    case DAMACY_BF16:
+      return "bf16";
   }
   return "?";
 }
@@ -247,29 +224,13 @@ static int
 dtype_to_dl(enum damacy_dtype dt, DLDataType* out_dt, uint8_t* out_bpe)
 {
   switch (dt) {
-    case DAMACY_U8:
-      *out_dt = (DLDataType){ .code = kDLUInt, .bits = 8, .lanes = 1 };
-      *out_bpe = 1;
-      return 0;
-    case DAMACY_U16:
-      *out_dt = (DLDataType){ .code = kDLUInt, .bits = 16, .lanes = 1 };
-      *out_bpe = 2;
-      return 0;
-    case DAMACY_I16:
-      *out_dt = (DLDataType){ .code = kDLInt, .bits = 16, .lanes = 1 };
-      *out_bpe = 2;
-      return 0;
-    case DAMACY_U32:
-      *out_dt = (DLDataType){ .code = kDLUInt, .bits = 32, .lanes = 1 };
-      *out_bpe = 4;
-      return 0;
-    case DAMACY_F16:
-      *out_dt = (DLDataType){ .code = kDLFloat, .bits = 16, .lanes = 1 };
-      *out_bpe = 2;
-      return 0;
     case DAMACY_F32:
       *out_dt = (DLDataType){ .code = kDLFloat, .bits = 32, .lanes = 1 };
       *out_bpe = 4;
+      return 0;
+    case DAMACY_BF16:
+      *out_dt = (DLDataType){ .code = kDLBfloat, .bits = 16, .lanes = 1 };
+      *out_bpe = 2;
       return 0;
   }
   return -1;

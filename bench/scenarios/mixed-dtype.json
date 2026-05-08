@@ -1,14 +1,14 @@
 {
-  "name": "mixed",
+  "name": "mixed-dtype",
   "dataset": {
-    "store_root": "bench/data/mixed",
+    "store_root": "bench/data/mixed-dtype",
     "n_zarrs": 8,
     "uri_fmt": "z%03u/scale0/image",
     "zarr_shape": [512, 512, 512],
     "chunk_shape": [32, 64, 64],
     "shard_shape": [256, 256, 512],
-    "dtypes": ["u16"],
-    "codecs": ["zstd", "blosc-zstd"],
+    "dtypes": ["u8", "u16"],
+    "codecs": ["zstd"],
     "clevel": 3,
     "entropy": 0.5,
     "seed": 42
@@ -17,15 +17,15 @@
     "sample_shape": [128, 128, 128],
     "n_batches": 50,
     "n_warmup_batches": 5,
-    "batch_size": 128,
+    "batch_size": 64,
     "seed": 1234
   },
   "pipeline": {
     "dtype": "f32",
     "lookahead_batches": 4,
     "n_io_threads": 8,
-    "host_buffer_mb": 1024,
-    "device_buffer_mb": 1024,
+    "host_buffer_mb": 512,
+    "device_buffer_mb": 512,
     "n_zarrs_meta_cache": 4096,
     "n_shards_meta_cache": 16384
   }

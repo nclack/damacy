@@ -55,11 +55,12 @@ extern "C"
     uint16_t batch_pool_slot;
     uint16_t sample_idx_in_batch;
     uint8_t rank;                            // spatial rank
+    uint8_t src_dtype;                       // enum dtype; source zarr type
     struct sample_dim dims[DAMACY_MAX_RANK]; // dims[0..rank)
-    int64_t
-      sample_dst_off_elems; // sample slot start (elements; * bpe at runtime)
-    uint32_t chunk_offset;  // first chunk in chunk_plans
-    uint32_t chunk_count;   // ∏ dims[d].chunk_grid_extent
+    int64_t sample_dst_off_elems; // sample slot start (elements; * dst bpe at
+                                  // runtime)
+    uint32_t chunk_offset;        // first chunk in chunk_plans
+    uint32_t chunk_count;         // ∏ dims[d].chunk_grid_extent
   };
 
   // Per-chunk plan. Carries IO/decompress fields plus assemble-side
