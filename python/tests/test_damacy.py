@@ -16,10 +16,12 @@ import damacy
 from damacy import _native
 
 
-def _base_kwargs(store_root: Path, dtype: str | int = "u16") -> dict:
+def _base_kwargs(store_root: Path, dtype: str | int = "f32") -> dict:
     """Minimum-viable kwargs for damacy._native.Damacy(...).
 
     Mirrors the defaults used by tests/test_damacy_caps.c::mk_cfg.
+    `dtype` is the *destination* batch dtype (#16): F32 or BF16. Source
+    zarrs cast in-kernel; tiny_zarr is u16 → f32 here.
     max_chunk_uncompressed_bytes is required by the binding; 0 means
     "use the C default" (512 KB), which is what the C test passes.
     """
@@ -77,21 +79,22 @@ def test_max_gpu_memory_too_small_rejected(tmp_path):
         _native.Damacy(**kw)
 
 
-def test_dtype_string_form_accepted(tiny_zarr):
+@pytest.mark.parametrize("dtype", ["f32", "bf16", "float32", "bfloat16"])
+def test_dtype_string_form_accepted(tiny_zarr, dtype):
     root, _ = tiny_zarr
-    d = _native.Damacy(**_base_kwargs(root, dtype="u16"))
+    d = _native.Damacy(**_base_kwargs(root, dtype=dtype))
     assert d is not None
 
 
 def test_dtype_int_form_accepted(tiny_zarr):
     root, _ = tiny_zarr
-    # DAMACY_U16 = 1 (matches enum order in damacy.h).
+    # DAMACY_BF16 = 1 (post-#16 enum: F32=0, BF16=1).
     d = _native.Damacy(**_base_kwargs(root, dtype=1))
     assert d is not None
 
 
 def test_dtype_unknown_string_raises(tmp_path):
-    kw = _base_kwargs(tmp_path, dtype="u128")
+    kw = _base_kwargs(tmp_path, dtype="u16")  # post-#16: u16 is source-only
     with pytest.raises(ValueError, match="unknown dtype"):
         _native.Damacy(**kw)
 
@@ -107,9 +110,10 @@ def test_push_pop_release(tiny_zarr):
 
     b = d.pop()
     info = b.info
-    # Leading N axis (batch_size=1) followed by zarr axes.
+    # Leading N axis (batch_size=1) followed by zarr axes. dtype is the
+    # *destination* (cfg.dtype); the u16 source casts to f32 in-kernel.
     assert info["shape"] == (1, 8, 16)
-    assert info["dtype"] == "u16"
+    assert info["dtype"] == "f32"
     assert info["batch_id"] == 0
     assert info["device_ptr"] != 0
     # release returns the slot to the pool; idempotent.
@@ -125,11 +129,11 @@ def test_unknown_uri_returns_notfound(tiny_zarr):
     assert r["consumed"] == 0
 
 
-def test_dtype_mismatch_returns_dtype_error(tiny_zarr_u32):
-    # The fixture is u32; we configure damacy to expect u16 — push must
+def test_unsupported_src_dtype_returns_dtype_error(tiny_zarr_no_cast):
+    # The fixture is int64 — no cast path to f32 (post-#16). push must
     # surface DAMACY_DTYPE on the offending sample.
-    root, uri = tiny_zarr_u32
-    d = _native.Damacy(**_base_kwargs(root, dtype="u16"))
+    root, uri = tiny_zarr_no_cast
+    d = _native.Damacy(**_base_kwargs(root, dtype="f32"))
     r = d.push([{"uri": uri, "aabb": [(0, 8), (0, 16)]}])
     assert r["status"] == "dtype mismatch"
     assert r["consumed"] == 0
