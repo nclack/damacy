@@ -36,7 +36,6 @@ extern "C"
     uint32_t compressed_nbytes;
     uint32_t decompressed_nbytes;
     uint8_t codec_id;
-    uint8_t _pad[7];
   };
 
   // SOA nvcomp fanout in HOST memory. Layout matches `nvcomp_fanout`; the
