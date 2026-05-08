@@ -78,7 +78,13 @@ class Batch:
         dl_device: tuple[int, int] | None = ...,
         copy: bool | None = ...,
     ) -> Any:
-        """DLPack v1 capsule export. Honors stream=... per the protocol."""
+        """DLPack v1 capsule export. ``stream`` is honored per the
+        protocol (consumer's stream waits on damacy's ``ready_stream``).
+        ``copy=True`` raises :class:`BufferError` — the batch is on the
+        device damacy assembled it on, no implicit copy is performed.
+        ``max_version`` and ``dl_device`` are accepted for protocol
+        compatibility but currently ignored; the producer always emits
+        the v1 layout on the assembling device."""
 
     def __dlpack_device__(self) -> tuple[int, int]:
         """Returns (kDLCUDA=2, ordinal)."""

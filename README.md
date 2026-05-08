@@ -53,9 +53,17 @@ with damacy.Pipeline(cfg) as p:
     p.push(samples)                                # producer side
     for batch in p.batches(len(samples) // cfg.batch_size):
         with batch as t:                           # consumer side
-            x = torch.from_dlpack(t)               # zero-copy on-device
+            x = torch.from_dlpack(t)               # zero-copy + stream-fenced
             ...                                    # train step
 ```
+
+`torch.from_dlpack` (or any DLPack v1 consumer — cupy, jax, …) handles the
+stream handoff: damacy hands over `BatchInfo.ready_stream`, the consumer
+records a `cuStreamWaitEvent` against it, and the resulting tensor is
+fenced for downstream kernels. Damacy's internal streams are non-blocking
+with respect to the legacy default stream, so don't read
+`BatchInfo.device_ptr` directly without a matching `cuStreamWaitEvent` on
+`ready_stream`.
 
 ## Streaming
 

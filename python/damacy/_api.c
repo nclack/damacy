@@ -840,7 +840,9 @@ PyTypeObject PipelineType = {
   PyVarObject_HEAD_INIT(NULL, 0).tp_name = "damacy._native.Pipeline",
   .tp_basicsize = sizeof(PipelineObj),
   .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
-  .tp_doc = "Streaming loader handle. Drive push/pop/flush.",
+  .tp_doc = "Native streaming pipeline handle. Implementation detail of "
+            "damacy.Pipeline; prefer the wrapper, which adds typed config, "
+            "the exception hierarchy, and lazy-generator push semantics.",
   .tp_new = PyType_GenericNew,
   .tp_init = (initproc)Pipeline_init,
   .tp_dealloc = (destructor)Pipeline_dealloc,

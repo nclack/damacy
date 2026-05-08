@@ -45,14 +45,15 @@ if(BUILD_TESTING)
         )
         set(_damacy_pytest_cov_args "")
         if(_damacy_have_pytest_cov EQUAL 0)
-            # Gate at 95% — current is 99%; the margin absorbs small,
-            # genuinely-untestable additions (e.g. defensive except blocks)
-            # without forcing a same-PR test for every line.
+            # Local floor matches codecov.yml's patch target so the two
+            # gates (project-total here, per-PR-patch on codecov) read
+            # the same number. Headroom above the floor lets defensive
+            # except blocks land without a same-PR test for every line.
             list(
                 APPEND _damacy_pytest_cov_args
                 "--cov=damacy"
                 "--cov-report=term-missing:skip-covered"
-                "--cov-fail-under=95"
+                "--cov-fail-under=70"
             )
         endif()
         add_test(

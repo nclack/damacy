@@ -58,7 +58,6 @@ __all__ = [
     "DecodeError",
     "Dtype",
     "DtypeMismatch",
-    "IOError",
     "InvalidArgument",
     "Metric",
     "NativeCudaError",
@@ -70,6 +69,7 @@ __all__ = [
     "ShutdownError",
     "Stats",
     "Status",
+    "StorageError",
     "TryAgain",
     "set_log_level",
     "set_log_quiet",
@@ -161,8 +161,10 @@ class RankMismatch(DamacyError):
     """Sample rank is incompatible with the resolved zarr rank."""
 
 
-class IOError(DamacyError):  # intentional shadow of builtins.IOError
-    """Read/open failure on a shard file."""
+class StorageError(DamacyError):
+    """Read or open failure on a shard file. Named ``StorageError`` rather
+    than ``IOError`` to avoid shadowing :class:`builtins.IOError` for
+    callers that ``from damacy import *``."""
 
 
 class DecodeError(DamacyError):
@@ -189,7 +191,7 @@ _STATUS_TO_EXC: dict[int, type[DamacyError]] = {
     _native.STATUS_NOTFOUND: NotFound,
     _native.STATUS_DTYPE: DtypeMismatch,
     _native.STATUS_RANK: RankMismatch,
-    _native.STATUS_IO: IOError,
+    _native.STATUS_IO: StorageError,
     _native.STATUS_DECODE: DecodeError,
     _native.STATUS_CUDA: NativeCudaError,
     _native.STATUS_OOM: OutOfMemory,
@@ -572,11 +574,18 @@ class Batch:
             return "Batch(<released>)"
 
 
+# Pairs of (LOCAL_RANK, bound) we've already warned about in this
+# process. A loop that constructs many Pipelines under the same
+# misconfiguration shouldn't generate one warning per construction.
+_warned_local_rank_pairs: set[tuple[int, int]] = set()
+
+
 def _warn_if_local_rank_disagrees(cfg_device: int | None, bound: int) -> None:
     """Warn when ``LOCAL_RANK`` is set but the bound device disagrees;
     silent unless the user looks like they're under torchrun. Skipped
     when the user passed ``Config.device`` explicitly — they've already
-    declared their intent and the native cross-check has run."""
+    declared their intent and the native cross-check has run. Each
+    (LOCAL_RANK, bound) pair warns at most once per process."""
     if cfg_device is not None:
         return
     raw = os.environ.get("LOCAL_RANK")
@@ -586,13 +595,18 @@ def _warn_if_local_rank_disagrees(cfg_device: int | None, bound: int) -> None:
         local_rank = int(raw)
     except ValueError:
         return
-    if local_rank != bound:
-        warnings.warn(
-            f"damacy.Pipeline bound to CUDA device {bound} but LOCAL_RANK={local_rank}. "
-            f"Did you forget torch.cuda.set_device({local_rank}) before constructing "
-            f"the pipeline, or pass Config(device={local_rank}) to bind explicitly?",
-            stacklevel=3,
-        )
+    if local_rank == bound:
+        return
+    key = (local_rank, bound)
+    if key in _warned_local_rank_pairs:
+        return
+    _warned_local_rank_pairs.add(key)
+    warnings.warn(
+        f"damacy.Pipeline bound to CUDA device {bound} but LOCAL_RANK={local_rank}. "
+        f"Did you forget torch.cuda.set_device({local_rank}) before constructing "
+        f"the pipeline, or pass Config(device={local_rank}) to bind explicitly?",
+        stacklevel=3,
+    )
 
 
 # ---- Pipeline -----------------------------------------------------------
@@ -649,6 +663,7 @@ class Pipeline:
     @property
     def device(self) -> int:
         """CUDA device index this pipeline is bound to."""
+        self._check_open()
         return int(self._native.device)
 
     @property
@@ -658,8 +673,18 @@ class Pipeline:
 
     # ---- lifecycle ---------------------------------------------------
 
+    def _check_open(self) -> None:
+        """Raise :class:`ShutdownError` if close() has already run.
+        Called at the top of every method that touches the native handle."""
+        if self._closed:
+            exc = ShutdownError("damacy: pipeline has been closed")
+            exc.status = Status.SHUTDOWN
+            exc.what = "closed"
+            raise exc
+
     def close(self) -> None:
-        """Release the underlying handle. Idempotent."""
+        """Release the underlying handle. Idempotent. Subsequent calls
+        on the pipeline raise :class:`ShutdownError`."""
         if not self._closed:
             self._closed = True
             del self._native
@@ -677,13 +702,16 @@ class Pipeline:
         # Drain any in-flight work so a clean shutdown doesn't drop a
         # partial last batch silently. Pending samples that don't fit
         # are discarded — the user is on the hook for popping
-        # everything they pushed before exiting.
+        # everything they pushed before exiting. close() runs in
+        # finally so the native handle releases even if flush raises
+        # something we don't catch.
         try:
             if not self._closed:
                 self.flush()
         except DamacyError:
             pass  # don't mask the user's exception
-        self.close()
+        finally:
+            self.close()
 
     # ---- pipeline ----------------------------------------------------
 
@@ -695,8 +723,10 @@ class Pipeline:
         Fatal errors from the C-side validator (``NotFound``,
         ``DtypeMismatch``, ``RankMismatch``, …) raise the matching
         :class:`DamacyError` subclass; the offending iterator is
-        discarded but other already-pushed iterators keep their place.
+        discarded but samples accepted by earlier ``push`` calls are
+        unaffected.
         """
+        self._check_open()
         self._pending.append(iter(samples))
         self._drain_pending()
 
@@ -729,6 +759,7 @@ class Pipeline:
         """Block until the next batch is on-device-ready. Returns a
         :class:`Batch` you can hand to ``torch.from_dlpack`` (or any
         DLPack consumer) — preferably inside a ``with`` block."""
+        self._check_open()
         # Top up native from the pending queue so the planner has work.
         self._drain_pending()
         try:
@@ -742,6 +773,7 @@ class Pipeline:
         samples that don't fit before flush are dropped — pop until
         :attr:`pending` reads False if you want every queued sample to
         emit as a batch."""
+        self._check_open()
         self._drain_pending()
         try:
             self._native.flush()
@@ -771,9 +803,11 @@ class Pipeline:
     # ---- stats -------------------------------------------------------
 
     def stats(self) -> Stats:
+        self._check_open()
         return Stats._from_native(self._native.stats())
 
     def stats_reset(self) -> None:
+        self._check_open()
         self._native.stats_reset()
 
 

@@ -133,10 +133,11 @@ stream wait on it, so train kernels see a fenced tensor.
 
 Damacy's internal streams are non-blocking, so a default-stream
 operation elsewhere in your code won't accidentally serialize the
-pipeline.
-
-If you bypass DLPack, `BatchInfo.ready_stream` is the producer
-stream as an int handle.
+pipeline. The flip side: don't assume the legacy default stream
+sees damacy's work either. If you bypass DLPack and read
+`BatchInfo.device_ptr` directly, do a `cuStreamWaitEvent` against
+`BatchInfo.ready_stream` on your consumer stream before launching
+your kernel — the implicit default-stream sync is gone.
 
 ## Common failures
 

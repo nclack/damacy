@@ -35,12 +35,16 @@ def _have_uv() -> bool:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _cuda_ctx() -> None:
+def cuda_ctx() -> None:
     """Make device 0's primary CUcontext current for the test process.
 
     damacy_create requires a current CUcontext on the calling thread.
     PyTorch sets one up implicitly; bare pytest doesn't, so we do it
     once per session. Skips the suite if no CUDA driver is reachable.
+
+    No leading underscore: autouse fixtures are wired up by pytest's
+    decorator-driven discovery, not by direct reference, and the
+    underscore would trip pyright's reportUnusedFunction.
     """
     from damacy import _native
 

@@ -40,7 +40,7 @@ The full public surface of the `damacy` package.
 
 ::: damacy.RankMismatch
 
-::: damacy.IOError
+::: damacy.StorageError
 
 ::: damacy.DecodeError
 

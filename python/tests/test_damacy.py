@@ -12,6 +12,7 @@ from __future__ import annotations
 import dataclasses
 import shutil
 import subprocess
+import warnings
 
 import damacy
 import pytest
@@ -263,16 +264,17 @@ def test_push_chains_multiple_calls(tiny_zarr):
 
 
 def test_push_error_drops_offending_iterator(tiny_zarr):
-    """A NotFound mid-iterator drops *that* iterator's tail but earlier
-    queued iterators still resolve."""
+    """A NotFound surfaces the error and discards the failing iterator's
+    tail. Samples accepted by earlier ``push`` calls (already in the
+    native lookahead) still resolve through ``pop``."""
     uri = tiny_zarr
     good = Sample(uri=uri, aabb=[(0, 8), (0, 16)])
     bad = Sample(uri="not_a_zarr", aabb=[(0, 8), (0, 16)])
     with Pipeline(_base_config()) as d:
-        d.push([good])  # this one queues + drains cleanly
+        d.push([good])  # drains synchronously into native
         with pytest.raises(NotFound):
-            d.push([bad, good])  # raises mid-drain; bad's tail discarded
-        # The first push's sample still resolves.
+            d.push([bad, good])  # raises on bad; the trailing good is dropped
+        # The first push's sample is in the lookahead and still pops.
         with d.pop() as b:
             assert b.info.batch_id == 0
 
@@ -424,8 +426,21 @@ def test_use_after_close_raises(tiny_zarr):
     d = Pipeline(_base_config())
     d.close()
     d.close()  # idempotent
-    with pytest.raises(AttributeError):
+    # Every public method that touches the native handle surfaces a
+    # typed ShutdownError, not a bare AttributeError.
+    with pytest.raises(damacy.ShutdownError) as excinfo:
         d.stats()
+    assert excinfo.value.status is Status.SHUTDOWN
+    with pytest.raises(damacy.ShutdownError):
+        d.pop()
+    with pytest.raises(damacy.ShutdownError):
+        d.push([Sample(uri="x", aabb=[(0, 1), (0, 1)])])
+    with pytest.raises(damacy.ShutdownError):
+        d.flush()
+    with pytest.raises(damacy.ShutdownError):
+        d.stats_reset()
+    with pytest.raises(damacy.ShutdownError):
+        _ = d.device
 
 
 # ---- exception hierarchy ------------------------------------------------
@@ -463,8 +478,25 @@ def test_explicit_device_zero_succeeds(tiny_zarr):
 def test_local_rank_disagreement_warns(tiny_zarr, monkeypatch):
     _ = tiny_zarr
     monkeypatch.setenv("LOCAL_RANK", "3")  # bound dev is 0; rank claims 3
+    # Per-process dedup means a previous test could have absorbed the
+    # warning for this (rank, bound) pair. Clear the cache so the
+    # assertion is deterministic regardless of test order.
+    damacy._warned_local_rank_pairs.clear()
     with pytest.warns(UserWarning, match="LOCAL_RANK=3"):
         Pipeline(_base_config()).close()
+
+
+def test_local_rank_warning_dedupes(tiny_zarr, monkeypatch):
+    _ = tiny_zarr
+    monkeypatch.setenv("LOCAL_RANK", "3")
+    damacy._warned_local_rank_pairs.clear()
+    with pytest.warns(UserWarning, match="LOCAL_RANK=3"):
+        Pipeline(_base_config()).close()
+    # Second construction with the same misconfiguration is silent.
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        Pipeline(_base_config()).close()
+    assert not any("LOCAL_RANK" in str(w.message) for w in caught)
 
 
 def test_local_rank_match_is_quiet(tiny_zarr, monkeypatch, recwarn):
