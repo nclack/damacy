@@ -81,12 +81,17 @@ jobs:
               ctest --output-on-failure --test-dir build
               python3 -c "import damacy; print(\"damacy\", damacy.__version__); damacy._native.set_log_quiet(True); print(\"api-ok\")"
               mkdir -p coverage-html
+              # negative_hits.warn: gcc bug 68080 produces negative branch
+              # counters for atomic ops (e.g. threadpool's epoch / counter
+              # primitives). Warn instead of fail; the line counts are
+              # still accurate.
               gcovr --root . \
                 --xml-pretty --output coverage.xml \
                 --html-details coverage-html/index.html \
                 --exclude ".*/tests/.*" \
                 --exclude ".*/experiments/.*" \
                 --exclude ".*/build/.*" \
+                --gcov-ignore-parse-errors=negative_hits.warn \
                 --print-summary
               if [ -z "${CODECOV_TOKEN:-}" ]; then
                 echo "ERROR: CODECOV_TOKEN not set" >&2
