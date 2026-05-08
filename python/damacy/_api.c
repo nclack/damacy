@@ -123,18 +123,44 @@ dtype_name(enum damacy_dtype d)
   return "?";
 }
 
-static const char*
-status_name(enum damacy_status s)
-{
-  return damacy_status_str(s);
-}
+// Module-owned exception type. Subclasses RuntimeError so legacy callers
+// catching RuntimeError still work; the Python wrapper layer remaps to
+// per-status subclasses keyed by .status.
+PyObject* DamacyError = NULL;
 
-// Raise a damacy-status-tagged RuntimeError. Returns NULL.
+// Raise a status-tagged DamacyError. Sets .status (int) and .what (str)
+// attributes on the instance. Returns NULL so callers can `return
+// raise_status(...)`.
 static PyObject*
 raise_status(enum damacy_status s, const char* what)
 {
-  PyErr_Format(
-    PyExc_RuntimeError, "damacy: %s failed (%s)", what, damacy_status_str(s));
+  PyObject* msg =
+    PyUnicode_FromFormat("damacy: %s failed (%s)", what, damacy_status_str(s));
+  if (!msg)
+    return NULL;
+  PyObject* exc = PyObject_CallFunction(DamacyError, "O", msg);
+  Py_DECREF(msg);
+  if (!exc)
+    return NULL;
+  PyObject* status = PyLong_FromLong((long)s);
+  PyObject* what_obj = PyUnicode_FromString(what);
+  if (!status || !what_obj) {
+    Py_XDECREF(status);
+    Py_XDECREF(what_obj);
+    Py_DECREF(exc);
+    return NULL;
+  }
+  if (PyObject_SetAttrString(exc, "status", status) < 0 ||
+      PyObject_SetAttrString(exc, "what", what_obj) < 0) {
+    Py_DECREF(status);
+    Py_DECREF(what_obj);
+    Py_DECREF(exc);
+    return NULL;
+  }
+  Py_DECREF(status);
+  Py_DECREF(what_obj);
+  PyErr_SetObject(DamacyError, exc);
+  Py_DECREF(exc);
   return NULL;
 }
 
@@ -633,7 +659,7 @@ Damacy_push(DamacyObj* self, PyObject* arg)
   }
   Py_ssize_t n = PySequence_Fast_GET_SIZE(arg);
   if (n == 0)
-    return Py_BuildValue("{s:i,s:s}", "consumed", 0, "status", "OK");
+    return Py_BuildValue("{s:i,s:i}", "consumed", 0, "status", (int)DAMACY_OK);
 
   struct damacy_sample* buf = PyMem_Calloc((size_t)n, sizeof *buf);
   if (!buf)
@@ -655,8 +681,14 @@ Damacy_push(DamacyObj* self, PyObject* arg)
     Py_ssize_t consumed = (Py_ssize_t)(r.unconsumed.beg - buf);
   PyMem_Free(buf);
 
+  // OK / AGAIN are not errors at this layer — return the consumed count
+  // and the integer status so the caller can detect back-pressure. Any
+  // other status (NOTFOUND/DTYPE/RANK/SHUTDOWN/...) raises.
+  if (r.status != DAMACY_OK && r.status != DAMACY_AGAIN)
+    return raise_status(r.status, "push");
+
   return Py_BuildValue(
-    "{s:n,s:s}", "consumed", consumed, "status", status_name(r.status));
+    "{s:n,s:i}", "consumed", consumed, "status", (int)r.status);
 }
 
 static PyObject*
@@ -815,5 +847,54 @@ api_register_types(PyObject* m)
     Py_DECREF(&BatchType);
     return -1;
   }
+
+  // DamacyError(message) — subclass of RuntimeError. Carries .status
+  // (int, one of STATUS_*) and .what (str) attributes; the Python
+  // wrapper module uses .status to remap to per-status subclasses.
+  DamacyError = PyErr_NewExceptionWithDoc(
+    "damacy._native.DamacyError",
+    "Native damacy error. .status is one of damacy._native.STATUS_*.",
+    PyExc_RuntimeError,
+    NULL);
+  if (!DamacyError)
+    return -1;
+  Py_INCREF(DamacyError);
+  if (PyModule_AddObject(m, "DamacyError", DamacyError) < 0) {
+    Py_DECREF(DamacyError);
+    Py_DECREF(DamacyError);
+    DamacyError = NULL;
+    return -1;
+  }
+
+  // Status code integer constants. Mirror enum damacy_status; consumed
+  // by the Python wrapper to map raw exceptions to typed subclasses.
+  static const struct
+  {
+    const char* name;
+    int value;
+  } statuses[] = {
+    { "STATUS_OK", DAMACY_OK },
+    { "STATUS_AGAIN", DAMACY_AGAIN },
+    { "STATUS_INVAL", DAMACY_INVAL },
+    { "STATUS_NOTFOUND", DAMACY_NOTFOUND },
+    { "STATUS_DTYPE", DAMACY_DTYPE },
+    { "STATUS_RANK", DAMACY_RANK },
+    { "STATUS_IO", DAMACY_IO },
+    { "STATUS_DECODE", DAMACY_DECODE },
+    { "STATUS_CUDA", DAMACY_CUDA },
+    { "STATUS_OOM", DAMACY_OOM },
+    { "STATUS_SHUTDOWN", DAMACY_SHUTDOWN },
+  };
+  for (size_t i = 0; i < sizeof statuses / sizeof statuses[0]; ++i) {
+    if (PyModule_AddIntConstant(m, statuses[i].name, statuses[i].value) < 0)
+      return -1;
+  }
+
+  // dtype enum mirrors damacy_dtype. Tagged DTYPE_ to avoid collision
+  // with future U16/I32/... source-side dtype constants.
+  if (PyModule_AddIntConstant(m, "DTYPE_F32", DAMACY_F32) < 0)
+    return -1;
+  if (PyModule_AddIntConstant(m, "DTYPE_BF16", DAMACY_BF16) < 0)
+    return -1;
   return 0;
 }

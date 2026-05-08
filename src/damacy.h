@@ -1,8 +1,8 @@
 // damacy public C API — high-throughput streaming loader for batches
 // assembled from many sharded NGFF zarr stores.
 //
-// See docs/api-design-surface-draft.md for the rationale and discussion;
-// docs/api-design-internals-draft.md describes the implementation shape.
+// See dev/api-design-surface-draft.md for the rationale and discussion;
+// dev/api-design-internals-draft.md describes the implementation shape.
 //
 // Threading model: a single user thread should own a `damacy*` instance
 // and drive push/pop/flush on it. damacy_release is safe to call from

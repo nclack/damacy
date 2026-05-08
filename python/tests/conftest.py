@@ -27,9 +27,7 @@ def _write_zarr_script() -> Path:
         cand = parent / "tests" / "write_zarr.py"
         if cand.is_file():
             return cand
-    raise RuntimeError(
-        "WRITE_ZARR_SCRIPT not set and tests/write_zarr.py not found"
-    )
+    raise RuntimeError("WRITE_ZARR_SCRIPT not set and tests/write_zarr.py not found")
 
 
 def _have_uv() -> bool:

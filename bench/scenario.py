@@ -4,6 +4,7 @@ Mirrors the scenario.json schema and the results.json emitted by
 damacy_bench. Both scripts add this directory to sys.path before
 importing.
 """
+
 from __future__ import annotations
 
 from typing import Literal

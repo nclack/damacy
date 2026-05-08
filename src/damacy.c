@@ -1280,7 +1280,7 @@ build_assemble_meta(struct damacy* self, struct damacy_wave* wave)
 // stream_compute is shared across waves (FIFO), so blocking the host
 // here doesn't add cross-wave serialization beyond what stream_compute
 // already enforces: wave B's compute work is already queued behind
-// wave A's. See docs/devlog.md for the per-wave-stream investigation.
+// wave A's. See dev/devlog.md for the per-wave-stream investigation.
 static enum damacy_status
 kick_blosc1_parse(struct damacy* self,
                   struct damacy_wave* wave,

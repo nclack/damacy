@@ -1,5 +1,10 @@
 # dev log
 
+## 2026-05-08
+
+Making the python interface nicer. Adding typing, linting and formatting w
+ruff + pyright.
+
 ## 2026-05-07
 
 continuing on blosc
@@ -15,6 +20,9 @@ looks pretty slow - or is it?
 
 blosc chunk headers are parsed on gpu but that is probably a mistake. Just
 parse on cpu w a threadpool avoids the d2h, error handling better.
+
+Testing on the cluster found (a) need to handle device contexts better
+and (b) need to get proper dtype support in. So I added that.
 
 ## 2026-05-06
 

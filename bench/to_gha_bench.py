@@ -17,6 +17,7 @@ are prefixed with the scenario so different scenarios chart separately.
   uv run bench/to_gha_bench.py bench/runs/default/20260507-135830/results.json \\
     --out-smaller bench-smaller.json --out-bigger bench-bigger.json
 """
+
 from __future__ import annotations
 
 import argparse
@@ -27,17 +28,24 @@ from pathlib import Path
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("results", type=Path,
-                    help="path to bench/runs/<scenario>/<ts>/results.json")
+    ap.add_argument(
+        "results", type=Path, help="path to bench/runs/<scenario>/<ts>/results.json"
+    )
     ap.add_argument("--out-smaller", type=Path, required=True)
     ap.add_argument("--out-bigger", type=Path, required=True)
-    ap.add_argument("--scenario", default=None,
-                    help="scenario name prefix (default: parent dir name)")
-    ap.add_argument("--runner", default=None,
-                    help="optional runner-name prefix; metrics become "
-                         "<runner>/<scenario>/<metric>. Lets you keep "
-                         "histories from different machines separable on "
-                         "the gh-pages dashboard.")
+    ap.add_argument(
+        "--scenario",
+        default=None,
+        help="scenario name prefix (default: parent dir name)",
+    )
+    ap.add_argument(
+        "--runner",
+        default=None,
+        help="optional runner-name prefix; metrics become "
+        "<runner>/<scenario>/<metric>. Lets you keep "
+        "histories from different machines separable on "
+        "the gh-pages dashboard.",
+    )
     args = ap.parse_args()
 
     scenario = args.scenario or args.results.parent.parent.name
@@ -60,42 +68,57 @@ def main() -> int:
     smaller: list[dict] = []
     for key in ("init", "time_to_first_batch", "wall"):
         if key in timings:
-            smaller.append({
-                "name": f"{prefix}/{key}",
-                "unit": "ms",
-                "value": timings[key],
-            })
+            smaller.append(
+                {
+                    "name": f"{prefix}/{key}",
+                    "unit": "ms",
+                    "value": timings[key],
+                }
+            )
     # Aggregate decompress + per-codec sub-stages. The mixed scenario
     # exercises zstd and blosc-zstd; tracking only the aggregate would
     # hide codec-specific regressions.
     tracked_stages = (
-        "io", "h2d", "decompress", "assemble",
-        "decompress.parse", "decompress.zstd",
-        "decompress.lz4", "decompress.post",
+        "io",
+        "h2d",
+        "decompress",
+        "assemble",
+        "decompress.parse",
+        "decompress.zstd",
+        "decompress.lz4",
+        "decompress.post",
     )
     for stage in tracked_stages:
         v = stage_avg(stage)
         if v is not None:
-            smaller.append({
-                "name": f"{prefix}/{stage}.ms_avg",
-                "unit": "ms",
-                "value": v,
-            })
+            smaller.append(
+                {
+                    "name": f"{prefix}/{stage}.ms_avg",
+                    "unit": "ms",
+                    "value": v,
+                }
+            )
 
     bigger: list[dict] = []
     if "throughput_mb_s" in derived:
-        bigger.append({
-            "name": f"{prefix}/throughput",
-            "unit": "MB/s",
-            "value": derived["throughput_mb_s"],
-        })
+        bigger.append(
+            {
+                "name": f"{prefix}/throughput",
+                "unit": "MB/s",
+                "value": derived["throughput_mb_s"],
+            }
+        )
 
     args.out_smaller.write_text(json.dumps(smaller, indent=2))
     args.out_bigger.write_text(json.dumps(bigger, indent=2))
-    print(f"wrote {len(smaller)} smaller-is-better metrics to {args.out_smaller}",
-          file=sys.stderr)
-    print(f"wrote {len(bigger)} bigger-is-better metrics to {args.out_bigger}",
-          file=sys.stderr)
+    print(
+        f"wrote {len(smaller)} smaller-is-better metrics to {args.out_smaller}",
+        file=sys.stderr,
+    )
+    print(
+        f"wrote {len(bigger)} bigger-is-better metrics to {args.out_bigger}",
+        file=sys.stderr,
+    )
     return 0
 
 

@@ -1,0 +1,79 @@
+# Build the mkdocs+material+mkdocstrings site and (on push to main /
+# workflow_dispatch) publish it to the gh-pages branch alongside the
+# bench dashboards.
+#
+# mkdocstrings introspects damacy via griffe's static AST parse — no
+# `import damacy` happens, so this runs on a stock GitHub-hosted runner
+# without CUDA / nvcomp / the C extension.
+#
+# The bench workflow (bench.yml) publishes /timings/ and /throughput/
+# to the same gh-pages branch via benchmark-action. peaceiris is run
+# with keep_files: true so a docs deploy preserves those subtrees;
+# benchmark-action only edits files under those dirs, so a bench run
+# also leaves the docs untouched.
+#
+# Site URL: https://nclack.github.io/damacy/
+
+name: docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Serialize pushes to gh-pages. bench.yml uses the gpu-runner group for
+# benchmark serialisation and pushes via benchmark-action (with its own
+# pull/push retry); peaceiris also retries on conflict, so cross-workflow
+# races recover automatically. This group only protects docs against
+# itself.
+concurrency:
+  group: gh-pages-docs
+  cancel-in-progress: false
+
+permissions:
+  contents: write  # peaceiris pushes to gh-pages
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install docs deps
+        # Listed inline rather than via `pip install .[docs]` because
+        # the project install would trigger scikit-build-core → cmake +
+        # CUDA, which the docs build doesn't need.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            'mkdocs>=1.6' \
+            'mkdocs-material>=9.5' \
+            'mkdocstrings[python]>=0.26' \
+            'ruff>=0.6'
+
+      - name: Build site (--strict)
+        run: mkdocs build --strict
+
+      - name: Deploy to gh-pages
+        if: github.event_name != 'pull_request'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./site
+          publish_branch: gh-pages
+          # Preserve /timings/ and /throughput/ subtrees that bench.yml
+          # publishes to the same branch via benchmark-action. Without
+          # this flag peaceiris would force-replace the whole tree.
+          keep_files: true
+          user_name: "github-actions[bot]"
+          user_email: "github-actions[bot]@users.noreply.github.com"
+          commit_message: "docs: ${{ github.event.head_commit.message || github.sha }}"

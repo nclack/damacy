@@ -45,9 +45,7 @@ decoder_status_reduce_launch(CUstream stream,
   uint32_t blocks = (n + kThreadsPerBlock - 1) / kThreadsPerBlock;
   if (blocks > 64u)
     blocks = 64u;
-  status_reduce_kernel<<<blocks,
-                         kThreadsPerBlock,
-                         0,
-                         (cudaStream_t)stream>>>(d_statuses, d_error_counter, n);
+  status_reduce_kernel<<<blocks, kThreadsPerBlock, 0, (cudaStream_t)stream>>>(
+    d_statuses, d_error_counter, n);
   return decoder_launch_status_check("decoder_status_reduce_launch");
 }

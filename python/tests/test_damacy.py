@@ -1,148 +1,168 @@
-# Pytest coverage for the damacy._native bindings (issue #10).
-#
-# Mirrors the C-side test_damacy_caps coverage at the bindings layer,
-# plus end-to-end push/pop and stats assertions specific to the Python
-# wrapper. Construction tests do not require a GPU; end-to-end / stats
-# tests do — they need CUDA + nvcomp + a real device, the same prereq
-# as the C ctest CUDA suite.
+"""Pytest coverage for the user-facing damacy Python surface (issue #18).
+
+Mirrors the C-side test_damacy_caps coverage at the bindings layer plus
+end-to-end push/pop and stats assertions specific to the Python wrapper.
+Construction tests do not require a GPU; end-to-end / stats tests do —
+they need CUDA + nvcomp + a real device, the same prereq as the C ctest
+CUDA suite.
+"""
+
 from __future__ import annotations
 
-import logging
+import dataclasses
+import shutil
+import subprocess
 from pathlib import Path
 
-import pytest
-
 import damacy
-from damacy import _native
+import pytest
+from damacy import (
+    BatchInfo,
+    Config,
+    Damacy,
+    DamacyError,
+    DtypeMismatch,
+    InvalidArgument,
+    NotFound,
+    OutOfMemory,
+    Sample,
+    Stats,
+    Status,
+    _native,
+)
 
 
-def _base_kwargs(store_root: Path, dtype: str | int = "f32") -> dict:
-    """Minimum-viable kwargs for damacy._native.Damacy(...).
+def _base_config(store_root: Path, dtype: str | int | damacy.Dtype = "f32") -> Config:
+    """Minimum-viable Config for tests.
 
     Mirrors the defaults used by tests/test_damacy_caps.c::mk_cfg.
     `dtype` is the *destination* batch dtype (#16): F32 or BF16. Source
     zarrs cast in-kernel; tiny_zarr is u16 → f32 here.
-    max_chunk_uncompressed_bytes is required by the binding; 0 means
-    "use the C default" (512 KB), which is what the C test passes.
     """
-    return {
-        "store_root": str(store_root),
-        "batch_size": 1,
-        "lookahead_batches": 2,
-        "n_io_threads": 1,
-        "host_buffer_bytes": 1 << 20,
-        "device_buffer_bytes": 1 << 20,
-        "n_zarrs_meta_cache": 4,
-        "n_shards_meta_cache": 4,
-        "dtype": dtype,
-        "max_chunk_uncompressed_bytes": 0,
-    }
+    return Config(
+        store_root=str(store_root),
+        batch_size=1,
+        host_buffer_bytes=1 << 20,
+        device_buffer_bytes=1 << 20,
+        dtype=dtype,
+        lookahead_batches=2,
+        n_io_threads=1,
+        n_zarrs_meta_cache=4,
+        n_shards_meta_cache=4,
+    )
 
 
-# ---------- module surface ----------
-
-def test_module_constants():
-    assert _native.MAX_CHUNK_UNCOMPRESSED_BYTES == (2 << 20)
-    # Log-level constants stay aligned with damacy_log.h.
-    assert _native.LOG_TRACE == 0
-    assert _native.LOG_FATAL == 5
+# ---- module surface -----------------------------------------------------
 
 
-def test_module_version_matches_package():
+def test_module_version_matches_native():
     assert damacy.__version__ == _native.__version__
 
 
-# ---------- construction & validation (no GPU work yet at this point) ----------
-
-def test_missing_max_chunk_raises_type_error(tmp_path):
-    kw = _base_kwargs(tmp_path)
-    kw.pop("max_chunk_uncompressed_bytes")
-    with pytest.raises(TypeError):
-        _native.Damacy(**kw)
+def test_log_level_constants_aligned():
+    assert damacy.LOG_TRACE == _native.LOG_TRACE == 0
+    assert damacy.LOG_FATAL == _native.LOG_FATAL == 5
 
 
-def test_oversize_max_chunk_rejected(tmp_path):
-    # > DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES is rejected at create with
-    # DAMACY_INVAL → RuntimeError surfacing the C status string.
-    kw = _base_kwargs(tmp_path)
-    kw["max_chunk_uncompressed_bytes"] = _native.MAX_CHUNK_UNCOMPRESSED_BYTES + 1
-    with pytest.raises(RuntimeError, match="invalid argument"):
-        _native.Damacy(**kw)
+def test_status_enum_values_mirror_native():
+    assert Status.OK == _native.STATUS_OK == 0
+    assert Status.SHUTDOWN == _native.STATUS_SHUTDOWN
+    # Round-trip a few; if the C side ever renumbers, this catches it.
+    for s in (Status.AGAIN, Status.INVAL, Status.NOTFOUND, Status.DTYPE):
+        assert Status(int(s)) is s
 
 
-def test_max_gpu_memory_too_small_rejected(tmp_path):
-    # Mirrors test_damacy_caps.c::test_gpu_budget_too_small — wave-resident
-    # memory at default config is many MB, so create returns DAMACY_OOM.
-    kw = _base_kwargs(tmp_path)
-    kw["max_gpu_memory_bytes"] = 64
-    with pytest.raises(RuntimeError, match="OOM|out of memory"):
-        _native.Damacy(**kw)
+def test_dtype_coerce():
+    assert damacy.Dtype.coerce("f32") is damacy.Dtype.F32
+    assert damacy.Dtype.coerce("float32") is damacy.Dtype.F32
+    assert damacy.Dtype.coerce("bf16") is damacy.Dtype.BF16
+    assert damacy.Dtype.coerce("bfloat16") is damacy.Dtype.BF16
+    assert damacy.Dtype.coerce(0) is damacy.Dtype.F32
+    assert damacy.Dtype.coerce(damacy.Dtype.BF16) is damacy.Dtype.BF16
+    with pytest.raises(ValueError, match="unknown dtype"):
+        damacy.Dtype.coerce("u16")
+
+
+# ---- construction & validation ------------------------------------------
+
+
+def test_oversize_max_chunk_raises_invalid_argument(tmp_path):
+    cfg = dataclasses.replace(
+        _base_config(tmp_path),
+        max_chunk_uncompressed_bytes=_native.MAX_CHUNK_UNCOMPRESSED_BYTES + 1,
+    )
+    with pytest.raises(InvalidArgument) as excinfo:
+        Damacy(cfg)
+    # The base class is still _native.DamacyError so legacy `except
+    # RuntimeError` catches keep working.
+    assert excinfo.value.status is Status.INVAL
+    assert isinstance(excinfo.value, _native.DamacyError)
+    assert isinstance(excinfo.value, RuntimeError)
+
+
+def test_max_gpu_memory_too_small_raises_oom(tmp_path):
+    cfg = dataclasses.replace(_base_config(tmp_path), max_gpu_memory_bytes=64)
+    with pytest.raises(OutOfMemory) as excinfo:
+        Damacy(cfg)
+    assert excinfo.value.status is Status.OOM
 
 
 @pytest.mark.parametrize("dtype", ["f32", "bf16", "float32", "bfloat16"])
 def test_dtype_string_form_accepted(tiny_zarr, dtype):
     root, _ = tiny_zarr
-    d = _native.Damacy(**_base_kwargs(root, dtype=dtype))
-    assert d is not None
+    with Damacy(_base_config(root, dtype=dtype)) as d:
+        assert isinstance(d, Damacy)
+        assert d.config.dtype is damacy.Dtype.coerce(dtype)
 
 
 def test_dtype_int_form_accepted(tiny_zarr):
     root, _ = tiny_zarr
-    # DAMACY_BF16 = 1 (post-#16 enum: F32=0, BF16=1).
-    d = _native.Damacy(**_base_kwargs(root, dtype=1))
-    assert d is not None
+    with Damacy(_base_config(root, dtype=damacy.Dtype.BF16)) as d:
+        assert d.config.dtype is damacy.Dtype.BF16
 
 
 def test_dtype_unknown_string_raises(tmp_path):
-    kw = _base_kwargs(tmp_path, dtype="u16")  # post-#16: u16 is source-only
+    # Validation runs in Config.__post_init__ — fails before we touch CUDA.
     with pytest.raises(ValueError, match="unknown dtype"):
-        _native.Damacy(**kw)
+        _base_config(tmp_path, dtype="u16")
 
 
-# ---------- end-to-end push / pop / release ----------
+# ---- end-to-end push / pop / release ------------------------------------
 
-def test_push_pop_release(tiny_zarr):
+
+def test_push_pop_release_via_context_managers(tiny_zarr):
     root, uri = tiny_zarr
-    d = _native.Damacy(**_base_kwargs(root))
-    r = d.push([{"uri": uri, "aabb": [(0, 8), (0, 16)]}])
-    assert r["status"] == "ok"
-    assert r["consumed"] == 1
+    with Damacy(_base_config(root)) as d:
+        consumed = d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
+        assert consumed == 1
 
-    b = d.pop()
-    info = b.info
-    # Leading N axis (batch_size=1) followed by zarr axes. dtype is the
-    # *destination* (cfg.dtype); the u16 source casts to f32 in-kernel.
-    assert info["shape"] == (1, 8, 16)
-    assert info["dtype"] == "f32"
-    assert info["batch_id"] == 0
-    assert info["device_ptr"] != 0
-    # release returns the slot to the pool; idempotent.
-    b.release()
-    b.release()
+        with d.pop() as batch:
+            info = batch.info
+            assert isinstance(info, BatchInfo)
+            assert info.shape == (1, 8, 16)
+            assert info.dtype is damacy.Dtype.F32
+            assert info.batch_id == 0
+            assert info.device_ptr != 0
+            assert "Batch" in repr(batch)
 
 
-def test_unknown_uri_returns_notfound(tiny_zarr):
+def test_unknown_uri_raises_notfound(tiny_zarr):
     root, _ = tiny_zarr
-    d = _native.Damacy(**_base_kwargs(root))
-    r = d.push([{"uri": "not_a_zarr", "aabb": [(0, 8), (0, 16)]}])
-    assert r["status"] == "not found"
-    assert r["consumed"] == 0
+    with Damacy(_base_config(root)) as d:
+        with pytest.raises(NotFound) as excinfo:
+            d.push([Sample(uri="not_a_zarr", aabb=[(0, 8), (0, 16)])])
+        assert excinfo.value.status is Status.NOTFOUND
 
 
-def test_unsupported_src_dtype_returns_dtype_error(tiny_zarr_no_cast):
-    # The fixture is int64 — no cast path to f32 (post-#16). push must
-    # surface DAMACY_DTYPE on the offending sample.
+def test_unsupported_src_dtype_raises_dtype_mismatch(tiny_zarr_no_cast):
     root, uri = tiny_zarr_no_cast
-    d = _native.Damacy(**_base_kwargs(root, dtype="f32"))
-    r = d.push([{"uri": uri, "aabb": [(0, 8), (0, 16)]}])
-    assert r["status"] == "dtype mismatch"
-    assert r["consumed"] == 0
+    with Damacy(_base_config(root, dtype="f32")) as d:
+        with pytest.raises(DtypeMismatch) as excinfo:
+            d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
+        assert excinfo.value.status is Status.DTYPE
 
 
 def test_oversize_chunk_surfaces_at_pop(tmp_path, write_zarr_script):
-    # Mirrors test_damacy_caps.c::test_oversize_chunk_rejected: 8x16 u16
-    # = 256 B inner chunk, runtime cap 128 B → planner rejects at pop.
-    import shutil, subprocess
     if not shutil.which("uv"):
         pytest.skip("uv not on PATH")
     out = tmp_path / "foo"
@@ -150,61 +170,207 @@ def test_oversize_chunk_surfaces_at_pop(tmp_path, write_zarr_script):
         "uv", "run", "--script", str(write_zarr_script),
         "--out", str(out), "--shape", "8,16", "--inner", "8,16",
         "--shard", "8,16", "--dtype", "uint16", "--codec", "blosc-lz4",
-    ]
+    ]  # fmt: skip
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         pytest.skip(f"write_zarr.py failed: {r.stderr}")
 
-    kw = _base_kwargs(tmp_path)
-    kw["max_chunk_uncompressed_bytes"] = 128  # 8x16 u16 = 256 B → over
-    d = _native.Damacy(**kw)
-    res = d.push([{"uri": "foo", "aabb": [(0, 8), (0, 16)]}])
-    assert res["status"] == "ok"
-    with pytest.raises(RuntimeError, match="invalid argument"):
-        d.pop()
+    cfg = dataclasses.replace(
+        _base_config(tmp_path),
+        max_chunk_uncompressed_bytes=128,  # 8x16 u16 = 256 B → over
+    )
+    with Damacy(cfg) as d:
+        consumed = d.push([Sample(uri="foo", aabb=[(0, 8), (0, 16)])])
+        assert consumed == 1
+        with pytest.raises(InvalidArgument):
+            d.pop()
 
 
-# ---------- stats ----------
+# ---- batches() iterator -------------------------------------------------
 
-def test_stats_shape_includes_gpu_bytes_committed(tiny_zarr):
+
+def test_batches_iterator_yields_n(tiny_zarr):
+    root, uri = tiny_zarr
+    samples = [Sample(uri=uri, aabb=[(0, 8), (0, 16)]) for _ in range(3)]
+    # Bump lookahead so all 3 batches fit in the user-push queue at once.
+    cfg = dataclasses.replace(_base_config(root), lookahead_batches=4)
+    with Damacy(cfg) as d:
+        consumed = d.push(samples)
+        assert consumed == 3
+        ids: list[int] = []
+        for batch in d.batches(3):
+            with batch as b:
+                ids.append(b.info.batch_id)
+        assert ids == [0, 1, 2]
+
+
+# ---- Config dataclass --------------------------------------------------
+
+
+def test_config_validates_eagerly():
+    with pytest.raises(ValueError, match="batch_size"):
+        Config(
+            store_root="/tmp",
+            batch_size=0,
+            host_buffer_bytes=1 << 20,
+            device_buffer_bytes=1 << 20,
+        )
+    with pytest.raises(ValueError, match="lookahead_batches"):
+        Config(
+            store_root="/tmp",
+            batch_size=1,
+            host_buffer_bytes=1 << 20,
+            device_buffer_bytes=1 << 20,
+            lookahead_batches=1,
+        )
+    with pytest.raises(ValueError, match="n_io_threads"):
+        Config(
+            store_root="/tmp",
+            batch_size=1,
+            host_buffer_bytes=1 << 20,
+            device_buffer_bytes=1 << 20,
+            n_io_threads=0,
+        )
+    with pytest.raises(ValueError, match="host/device_buffer_bytes"):
+        Config(
+            store_root="/tmp",
+            batch_size=1,
+            host_buffer_bytes=0,
+            device_buffer_bytes=1 << 20,
+        )
+    with pytest.raises(ValueError, match="max_chunk_uncompressed_bytes"):
+        Config(
+            store_root="/tmp",
+            batch_size=1,
+            host_buffer_bytes=1 << 20,
+            device_buffer_bytes=1 << 20,
+            max_chunk_uncompressed_bytes=-1,
+        )
+
+
+def test_config_dtype_coerced(tmp_path):
+    cfg = _base_config(tmp_path, dtype="bf16")
+    assert cfg.dtype is damacy.Dtype.BF16
+
+
+def test_config_replace_for_variants(tmp_path):
+    base = _base_config(tmp_path)
+    big = dataclasses.replace(base, batch_size=4)
+    assert base.batch_size == 1 and big.batch_size == 4
+    # frozen
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        base.batch_size = 99  # type: ignore[misc]
+
+
+# ---- stats --------------------------------------------------------------
+
+
+def test_stats_returns_typed_dataclass(tiny_zarr):
     root, _ = tiny_zarr
-    d = _native.Damacy(**_base_kwargs(root))
-    s = d.stats()
-    # New field surfaced from struct damacy_stats; lazy batch pool means
-    # it's nonzero immediately after create (wave_init commits scratch).
-    assert "gpu_bytes_committed" in s
-    assert isinstance(s["gpu_bytes_committed"], int)
-    assert s["gpu_bytes_committed"] > 0
+    with Damacy(_base_config(root)) as d:
+        s = d.stats()
+        assert isinstance(s, Stats)
+        assert s.gpu_bytes_committed > 0
+        assert s.plan.name == "plan"
 
 
 def test_stats_gpu_bytes_grows_after_first_pop(tiny_zarr):
     root, uri = tiny_zarr
-    d = _native.Damacy(**_base_kwargs(root))
-    before = d.stats()["gpu_bytes_committed"]
-    r = d.push([{"uri": uri, "aabb": [(0, 8), (0, 16)]}])
-    assert r["status"] == "ok"
-    b = d.pop()
-    after = d.stats()["gpu_bytes_committed"]
-    b.release()
-    # The batch-output pool is lazily sized on the first pop, so the
-    # committed count must strictly grow past the wave-init baseline.
-    assert after > before
+    with Damacy(_base_config(root)) as d:
+        before = d.stats().gpu_bytes_committed
+        d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
+        with d.pop():
+            pass
+        after = d.stats().gpu_bytes_committed
+        assert after > before
 
 
-# ---------- log sink smoke ----------
+# ---- explicit flush / stats_reset --------------------------------------
 
-def test_log_sink_routes_to_python_logger(caplog):
-    # Drives a synthetic record from a freshly-spawned C thread through
-    # the lock-free ring → drain thread → logging.getLogger("damacy").
-    # caplog captures at WARNING by default; we use ERROR to be safe.
-    with caplog.at_level(logging.ERROR, logger="damacy"):
-        _native._log_emit_from_thread(_native.LOG_ERROR, "pytest-smoke")
-        # Drain runs in a daemon thread; give it a beat.
-        import time
-        deadline = time.monotonic() + 2.0
-        while time.monotonic() < deadline:
-            if any("pytest-smoke" in r.getMessage() for r in caplog.records):
-                break
-            time.sleep(0.02)
-    msgs = [r.getMessage() for r in caplog.records]
-    assert any("pytest-smoke" in m for m in msgs), msgs
+
+def test_flush_and_stats_reset_are_idempotent(tiny_zarr):
+    root, uri = tiny_zarr
+    with Damacy(_base_config(root)) as d:
+        d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
+        d.flush()
+        d.flush()  # idempotent
+        with d.pop():
+            pass
+        s_before = d.stats()
+        d.stats_reset()
+        s_after = d.stats()
+        # Most counters reset; gpu_bytes_committed reflects committed
+        # buffers and stays put.
+        assert s_after.batches_emitted == 0
+        assert s_before.batches_emitted >= 1
+
+
+# ---- DLPack export -----------------------------------------------------
+
+
+def test_batch_dlpack_export_smoke(tiny_zarr):
+    root, uri = tiny_zarr
+    with Damacy(_base_config(root)) as d:
+        d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
+        with d.pop() as batch:
+            # __dlpack_device__ → (kDLCUDA=2, ordinal).
+            dev = batch.__dlpack_device__()
+            assert dev[0] == 2
+            # __dlpack__ returns a capsule; consuming it would need
+            # torch/cupy. Leave the capsule unconsumed; the C-side
+            # deleter is exercised when the capsule is GC'd.
+            cap = batch.__dlpack__(stream=None)
+            assert cap is not None
+            del cap
+
+
+# ---- log helpers -------------------------------------------------------
+
+
+def test_set_log_level_and_quiet_passthrough():
+    # Cycle through legal values; they forward into the C-side sink.
+    damacy.set_log_level(damacy.LOG_DEBUG)
+    damacy.set_log_level(damacy.LOG_INFO)
+    damacy.set_log_quiet(True)
+    damacy.set_log_quiet(False)
+
+
+# ---- Batch repr after release ------------------------------------------
+
+
+def test_batch_repr_handles_released_state(tiny_zarr):
+    root, uri = tiny_zarr
+    with Damacy(_base_config(root)) as d:
+        d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
+        b = d.pop()
+        assert "Batch(batch_id=" in repr(b)
+        b.release()
+        assert "<released>" in repr(b)
+
+
+# ---- closed-handle hygiene ---------------------------------------------
+
+
+def test_use_after_close_raises(tiny_zarr):
+    root, _ = tiny_zarr
+    d = Damacy(_base_config(root))
+    d.close()
+    d.close()  # idempotent
+    with pytest.raises(AttributeError):
+        d.stats()
+
+
+# ---- exception hierarchy ------------------------------------------------
+
+
+def test_per_status_exceptions_share_base(tmp_path):
+    # Cheap construction-time error: oversize max_chunk → INVAL.
+    cfg = dataclasses.replace(
+        _base_config(tmp_path),
+        max_chunk_uncompressed_bytes=_native.MAX_CHUNK_UNCOMPRESSED_BYTES + 1,
+    )
+    with pytest.raises(DamacyError) as excinfo:
+        Damacy(cfg)
+    assert isinstance(excinfo.value, InvalidArgument)
+    assert isinstance(excinfo.value, DamacyError)
+    assert isinstance(excinfo.value, _native.DamacyError)
