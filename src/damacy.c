@@ -318,9 +318,8 @@ struct damacy
   struct planner* planner;
   CUstream stream_h2d;
   CUstream stream_compute;
-  CUstream stream_zstd;  // nvcomp Zstd batch
-  CUstream stream_lz4;   // nvcomp LZ4 batch
-  CUcontext primary_ctx; // retained for the device's lifetime
+  CUstream stream_zstd; // nvcomp Zstd batch
+  CUstream stream_lz4;  // nvcomp LZ4 batch
 
   struct damacy_lookahead lookahead;
   struct damacy_batch_pool batch_pool;
@@ -1703,15 +1702,19 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   CHECK(Fail, self->store_root);
 
   s = DAMACY_CUDA;
-  // Driver-API context model: ensure init, take the device's primary
-  // context (interoperable with anything that uses the runtime API),
-  // make it current on this thread.
   CR(Fail, cuInit(0));
-  CUdevice dev = 0;
-  CR(Fail, cuDeviceGet(&dev, 0));
+
+  // Caller must have a CUcontext current; we capture its device.
+  CUcontext caller_ctx = NULL;
+  CR(Fail, cuCtxGetCurrent(&caller_ctx));
+  if (!caller_ctx) {
+    log_error("damacy_create: no CUcontext is current on calling thread");
+    s = DAMACY_INVAL;
+    goto Fail;
+  }
+  CUdevice dev;
+  CR(Fail, cuCtxGetDevice(&dev));
   self->cuda_device = (int)dev;
-  CR(Fail, cuDevicePrimaryCtxRetain(&self->primary_ctx, dev));
-  CR(Fail, cuCtxSetCurrent(self->primary_ctx));
   CR(Fail, cuStreamCreate(&self->stream_h2d, CU_STREAM_DEFAULT));
   CR(Fail, cuStreamCreate(&self->stream_compute, CU_STREAM_DEFAULT));
   CR(Fail, cuStreamCreate(&self->stream_zstd, CU_STREAM_DEFAULT));
@@ -1846,12 +1849,6 @@ damacy_destroy(struct damacy* self)
   zarr_shard_cache_destroy(self->shard_cache);
   zarr_meta_cache_destroy(self->meta_cache);
   store_destroy(self->store);
-
-  // Release matches the Retain in damacy_create; only call when we
-  // actually retained, to keep the device's primary-context refcount
-  // balanced if create failed before Retain.
-  if (self->primary_ctx)
-    cuDevicePrimaryCtxRelease(self->cuda_device);
 
   free(self->store_root);
   free(self);
