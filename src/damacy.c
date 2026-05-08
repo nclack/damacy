@@ -274,7 +274,8 @@ struct damacy_wave
   struct wave_events
   {
     CUevent h2d_start;
-    CUevent h2d_end; // bulk H2D + fanout/op H2Ds + d_blosc1_totals zero done
+    CUevent bulk_h2d_end; // bulk slab H2D done; used for stats.h2d
+    CUevent h2d_end;      // + fanout/op H2Ds + d_blosc1_totals zero done
     CUevent decomp_start;
     CUevent zstd_done;
     CUevent lz4_done;
@@ -904,6 +905,7 @@ wave_init(struct damacy_wave* wave,
   wave->dev_unshuffle_scratch = (void*)(uintptr_t)dptr;
 
   CR(Error, cuEventCreate(&wave->ev.h2d_start, CU_EVENT_DEFAULT));
+  CR(Error, cuEventCreate(&wave->ev.bulk_h2d_end, CU_EVENT_DEFAULT));
   CR(Error, cuEventCreate(&wave->ev.h2d_end, CU_EVENT_DEFAULT));
   CR(Error, cuEventCreate(&wave->ev.decomp_start, CU_EVENT_DEFAULT));
   CR(Error, cuEventCreate(&wave->ev.zstd_done, CU_EVENT_DEFAULT));
@@ -1000,11 +1002,11 @@ wave_destroy(struct damacy_wave* wave)
     if (dev_ptrs[i])
       cuMemFree(CUDPTR(dev_ptrs[i]));
   // cuEventDestroy is not no-op on NULL; guard each.
-  CUevent* const events[] = { &wave->ev.h2d_start,    &wave->ev.h2d_end,
-                              &wave->ev.decomp_start, &wave->ev.zstd_done,
-                              &wave->ev.lz4_done,     &wave->ev.post_start,
-                              &wave->ev.decomp_end,   &wave->ev.asm_start,
-                              &wave->ev.asm_end };
+  CUevent* const events[] = { &wave->ev.h2d_start,  &wave->ev.bulk_h2d_end,
+                              &wave->ev.h2d_end,    &wave->ev.decomp_start,
+                              &wave->ev.zstd_done,  &wave->ev.lz4_done,
+                              &wave->ev.post_start, &wave->ev.decomp_end,
+                              &wave->ev.asm_start,  &wave->ev.asm_end };
   for (size_t i = 0; i < countof(events); ++i)
     if (*events[i])
       cuEventDestroy_v2(*events[i]);
@@ -1261,6 +1263,11 @@ kick_h2d(struct damacy* self, struct damacy_wave* wave)
                        wave->host_slab,
                        wave->host_used_bytes,
                        self->stream_h2d));
+  // Record bulk_h2d_end before queueing fanout/op H2Ds so stats.h2d
+  // measures just the slab copy. The event may include a stream-idle
+  // gap if the host parse outruns the bulk copy, but no extra ops are
+  // folded in.
+  CR(CudaFail, cuEventRecord(wave->ev.bulk_h2d_end, self->stream_h2d));
 
   build_blosc1_host_chunks(self, wave);
 
@@ -1595,7 +1602,7 @@ drain_wave_metrics(struct damacy* self, struct damacy_wave* wave)
   metric_record(&self->stats.io, io_ms, wave->io_bytes, wave->io_bytes);
 
   float ms = 0.f;
-  if (cuEventElapsedTime(&ms, wave->ev.h2d_start, wave->ev.h2d_end) ==
+  if (cuEventElapsedTime(&ms, wave->ev.h2d_start, wave->ev.bulk_h2d_end) ==
       CUDA_SUCCESS)
     metric_record(&self->stats.h2d, ms, wave->io_bytes, wave->io_bytes);
   if (cuEventElapsedTime(&ms, wave->ev.decomp_start, wave->ev.decomp_end) ==
