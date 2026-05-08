@@ -12,6 +12,9 @@ ruff + pyright.
 - [ ] !double check context binding behavior.
 - [ ] readme should show some non-trivial crops. mention all crops have to
       be same size
+- [ ] does the api need to be able to take a (cuda0 stream as input
+
+I forgot about nvidia's DALI. I need to evaluate positioning wrt that.
 
 ## 2026-05-07
 

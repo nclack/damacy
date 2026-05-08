@@ -4,7 +4,7 @@ The full public surface of the `damacy` package.
 
 ## Pipeline
 
-::: damacy.Damacy
+::: damacy.Pipeline
 
 ::: damacy.Config
 

@@ -1,10 +1,10 @@
-// Damacy / Batch python bindings around the public C API.
+// Pipeline / Batch python bindings around the public C API.
 //
 // Lifetime model:
-//   Damacy(...)        → damacy_create
-//   d.push(samples)    → damacy_push
-//   d.pop()            → damacy_pop, returns a Batch (GIL released while
-//   waiting) d.flush()          → damacy_flush d.stats()          →
+//   Pipeline(...)      → damacy_create
+//   p.push(samples)    → damacy_push
+//   p.pop()            → damacy_pop, returns a Batch (GIL released while
+//   waiting) p.flush()          → damacy_flush p.stats()          →
 //   damacy_stats_get → dict batch.release()    → damacy_release; tp_dealloc
 //   auto-releases if forgotten batch.info         → dict snapshot of
 //   damacy_batch_info batch.__dlpack__   → DLPack capsule (handled in
@@ -169,16 +169,16 @@ raise_status(enum damacy_status s, const char* what)
 typedef struct
 {
   PyObject_HEAD struct damacy* handle; // strong ref while not destroyed
-} DamacyObj;
+} PipelineObj;
 
 typedef struct
 {
-  PyObject_HEAD DamacyObj*
+  PyObject_HEAD PipelineObj*
     parent;                    // owns the lifetime of the underlying damacy*
   struct damacy_batch* handle; // NULL once released
 } BatchObj;
 
-extern PyTypeObject DamacyType;
+extern PyTypeObject PipelineType;
 extern PyTypeObject BatchType;
 
 // ---------- Batch ----------
@@ -497,7 +497,7 @@ PyTypeObject BatchType = {
 };
 
 static BatchObj*
-batch_new(DamacyObj* parent, struct damacy_batch* handle)
+batch_new(PipelineObj* parent, struct damacy_batch* handle)
 {
   BatchObj* b = PyObject_New(BatchObj, &BatchType);
   if (!b)
@@ -508,10 +508,10 @@ batch_new(DamacyObj* parent, struct damacy_batch* handle)
   return b;
 }
 
-// ---------- Damacy ----------
+// ---------- Pipeline ----------
 
 static int
-Damacy_init(DamacyObj* self, PyObject* args, PyObject* kw)
+Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
 {
   static char* kws[] = { "store_root",
                          "batch_size",
@@ -588,7 +588,7 @@ Damacy_init(DamacyObj* self, PyObject* args, PyObject* kw)
 }
 
 static void
-Damacy_dealloc(DamacyObj* self)
+Pipeline_dealloc(PipelineObj* self)
 {
   if (self->handle) {
     struct damacy* d = self->handle;
@@ -646,10 +646,10 @@ parse_sample(PyObject* obj, struct damacy_sample* out)
 }
 
 static PyObject*
-Damacy_push(DamacyObj* self, PyObject* arg)
+Pipeline_push(PipelineObj* self, PyObject* arg)
 {
   if (!self->handle) {
-    PyErr_SetString(PyExc_RuntimeError, "Damacy has been destroyed");
+    PyErr_SetString(PyExc_RuntimeError, "Pipeline has been destroyed");
     return NULL;
   }
   if (!PyList_Check(arg) && !PyTuple_Check(arg)) {
@@ -692,10 +692,10 @@ Damacy_push(DamacyObj* self, PyObject* arg)
 }
 
 static PyObject*
-Damacy_pop(DamacyObj* self, PyObject* Py_UNUSED(ignored))
+Pipeline_pop(PipelineObj* self, PyObject* Py_UNUSED(ignored))
 {
   if (!self->handle) {
-    PyErr_SetString(PyExc_RuntimeError, "Damacy has been destroyed");
+    PyErr_SetString(PyExc_RuntimeError, "Pipeline has been destroyed");
     return NULL;
   }
   struct damacy_batch* b = NULL;
@@ -706,10 +706,10 @@ Damacy_pop(DamacyObj* self, PyObject* Py_UNUSED(ignored))
 }
 
 static PyObject*
-Damacy_flush(DamacyObj* self, PyObject* Py_UNUSED(ignored))
+Pipeline_flush(PipelineObj* self, PyObject* Py_UNUSED(ignored))
 {
   if (!self->handle) {
-    PyErr_SetString(PyExc_RuntimeError, "Damacy has been destroyed");
+    PyErr_SetString(PyExc_RuntimeError, "Pipeline has been destroyed");
     return NULL;
   }
   enum damacy_status s;
@@ -737,10 +737,10 @@ metric_to_dict(const struct damacy_metric* m)
 }
 
 static PyObject*
-Damacy_stats(DamacyObj* self, PyObject* Py_UNUSED(ignored))
+Pipeline_stats(PipelineObj* self, PyObject* Py_UNUSED(ignored))
 {
   if (!self->handle) {
-    PyErr_SetString(PyExc_RuntimeError, "Damacy has been destroyed");
+    PyErr_SetString(PyExc_RuntimeError, "Pipeline has been destroyed");
     return NULL;
   }
   struct damacy_stats st;
@@ -782,50 +782,50 @@ Damacy_stats(DamacyObj* self, PyObject* Py_UNUSED(ignored))
 }
 
 static PyObject*
-Damacy_stats_reset(DamacyObj* self, PyObject* Py_UNUSED(ignored))
+Pipeline_stats_reset(PipelineObj* self, PyObject* Py_UNUSED(ignored))
 {
   if (!self->handle) {
-    PyErr_SetString(PyExc_RuntimeError, "Damacy has been destroyed");
+    PyErr_SetString(PyExc_RuntimeError, "Pipeline has been destroyed");
     return NULL;
   }
   damacy_stats_reset(self->handle);
   Py_RETURN_NONE;
 }
 
-static PyMethodDef Damacy_methods[] = {
+static PyMethodDef Pipeline_methods[] = {
   { "push",
-    (PyCFunction)Damacy_push,
+    (PyCFunction)Pipeline_push,
     METH_O,
     "Push a sequence of {uri, aabb} dicts. Returns "
     "{consumed: int, status: str}." },
   { "pop",
-    (PyCFunction)Damacy_pop,
+    (PyCFunction)Pipeline_pop,
     METH_NOARGS,
     "Block until the next batch is on-device-ready. Returns a Batch." },
   { "flush",
-    (PyCFunction)Damacy_flush,
+    (PyCFunction)Pipeline_flush,
     METH_NOARGS,
     "Drain in-flight work and ready any partial last batch." },
   { "stats",
-    (PyCFunction)Damacy_stats,
+    (PyCFunction)Pipeline_stats,
     METH_NOARGS,
     "Cumulative pipeline metrics as a dict." },
   { "stats_reset",
-    (PyCFunction)Damacy_stats_reset,
+    (PyCFunction)Pipeline_stats_reset,
     METH_NOARGS,
     "Reset all cumulative counters." },
   { NULL, NULL, 0, NULL },
 };
 
-PyTypeObject DamacyType = {
-  PyVarObject_HEAD_INIT(NULL, 0).tp_name = "damacy._native.Damacy",
-  .tp_basicsize = sizeof(DamacyObj),
+PyTypeObject PipelineType = {
+  PyVarObject_HEAD_INIT(NULL, 0).tp_name = "damacy._native.Pipeline",
+  .tp_basicsize = sizeof(PipelineObj),
   .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
   .tp_doc = "Streaming loader handle. Drive push/pop/flush.",
   .tp_new = PyType_GenericNew,
-  .tp_init = (initproc)Damacy_init,
-  .tp_dealloc = (destructor)Damacy_dealloc,
-  .tp_methods = Damacy_methods,
+  .tp_init = (initproc)Pipeline_init,
+  .tp_dealloc = (destructor)Pipeline_dealloc,
+  .tp_methods = Pipeline_methods,
 };
 
 // ---------- registration ----------
@@ -833,13 +833,13 @@ PyTypeObject DamacyType = {
 int
 api_register_types(PyObject* m)
 {
-  if (PyType_Ready(&DamacyType) < 0)
+  if (PyType_Ready(&PipelineType) < 0)
     return -1;
   if (PyType_Ready(&BatchType) < 0)
     return -1;
-  Py_INCREF(&DamacyType);
-  if (PyModule_AddObject(m, "Damacy", (PyObject*)&DamacyType) < 0) {
-    Py_DECREF(&DamacyType);
+  Py_INCREF(&PipelineType);
+  if (PyModule_AddObject(m, "Pipeline", (PyObject*)&PipelineType) < 0) {
+    Py_DECREF(&PipelineType);
     return -1;
   }
   Py_INCREF(&BatchType);

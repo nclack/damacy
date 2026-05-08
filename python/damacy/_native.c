@@ -179,7 +179,7 @@ static PyMethodDef methods[] = {
     (PyCFunction)(void (*)(void))py_cuda_init_primary,
     METH_VARARGS | METH_KEYWORDS,
     "cuda_init_primary(device=0): make device's primary CUcontext current "
-    "on the calling thread. Required before damacy._native.Damacy(...) when "
+    "on the calling thread. Required before damacy._native.Pipeline(...) when "
     "the caller (e.g. pytest) hasn't already set up a context." },
   { NULL, NULL, 0, NULL },
 };

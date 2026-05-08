@@ -21,9 +21,9 @@ Typical use::
         damacy.Sample(uri="cell-2.zarr", aabb=[(0, 64), (0, 256), (0, 256)]),
     ]
 
-    with damacy.Damacy(cfg) as d:
-        d.push(samples)
-        for batch in d.batches(len(samples) // cfg.batch_size):
+    with damacy.Pipeline(cfg) as p:
+        p.push(samples)
+        for batch in p.batches(len(samples) // cfg.batch_size):
             with batch as t:
                 x = torch.from_dlpack(t)
                 ...  # train step
@@ -51,7 +51,6 @@ __all__ = [
     "Batch",
     "BatchInfo",
     "Config",
-    "Damacy",
     "DamacyError",
     "DecodeError",
     "Dtype",
@@ -62,6 +61,7 @@ __all__ = [
     "NativeCudaError",
     "NotFound",
     "OutOfMemory",
+    "Pipeline",
     "RankMismatch",
     "Sample",
     "ShutdownError",
@@ -429,7 +429,7 @@ class Metric:
 
 @dataclass(frozen=True, slots=True)
 class Stats:
-    """Cumulative pipeline metrics. Reset with :meth:`Damacy.stats_reset`."""
+    """Cumulative pipeline metrics. Reset with :meth:`Pipeline.stats_reset`."""
 
     plan: Metric
     io: Metric
@@ -566,11 +566,14 @@ class Batch:
             return "Batch(<released>)"
 
 
-# ---- Damacy -------------------------------------------------------------
+# ---- Pipeline -----------------------------------------------------------
 
 
-class Damacy:
-    """Streaming loader. Drive :meth:`push`, :meth:`pop`, :meth:`flush`.
+class Pipeline:
+    """Streaming GPU data pipeline. Drive :meth:`push`, :meth:`pop`,
+    :meth:`flush`. Stages are plan → host I/O → H2D copy → on-device
+    decompress → assemble; output batches are double-buffered (B=2)
+    and waves are double-buffered internally.
 
     A CUcontext must be current on the calling thread when this is
     constructed; PyTorch sets one up implicitly. For bare-Python use,
@@ -579,19 +582,17 @@ class Damacy:
     Constructed from a :class:`Config`::
 
         cfg = damacy.Config(store_root=..., batch_size=8, ...)
-        with damacy.Damacy(cfg) as d:
+        with damacy.Pipeline(cfg) as p:
             ...
 
     Resource caps are fixed at construction; nothing grows after that.
-    Output batches are double-buffered (B=2); waves are double-buffered
-    internally.
     """
 
     __slots__ = ("_closed", "_config", "_native")
 
     def __init__(self, config: Config) -> None:
         try:
-            self._native = _native.Damacy(
+            self._native = _native.Pipeline(
                 store_root=str(config.store_root),
                 batch_size=config.batch_size,
                 lookahead_batches=config.lookahead_batches,

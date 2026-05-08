@@ -31,7 +31,7 @@ samples = [
     damacy.Sample(uri="cell-2.zarr", aabb=[(0, 64), (0, 256), (0, 256)]),
 ]
 
-with damacy.Damacy(cfg) as d:
+with damacy.Pipeline(cfg) as d:
     d.push(samples)
     for batch in d.batches(len(samples) // cfg.batch_size):
         with batch as t:
@@ -49,7 +49,7 @@ The published API lives entirely under the top-level `damacy` package.
 The native extension (`damacy._native`) is an implementation detail
 documented only via its `.pyi` stub.
 
-- [API reference](api.md) — `Damacy`, `Config`, `Sample`, `Batch`, the
+- [API reference](api.md) — `Pipeline`, `Config`, `Sample`, `Batch`, the
   exception hierarchy, and the `Stats`/`Metric` value types.
 
 ## Performance dashboards
@@ -69,7 +69,7 @@ Continuous benchmark history (auto-published from
   double-buffered so the consumer can overlap training compute with the
   next wave's decompression and assembly.
 - Resource caps (host pinned-buffer pool, device decompress-scratch
-  pool, GPU memory) are fixed at `Damacy(...)` construction; nothing
+  pool, GPU memory) are fixed at `Pipeline(...)` construction; nothing
   grows after that.
 - The assemble kernel casts heterogeneous source dtypes
   (`u8`/`u16`/`i16`/`u32`/`i32`/`f16`/`f32`) to the configured

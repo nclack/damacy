@@ -19,12 +19,12 @@ import pytest
 from damacy import (
     BatchInfo,
     Config,
-    Damacy,
     DamacyError,
     DtypeMismatch,
     InvalidArgument,
     NotFound,
     OutOfMemory,
+    Pipeline,
     Sample,
     Stats,
     Status,
@@ -92,7 +92,7 @@ def test_oversize_max_chunk_raises_invalid_argument(tmp_path):
         max_chunk_uncompressed_bytes=_native.MAX_CHUNK_UNCOMPRESSED_BYTES + 1,
     )
     with pytest.raises(InvalidArgument) as excinfo:
-        Damacy(cfg)
+        Pipeline(cfg)
     # The base class is still _native.DamacyError so legacy `except
     # RuntimeError` catches keep working.
     assert excinfo.value.status is Status.INVAL
@@ -103,21 +103,21 @@ def test_oversize_max_chunk_raises_invalid_argument(tmp_path):
 def test_max_gpu_memory_too_small_raises_oom(tmp_path):
     cfg = dataclasses.replace(_base_config(tmp_path), max_gpu_memory_bytes=64)
     with pytest.raises(OutOfMemory) as excinfo:
-        Damacy(cfg)
+        Pipeline(cfg)
     assert excinfo.value.status is Status.OOM
 
 
 @pytest.mark.parametrize("dtype", ["f32", "bf16", "float32", "bfloat16"])
 def test_dtype_string_form_accepted(tiny_zarr, dtype):
     root, _ = tiny_zarr
-    with Damacy(_base_config(root, dtype=dtype)) as d:
-        assert isinstance(d, Damacy)
+    with Pipeline(_base_config(root, dtype=dtype)) as d:
+        assert isinstance(d, Pipeline)
         assert d.config.dtype is damacy.Dtype.coerce(dtype)
 
 
 def test_dtype_int_form_accepted(tiny_zarr):
     root, _ = tiny_zarr
-    with Damacy(_base_config(root, dtype=damacy.Dtype.BF16)) as d:
+    with Pipeline(_base_config(root, dtype=damacy.Dtype.BF16)) as d:
         assert d.config.dtype is damacy.Dtype.BF16
 
 
@@ -132,7 +132,7 @@ def test_dtype_unknown_string_raises(tmp_path):
 
 def test_push_pop_release_via_context_managers(tiny_zarr):
     root, uri = tiny_zarr
-    with Damacy(_base_config(root)) as d:
+    with Pipeline(_base_config(root)) as d:
         consumed = d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
         assert consumed == 1
 
@@ -148,7 +148,7 @@ def test_push_pop_release_via_context_managers(tiny_zarr):
 
 def test_unknown_uri_raises_notfound(tiny_zarr):
     root, _ = tiny_zarr
-    with Damacy(_base_config(root)) as d:
+    with Pipeline(_base_config(root)) as d:
         with pytest.raises(NotFound) as excinfo:
             d.push([Sample(uri="not_a_zarr", aabb=[(0, 8), (0, 16)])])
         assert excinfo.value.status is Status.NOTFOUND
@@ -156,7 +156,7 @@ def test_unknown_uri_raises_notfound(tiny_zarr):
 
 def test_unsupported_src_dtype_raises_dtype_mismatch(tiny_zarr_no_cast):
     root, uri = tiny_zarr_no_cast
-    with Damacy(_base_config(root, dtype="f32")) as d:
+    with Pipeline(_base_config(root, dtype="f32")) as d:
         with pytest.raises(DtypeMismatch) as excinfo:
             d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
         assert excinfo.value.status is Status.DTYPE
@@ -179,7 +179,7 @@ def test_oversize_chunk_surfaces_at_pop(tmp_path, write_zarr_script):
         _base_config(tmp_path),
         max_chunk_uncompressed_bytes=128,  # 8x16 u16 = 256 B → over
     )
-    with Damacy(cfg) as d:
+    with Pipeline(cfg) as d:
         consumed = d.push([Sample(uri="foo", aabb=[(0, 8), (0, 16)])])
         assert consumed == 1
         with pytest.raises(InvalidArgument):
@@ -194,7 +194,7 @@ def test_batches_iterator_yields_n(tiny_zarr):
     samples = [Sample(uri=uri, aabb=[(0, 8), (0, 16)]) for _ in range(3)]
     # Bump lookahead so all 3 batches fit in the user-push queue at once.
     cfg = dataclasses.replace(_base_config(root), lookahead_batches=4)
-    with Damacy(cfg) as d:
+    with Pipeline(cfg) as d:
         consumed = d.push(samples)
         assert consumed == 3
         ids: list[int] = []
@@ -267,7 +267,7 @@ def test_config_replace_for_variants(tmp_path):
 
 def test_stats_returns_typed_dataclass(tiny_zarr):
     root, _ = tiny_zarr
-    with Damacy(_base_config(root)) as d:
+    with Pipeline(_base_config(root)) as d:
         s = d.stats()
         assert isinstance(s, Stats)
         assert s.gpu_bytes_committed > 0
@@ -276,7 +276,7 @@ def test_stats_returns_typed_dataclass(tiny_zarr):
 
 def test_stats_gpu_bytes_grows_after_first_pop(tiny_zarr):
     root, uri = tiny_zarr
-    with Damacy(_base_config(root)) as d:
+    with Pipeline(_base_config(root)) as d:
         before = d.stats().gpu_bytes_committed
         d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
         with d.pop():
@@ -290,7 +290,7 @@ def test_stats_gpu_bytes_grows_after_first_pop(tiny_zarr):
 
 def test_flush_and_stats_reset_are_idempotent(tiny_zarr):
     root, uri = tiny_zarr
-    with Damacy(_base_config(root)) as d:
+    with Pipeline(_base_config(root)) as d:
         d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
         d.flush()
         d.flush()  # idempotent
@@ -310,7 +310,7 @@ def test_flush_and_stats_reset_are_idempotent(tiny_zarr):
 
 def test_batch_dlpack_export_smoke(tiny_zarr):
     root, uri = tiny_zarr
-    with Damacy(_base_config(root)) as d:
+    with Pipeline(_base_config(root)) as d:
         d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
         with d.pop() as batch:
             # __dlpack_device__ → (kDLCUDA=2, ordinal).
@@ -340,7 +340,7 @@ def test_set_log_level_and_quiet_passthrough():
 
 def test_batch_repr_handles_released_state(tiny_zarr):
     root, uri = tiny_zarr
-    with Damacy(_base_config(root)) as d:
+    with Pipeline(_base_config(root)) as d:
         d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
         b = d.pop()
         assert "Batch(batch_id=" in repr(b)
@@ -353,7 +353,7 @@ def test_batch_repr_handles_released_state(tiny_zarr):
 
 def test_use_after_close_raises(tiny_zarr):
     root, _ = tiny_zarr
-    d = Damacy(_base_config(root))
+    d = Pipeline(_base_config(root))
     d.close()
     d.close()  # idempotent
     with pytest.raises(AttributeError):
@@ -370,7 +370,7 @@ def test_per_status_exceptions_share_base(tmp_path):
         max_chunk_uncompressed_bytes=_native.MAX_CHUNK_UNCOMPRESSED_BYTES + 1,
     )
     with pytest.raises(DamacyError) as excinfo:
-        Damacy(cfg)
+        Pipeline(cfg)
     assert isinstance(excinfo.value, InvalidArgument)
     assert isinstance(excinfo.value, DamacyError)
     assert isinstance(excinfo.value, _native.DamacyError)

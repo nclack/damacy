@@ -59,7 +59,7 @@ def _log_emit_from_thread(level: int, msg: str, /) -> None: ...
 # ---- core types ---------------------------------------------------------
 
 class Batch:
-    """Native batch handle. Yielded by Damacy.pop()."""
+    """Native batch handle. Yielded by Pipeline.pop()."""
 
     @property
     def info(self) -> dict[str, Any]:
@@ -83,8 +83,8 @@ class Batch:
     def __dlpack_device__(self) -> tuple[int, int]:
         """Returns (kDLCUDA=2, ordinal)."""
 
-class Damacy:
-    """Native streaming-loader handle."""
+class Pipeline:
+    """Native streaming-pipeline handle."""
 
     def __init__(
         self,
