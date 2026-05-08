@@ -85,6 +85,11 @@ extern "C"
     uint32_t batch_size;        // samples per batch
     uint32_t lookahead_batches; // user-push queue depth (>= 2)
     uint32_t n_io_threads;
+    // Background workers for blosc1 chunk-header parsing on the host.
+    // 0 = parse runs serially on the calling thread inside damacy_pop;
+    // >= 1 spawns N workers in a fork-join pool. Caller participates as
+    // tid 0, so total parallelism = n_compute_threads + 1.
+    uint32_t n_compute_threads;
 
     // Streaming buffers (split in half across two wave slots internally)
     uint64_t host_buffer_bytes;   // pinned staging; sized for IO bw

@@ -30,6 +30,7 @@
 #include "planner/planner.h"
 #include "platform/platform.h"
 #include "store/store.h"
+#include "threadpool/threadpool.h"
 #include "util/prelude.h"
 #include "zarr/zarr_meta_cache.h"
 #include "zarr/zarr_metadata.h"
@@ -321,6 +322,11 @@ struct damacy
   CUstream stream_compute;
   CUstream stream_zstd; // nvcomp Zstd batch
   CUstream stream_lz4;  // nvcomp LZ4 batch
+
+  // Fork-join pool for host-side blosc1 chunk-header parsing. NULL when
+  // cfg.n_compute_threads == 0 — dispatch helpers degrade to running on
+  // the calling thread.
+  struct threadpool* compute_pool;
 
   struct damacy_lookahead lookahead;
   struct damacy_batch_pool batch_pool;
@@ -1744,6 +1750,15 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   CR(Fail, cuStreamCreate(&self->stream_zstd, CU_STREAM_NON_BLOCKING));
   CR(Fail, cuStreamCreate(&self->stream_lz4, CU_STREAM_NON_BLOCKING));
 
+  // Fork-join compute pool. nthreads=0 is supported (serial on caller);
+  // threadpool_new only returns NULL on real allocation/thread-spawn
+  // failure, which we surface as OOM.
+  self->compute_pool = threadpool_new((int)cfg->n_compute_threads);
+  if (!self->compute_pool) {
+    s = DAMACY_OOM;
+    goto Fail;
+  }
+
   // Predict wave-resident GPU bytes and reject early if over budget.
   // Batch-output tensors (sized from the first AABB) are checked
   // separately at batch_pool_allocate.
@@ -1863,6 +1878,10 @@ damacy_destroy(struct damacy* self)
       cuStreamSynchronize(*streams[i]);
       cuStreamDestroy(*streams[i]);
     }
+
+  // Streams are quiesced; host parse workers are idle (parse only runs
+  // synchronously inside kick_h2d on the caller thread).
+  threadpool_free(self->compute_pool);
 
   free(self->batch_stage);
   free(self->batch_samples);
