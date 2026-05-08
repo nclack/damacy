@@ -7,7 +7,6 @@ add_src_lib(log SOURCES log/log.h log/log.c ${PROJECT_SOURCE_DIR}/src/damacy_log
 
 # Foundational types
 add_src_lib(dtype     SOURCES dtype/dtype.c dtype/dtype.h)
-add_src_lib(dimension SOURCES dimension/dimension.c dimension/dimension.h)
 
 # Utilities
 add_src_lib(slice  SOURCES util/slice.c  util/slice.h)
