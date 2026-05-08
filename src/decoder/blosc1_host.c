@@ -3,6 +3,7 @@
 #include "damacy_limits.h"
 #include "log/log.h"
 #include "threadpool/threadpool.h"
+#include "util/prelude.h"
 #include "zarr/zarr_metadata.h"
 
 #include <stdatomic.h>
@@ -392,6 +393,8 @@ blosc1_host_parse(struct threadpool* pool,
                   struct gpu_shuffle_op* bitunshuffle_ops,
                   struct blosc1_totals* out_totals)
 {
+  CHECK(Fail, out_totals);
+
   // n_codec_errors is set by decoder_status_reduce after nvcomp; leave
   // it alone here. Other fields are fully written below.
   out_totals->n_zstd = 0;
@@ -402,6 +405,26 @@ blosc1_host_parse(struct threadpool* pool,
   out_totals->n_parse_errors = 0;
   if (n_chunks == 0)
     return 0;
+
+  // Per-wave scratch + the destination arrays must be sized for the
+  // worst-case substream count of the wave. Fanout SOAs may be empty
+  // for codecs that aren't present in this wave but the SOA pointer
+  // arrays must still be valid (phase_emit indexes them by codec).
+  CHECK(Fail, chunks);
+  CHECK(Fail, scratch.hdrs);
+  CHECK(Fail, scratch.counts);
+  CHECK(Fail, scratch.offsets);
+  CHECK(Fail, zstd.comp_ptrs);
+  CHECK(Fail, zstd.comp_sizes);
+  CHECK(Fail, zstd.decomp_ptrs);
+  CHECK(Fail, zstd.decomp_buf_sizes);
+  CHECK(Fail, lz4.comp_ptrs);
+  CHECK(Fail, lz4.comp_sizes);
+  CHECK(Fail, lz4.decomp_ptrs);
+  CHECK(Fail, lz4.decomp_buf_sizes);
+  CHECK(Fail, memcpy_ops);
+  CHECK(Fail, unshuffle_ops);
+  CHECK(Fail, bitunshuffle_ops);
 
   struct parse_ctx ctx = {
     .chunks = chunks,
@@ -430,4 +453,6 @@ blosc1_host_parse(struct threadpool* pool,
 
   threadpool_for_n_dynamic(pool, n_chunks, phase_emit, &ctx);
   return 0;
+Fail:
+  return 1;
 }
