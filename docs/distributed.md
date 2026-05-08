@@ -125,27 +125,18 @@ filesystem, object store). When stacking multiple ranks on one GPU
 (uncommon, but valid), divide the device-side budgets so the per-GPU
 total fits below `max_gpu_memory_bytes`.
 
-## How damacy uses CUDA streams
+## CUDA streams
 
-Damacy creates four non-blocking CUDA streams internally (H2D,
-compute, zstd, lz4) and overlaps wave-level work across them.
-Nothing for you to configure, but a few facts are worth knowing:
+DLPack handles synchronization. `torch.from_dlpack(batch)` records
+an event on damacy's output stream and makes the consuming PyTorch
+stream wait on it, so train kernels see a fenced tensor.
 
-- The streams are non-blocking, so damacy never serialises against
-  the legacy default stream that some user code still lands on.
-- `Batch.__dlpack__` follows the DLPack stream protocol:
-  `torch.from_dlpack(batch)` passes its current PyTorch stream and
-  damacy records an event/wait so the assembled tensor is fenced
-  against the consuming kernels automatically. No manual events
-  needed in the common case.
-- For non-DLPack consumers, `BatchInfo.ready_stream` is the producer
-  stream as an int handle — synchronize against it directly.
-- Two pipelines on the same GPU each own their own four streams, so
-  train + validation (for example) overlap up to GPU compute
-  capacity without coordination.
+Damacy's internal streams are non-blocking, so a default-stream
+operation elsewhere in your code won't accidentally serialize the
+pipeline.
 
-Streams are not user-supplied. The DLPack hand-off (or
-`BatchInfo.ready_stream`) is the integration boundary.
+If you bypass DLPack, `BatchInfo.ready_stream` is the producer
+stream as an int handle.
 
 ## Common failures
 
