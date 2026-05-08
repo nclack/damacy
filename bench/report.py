@@ -5,12 +5,12 @@
 # ///
 """Pretty-print a damacy_bench results.json.
 
-  uv run bench/report.py results.json
-  cat results.json | uv run bench/report.py -
+uv run bench/report.py results.json
+cat results.json | uv run bench/report.py -
 """
+
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
@@ -21,7 +21,7 @@ from rich.table import Table
 from rich.text import Text
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from scenario import Results  # noqa: E402
+from scenario import Results
 
 app = typer.Typer(add_completion=False, no_args_is_help=True, help=__doc__)
 
@@ -58,8 +58,12 @@ def _fmt_ms(ms: float) -> str:
 
 
 def _stage_table(r: Results) -> Table:
-    t = Table(title="pipeline stages", title_style="bold cyan",
-              show_lines=False, header_style="bold")
+    t = Table(
+        title="pipeline stages",
+        title_style="bold cyan",
+        show_lines=False,
+        header_style="bold",
+    )
     t.add_column("stage", style="cyan", no_wrap=True)
     t.add_column("unit", style="dim")
     t.add_column("GB/s_in", justify="right")
@@ -100,8 +104,14 @@ def _stage_table(r: Results) -> Table:
 
 
 def _counters_table(r: Results) -> Table:
-    t = Table(title="counters", title_style="bold cyan", show_header=False,
-              show_lines=False, box=None, padding=(0, 2))
+    t = Table(
+        title="counters",
+        title_style="bold cyan",
+        show_header=False,
+        show_lines=False,
+        box=None,
+        padding=(0, 2),
+    )
     t.add_column(style="dim")
     t.add_column(justify="right")
     c = r.counters
@@ -113,10 +123,8 @@ def _counters_table(r: Results) -> Table:
         ("chunks_dispatched", f"{c.chunks_dispatched:,}"),
         ("distinct_zarrs", f"{c.distinct_zarrs}"),
         ("distinct_shards", f"{c.distinct_shards}"),
-        ("zarr_meta hits/misses",
-         f"{c.zarr_meta_hits:,} / {c.zarr_meta_misses:,}"),
-        ("shard_idx hits/misses",
-         f"{c.shard_idx_hits:,} / {c.shard_idx_misses:,}"),
+        ("zarr_meta hits/misses", f"{c.zarr_meta_hits:,} / {c.zarr_meta_misses:,}"),
+        ("shard_idx hits/misses", f"{c.shard_idx_hits:,} / {c.shard_idx_misses:,}"),
     ]
     for k, v in rows:
         t.add_row(k, v)
@@ -124,8 +132,14 @@ def _counters_table(r: Results) -> Table:
 
 
 def _summary_table(r: Results) -> Table:
-    t = Table(title="summary", title_style="bold cyan", show_header=False,
-              show_lines=False, box=None, padding=(0, 2))
+    t = Table(
+        title="summary",
+        title_style="bold cyan",
+        show_header=False,
+        show_lines=False,
+        box=None,
+        padding=(0, 2),
+    )
     t.add_column(style="dim")
     t.add_column(justify="right")
     tm = r.timings_ms
@@ -134,10 +148,14 @@ def _summary_table(r: Results) -> Table:
         ("init", _fmt_ms(tm.init) + " ms"),
         ("time_to_first_batch", _fmt_ms(tm.time_to_first_batch) + " ms"),
         ("wall (steady-state)", f"{tm.wall / 1e3:.2f} s"),
-        ("throughput",
-         f"{d.throughput_mb_s / 1e3:.2f} GB/s  [dim](sample volume / wall)[/dim]"),
-        ("stage_concurrency",
-         f"{d.stage_concurrency:.2f}  [dim](sum stage ms / wall ms)[/dim]"),
+        (
+            "throughput",
+            f"{d.throughput_mb_s / 1e3:.2f} GB/s  [dim](sample volume / wall)[/dim]",
+        ),
+        (
+            "stage_concurrency",
+            f"{d.stage_concurrency:.2f}  [dim](sum stage ms / wall ms)[/dim]",
+        ),
         ("chunks/batch", f"{d.chunks_per_batch:.0f}"),
         ("chunks/wave", f"{d.chunks_per_wave:.0f}"),
         ("bytes/sample", f"{d.bytes_per_sample / 1e6:.2f} MB"),
@@ -178,9 +196,7 @@ def render(r: Results, out: Console | None = None) -> None:
 
 @app.command()
 def main(
-    path: str = typer.Argument(
-        ..., help="results.json path, or '-' for stdin"
-    ),
+    path: str = typer.Argument(..., help="results.json path, or '-' for stdin"),
 ):
     src = sys.stdin.read() if path == "-" else Path(path).read_text()
     r = Results.model_validate_json(src)

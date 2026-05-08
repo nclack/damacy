@@ -34,11 +34,33 @@ if(BUILD_TESTING)
         ERROR_QUIET
     )
     if(_damacy_have_pytest EQUAL 0)
+        # Probe for pytest-cov; if present, layer --cov flags onto the
+        # invocation so ctest produces a coverage summary alongside the
+        # gcovr C-side report.
+        execute_process(
+            COMMAND ${Python_EXECUTABLE} -c "import pytest_cov"
+            RESULT_VARIABLE _damacy_have_pytest_cov
+            OUTPUT_QUIET
+            ERROR_QUIET
+        )
+        set(_damacy_pytest_cov_args "")
+        if(_damacy_have_pytest_cov EQUAL 0)
+            # Local floor matches codecov.yml's patch target so the two
+            # gates (project-total here, per-PR-patch on codecov) read
+            # the same number. Headroom above the floor lets defensive
+            # except blocks land without a same-PR test for every line.
+            list(
+                APPEND _damacy_pytest_cov_args
+                "--cov=damacy"
+                "--cov-report=term-missing:skip-covered"
+                "--cov-fail-under=70"
+            )
+        endif()
         add_test(
             NAME python_pytest
             COMMAND
                 ${Python_EXECUTABLE} -m pytest -v --color=yes
-                "${CMAKE_CURRENT_SOURCE_DIR}/tests"
+                ${_damacy_pytest_cov_args} "${CMAKE_CURRENT_SOURCE_DIR}/tests"
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
         )
         set_tests_properties(

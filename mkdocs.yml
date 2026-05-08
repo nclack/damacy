@@ -1,0 +1,81 @@
+site_name: damacy
+site_description: High-speed streamed assembly of tensors from zarr sources to GPU.
+site_url: https://nclack.github.io/damacy/
+repo_url: https://github.com/nclack/damacy
+repo_name: nclack/damacy
+edit_uri: edit/main/docs/
+
+# Internal design drafts, investigations, devlog, and plans live under
+# dev/ (outside the mkdocs source tree), so no exclude_docs is needed.
+
+theme:
+  name: material
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - content.code.annotate
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+plugins:
+  - search
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          # paths is relative to the mkdocs.yml dir; griffe walks python/
+          # and finds the damacy package without an editable install.
+          paths: [python]
+          options:
+            show_source: true
+            show_root_heading: true
+            show_root_full_path: false
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            show_signature_annotations: true
+            separate_signature: true
+            signature_crossrefs: true
+            merge_init_into_class: true
+            docstring_section_style: table
+            members_order: source
+            filters:
+              - "!^_"  # hide private/dunder symbols by default
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Distributed: distributed.md
+  - API reference: api.md

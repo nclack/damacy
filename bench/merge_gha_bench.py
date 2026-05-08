@@ -12,6 +12,7 @@ the names in a Python merge block.
   uv run bench/merge_gha_bench.py \\
     --out merged.json bench-default-smaller.json bench-mixed-smaller.json
 """
+
 from __future__ import annotations
 
 import argparse
@@ -30,8 +31,10 @@ def main() -> int:
     for p in args.inputs:
         merged.extend(json.loads(p.read_text()))
     args.out.write_text(json.dumps(merged, indent=2))
-    print(f"merged {len(args.inputs)} file(s), {len(merged)} metrics, "
-          f"into {args.out}", file=sys.stderr)
+    print(
+        f"merged {len(args.inputs)} file(s), {len(merged)} metrics, into {args.out}",
+        file=sys.stderr,
+    )
     return 0
 
 

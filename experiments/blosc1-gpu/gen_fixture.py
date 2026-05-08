@@ -19,6 +19,7 @@ Emits five (.blosc1, .raw) pairs alongside this script:
 Each .blosc1 is the codec.encode(...) output; each .raw is the original
 bytes. The spike consumes both and verifies round-trip.
 """
+
 from __future__ import annotations
 
 import struct
@@ -27,7 +28,6 @@ from pathlib import Path
 
 import numpy as np
 from numcodecs import Blosc
-
 
 HERE = Path(__file__).resolve().parent
 
@@ -39,8 +39,15 @@ def make_pattern_int32(nelems: int) -> np.ndarray:
     return np.tile(pat, reps)[:nelems]
 
 
-def emit(name: str, *, data: np.ndarray, cname: str, shuffle: int, typesize: int,
-         blocksize: int = 0) -> None:
+def emit(
+    name: str,
+    *,
+    data: np.ndarray,
+    cname: str,
+    shuffle: int,
+    typesize: int,
+    blocksize: int = 0,
+) -> None:
     """Encode `data` with the given Blosc options and write fixtures."""
     codec = Blosc(cname=cname, clevel=5, shuffle=shuffle, blocksize=blocksize)
     # Pass ndarray so dtype.itemsize → typesize. For typesize=1 we override
@@ -56,12 +63,16 @@ def emit(name: str, *, data: np.ndarray, cname: str, shuffle: int, typesize: int
     nbytes, bs, cb = struct.unpack_from("<III", encoded, 4)
     nblocks = (nbytes + bs - 1) // bs
     bstarts = list(struct.unpack_from(f"<{nblocks}i", encoded, 16))
-    print(f"{name:30s}  {len(encoded):>9} bytes  ratio={len(encoded)/len(raw):.3f}")
-    print(f"  flags=0x{flags:02x} typesize={ts} nbytes={nbytes} blocksize={bs}"
-          f" nblocks={nblocks}")
+    print(f"{name:30s}  {len(encoded):>9} bytes  ratio={len(encoded) / len(raw):.3f}")
+    print(
+        f"  flags=0x{flags:02x} typesize={ts} nbytes={nbytes} blocksize={bs}"
+        f" nblocks={nblocks}"
+    )
     if ts != typesize:
-        print(f"  WARNING: requested typesize={typesize} but header says {ts}",
-              file=sys.stderr)
+        print(
+            f"  WARNING: requested typesize={typesize} but header says {ts}",
+            file=sys.stderr,
+        )
 
     (HERE / f"{name}.blosc1").write_bytes(encoded)
     (HERE / f"{name}.raw").write_bytes(raw)
@@ -75,19 +86,49 @@ def main() -> int:
     # 4 MB at typesize=4 = 1048576 int32s.
     data_4m_i32 = make_pattern_int32(1024 * 1024)
 
-    emit("lz4_noshuffle_ts4", data=data_64k_i32,
-         cname="lz4", shuffle=Blosc.NOSHUFFLE, typesize=4)
-    emit("lz4_shuffle_ts4", data=data_64k_i32,
-         cname="lz4", shuffle=Blosc.SHUFFLE, typesize=4)
-    emit("zstd_noshuffle_ts4", data=data_64k_i32,
-         cname="zstd", shuffle=Blosc.NOSHUFFLE, typesize=4)
-    emit("lz4_noshuffle_ts1", data=data_64k_u8,
-         cname="lz4", shuffle=Blosc.NOSHUFFLE, typesize=1)
-    emit("lz4_noshuffle_ts4_mb", data=data_4m_i32,
-         cname="lz4", shuffle=Blosc.NOSHUFFLE, typesize=4,
-         blocksize=65536)
-    emit("lz4_bitshuffle_ts4", data=data_64k_i32,
-         cname="lz4", shuffle=Blosc.BITSHUFFLE, typesize=4)
+    emit(
+        "lz4_noshuffle_ts4",
+        data=data_64k_i32,
+        cname="lz4",
+        shuffle=Blosc.NOSHUFFLE,
+        typesize=4,
+    )
+    emit(
+        "lz4_shuffle_ts4",
+        data=data_64k_i32,
+        cname="lz4",
+        shuffle=Blosc.SHUFFLE,
+        typesize=4,
+    )
+    emit(
+        "zstd_noshuffle_ts4",
+        data=data_64k_i32,
+        cname="zstd",
+        shuffle=Blosc.NOSHUFFLE,
+        typesize=4,
+    )
+    emit(
+        "lz4_noshuffle_ts1",
+        data=data_64k_u8,
+        cname="lz4",
+        shuffle=Blosc.NOSHUFFLE,
+        typesize=1,
+    )
+    emit(
+        "lz4_noshuffle_ts4_mb",
+        data=data_4m_i32,
+        cname="lz4",
+        shuffle=Blosc.NOSHUFFLE,
+        typesize=4,
+        blocksize=65536,
+    )
+    emit(
+        "lz4_bitshuffle_ts4",
+        data=data_64k_i32,
+        cname="lz4",
+        shuffle=Blosc.BITSHUFFLE,
+        typesize=4,
+    )
     print("done")
     return 0
 

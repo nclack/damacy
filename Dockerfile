@@ -63,7 +63,7 @@ ENV PATH=/opt/venv/bin:${PATH} \
 # pytest drives python/tests/* via the python_pytest ctest target;
 # installed alongside scikit-build-core so the cmake configure can
 # detect it and register the test.
-RUN uv pip install scikit-build-core pytest
+RUN uv pip install scikit-build-core pytest pytest-cov
 
 # ----- build configuration ---------------------------------------------------
 # Override at `docker build` time via --build-arg to produce a coverage

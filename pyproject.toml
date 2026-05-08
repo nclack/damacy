@@ -11,10 +11,20 @@ license = { file = "LICENSE" }
 authors = [{ name = "Nathan Clack", email = "nclack@gmail.com" }]
 requires-python = ">=3.11"
 
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.6", "pyright>=1.1"]
+# mkdocstrings reads damacy via griffe's static analysis (AST parse), so the
+# docs build does not import the package — no CUDA / nvcomp needed at build.
+# ruff is here so mkdocstrings can format rendered signatures (it imports
+# the python module, not the shell binary nix ships).
+docs = [
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.26",
+    "ruff>=0.6",
+]
+
 [tool.scikit-build]
-# scikit-build-core invokes our top-level CMakeLists with DAMACY_PYTHON=ON
-# so the python/ subdirectory builds the extension. The C lib + tests are
-# unaffected; non-python builds default DAMACY_PYTHON=OFF.
 cmake.args = ["-DDAMACY_PYTHON=ON"]
 cmake.build-type = "RelWithDebInfo"
 build-dir = "build/{wheel_tag}"
@@ -24,6 +34,81 @@ wheel.packages = ["python/damacy"]
 wheel.py-api = ""
 
 [tool.scikit-build.cmake.define]
-# CUDA is required for the python module (via the damacy lib). Fuzz mode
-# is not relevant to wheel builds.
 DAMACY_FUZZ = "OFF"
+
+# ---- ruff ---------------------------------------------------------------
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+extend-exclude = ["build", ".venv", ".claude/worktrees"]
+
+[tool.ruff.lint]
+# E/W = pycodestyle, F = pyflakes, I = isort, UP = pyupgrade,
+# B = bugbear, SIM = simplifications, RUF = ruff-specific.
+select = ["E", "W", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["E501"]                                      # line-length is enforced by the formatter
+
+[tool.ruff.lint.per-file-ignores]
+"python/tests/*" = ["B011"] # asserts in tests are fine
+# relax rules for internal scripts
+"bench/*" = [
+  "B008",
+  "B904",
+  "B905",
+  "E402",
+  "E731",
+  "F401",
+  "F841",
+  "RUF059",
+  "RUF100",
+]
+"experiments/*" = [
+  "B008",
+  "B904",
+  "B905",
+  "E402",
+  "E731",
+  "F401",
+  "F841",
+  "RUF059",
+]
+"tests/*.py" = ["B008", "B904", "B905", "E402", "E731", "F401", "F841", "UP045"]
+
+# ---- pyright ------------------------------------------------------------
+
+[tool.pyright]
+include = ["python/damacy", "python/tests"]
+exclude = ["build", ".venv", ".claude/worktrees", "**/__pycache__"]
+pythonVersion = "3.11"
+typeCheckingMode = "standard"
+reportMissingImports = "error"
+reportMissingTypeStubs = "warning"
+# _native is a C extension whose source isn't a .py file — the .pyi stub
+# is the source of truth, so silence the "found binary but not source" note.
+reportMissingModuleSource = "none"
+# Resolve project deps (pytest etc.) from the in-tree venv when present.
+venvPath = "."
+venv = ".venv"
+
+# ---- pytest -------------------------------------------------------------
+
+[tool.pytest.ini_options]
+# --cov is added by the cmake-driven invocation when pytest-cov is
+# importable; ad-hoc `pytest` runs without coverage by default.
+minversion = "8.0"
+testpaths = ["python/tests"]
+addopts = ["-ra", "--strict-markers"]
+
+[tool.coverage.run]
+source = ["damacy"]
+omit = ["*/_native*"] # C extension is not Python-coverable
+
+[tool.coverage.report]
+exclude_lines = [
+  "pragma: no cover",
+  "raise NotImplementedError",
+  "if TYPE_CHECKING:",
+]
+show_missing = true
+skip_covered = true

@@ -14,12 +14,13 @@ test (~100 MB on disk at default entropy).
 
 Run with: uv run bench/gen_dataset.py --out path/to/store.zarr
 """
+
 import argparse
 import sys
 from pathlib import Path
 
-import numpy as np
 import ngff_zarr as nz
+import numpy as np
 from zarr.codecs import BloscCname, BloscCodec, BloscShuffle, ZstdCodec
 
 
@@ -33,15 +34,23 @@ def make_compressors(codec: str, clevel: int, dtype: np.dtype):
     if codec == "zstd":
         return [ZstdCodec(level=clevel, checksum=False)]
     if codec == "blosc-zstd":
-        return [BloscCodec(
-            cname=BloscCname.zstd, clevel=clevel,
-            shuffle=BloscShuffle.shuffle, typesize=int(dtype.itemsize),
-        )]
+        return [
+            BloscCodec(
+                cname=BloscCname.zstd,
+                clevel=clevel,
+                shuffle=BloscShuffle.shuffle,
+                typesize=int(dtype.itemsize),
+            )
+        ]
     if codec == "blosc-lz4":
-        return [BloscCodec(
-            cname=BloscCname.lz4, clevel=clevel,
-            shuffle=BloscShuffle.shuffle, typesize=int(dtype.itemsize),
-        )]
+        return [
+            BloscCodec(
+                cname=BloscCname.lz4,
+                clevel=clevel,
+                shuffle=BloscShuffle.shuffle,
+                typesize=int(dtype.itemsize),
+            )
+        ]
     raise SystemExit(f"unknown --codec {codec!r}")
 
 
@@ -60,10 +69,12 @@ def main() -> int:
         help="shard / outer chunk shape (csv); must be a multiple of inner",
     )
     ap.add_argument("--dtype", default="uint16")
-    ap.add_argument("--codec", default="zstd",
-                    choices=["none", "zstd", "blosc-zstd", "blosc-lz4"])
-    ap.add_argument("--clevel", type=int, default=3,
-                    help="compression level passed to zstd / blosc")
+    ap.add_argument(
+        "--codec", default="zstd", choices=["none", "zstd", "blosc-zstd", "blosc-lz4"]
+    )
+    ap.add_argument(
+        "--clevel", type=int, default=3, help="compression level passed to zstd / blosc"
+    )
     ap.add_argument(
         "--entropy",
         type=float,
@@ -71,9 +82,7 @@ def main() -> int:
         help="0.0 = constant (highly compressible), 1.0 = uniform random "
         "(barely compressible)",
     )
-    ap.add_argument(
-        "--seed", type=int, default=42, help="rng seed for reproducibility"
-    )
+    ap.add_argument("--seed", type=int, default=42, help="rng seed for reproducibility")
     args = ap.parse_args()
 
     shape = parse_shape(args.shape)
@@ -84,8 +93,9 @@ def main() -> int:
         return 1
     for d, (s, sh) in enumerate(zip(inner, shard)):
         if sh % s != 0:
-            print(f"shard[{d}]={sh} is not a multiple of inner[{d}]={s}",
-                  file=sys.stderr)
+            print(
+                f"shard[{d}]={sh} is not a multiple of inner[{d}]={s}", file=sys.stderr
+            )
             return 1
     chunks_per_shard = tuple(sh // s for s, sh in zip(inner, shard))
 

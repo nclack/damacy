@@ -1,5 +1,36 @@
 # dev log
 
+## 2026-05-08
+
+Making the python interface nicer. Adding typing, linting and formatting w
+ruff + pyright.
+
+- [x] tests/coverage
+- [x] autodoc
+- [ ] wheel
+- [x] readme examples
+- [x] !double check context binding behavior.
+- [x] readme should show some non-trivial crops. mention all crops have to
+      be same size
+- [x] does the api need to be able to take a (cuda0 stream as input
+- [x] !FIX store root in the python api
+- [x] !FIX python users expect all pushed input to get consumed
+
+I forgot about nvidia's DALI. I need to evaluate positioning wrt that.
+Added a TODO about comparative benchmarking. Looks like there have been some
+hackathon projects wrt zarr on DALI. Should look at that.
+
+- [ ] think about caller supplied memory. Batch memory reuse. The pointer might
+      pin the device so there's no ambiguity.
+- [x] maybe move different ddp examples to docs and off the readme
+
+Ran `try-nvcomp` on this machine, and I get 42 GB/s, so we've got lots of
+headroom on this machine.
+
+cleanup
+
+- [ ] refactor long files
+
 ## 2026-05-07
 
 continuing on blosc
@@ -15,6 +46,9 @@ looks pretty slow - or is it?
 
 blosc chunk headers are parsed on gpu but that is probably a mistake. Just
 parse on cpu w a threadpool avoids the d2h, error handling better.
+
+Testing on the cluster found (a) need to handle device contexts better
+and (b) need to get proper dtype support in. So I added that.
 
 ## 2026-05-06
 

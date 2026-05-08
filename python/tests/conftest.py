@@ -27,9 +27,7 @@ def _write_zarr_script() -> Path:
         cand = parent / "tests" / "write_zarr.py"
         if cand.is_file():
             return cand
-    raise RuntimeError(
-        "WRITE_ZARR_SCRIPT not set and tests/write_zarr.py not found"
-    )
+    raise RuntimeError("WRITE_ZARR_SCRIPT not set and tests/write_zarr.py not found")
 
 
 def _have_uv() -> bool:
@@ -37,12 +35,16 @@ def _have_uv() -> bool:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _cuda_ctx() -> None:
+def cuda_ctx() -> None:
     """Make device 0's primary CUcontext current for the test process.
 
     damacy_create requires a current CUcontext on the calling thread.
     PyTorch sets one up implicitly; bare pytest doesn't, so we do it
     once per session. Skips the suite if no CUDA driver is reachable.
+
+    No leading underscore: autouse fixtures are wired up by pytest's
+    decorator-driven discovery, not by direct reference, and the
+    underscore would trip pyright's reportUnusedFunction.
     """
     from damacy import _native
 
@@ -58,11 +60,9 @@ def write_zarr_script() -> Path:
 
 
 @pytest.fixture
-def tiny_zarr(tmp_path: Path, write_zarr_script: Path) -> tuple[Path, str]:
+def tiny_zarr(tmp_path: Path, write_zarr_script: Path) -> str:
     """A 2D u16 zarr (8x16, single 8x16 shard, 4x8 inner chunks, blosc-lz4).
-
-    Returns (store_root, uri). uri is the directory name relative to root.
-    """
+    Returns the absolute uri."""
     if not _have_uv():
         pytest.skip("uv not on PATH; needed to materialise the zarr fixture")
     out = tmp_path / "foo"
@@ -90,11 +90,11 @@ def tiny_zarr(tmp_path: Path, write_zarr_script: Path) -> tuple[Path, str]:
     if r.returncode != 0:
         sys.stderr.write(r.stderr)
         pytest.skip(f"write_zarr.py failed (rc={r.returncode}); skipping")
-    return tmp_path, "foo"
+    return str(out)
 
 
 @pytest.fixture
-def tiny_zarr_no_cast(tmp_path: Path, write_zarr_script: Path) -> tuple[Path, str]:
+def tiny_zarr_no_cast(tmp_path: Path, write_zarr_script: Path) -> str:
     """Same shape as tiny_zarr but int64 — has no cast path to f32/bf16
     (post-#16: only u8/u16/i16/u32/i32/f16/f32 sources are supported).
     Used to drive the DAMACY_DTYPE error path."""
@@ -123,4 +123,4 @@ def tiny_zarr_no_cast(tmp_path: Path, write_zarr_script: Path) -> tuple[Path, st
     if r.returncode != 0:
         sys.stderr.write(r.stderr)
         pytest.skip(f"write_zarr.py failed (rc={r.returncode}); skipping")
-    return tmp_path, "bar"
+    return str(out)

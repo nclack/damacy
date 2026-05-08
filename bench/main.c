@@ -676,8 +676,16 @@ main(int argc, char** argv)
     return 1;
   }
 
+  // damacy now wants absolute uris; prepend the scenario's store_root.
+  char abs_fmt[DAMACY_MAX_PATH];
+  if (snprintf(abs_fmt, sizeof abs_fmt, "%s/%s", sc.store_root, sc.uri_fmt) >=
+      (int)sizeof abs_fmt) {
+    fprintf(stderr, "bench: store_root + uri_fmt exceeds DAMACY_MAX_PATH\n");
+    free(json_buf);
+    return 1;
+  }
   struct uri_table uris = { 0 };
-  if (uri_table_init(&uris, sc.uri_fmt, sc.n_zarrs) != 0) {
+  if (uri_table_init(&uris, abs_fmt, sc.n_zarrs) != 0) {
     fprintf(stderr, "bench: uri table alloc failed\n");
     free(json_buf);
     return 1;
@@ -692,7 +700,6 @@ main(int argc, char** argv)
           sc.n_warmup_batches);
 
   struct damacy_config cfg = {
-    .store_root = sc.store_root,
     .batch_size = sc.batch_size,
     .lookahead_batches = sc.lookahead_batches,
     .n_io_threads = sc.n_io_threads,
@@ -701,6 +708,7 @@ main(int argc, char** argv)
     .n_zarrs_meta_cache = sc.n_zarrs_meta_cache,
     .n_shards_meta_cache = sc.n_shards_meta_cache,
     .dtype = sc.dtype,
+    .device = -1,
   };
 
   struct rng rng = { .s = sc.sampling_seed ? sc.sampling_seed : 0xdeadbeefULL };

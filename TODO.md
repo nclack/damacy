@@ -33,16 +33,18 @@
 ## To triage
 
 - [ ] thread-safe public API (push/pop/flush)
-- [ ] support for bf16 fp16
+- [x] support for fp16 sources
+- [x] support for bf16 output
 - [ ] testing the hashmap/lru
 - [ ] add ngff and multiscale
 - [ ] handle oob aabb's
-- [ ] type translation (e.g. u16 to bf16)
+- [x] type translation (e.g. u16 to bf16)
 - [ ] eval lru for compressed chunk
       - may be interesting to eval hit rate
       - system's virtual page cache may obviate this for host mem
-- [x] how to add back blosc support - will need decompression on the cpu side
+- [x] how to add back blosc support - add gpu support
 - [ ] codegen for h100s
+- [ ] comparitive benchmark against other libs/solns: tensorstore, kvikio, DALI?
 
 ## Fuzzing
 
@@ -59,7 +61,7 @@
       smoke job (~60s/harness against checked-in seeds), gated on
       paths affecting the parser (`src/util/{json,slice}.*`,
       `tests/fuzz/**`, the relevant CMake files, `flake.nix`). Fail
-      the PR on any `crash-*` file. See `docs/fuzzing.md` for the
+      the PR on any `crash-*` file. See `dev/fuzzing.md` for the
       full menu of options.
 
 - [ ] **Scheduled long run with corpus persistence.** Weekly Actions

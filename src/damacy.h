@@ -1,8 +1,8 @@
 // damacy public C API — high-throughput streaming loader for batches
 // assembled from many sharded NGFF zarr stores.
 //
-// See docs/api-design-surface-draft.md for the rationale and discussion;
-// docs/api-design-internals-draft.md describes the implementation shape.
+// See dev/api-design-surface-draft.md for the rationale and discussion;
+// dev/api-design-internals-draft.md describes the implementation shape.
 //
 // Threading model: a single user thread should own a `damacy*` instance
 // and drive push/pop/flush on it. damacy_release is safe to call from
@@ -77,17 +77,10 @@ extern "C"
   };
 
   // All resource caps fixed at create-time. Nothing grows after this.
-  // Device is captured from the current CUcontext at damacy_create.
   // Output batches are double-buffered (B=2); waves are double-buffered
   // internally. Neither is configurable.
   struct damacy_config
   {
-    // Filesystem root that resolves sample.uri (sample.uri is interpreted
-    // as a path relative to this root). v1 supports a single fs-backed
-    // store; later configurations will allow multiple/heterogeneous
-    // backends behind the same handle.
-    const char* store_root;
-
     // Batch geometry
     uint32_t batch_size;        // samples per batch
     uint32_t lookahead_batches; // user-push queue depth (>= 2)
@@ -132,17 +125,23 @@ extern "C"
     // pool, computed from the first sample's AABB, would push past it.
     // 0 = no cap (driver OOM, current behaviour).
     uint64_t max_gpu_memory_bytes;
+
+    // -1 captures current CUcontext; >= 0 retains the primary for that
+    // device internally and rejects a current context on another device.
+    int device;
   };
 
   struct damacy;
   struct damacy_batch;
 
-  // Create a damacy instance. A CUcontext must be current on the
-  // calling thread; its device is captured for the instance's
-  // lifetime. Returns DAMACY_INVAL if no ctx is current. The caller is
-  // expected to keep that ctx current across subsequent calls.
+  // Create a damacy instance. cfg->device < 0 captures the current
+  // CUcontext (DAMACY_INVAL if none); cfg->device >= 0 retains the
+  // primary for that device and pushes it on the calling thread.
   enum damacy_status damacy_create(const struct damacy_config* cfg,
                                    struct damacy** out);
+
+  // The CUDA device index this instance is bound to.
+  int damacy_get_device(const struct damacy* d);
 
   // Tear down. Does NOT flush in-flight work; the io_queue is asked to
   // shut down and pending CUDA streams are synchronized before buffers

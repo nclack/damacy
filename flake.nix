@@ -45,6 +45,14 @@
               files = "(\\.cmake$|CMakeLists\\.txt$)";
               pass_filenames = true;
             };
+            # ruff handles both lint and format for python; pyproject.toml
+            # carries the per-project rule set.
+            ruff = {
+              enable = true;
+            };
+            ruff-format = {
+              enable = true;
+            };
           };
         };
       in
@@ -70,7 +78,9 @@
             # build under tests/fuzz/. Ships libclang_rt.fuzzer alongside.
             clang
             uv
-            python311
+            tokei
+            ruff
+            pyright
           ];
 
           buildInputs = [
