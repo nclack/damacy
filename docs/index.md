@@ -39,9 +39,11 @@ with damacy.Pipeline(cfg) as d:
             ...  # train step
 ```
 
-A current CUDA context is required on the calling thread. PyTorch sets
-one up implicitly; for bare-Python use call
-`damacy._native.cuda_init_primary()` once first.
+By default the pipeline captures whatever CUDA context is current on
+the calling thread; PyTorch sets one up implicitly, and bare-Python
+users can call `damacy._native.cuda_init_primary()` once. For
+multi-GPU setups, prefer `Config(..., device=local_rank)` — see
+the [README](https://github.com/nclack/damacy#failure-modes).
 
 ## Public surface
 

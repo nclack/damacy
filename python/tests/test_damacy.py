@@ -374,3 +374,52 @@ def test_per_status_exceptions_share_base(tmp_path):
     assert isinstance(excinfo.value, InvalidArgument)
     assert isinstance(excinfo.value, DamacyError)
     assert isinstance(excinfo.value, _native.DamacyError)
+
+
+# ---- device binding -----------------------------------------------------
+
+
+def test_pipeline_exposes_bound_device(tiny_zarr):
+    root, _ = tiny_zarr
+    with Pipeline(_base_config(root)) as p:
+        assert p.device == 0  # pytest fixture binds dev 0
+
+
+def test_explicit_device_zero_succeeds(tiny_zarr):
+    root, _ = tiny_zarr
+    cfg = dataclasses.replace(_base_config(root), device=0)
+    with Pipeline(cfg) as p:
+        assert p.device == 0
+
+
+def test_local_rank_disagreement_warns(tiny_zarr, monkeypatch):
+    root, _ = tiny_zarr
+    monkeypatch.setenv("LOCAL_RANK", "3")  # bound dev is 0; rank claims 3
+    with pytest.warns(UserWarning, match="LOCAL_RANK=3"):
+        Pipeline(_base_config(root)).close()
+
+
+def test_local_rank_match_is_quiet(tiny_zarr, monkeypatch, recwarn):
+    root, _ = tiny_zarr
+    monkeypatch.setenv("LOCAL_RANK", "0")
+    Pipeline(_base_config(root)).close()
+    # No UserWarning from our heuristic; other libs may warn — filter ours.
+    ours = [w for w in recwarn.list if "LOCAL_RANK" in str(w.message)]
+    assert ours == []
+
+
+def test_explicit_device_suppresses_local_rank_warning(tiny_zarr, monkeypatch, recwarn):
+    root, _ = tiny_zarr
+    monkeypatch.setenv("LOCAL_RANK", "3")
+    cfg = dataclasses.replace(_base_config(root), device=0)
+    Pipeline(cfg).close()
+    ours = [w for w in recwarn.list if "LOCAL_RANK" in str(w.message)]
+    assert ours == []
+
+
+def test_local_rank_non_int_is_quiet(tiny_zarr, monkeypatch, recwarn):
+    root, _ = tiny_zarr
+    monkeypatch.setenv("LOCAL_RANK", "not-a-number")
+    Pipeline(_base_config(root)).close()
+    ours = [w for w in recwarn.list if "LOCAL_RANK" in str(w.message)]
+    assert ours == []

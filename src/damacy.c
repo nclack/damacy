@@ -305,6 +305,8 @@ struct damacy
   uint64_t next_batch_id;
   uint64_t page_alignment;
   int cuda_device;
+  int retained_primary_device; // -1 = captured caller's ctx; else release at
+                               // destroy
 
   // GPU memory budgeting: total bytes committed at create-time (waves +
   // per-batch metadata). Lazy batch-output tensors are summed against
@@ -1705,17 +1707,41 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   s = DAMACY_CUDA;
   CR(Fail, cuInit(0));
 
-  // Caller must have a CUcontext current; we capture its device.
+  self->retained_primary_device = -1;
   CUcontext caller_ctx = NULL;
   CR(Fail, cuCtxGetCurrent(&caller_ctx));
-  if (!caller_ctx) {
-    log_error("damacy_create: no CUcontext is current on calling thread");
-    s = DAMACY_INVAL;
-    goto Fail;
+  if (cfg->device >= 0) {
+    if (caller_ctx) {
+      CUdevice cur_dev;
+      CR(Fail, cuCtxGetDevice(&cur_dev));
+      if ((int)cur_dev != cfg->device) {
+        s = DAMACY_INVAL;
+        log_error("damacy_create: Config.device=%d but a CUcontext is "
+                  "already current on device %d — likely a missing "
+                  "cuCtxSetCurrent / torch.cuda.set_device(%d)",
+                  cfg->device,
+                  (int)cur_dev,
+                  cfg->device);
+        goto Fail;
+      }
+    }
+    CUdevice dev;
+    CR(Fail, cuDeviceGet(&dev, cfg->device));
+    CUcontext primary = NULL;
+    CR(Fail, cuDevicePrimaryCtxRetain(&primary, dev));
+    self->retained_primary_device = cfg->device;
+    CR(Fail, cuCtxPushCurrent(primary));
+    self->cuda_device = cfg->device;
+  } else {
+    if (!caller_ctx) {
+      log_error("damacy_create: no CUcontext is current on calling thread");
+      s = DAMACY_INVAL;
+      goto Fail;
+    }
+    CUdevice dev;
+    CR(Fail, cuCtxGetDevice(&dev));
+    self->cuda_device = (int)dev;
   }
-  CUdevice dev;
-  CR(Fail, cuCtxGetDevice(&dev));
-  self->cuda_device = (int)dev;
   CR(Fail, cuStreamCreate(&self->stream_h2d, CU_STREAM_DEFAULT));
   CR(Fail, cuStreamCreate(&self->stream_compute, CU_STREAM_DEFAULT));
   CR(Fail, cuStreamCreate(&self->stream_zstd, CU_STREAM_DEFAULT));
@@ -1852,7 +1878,17 @@ damacy_destroy(struct damacy* self)
   store_destroy(self->store);
 
   free(self->store_root);
+  if (self->retained_primary_device >= 0) {
+    cuCtxPopCurrent(NULL);
+    cuDevicePrimaryCtxRelease((CUdevice)self->retained_primary_device);
+  }
   free(self);
+}
+
+int
+damacy_get_device(const struct damacy* d)
+{
+  return d ? d->cuda_device : -1;
 }
 
 // --- push -----------------------------------------------------------------

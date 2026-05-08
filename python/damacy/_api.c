@@ -525,6 +525,7 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                          "max_chunk_uncompressed_bytes",
                          "max_gpu_memory_bytes",
                          "max_bytes_per_element",
+                         "device",
                          NULL };
   const char* store_root = NULL;
   unsigned int batch_size = 0;
@@ -538,9 +539,10 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   unsigned int max_chunk_uncompressed = 0;
   unsigned long long max_gpu_bytes = 0;
   unsigned char max_bytes_per_element = 0;
+  int device = -1;
   if (!PyArg_ParseTupleAndKeywords(args,
                                    kw,
-                                   "sIIIKKIIOI|KB",
+                                   "sIIIKKIIOI|KBi",
                                    kws,
                                    &store_root,
                                    &batch_size,
@@ -553,7 +555,8 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                                    &dtype_obj,
                                    &max_chunk_uncompressed,
                                    &max_gpu_bytes,
-                                   &max_bytes_per_element))
+                                   &max_bytes_per_element,
+                                   &device))
     return -1;
 
   enum damacy_dtype dt;
@@ -573,6 +576,7 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
     .max_chunk_uncompressed_bytes = max_chunk_uncompressed,
     .max_gpu_memory_bytes = (uint64_t)max_gpu_bytes,
     .max_bytes_per_element = max_bytes_per_element,
+    .device = device,
   };
 
   struct damacy* d = NULL;
@@ -792,6 +796,25 @@ Pipeline_stats_reset(PipelineObj* self, PyObject* Py_UNUSED(ignored))
   Py_RETURN_NONE;
 }
 
+static PyObject*
+Pipeline_get_device(PipelineObj* self, void* Py_UNUSED(closure))
+{
+  if (!self->handle) {
+    PyErr_SetString(DamacyError, "Pipeline has been destroyed");
+    return NULL;
+  }
+  return PyLong_FromLong(damacy_get_device(self->handle));
+}
+
+static PyGetSetDef Pipeline_getset[] = {
+  { "device",
+    (getter)Pipeline_get_device,
+    NULL,
+    "CUDA device index this pipeline is bound to.",
+    NULL },
+  { NULL, NULL, NULL, NULL, NULL },
+};
+
 static PyMethodDef Pipeline_methods[] = {
   { "push",
     (PyCFunction)Pipeline_push,
@@ -826,6 +849,7 @@ PyTypeObject PipelineType = {
   .tp_init = (initproc)Pipeline_init,
   .tp_dealloc = (destructor)Pipeline_dealloc,
   .tp_methods = Pipeline_methods,
+  .tp_getset = Pipeline_getset,
 };
 
 // ---------- registration ----------

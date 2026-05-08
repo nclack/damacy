@@ -77,7 +77,6 @@ extern "C"
   };
 
   // All resource caps fixed at create-time. Nothing grows after this.
-  // Device is captured from the current CUcontext at damacy_create.
   // Output batches are double-buffered (B=2); waves are double-buffered
   // internally. Neither is configurable.
   struct damacy_config
@@ -132,17 +131,23 @@ extern "C"
     // pool, computed from the first sample's AABB, would push past it.
     // 0 = no cap (driver OOM, current behaviour).
     uint64_t max_gpu_memory_bytes;
+
+    // -1 captures current CUcontext; >= 0 retains the primary for that
+    // device internally and rejects a current context on another device.
+    int device;
   };
 
   struct damacy;
   struct damacy_batch;
 
-  // Create a damacy instance. A CUcontext must be current on the
-  // calling thread; its device is captured for the instance's
-  // lifetime. Returns DAMACY_INVAL if no ctx is current. The caller is
-  // expected to keep that ctx current across subsequent calls.
+  // Create a damacy instance. cfg->device < 0 captures the current
+  // CUcontext (DAMACY_INVAL if none); cfg->device >= 0 retains the
+  // primary for that device and pushes it on the calling thread.
   enum damacy_status damacy_create(const struct damacy_config* cfg,
                                    struct damacy** out);
+
+  // The CUDA device index this instance is bound to.
+  int damacy_get_device(const struct damacy* d);
 
   // Tear down. Does NOT flush in-flight work; the io_queue is asked to
   // shut down and pending CUDA streams are synchronized before buffers

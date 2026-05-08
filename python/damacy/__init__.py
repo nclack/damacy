@@ -36,6 +36,8 @@ Variants reuse a base via :func:`dataclasses.replace`::
 from __future__ import annotations
 
 import logging
+import os
+import warnings
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from enum import IntEnum
@@ -349,6 +351,10 @@ class Config:
             wave-resident buffers and batch-output pools. 0 = no cap.
         max_bytes_per_element: Largest source dtype size (bytes) the
             pipeline will accept; 0 = the codec ceiling.
+        device: CUDA device index to bind. ``None`` (default) captures
+            the current ``CUcontext`` on the calling thread; pass an
+            int (e.g. ``local_rank``) to retain that device's primary
+            context internally — recommended under torchrun / MPI.
     """
 
     store_root: str
@@ -363,6 +369,7 @@ class Config:
     max_chunk_uncompressed_bytes: int = 0
     max_gpu_memory_bytes: int = 0
     max_bytes_per_element: int = 0
+    device: int | None = None
 
     def __post_init__(self) -> None:
         # Coerce dtype eagerly so reading .dtype always yields a Dtype.
@@ -566,6 +573,29 @@ class Batch:
             return "Batch(<released>)"
 
 
+def _warn_if_local_rank_disagrees(cfg_device: int | None, bound: int) -> None:
+    """Warn when ``LOCAL_RANK`` is set but the bound device disagrees;
+    silent unless the user looks like they're under torchrun. Skipped
+    when the user passed ``Config.device`` explicitly — they've already
+    declared their intent and the native cross-check has run."""
+    if cfg_device is not None:
+        return
+    raw = os.environ.get("LOCAL_RANK")
+    if raw is None:
+        return
+    try:
+        local_rank = int(raw)
+    except ValueError:
+        return
+    if local_rank != bound:
+        warnings.warn(
+            f"damacy.Pipeline bound to CUDA device {bound} but LOCAL_RANK={local_rank}. "
+            f"Did you forget torch.cuda.set_device({local_rank}) before constructing "
+            f"the pipeline, or pass Config(device={local_rank}) to bind explicitly?",
+            stacklevel=3,
+        )
+
+
 # ---- Pipeline -----------------------------------------------------------
 
 
@@ -605,11 +635,18 @@ class Pipeline:
                 max_chunk_uncompressed_bytes=config.max_chunk_uncompressed_bytes,
                 max_gpu_memory_bytes=config.max_gpu_memory_bytes,
                 max_bytes_per_element=config.max_bytes_per_element,
+                device=-1 if config.device is None else int(config.device),
             )
         except _native.DamacyError as exc:
             _reraise_typed(exc)
         self._closed = False
         self._config = config
+        _warn_if_local_rank_disagrees(config.device, self._native.device)
+
+    @property
+    def device(self) -> int:
+        """CUDA device index this pipeline is bound to."""
+        return int(self._native.device)
 
     @property
     def config(self) -> Config:

@@ -1,14 +1,15 @@
-// Regression tests for issue #12: damacy_create's CUDA context
-// contract. damacy_create captures the caller's current CUcontext;
-// pre-fix it stomped dev 0's primary, segfaulting DDP on the next
-// DLPack import.
+// Regression tests for damacy_create's CUDA context contract.
 //
-// Test cases:
-//   test_create_preserves_caller_ctx — caller has a non-primary ctx
-//                                      current; create + destroy
-//                                      must not change it.
-//   test_create_no_ctx_returns_inval — no CUcontext current; create
-//                                      must return DAMACY_INVAL.
+//   test_create_preserves_caller_ctx — capture-current path (cfg.device
+//       < 0): caller has a non-primary ctx current; create + destroy
+//       must leave it unchanged. Pre-fix (issue #12) we stomped dev 0's
+//       primary, segfaulting DDP on the next DLPack import.
+//   test_create_no_ctx_returns_inval — capture-current with no ctx
+//       current must return DAMACY_INVAL.
+//   test_create_explicit_device_no_ctx — explicit cfg.device with no
+//       ctx current succeeds; we retain the primary ourselves.
+//   test_create_explicit_device_mismatch — explicit cfg.device with a
+//       ctx already current on a *different* device returns INVAL.
 
 #include "damacy.h"
 #include "fixture.h"
@@ -40,6 +41,7 @@ mk_cfg(const char* root)
     .n_zarrs_meta_cache = 4,
     .n_shards_meta_cache = 4,
     .dtype = DAMACY_F32,
+    .device = -1,
   };
 }
 
@@ -113,11 +115,70 @@ test_create_no_ctx_returns_inval(void)
   return 0;
 }
 
+// cfg.device set with no caller context: damacy retains primary itself.
+static int
+test_create_explicit_device_no_ctx(void)
+{
+  EXPECT(cuInit(0) == CUDA_SUCCESS);
+  EXPECT(cuCtxSetCurrent(NULL) == CUDA_SUCCESS);
+
+  char root[64];
+  EXPECT(mkdtemp_root(root, sizeof root) == 0);
+  char p[256];
+  snprintf(p, sizeof p, "%s/foo", root);
+  int64_t shape[2] = { 8, 16 }, inner[2] = { 4, 8 }, shard[2] = { 8, 16 };
+  EXPECT(fixture_write_zarr_codec(
+           p, shape, inner, shard, 2, "uint16", 0, "blosc-lz4") == 0);
+
+  struct damacy_config cfg = mk_cfg(root);
+  cfg.device = 0;
+  struct damacy* d = NULL;
+  EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
+  EXPECT(damacy_get_device(d) == 0);
+  damacy_destroy(d);
+  fixture_rm_tree(root);
+  return 0;
+}
+
+// cfg.device set, but a context is already current on a different
+// device. Mismatch is rejected with INVAL.
+static int
+test_create_explicit_device_mismatch(void)
+{
+  int n_devices = 0;
+  EXPECT(cuInit(0) == CUDA_SUCCESS);
+  EXPECT(cuDeviceGetCount(&n_devices) == CUDA_SUCCESS);
+  if (n_devices < 2) {
+    log_info("skip: needs >= 2 CUDA devices (have %d)", n_devices);
+    return 0;
+  }
+  CUdevice dev0 = 0;
+  EXPECT(cuDeviceGet(&dev0, 0) == CUDA_SUCCESS);
+  CUcontext caller = NULL;
+  EXPECT(cuCtxCreate(&caller, NULL, 0, dev0) == CUDA_SUCCESS);
+  EXPECT(cuCtxSetCurrent(caller) == CUDA_SUCCESS);
+
+  char root[64];
+  EXPECT(mkdtemp_root(root, sizeof root) == 0);
+  struct damacy_config cfg = mk_cfg(root);
+  cfg.device = 1;
+  struct damacy* d = NULL;
+  EXPECT(damacy_create(&cfg, &d) == DAMACY_INVAL);
+  EXPECT(d == NULL);
+
+  EXPECT(cuCtxSetCurrent(NULL) == CUDA_SUCCESS);
+  EXPECT(cuCtxDestroy(caller) == CUDA_SUCCESS);
+  fixture_rm_tree(root);
+  return 0;
+}
+
 int
 main(void)
 {
   RUN(test_create_preserves_caller_ctx);
   RUN(test_create_no_ctx_returns_inval);
+  RUN(test_create_explicit_device_no_ctx);
+  RUN(test_create_explicit_device_mismatch);
   log_info("all tests passed");
   return 0;
 }

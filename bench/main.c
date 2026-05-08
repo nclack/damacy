@@ -701,6 +701,7 @@ main(int argc, char** argv)
     .n_zarrs_meta_cache = sc.n_zarrs_meta_cache,
     .n_shards_meta_cache = sc.n_shards_meta_cache,
     .dtype = sc.dtype,
+    .device = -1,
   };
 
   struct rng rng = { .s = sc.sampling_seed ? sc.sampling_seed : 0xdeadbeefULL };

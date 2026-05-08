@@ -53,6 +53,7 @@ mk_cfg(const char* root, uint32_t batch_size)
     .n_zarrs_meta_cache = 4,
     .n_shards_meta_cache = 4,
     .dtype = DAMACY_F32,
+    .device = -1,
   };
 }
 

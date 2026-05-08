@@ -40,10 +40,11 @@ with damacy.Pipeline(cfg) as d:
             ...                       # train step
 ```
 
-A current CUDA context is required on the calling thread. PyTorch sets
-one up implicitly on first allocation; for bare-Python use call
-`damacy._native.cuda_init_primary()` once first. With no current
-context, `Pipeline(cfg)` raises `damacy.NativeCudaError`.
+By default `Pipeline(cfg)` captures the current CUDA context on the
+calling thread; PyTorch sets one up implicitly on first allocation, and
+bare-Python users can call `damacy._native.cuda_init_primary()` once.
+For multi-GPU setups, prefer `Config(..., device=local_rank)` — see
+the torchrun example below.
 
 `aabb` accepts ``(start, stop)`` 2-tuples or Python ``slice`` objects
 per axis, so ``aabb=np.s_[0:64, 0:256, 0:256]`` works directly.
@@ -68,13 +69,10 @@ def main() -> None:
     local_rank = int(os.environ["LOCAL_RANK"])
     world_size = dist.get_world_size()
 
-    # Bind this rank to its GPU and prime the CUDA context. The
-    # pipeline captures the caller's context at construction; do this
-    # *before* `damacy.Pipeline(...)`. See "Failure modes" below for
-    # what goes wrong if you skip either of these two lines.
+    # PyTorch needs this for its own tensor placement; pass the same
+    # rank to Config(device=...) below so damacy retains *that* device's
+    # primary context internally and can't end up on the wrong GPU.
     torch.cuda.set_device(local_rank)
-    torch.empty(1, device="cuda")  # touches the primary context
-    assert torch.cuda.current_device() == local_rank
 
     cfg = damacy.Config(
         store_root="/data/cells",
@@ -83,6 +81,7 @@ def main() -> None:
         device_buffer_bytes=1 << 30,  # per-rank
         dtype="bf16",
         n_io_threads=4,
+        device=local_rank,
     )
 
     # Shard work by rank — strided so adjacent samples stay co-located
@@ -118,19 +117,15 @@ Notes:
 
 ### Failure modes
 
-`Pipeline(cfg)` snapshots whatever `CUcontext` is current on the calling
-thread, **for the lifetime of the pipeline**. The two pre-`Pipeline(cfg)`
-lines above each guard a distinct foot-gun:
+`Config.device` controls how the pipeline binds to a CUDA device:
 
-| if you skip… | what happens |
+| value | behaviour |
 |---|---|
-| `torch.cuda.set_device(local_rank)` | All 8 ranks bind to the default device (GPU 0). DDP gradient sync still works, so training **looks fine** — it's just silently single-GPU-bound at ~1/8 throughput. The `assert torch.cuda.current_device() == local_rank` line catches this fail-fast. |
-| `torch.empty(1, device="cuda")` (or any other CUDA op) after `set_device` | The primary context for the new device hasn't been created yet, so no `CUcontext` is current when `Pipeline(cfg)` runs. Construction raises `damacy.NativeCudaError` (status `CUDA`). |
-| Both | Same as the second row — fail-fast with `NativeCudaError`. |
+| `None` (default) | Capture whatever `CUcontext` is current on the calling thread. Single-GPU friendly. Raises `damacy.InvalidArgument` if no context is current. Under torchrun, if `LOCAL_RANK` disagrees with the bound device damacy emits a `UserWarning` — almost always a missing `set_device(local_rank)`. |
+| `int` | Retain that device's primary context internally; the caller does not need `cuCtxSetCurrent` for damacy. If a context is *also* current on a different device, construction fails with `damacy.InvalidArgument` rather than silently shadowing it. |
 
-The "silent → wrong-device" mode is the dangerous one; the assertion
-is there to convert it into a loud `AssertionError` before any data
-moves.
+For multi-GPU runs, always pass `device=local_rank` — it eliminates the
+"silently bound to GPU 0" foot-gun entirely.
 
 ## Documentation
 

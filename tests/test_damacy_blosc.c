@@ -42,6 +42,7 @@ mk_cfg(const char* root, uint32_t batch_size)
     .n_zarrs_meta_cache = 4,
     .n_shards_meta_cache = 4,
     .dtype = DAMACY_F32,
+    .device = -1,
   };
 }
 
@@ -276,6 +277,7 @@ test_multi_wave_per_batch(void)
     .n_zarrs_meta_cache = 4,
     .n_shards_meta_cache = 4,
     .dtype = DAMACY_F32,
+    .device = -1,
   };
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
