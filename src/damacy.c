@@ -1703,15 +1703,24 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   CHECK(Fail, self->store_root);
 
   s = DAMACY_CUDA;
-  // Driver-API context model: ensure init, take the device's primary
-  // context (interoperable with anything that uses the runtime API),
-  // make it current on this thread.
+  // Driver-API context model: capture the caller's current context if
+  // any (PyTorch/DDP path), otherwise fall back to dev 0's primary and
+  // make it current on this thread (pure-C tests, bench).
   CR(Fail, cuInit(0));
-  CUdevice dev = 0;
-  CR(Fail, cuDeviceGet(&dev, 0));
+
+  CUcontext caller_ctx = NULL;
+  CR(Fail, cuCtxGetCurrent(&caller_ctx));
+
+  CUdevice dev;
+  if (caller_ctx) {
+    CR(Fail, cuCtxGetDevice(&dev));
+    CR(Fail, cuDevicePrimaryCtxRetain(&self->primary_ctx, dev));
+  } else {
+    CR(Fail, cuDeviceGet(&dev, 0));
+    CR(Fail, cuDevicePrimaryCtxRetain(&self->primary_ctx, dev));
+    CR(Fail, cuCtxSetCurrent(self->primary_ctx));
+  }
   self->cuda_device = (int)dev;
-  CR(Fail, cuDevicePrimaryCtxRetain(&self->primary_ctx, dev));
-  CR(Fail, cuCtxSetCurrent(self->primary_ctx));
   CR(Fail, cuStreamCreate(&self->stream_h2d, CU_STREAM_DEFAULT));
   CR(Fail, cuStreamCreate(&self->stream_compute, CU_STREAM_DEFAULT));
   CR(Fail, cuStreamCreate(&self->stream_zstd, CU_STREAM_DEFAULT));
