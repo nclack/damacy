@@ -133,8 +133,7 @@ def test_dtype_unknown_string_raises(tmp_path):
 def test_push_pop_release_via_context_managers(tiny_zarr):
     root, uri = tiny_zarr
     with Pipeline(_base_config(root)) as d:
-        consumed = d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
-        assert consumed == 1
+        d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
 
         with d.pop() as batch:
             info = batch.info
@@ -180,8 +179,7 @@ def test_oversize_chunk_surfaces_at_pop(tmp_path, write_zarr_script):
         max_chunk_uncompressed_bytes=128,  # 8x16 u16 = 256 B → over
     )
     with Pipeline(cfg) as d:
-        consumed = d.push([Sample(uri="foo", aabb=[(0, 8), (0, 16)])])
-        assert consumed == 1
+        d.push([Sample(uri="foo", aabb=[(0, 8), (0, 16)])])
         with pytest.raises(InvalidArgument):
             d.pop()
 
@@ -192,16 +190,93 @@ def test_oversize_chunk_surfaces_at_pop(tmp_path, write_zarr_script):
 def test_batches_iterator_yields_n(tiny_zarr):
     root, uri = tiny_zarr
     samples = [Sample(uri=uri, aabb=[(0, 8), (0, 16)]) for _ in range(3)]
-    # Bump lookahead so all 3 batches fit in the user-push queue at once.
-    cfg = dataclasses.replace(_base_config(root), lookahead_batches=4)
-    with Pipeline(cfg) as d:
-        consumed = d.push(samples)
-        assert consumed == 3
+    # Default lookahead (= 2 with batch_size=1, capacity=2) is now smaller
+    # than the push; the wrapper queues the overflow and drains as we pop.
+    with Pipeline(_base_config(root)) as d:
+        d.push(samples)
         ids: list[int] = []
         for batch in d.batches(3):
             with batch as b:
                 ids.append(b.info.batch_id)
         assert ids == [0, 1, 2]
+
+
+def test_push_returns_none(tiny_zarr):
+    root, uri = tiny_zarr
+    with Pipeline(_base_config(root)) as d:
+        assert d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])]) is None
+
+
+def _drain_ids(d: Pipeline, n: int) -> list[int]:
+    ids: list[int] = []
+    for batch in d.batches(n):
+        with batch as b:
+            ids.append(b.info.batch_id)
+    return ids
+
+
+def test_push_overflows_queue_into_pending(tiny_zarr):
+    """Pushing more samples than the native lookahead holds is silently
+    handled by the Python-side queue; pop drives the drain."""
+    root, uri = tiny_zarr
+    # default lookahead=2, batch_size=1 → capacity=2; we push 5.
+    samples = [Sample(uri=uri, aabb=[(0, 8), (0, 16)]) for _ in range(5)]
+    with Pipeline(_base_config(root)) as d:
+        d.push(samples)
+        assert d.pending  # 3 samples > capacity sitting in the deque
+        assert _drain_ids(d, 5) == [0, 1, 2, 3, 4]
+        assert not d.pending
+
+
+def test_push_accepts_generator(tiny_zarr):
+    root, uri = tiny_zarr
+
+    def gen():
+        for _ in range(4):
+            yield Sample(uri=uri, aabb=[(0, 8), (0, 16)])
+
+    with Pipeline(_base_config(root)) as d:
+        d.push(gen())  # generator, not a list
+        assert _drain_ids(d, 4) == [0, 1, 2, 3]
+
+
+def test_push_accepts_infinite_generator(tiny_zarr):
+    """Infinite generator must not be materialized; we pull only what fits
+    and what each pop frees."""
+    root, uri = tiny_zarr
+
+    def forever():
+        while True:
+            yield Sample(uri=uri, aabb=[(0, 8), (0, 16)])
+
+    with Pipeline(_base_config(root)) as d:
+        d.push(forever())  # would OOM if eagerly materialized
+        assert _drain_ids(d, 3) == [0, 1, 2]
+        assert d.pending  # generator still has more
+
+
+def test_push_chains_multiple_calls(tiny_zarr):
+    root, uri = tiny_zarr
+    s = Sample(uri=uri, aabb=[(0, 8), (0, 16)])
+    with Pipeline(_base_config(root)) as d:
+        d.push([s, s])
+        d.push([s, s, s])
+        assert _drain_ids(d, 5) == [0, 1, 2, 3, 4]
+
+
+def test_push_error_drops_offending_iterator(tiny_zarr):
+    """A NotFound mid-iterator drops *that* iterator's tail but earlier
+    queued iterators still resolve."""
+    root, uri = tiny_zarr
+    good = Sample(uri=uri, aabb=[(0, 8), (0, 16)])
+    bad = Sample(uri="not_a_zarr", aabb=[(0, 8), (0, 16)])
+    with Pipeline(_base_config(root)) as d:
+        d.push([good])  # this one queues + drains cleanly
+        with pytest.raises(NotFound):
+            d.push([bad, good])  # raises mid-drain; bad's tail discarded
+        # The first push's sample still resolves.
+        with d.pop() as b:
+            assert b.info.batch_id == 0
 
 
 # ---- Config dataclass --------------------------------------------------

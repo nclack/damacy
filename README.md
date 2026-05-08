@@ -60,21 +60,21 @@ with damacy.Pipeline(cfg) as p:
 
 ## Streaming
 
-For continuous training, push between pops instead of preloading
-the whole sample list — `damacy.Sample` plays nicely with any iterator:
+`push` accepts any iterable, including infinite generators — samples
+are pulled lazily as `pop` frees space. For unbounded training, hand
+the pipeline a generator and let it drain:
 
 ```python
 def crops():
     while True:
         yield random_crop()  # from the example above
 
-samples = crops()
 with damacy.Pipeline(cfg) as p:
+    p.push(crops())                    # bounded memory; pulled on demand
     for step in range(N_STEPS):
-        p.push(next(samples) for _ in range(cfg.batch_size))
         with p.pop() as t:
             x = torch.from_dlpack(t)
-            ...  # train step
+            ...                        # train step
 ```
 
 ## Documentation

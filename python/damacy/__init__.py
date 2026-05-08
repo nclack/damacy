@@ -35,9 +35,11 @@ Variants reuse a base via :func:`dataclasses.replace`::
 
 from __future__ import annotations
 
+import itertools
 import logging
 import os
 import warnings
+from collections import deque
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from enum import IntEnum
@@ -618,7 +620,7 @@ class Pipeline:
     Resource caps are fixed at construction; nothing grows after that.
     """
 
-    __slots__ = ("_closed", "_config", "_native")
+    __slots__ = ("_closed", "_config", "_native", "_pending")
 
     def __init__(self, config: Config) -> None:
         try:
@@ -641,6 +643,11 @@ class Pipeline:
             _reraise_typed(exc)
         self._closed = False
         self._config = config
+        # User-side queue of pending sample iterators. push() appends
+        # here and best-effort drains; pop()/flush() top up before
+        # touching native. This makes push() consume-everything from
+        # the user's perspective and lets generators flow naturally.
+        self._pending: deque[Iterator[Sample]] = deque()
         _warn_if_local_rank_disagrees(config.device, self._native.device)
 
     @property
@@ -672,52 +679,84 @@ class Pipeline:
     ) -> None:
         del exc_type, exc, tb  # protocol-required, not consumed
         # Drain any in-flight work so a clean shutdown doesn't drop a
-        # partial last batch silently. flush is a no-op if nothing
-        # is queued.
+        # partial last batch silently. Pending samples that don't fit
+        # are discarded — the user is on the hook for popping
+        # everything they pushed before exiting.
         try:
             if not self._closed:
-                self._native.flush()
-        except _native.DamacyError:
+                self.flush()
+        except DamacyError:
             pass  # don't mask the user's exception
         self.close()
 
     # ---- pipeline ----------------------------------------------------
 
-    def push(self, samples: Iterable[Sample]) -> int:
-        """Push samples into the loader. Returns the number of samples
-        consumed.
+    def push(self, samples: Iterable[Sample]) -> None:
+        """Queue samples for processing. Accepts any iterable (list,
+        generator, infinite generator, …); large or unbounded sources
+        are pulled lazily as :meth:`pop` frees space.
 
-        On non-fatal back-pressure (queue full mid-slice) the partial
-        count is returned and the caller can retry the unconsumed
-        suffix after :meth:`pop`. Fatal errors (bad uri, bad dtype, …)
-        raise the matching :class:`DamacyError` subclass and the
-        offending sample is left unconsumed.
+        Fatal errors from the C-side validator (``NotFound``,
+        ``DtypeMismatch``, ``RankMismatch``, …) raise the matching
+        :class:`DamacyError` subclass; the offending iterator is
+        discarded but other already-pushed iterators keep their place.
         """
-        items = [s._to_native() for s in samples]
-        try:
-            r = self._native.push(items)
-        except _native.DamacyError as exc:
-            _reraise_typed(exc)
-        # Back-pressure: AGAIN comes back as a partial-consume dict. We
-        # just hand the count to the caller; only fatal errors raise.
-        return int(r["consumed"])
+        self._pending.append(iter(samples))
+        self._drain_pending()
+
+    def _drain_pending(self) -> None:
+        """Move samples from pending iterators into the native lookahead
+        until the lookahead is full or all pending iterators are
+        exhausted. Best-effort; safe to call any time."""
+        cap = self._config.lookahead_batches * self._config.batch_size
+        while self._pending:
+            it = self._pending[0]
+            chunk = list(itertools.islice(it, cap))
+            if not chunk:
+                self._pending.popleft()
+                continue
+            try:
+                r = self._native.push([s._to_native() for s in chunk])
+            except _native.DamacyError as exc:
+                # Drop the failed iterator; other pending iterators
+                # keep their place and will retry on next drain.
+                self._pending.popleft()
+                _reraise_typed(exc)
+            consumed = int(r["consumed"])
+            if consumed < len(chunk):
+                # Native is full — put the unconsumed back at the head
+                # so the next drain (after a pop) resumes from here.
+                self._pending[0] = itertools.chain(chunk[consumed:], it)
+                return
 
     def pop(self) -> Batch:
         """Block until the next batch is on-device-ready. Returns a
         :class:`Batch` you can hand to ``torch.from_dlpack`` (or any
         DLPack consumer) — preferably inside a ``with`` block."""
+        # Top up native from the pending queue so the planner has work.
+        self._drain_pending()
         try:
             return Batch(self._native.pop())
         except _native.DamacyError as exc:
             _reraise_typed(exc)
 
     def flush(self) -> None:
-        """Drain in-flight work; ready any partial last batch for pop.
-        Idempotent. Subsequent :meth:`push` starts a fresh batch."""
+        """Drain pending samples into the pipeline (best-effort) and
+        ready any partial last batch for pop. Idempotent. Pending
+        samples that don't fit before flush are dropped — pop until
+        :attr:`pending` reads False if you want every queued sample to
+        emit as a batch."""
+        self._drain_pending()
         try:
             self._native.flush()
         except _native.DamacyError as exc:
             _reraise_typed(exc)
+
+    @property
+    def pending(self) -> bool:
+        """True if push() has accepted samples that haven't yet entered
+        the native lookahead. Becomes False as :meth:`pop` frees space."""
+        return bool(self._pending)
 
     def batches(self, n: int) -> Iterator[Batch]:
         """Pop *n* batches as an iterator. Each call to :meth:`pop`
