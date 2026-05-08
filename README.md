@@ -41,7 +41,8 @@ with damacy.Damacy(cfg) as d:
 
 A current CUDA context is required on the calling thread. PyTorch sets
 one up implicitly on first allocation; for bare-Python use call
-`damacy._native.cuda_init_primary()` once first.
+`damacy._native.cuda_init_primary()` once first. With no current
+context, `Damacy(cfg)` raises `damacy.NativeCudaError`.
 
 ## Distributed (torchrun, 8 GPUs)
 
@@ -65,9 +66,11 @@ def main() -> None:
 
     # Bind this rank to its GPU and prime the CUDA context. Damacy
     # captures the caller's context at construction; do this *before*
-    # `damacy.Damacy(...)`.
+    # `damacy.Damacy(...)`. See "Failure modes" below for what goes
+    # wrong if you skip either of these two lines.
     torch.cuda.set_device(local_rank)
     torch.empty(1, device="cuda")  # touches the primary context
+    assert torch.cuda.current_device() == local_rank
 
     cfg = damacy.Config(
         store_root="/data/cells",
@@ -103,13 +106,27 @@ if __name__ == "__main__":
 
 Notes:
 
-- `torch.cuda.set_device(local_rank)` must run **before** `Damacy(cfg)` —
-  Damacy snapshots the current `CUcontext` at construction.
 - The pipeline is single-rank-aware. There is no cross-rank coordination
   inside Damacy; throughput scales linearly with rank count provided
   the storage layer keeps up.
 - `n_io_threads` is per-rank; tune to your storage tier (NVMe pool,
   parallel filesystem, or object store).
+
+### Failure modes
+
+`Damacy(cfg)` snapshots whatever `CUcontext` is current on the calling
+thread, **for the lifetime of the loader**. The two pre-`Damacy(cfg)`
+lines above each guard a distinct foot-gun:
+
+| if you skip… | what happens |
+|---|---|
+| `torch.cuda.set_device(local_rank)` | All 8 ranks bind to the default device (GPU 0). DDP gradient sync still works, so training **looks fine** — it's just silently single-GPU-bound at ~1/8 throughput. The `assert torch.cuda.current_device() == local_rank` line catches this fail-fast. |
+| `torch.empty(1, device="cuda")` (or any other CUDA op) after `set_device` | The primary context for the new device hasn't been created yet, so no `CUcontext` is current when `Damacy(cfg)` runs. Construction raises `damacy.NativeCudaError` (status `CUDA`). |
+| Both | Same as the second row — fail-fast with `NativeCudaError`. |
+
+The "silent → wrong-device" mode is the dangerous one; the assertion
+is there to convert it into a loud `AssertionError` before any data
+moves.
 
 ## Documentation
 
