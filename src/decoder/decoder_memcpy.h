@@ -2,10 +2,6 @@
 
 #include <stdint.h>
 
-// Forward-declare CUstream so non-CUDA consumers (the host parse module)
-// can use gpu_memcpy_op without pulling in cuda.h. Matches cuda.h's
-// definition; the launch implementation lives in a .cu and #include's
-// the real header.
 typedef struct CUstream_st* CUstream;
 
 #ifdef __cplusplus

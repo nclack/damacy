@@ -1,11 +1,4 @@
-// End-to-end coverage of the host-side blosc1 parse: walks the six
-// fixture chunks in experiments/blosc1-gpu, runs blosc1_host_parse, then
-// drives nvcomp + (bit)unshuffle on the resulting fanout / op arrays
-// and memcmp's the decompressed output against the .raw ground truth.
-//
-// Bit-exact equivalence is the contract: any bug in the host parse,
-// emit, or rank-sort surfaces here as either a non-zero h_hdr.err, a
-// failed flag-extraction assert, or a bad memcmp.
+// blosc1_host_parse → nvcomp → (bit)unshuffle → memcmp against .raw.
 
 #include "decoder/bitshuffle.h"
 #include "decoder/blosc1.h"
@@ -110,8 +103,6 @@ slurp_file(const char* path, uint8_t** out_bytes, size_t* out_n)
   return 0;
 }
 
-// One fixture: host-parse the chunk, H2D the compressed bytes + the host
-// fanout / op SOA arrays, run nvcomp + (bit)unshuffle, memcmp result.
 static int
 run_one(const struct fixture* fx, struct threadpool* pool, CUstream stream)
 {
@@ -133,8 +124,6 @@ run_one(const struct fixture* fx, struct threadpool* pool, CUstream stream)
   EXPECT(cuMemcpyHtoDAsync(d_comp, h_comp, comp_n, stream) == CUDA_SUCCESS);
   EXPECT(cuMemsetD8Async(d_decomp, 0, raw_n, stream) == CUDA_SUCCESS);
 
-  // Host parse: builds host-resident fanout / op arrays. Pointer slots
-  // hold device addresses (d_comp / d_decomp + per-substream offset).
   struct blosc1_host_chunk h_chunk = {
     .h_compressed = h_comp,
     .d_compressed = (void*)(uintptr_t)d_comp,
@@ -214,14 +203,9 @@ run_one(const struct fixture* fx, struct threadpool* pool, CUstream stream)
     EXPECT(h_hdr.shuffle == 0);
     EXPECT(h_hdr.bitshuffle == 0);
   }
-  // Pure-codec fixtures (no per-block raw fallback expected at clevel=5
-  // on this low-entropy data).
+  // Fixtures are clevel=5 on low-entropy data; no raw fallback expected.
   EXPECT(h_totals.n_memcpy == 0);
 
-  // H2D the host-built fanout / op arrays so nvcomp + the (bit)unshuffle
-  // / memcpy launches can read them off-device. Each codec's contiguous
-  // slice is exactly its `n_*` substreams; the rest of the kMaxSubs
-  // capacity is unused.
   CUdeviceptr d_zstd_cp = 0, d_zstd_cs = 0, d_zstd_dp = 0, d_zstd_ds = 0;
   CUdeviceptr d_lz4_cp = 0, d_lz4_cs = 0, d_lz4_dp = 0, d_lz4_ds = 0;
   CUdeviceptr d_memcpy_ops = 0, d_unsh = 0, d_bitunsh = 0;
@@ -368,9 +352,7 @@ run_one(const struct fixture* fx, struct threadpool* pool, CUstream stream)
   return 0;
 }
 
-// Run the full fixture set against three pool sizes (0 = serial, 1 =
-// single worker, 4 = multi-worker). Catches any data race between
-// phase-A counts and phase-C emits.
+// Three pool sizes to flush any phase-A / phase-C race.
 static int
 test_all_fixtures(void)
 {

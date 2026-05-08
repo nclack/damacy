@@ -10,7 +10,6 @@
 #include <stdint.h>
 #include <string.h>
 
-// blosc1 chunk header: 16 bytes at offset 0; bstarts[nblocks] follows.
 #define BLOSC1_HEADER_BYTES 16u
 
 static inline uint32_t
@@ -30,9 +29,7 @@ inner_codec_compformat(uint8_t codec)
   return 0;
 }
 
-// Rank-sort bstarts into ascending order; ties broken by block index.
-// nblocks <= DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK (currently 64), so an
-// O(n²) rank-sort is comfortably under a microsecond per chunk.
+// Rank-sort bstarts ascending; ties broken by block index.
 static void
 sort_bstarts(const uint32_t* bstarts, uint32_t* sorted, uint32_t nblocks)
 {
@@ -48,10 +45,8 @@ sort_bstarts(const uint32_t* bstarts, uint32_t* sorted, uint32_t nblocks)
   }
 }
 
-// Walk one CODEC_BLOSC_* chunk's bstarts + per-substream prefixes,
-// filling `*c` with substream counts. Returns the chunk's per-substream
-// nstreams (== typesize for LZ4 multi-stream, else 1) for emit reuse.
-// Caller has already validated h->err == 0 and !h->memcpyed.
+// Walks bstarts + per-substream prefixes for a CODEC_BLOSC_* chunk,
+// filling counts. Caller has validated err == 0 and !memcpyed.
 static uint32_t
 walk_count(const uint8_t* p,
            const struct blosc1_chunk_hdr* h,
@@ -68,8 +63,6 @@ walk_count(const uint8_t* p,
   uint32_t n_codec = 0;
   uint32_t n_raw = 0;
   for (uint32_t bi = 0; bi < h->nblocks; ++bi) {
-    // Block bi's payload extent ends at the next bstart in sorted order
-    // (or at cbytes for the last block).
     uint32_t r = 0;
     for (uint32_t j = 0; j < h->nblocks; ++j) {
       const uint32_t a = bstarts[j];
@@ -103,8 +96,7 @@ walk_count(const uint8_t* p,
   return per_stream_dst;
 }
 
-// One chunk's parse + count. Sets hdrs[i] and counts[i]; returns the
-// chunk's err (0 on success).
+// Returns h.err (0 on success).
 static uint8_t
 parse_count_one(const struct blosc1_host_chunk* in,
                 struct blosc1_chunk_hdr* out_hdr,
@@ -193,8 +185,6 @@ Done:
   return h.err;
 }
 
-// Emit one chunk's fanout / op slots. `o` is the chunk's offsets into
-// each output array, computed by the scan pass.
 static void
 emit_one(const struct blosc1_host_chunk* in,
          const struct blosc1_chunk_hdr* h,
@@ -226,7 +216,6 @@ emit_one(const struct blosc1_host_chunk* in,
     return;
   }
 
-  // CODEC_BLOSC_*
   if (h->memcpyed) {
     const uint32_t overhead = BLOSC1_HEADER_BYTES + 4u * h->nblocks;
     struct gpu_memcpy_op* slot = &memcpy_ops[o->memcpy_off];
@@ -310,8 +299,6 @@ emit_one(const struct blosc1_host_chunk* in,
   }
 }
 
-// Three-phase parallel-for driver state. Phase A and Phase C share a
-// pointer to this; Phase B (the scan) runs serially on the caller.
 struct parse_ctx
 {
   const struct blosc1_host_chunk* chunks;
@@ -352,9 +339,6 @@ phase_emit(size_t i, int tid, void* vctx)
            ctx->bitunshuffle_ops);
 }
 
-// Serial exclusive scan over the five count fields, simultaneously
-// producing wave totals. n_chunks <= DAMACY_MAX_CHUNKS_PER_WAVE so the
-// loop's bounded; not worth parallelising vs. the dispatch overhead.
 static void
 scan_offsets(const struct blosc1_chunk_counts* counts,
              struct blosc1_chunk_offsets* offsets,
@@ -388,8 +372,7 @@ blosc1_host_parse(const struct blosc1_host_parse_args* args)
   CHECK(Fail, args->out_totals);
   struct blosc1_totals* out_totals = args->out_totals;
 
-  // n_codec_errors is set by decoder_status_reduce after nvcomp; leave
-  // it alone here. Other fields are fully written below.
+  // n_codec_errors is owned by decoder_status_reduce; don't touch.
   out_totals->n_zstd = 0;
   out_totals->n_lz4 = 0;
   out_totals->n_memcpy = 0;
@@ -399,10 +382,6 @@ blosc1_host_parse(const struct blosc1_host_parse_args* args)
   if (args->n_chunks == 0)
     return 0;
 
-  // Per-wave scratch + the destination arrays must be sized for the
-  // worst-case substream count of the wave. Fanout SOAs may be empty
-  // for codecs that aren't present in this wave but the SOA pointer
-  // arrays must still be valid (phase_emit indexes them by codec).
   CHECK(Fail, args->chunks);
   CHECK(Fail, args->scratch.hdrs);
   CHECK(Fail, args->scratch.counts);

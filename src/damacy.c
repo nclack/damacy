@@ -225,12 +225,10 @@ struct damacy_wave
   uint64_t host_slab_cap;
   uint64_t dev_decompressed_cap;
 
-  // blosc1 host-parse state. The parser walks host_slab while the bulk
-  // H2D streams the same bytes to dev_compressed; the resulting fanout
-  // / op records (host-pinned) are H2D'd onto stream_h2d so codec
-  // streams + post-decode kernels read them off-device.
+  // blosc1 host-parse state, all pinned. parse fills these; the fanout
+  // / op records H2D onto stream_h2d for the codec + post-decode stages.
   struct blosc1_host_chunk* h_chunks;
-  struct blosc1_host_scratch scratch; // hdrs / counts / offsets, sized to cap
+  struct blosc1_host_scratch scratch;
   struct blosc1_host_fanout h_zstd_fan;
   struct blosc1_host_fanout h_lz4_fan;
   struct gpu_memcpy_op* h_memcpy_ops;
@@ -238,13 +236,10 @@ struct damacy_wave
   struct gpu_shuffle_op* h_bitunshuffle_ops;
   struct blosc1_totals* h_blosc1_totals;
 
-  // d_blosc1_totals: zeroed each wave on stream_h2d; status_reduce
-  // atomically adds codec error counts. Read back to h_blosc1_totals at
-  // the end of post_decode for finalize_wave to surface.
+  // status_reduce atomicAdds into n_codec_errors; finalize_wave reads.
   struct blosc1_totals* d_blosc1_totals;
 
-  // Device SOA mirrors of the host fanout, populated by H2D in kick_h2d.
-  // nvcomp's batched APIs consume them off-device.
+  // Device SOA mirrors of the host fanout (H2D'd in kick_h2d).
   struct nvcomp_fanout zstd_fan;
   struct nvcomp_fanout lz4_fan;
 
@@ -252,9 +247,7 @@ struct damacy_wave
   struct gpu_shuffle_op* d_unshuffle_ops;
   struct gpu_shuffle_op* d_bitunshuffle_ops;
 
-  // Host wall-clock for the per-wave blosc1_host_parse call (ms). Drained
-  // into stats.decompress_parse alongside the GPU-event timings.
-  float parse_ms;
+  float parse_ms; // host wall-clock around blosc1_host_parse
   // Same extent as dev_decompressed; staging area used by the
   // (bit)unshuffle kernels so the per-block transpose isn't bounded by
   // the 64 KB shared-memory cap.
@@ -333,10 +326,7 @@ struct damacy
   CUstream stream_zstd; // nvcomp Zstd batch
   CUstream stream_lz4;  // nvcomp LZ4 batch
 
-  // Fork-join pool for host-side blosc1 chunk-header parsing. NULL when
-  // cfg.n_compute_threads == 0 — dispatch helpers degrade to running on
-  // the calling thread.
-  struct threadpool* compute_pool;
+  struct threadpool* compute_pool; // host blosc1 parse
 
   struct damacy_lookahead lookahead;
   struct damacy_batch_pool batch_pool;
@@ -838,14 +828,9 @@ wave_init(struct damacy_wave* wave,
   CR(Error, cuMemAlloc(&dptr, (size_t)cap * sizeof(struct assemble_chunk)));
   wave->d_assemble_chunks = (struct assemble_chunk*)(uintptr_t)dptr;
 
-  // Per-wave blosc1 device-side counters target. Status_reduce
-  // atomically adds non-zero nvcomp statuses into n_codec_errors; the
-  // count fields are written by the host parse and not touched on device.
   CR(Error, cuMemAlloc(&dptr, sizeof(struct blosc1_totals)));
   wave->d_blosc1_totals = (struct blosc1_totals*)(uintptr_t)dptr;
 
-  // Host + device SOA fanout for nvcomp Zstd / LZ4 batched calls. Host
-  // arrays are filled by blosc1_host_parse; device arrays are H2D copies.
   const size_t zsubs = DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE;
   const size_t lsubs = lz4_subs_per_wave(max_bpe);
   CR(
@@ -888,9 +873,6 @@ wave_init(struct damacy_wave* wave,
   CR(Error, cuMemAlloc(&dptr, lsubs * sizeof(size_t)));
   wave->lz4_fan.d_decomp_buf_sizes = (size_t*)(uintptr_t)dptr;
 
-  // Host + device memcpy / shuffle op arrays. Host buffers feed the H2D
-  // in kick_h2d; device buffers feed decoder_memcpy_launch and the
-  // (bit)unshuffle launches.
   CR(Error,
      cuMemAllocHost((void**)&wave->h_memcpy_ops,
                     DAMACY_MAX_BLOSC_MEMCPY_OPS_PER_WAVE *
@@ -971,7 +953,7 @@ wave_destroy(struct damacy_wave* wave)
     return;
   decoder_zstd_destroy(wave->zstd_decoder);
   decoder_lz4_destroy(wave->lz4_decoder);
-  // Pinned host buffers. cuMemFreeHost(NULL) is invalid; guard each.
+  // cuMemFreeHost(NULL) is invalid; guard each.
   void* const host_ptrs[] = {
     wave->host_slab,
     wave->h_chunks,
@@ -1246,11 +1228,8 @@ peel_wave(struct damacy* self, uint16_t wave_idx, uint16_t slot_idx)
   return DAMACY_OK;
 }
 
-// Build per-chunk blosc1_host_chunk records for the wave. The host
-// pointer reads through host_slab (pinned); the device pointers point
-// into dev_compressed / dev_decompressed and feed the host parse + the
-// fanout SOAs. host_slab and dev_compressed share byte offsets because
-// kick_h2d copies the slab byte-for-byte.
+// host_slab and dev_compressed share offsets because kick_h2d copies
+// the slab byte-for-byte.
 static void
 build_blosc1_host_chunks(struct damacy* self, struct damacy_wave* wave)
 {
@@ -1271,12 +1250,8 @@ build_blosc1_host_chunks(struct damacy* self, struct damacy_wave* wave)
   }
 }
 
-// IO is done — kick the bulk H2D, run blosc1_host_parse on the compute
-// pool while the DMA is in flight (pinned host_slab is readable by the
-// CPU during the transfer), then issue the fanout / op H2Ds and zero
-// d_blosc1_totals so status_reduce can atomicAdd into n_codec_errors.
-// ev.h2d_end fires after every stream_h2d submission for the wave —
-// codec streams + stream_compute gate on it.
+// Bulk H2D, host parse overlapping the DMA, fanout/op H2Ds, then
+// h2d_end. Codec streams + stream_compute gate on h2d_end.
 static enum damacy_status
 kick_h2d(struct damacy* self, struct damacy_wave* wave)
 {
@@ -1304,15 +1279,12 @@ kick_h2d(struct damacy* self, struct damacy_wave* wave)
   });
   wave->parse_ms = (float)((monotonic_ns() - parse_t0) / 1.0e6);
   if (rc) {
-    // Still record h2d_end so any wave-state cleanup gated on it drains.
+    // Record h2d_end so cleanup paths gated on it can drain.
     cuEventRecord(wave->ev.h2d_end, self->stream_h2d);
     self->failed_status = DAMACY_DECODE;
     return DAMACY_DECODE;
   }
 
-  // Fanout / op H2Ds. Each codec's slice is exactly its `n_*` substreams
-  // contiguous from offset 0 in the host SOAs; skip empties so we don't
-  // queue zero-byte H2Ds.
   const struct blosc1_totals* tot = wave->h_blosc1_totals;
   if (tot->n_zstd > 0) {
     CR(CudaFail,
@@ -1379,9 +1351,7 @@ kick_h2d(struct damacy* self, struct damacy_wave* wave)
                            sizeof(struct gpu_shuffle_op),
                          self->stream_h2d));
 
-  // Zero d_blosc1_totals so status_reduce's atomicAdds land in a clean
-  // n_codec_errors. Cheap (28 B); covers the count fields too even though
-  // the device side doesn't read them.
+  // Zero so status_reduce's atomicAdds land in a clean n_codec_errors.
   CR(CudaFail,
      cuMemsetD8Async(CUDPTR(wave->d_blosc1_totals),
                      0,
@@ -1536,15 +1506,8 @@ kick_post_decode(struct damacy* self,
                               wave->dev_decompressed,
                               wave->dev_unshuffle_scratch))
     goto DecodeFail;
-  // Refresh n_codec_errors on host so finalize_wave can surface any
-  // nvcomp non-success statuses. Narrowed to the 4-byte field — the
-  // count fields in h_blosc1_totals were filled by the host parse and
-  // are still consumed by drain_wave_metrics, so we mustn't clobber
-  // them with the device-side zeros. This rides on stream_compute
-  // (which has already waited on both codec streams' *_done events),
-  // so the read sees both reductions. asm_end (recorded later on
-  // stream_compute) sequences after this D2H, so finalize_wave's read
-  // of h_blosc1_totals is safe.
+  // Narrowed to the 4-byte n_codec_errors so the host parse's count
+  // fields in h_blosc1_totals stay intact for drain_wave_metrics.
   CR(CudaFail,
      cuMemcpyDtoHAsync(&wave->h_blosc1_totals->n_codec_errors,
                        CUDPTR(&wave->d_blosc1_totals->n_codec_errors),
@@ -1594,10 +1557,8 @@ CudaFail:
   return DAMACY_CUDA;
 }
 
-// H2D + host-parse done — totals are already on the host, fanout/op
-// arrays are already on the device. Gate nvcomp Zstd / LZ4 batches on
-// parallel streams via h2d_end, fold memcpy + (un)shuffles back onto
-// stream_compute, then assemble.
+// Codec batches on parallel streams gate on h2d_end; memcpy +
+// (un)shuffles fold back onto stream_compute; then assemble.
 static enum damacy_status
 kick_compute(struct damacy* self, struct damacy_wave* wave)
 {
@@ -1605,9 +1566,6 @@ kick_compute(struct damacy* self, struct damacy_wave* wave)
   CR(CudaFail, cuStreamWaitEvent(s, wave->ev.h2d_end, 0));
   CR(CudaFail, cuEventRecord(wave->ev.decomp_start, s));
 
-  // h_blosc1_totals was filled by blosc1_host_parse in kick_h2d. Snapshot
-  // it before kick_post_decode's D2H overwrites the count fields with
-  // zeros from the device side (the device only writes n_codec_errors).
   const struct blosc1_totals tot = *wave->h_blosc1_totals;
   enum damacy_status st = kick_codec_batches(self, wave, &tot);
   if (st != DAMACY_OK)
@@ -1646,15 +1604,7 @@ drain_wave_metrics(struct damacy* self, struct damacy_wave* wave)
                   ms,
                   wave->decomp_in_bytes,
                   wave->decomp_out_bytes);
-  // Sub-stages: host-parse wall-clock + per-codec batch + post-decode
-  // kernels. parse runs on the CPU concurrent with the bulk H2D (see
-  // kick_h2d); parse_ms is measured around the synchronous fork-join
-  // dispatch on compute_pool.
   metric_record(&self->stats.decompress_parse, wave->parse_ms, 0, 0);
-  // Codec batches gate on h2d_end; their *_done events fire on the
-  // dedicated codec stream after the nvcomp call retires. n_* count
-  // fields in h_blosc1_totals are preserved across post_decode (the
-  // D2H now copies only n_codec_errors), so they remain readable here.
   const struct blosc1_totals tot = *wave->h_blosc1_totals;
   if (tot.n_zstd > 0 &&
       cuEventElapsedTime(&ms, wave->ev.h2d_end, wave->ev.zstd_done) ==
@@ -1859,9 +1809,6 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   CR(Fail, cuStreamCreate(&self->stream_zstd, CU_STREAM_NON_BLOCKING));
   CR(Fail, cuStreamCreate(&self->stream_lz4, CU_STREAM_NON_BLOCKING));
 
-  // Fork-join compute pool. nthreads=0 is supported (serial on caller);
-  // threadpool_new only returns NULL on real allocation/thread-spawn
-  // failure, which we surface as OOM.
   self->compute_pool = threadpool_new((int)cfg->n_compute_threads);
   if (!self->compute_pool) {
     s = DAMACY_OOM;
@@ -1988,8 +1935,6 @@ damacy_destroy(struct damacy* self)
       cuStreamDestroy(*streams[i]);
     }
 
-  // Streams are quiesced; host parse workers are idle (parse only runs
-  // synchronously inside kick_h2d on the caller thread).
   threadpool_free(self->compute_pool);
 
   free(self->batch_stage);
