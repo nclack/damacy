@@ -17,6 +17,7 @@ DLPack-ready device tensor.
 ## Quick start
 
 ```python
+import random
 import damacy
 import torch
 
@@ -32,11 +33,22 @@ cfg = damacy.Config(
     # implicitly). For multi-GPU pass `device=local_rank` — see
     # https://nclack.github.io/damacy/distributed/
 )
-samples = [
-    # AABB = per-axis half-open intervals; np.s_[...] also accepted.
-    damacy.Sample(uri=f"cell-{i}.zarr", aabb=[(0, 64), (0, 256), (0, 256)])
-    for i in range(64)
-]
+
+# A Sample names a uri (relative to Config.store_root) and a per-axis
+# half-open AABB into the stored array (np.s_[...] also accepted).
+# Build them however suits — your own sampler, a torch Dataset, a
+# curriculum, a fixed tile grid, ...
+volumes = {  # uri → full ZYX shape
+    "brain-001.zarr":  (512, 4096, 4096),
+    "brain-002.zarr":  (768, 4096, 4096),
+    "kidney-007.zarr": (256, 2048, 2048),
+}
+def random_crop(size=(64, 256, 256)):
+    uri, full = random.choice(list(volumes.items()))
+    origin = [random.randint(0, f - s) for f, s in zip(full, size)]
+    return damacy.Sample(uri=uri, aabb=[(o, o + s) for o, s in zip(origin, size)])
+
+samples = [random_crop() for _ in range(64)]
 
 with damacy.Pipeline(cfg) as p:
     p.push(samples)                                # producer side
