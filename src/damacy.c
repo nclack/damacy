@@ -312,6 +312,7 @@ struct damacy
   int cuda_device;
   int retained_primary_device; // -1 = captured caller's ctx; else release at
                                // destroy
+  CUcontext retained_primary;  // pushed per-call by ctx_guard when retained
 
   // GPU memory budgeting: total bytes committed at create-time (waves +
   // per-batch metadata). Lazy batch-output tensors are summed against
@@ -341,6 +342,39 @@ struct damacy
   struct damacy_batch handle;
   struct damacy_stats stats;
 };
+
+// --- ctx guard ------------------------------------------------------------
+
+// Push the retained primary CUcontext for the duration of one public API
+// call and pop on exit. No-op when the pipeline captured the caller's ctx
+// (cfg.device < 0): the caller owns ctx lifetime in that mode.
+struct ctx_guard
+{
+  int active;
+};
+
+static enum damacy_status
+ctx_guard_enter(struct damacy* d, struct ctx_guard* g)
+{
+  g->active = 0;
+  if (!d || d->retained_primary_device < 0)
+    return DAMACY_OK;
+  enum damacy_status s = DAMACY_CUDA;
+  CR(Fail, cuCtxPushCurrent(d->retained_primary));
+  g->active = 1;
+  return DAMACY_OK;
+Fail:
+  return s;
+}
+
+static void
+ctx_guard_exit(struct ctx_guard* g)
+{
+  if (g && g->active) {
+    cuCtxPopCurrent(NULL);
+    g->active = 0;
+  }
+}
 
 // --- dtype helpers --------------------------------------------------------
 
@@ -1804,6 +1838,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
 {
   enum damacy_status s = DAMACY_INVAL;
   struct damacy* self = NULL;
+  struct ctx_guard cg = { 0 };
 
   CHECK_SILENT(InvalidArg, out);
   *out = NULL;
@@ -1824,6 +1859,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   CR(Fail, cuInit(0));
 
   self->retained_primary_device = -1;
+  self->retained_primary = NULL;
   CUcontext caller_ctx = NULL;
   CR(Fail, cuCtxGetCurrent(&caller_ctx));
   if (cfg->device >= 0) {
@@ -1846,7 +1882,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     CUcontext primary = NULL;
     CR(Fail, cuDevicePrimaryCtxRetain(&primary, dev));
     self->retained_primary_device = cfg->device;
-    CR(Fail, cuCtxPushCurrent(primary));
+    self->retained_primary = primary;
     self->cuda_device = cfg->device;
   } else {
     if (!caller_ctx) {
@@ -1858,6 +1894,14 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     CR(Fail, cuCtxGetDevice(&dev));
     self->cuda_device = (int)dev;
   }
+
+  // Push the retained primary for the rest of create (stream creation,
+  // wave init, ...). Popped via ctx_guard_exit on every return path so
+  // the caller's thread state is restored.
+  s = ctx_guard_enter(self, &cg);
+  if (s != DAMACY_OK)
+    goto Fail;
+
   // Non-blocking so damacy doesn't force-serialize against the legacy
   // default stream that some user code still lands on.
   CR(Fail, cuStreamCreate(&self->stream_h2d, CU_STREAM_NON_BLOCKING));
@@ -1958,10 +2002,12 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
 
   self->handle.d = self;
 
+  ctx_guard_exit(&cg);
   *out = self;
   return DAMACY_OK;
 
 Fail:
+  ctx_guard_exit(&cg);
   damacy_destroy(self);
   return s;
 
@@ -1974,6 +2020,12 @@ damacy_destroy(struct damacy* self)
 {
   if (!self)
     return;
+
+  // Push the retained primary for stream/buffer teardown; pop before
+  // releasing the primary handle below.
+  struct ctx_guard cg = { 0 };
+  ctx_guard_enter(self, &cg);
+
   // The four owned streams. NULL/0 is the legacy default stream — sync
   // and destroy on it would either be a no-op-on-the-wrong-thing or
   // outright invalid, so the loop's single guard is structural, not
@@ -2005,10 +2057,9 @@ damacy_destroy(struct damacy* self)
   zarr_meta_cache_destroy(self->meta_cache);
   store_destroy(self->store);
 
-  if (self->retained_primary_device >= 0) {
-    cuCtxPopCurrent(NULL);
+  ctx_guard_exit(&cg);
+  if (self->retained_primary_device >= 0)
     cuDevicePrimaryCtxRelease((CUdevice)self->retained_primary_device);
-  }
   free(self);
 }
 
@@ -2036,20 +2087,29 @@ damacy_push(struct damacy* self, struct damacy_sample_slice samples)
     r.status = DAMACY_INVAL;
     return r;
   }
+  struct ctx_guard cg = { 0 };
+  enum damacy_status gs = ctx_guard_enter(self, &cg);
+  if (gs != DAMACY_OK) {
+    r.status = gs;
+    return r;
+  }
   for (const struct damacy_sample* s = samples.beg; s != samples.end; ++s) {
     if (self->lookahead.size == self->lookahead.cap) {
       r.unconsumed.beg = s;
       r.status = DAMACY_AGAIN;
+      ctx_guard_exit(&cg);
       return r;
     }
     enum damacy_status ps = push_one(self, s);
     if (ps != DAMACY_OK) {
       r.unconsumed.beg = s;
       r.status = ps;
+      ctx_guard_exit(&cg);
       return r;
     }
   }
   r.unconsumed.beg = samples.end;
+  ctx_guard_exit(&cg);
   return r;
 }
 
@@ -2064,18 +2124,25 @@ damacy_pop(struct damacy* self, struct damacy_batch** out)
   if (self->failed_status != DAMACY_OK)
     return self->failed_status;
 
+  struct ctx_guard cg = { 0 };
+  enum damacy_status r = ctx_guard_enter(self, &cg);
+  if (r != DAMACY_OK)
+    return r;
+
   for (;;) {
-    enum damacy_status s = advance_waves(self);
-    if (s != DAMACY_OK)
-      return s;
+    r = advance_waves(self);
+    if (r != DAMACY_OK)
+      goto Done;
     // finalize_wave can set failed_status on a post-decode codec error
     // even when advance_waves itself returned OK; bail before handing
     // out a possibly-corrupt batch.
-    if (self->failed_status != DAMACY_OK)
-      return self->failed_status;
-    s = kick_new_waves(self);
-    if (s != DAMACY_OK)
-      return s;
+    if (self->failed_status != DAMACY_OK) {
+      r = self->failed_status;
+      goto Done;
+    }
+    r = kick_new_waves(self);
+    if (r != DAMACY_OK)
+      goto Done;
 
     int slot_idx = find_oldest_ready_slot(self);
     if (slot_idx >= 0) {
@@ -2085,11 +2152,14 @@ damacy_pop(struct damacy* self, struct damacy_batch** out)
       self->handle.batch_id = slot->batch_id;
       self->stats.batches_emitted++;
       *out = &self->handle;
-      return DAMACY_OK;
+      r = DAMACY_OK;
+      goto Done;
     }
     if (!any_wave_in_flight(self) && !any_batch_in_flight(self) &&
-        self->lookahead.size < self->cfg.batch_size)
-      return DAMACY_AGAIN;
+        self->lookahead.size < self->cfg.batch_size) {
+      r = DAMACY_AGAIN;
+      goto Done;
+    }
     // Attribute the upcoming poll to whichever stage we're blocked on.
     // Prefer compute when any wave has reached H2D/ASSEMBLE — that's
     // what we'd most likely be waiting on; fall back to IO otherwise.
@@ -2110,6 +2180,10 @@ damacy_pop(struct damacy* self, struct damacy_batch** out)
                   0,
                   0);
   }
+
+Done:
+  ctx_guard_exit(&cg);
+  return r;
 
 InvalidArg:
   return DAMACY_INVAL;
@@ -2140,23 +2214,30 @@ damacy_flush(struct damacy* self)
   if (self->failed_status != DAMACY_OK)
     return self->failed_status;
 
+  struct ctx_guard cg = { 0 };
+  enum damacy_status r = ctx_guard_enter(self, &cg);
+  if (r != DAMACY_OK)
+    return r;
+
   // Plan a partial batch from the remaining lookahead, if any.
   if (self->lookahead.size > 0 && self->lookahead.size < self->cfg.batch_size) {
     int free_slot = find_free_batch_slot(self);
     if (free_slot < 0) {
       // Both slots in use; drain one wave-cycle's worth and try again.
       // For step 5 we allow one drain pass; if still no slot, return AGAIN.
-      enum damacy_status s = advance_waves(self);
-      if (s != DAMACY_OK)
-        return s;
+      r = advance_waves(self);
+      if (r != DAMACY_OK)
+        goto Done;
       free_slot = find_free_batch_slot(self);
-      if (free_slot < 0)
-        return DAMACY_AGAIN;
+      if (free_slot < 0) {
+        r = DAMACY_AGAIN;
+        goto Done;
+      }
     }
     uint32_t n = self->lookahead.size;
-    enum damacy_status s = plan_into_slot(self, (uint16_t)free_slot, n);
-    if (s != DAMACY_OK)
-      return s;
+    r = plan_into_slot(self, (uint16_t)free_slot, n);
+    if (r != DAMACY_OK)
+      goto Done;
     self->stats.batches_truncated++;
   }
 
@@ -2164,12 +2245,12 @@ damacy_flush(struct damacy* self)
   // FILLING slots remain.
   uint64_t flush_t0 = monotonic_ns();
   while (any_wave_in_flight(self) || find_oldest_filling_slot(self) >= 0) {
-    enum damacy_status s = advance_waves(self);
-    if (s != DAMACY_OK)
-      return s;
-    s = kick_new_waves(self);
-    if (s != DAMACY_OK)
-      return s;
+    r = advance_waves(self);
+    if (r != DAMACY_OK)
+      goto Done;
+    r = kick_new_waves(self);
+    if (r != DAMACY_OK)
+      goto Done;
     if (any_wave_in_flight(self))
       platform_sleep_ns(DAMACY_POP_POLL_NS);
   }
@@ -2177,7 +2258,11 @@ damacy_flush(struct damacy* self)
                 (float)((monotonic_ns() - flush_t0) / 1.0e6),
                 0,
                 0);
-  return DAMACY_OK;
+  r = DAMACY_OK;
+
+Done:
+  ctx_guard_exit(&cg);
+  return r;
 }
 
 // --- batch info / stats ---------------------------------------------------
