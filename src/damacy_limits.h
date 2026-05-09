@@ -52,3 +52,9 @@
 // Inputs with more blocks are rejected at parse with DAMACY_DECODE.
 #define DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK 32u
 #define DAMACY_BLOSC_MAX_TYPESIZE 8u
+
+// Defensive cap on header.nbytes parsed from a blosc1 chunk. Prevents
+// overflow in the nblocks ceil-div for adversarial inputs, independent
+// of the runtime DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES cap (which gates
+// the planner, not the parser).
+#define DAMACY_BLOSC_MAX_CHUNK_UNCOMPRESSED_BYTES (16ull << 20) // 16 MB

@@ -444,7 +444,7 @@ expect_parse_err(uint8_t codec_id,
   return 0;
 }
 
-// Spot-check the err-code surface (1..8). Comprehensive coverage is
+// Spot-check the err-code surface (1..10). Comprehensive coverage is
 // expected to come from the fuzz harness tracked in the issue.
 static int
 test_bad_header(void)
@@ -481,8 +481,61 @@ test_bad_header(void)
   build_blosc1_header(hdr, CODEC_BLOSC_LZ4, 4096, 1024, 100, 4);
   EXPECT(expect_parse_err(99u, hdr, 100, 4096, 8, pool) == 0);
 
+  // err=9: bstart out of range. Build a valid 16+4*nblocks header
+  // followed by bstart entries that point past cbytes. nblocks=4 →
+  // cbytes=32 (header 16 + 4 bstarts * 4). bstarts[0] = 0xffffffff
+  // is far past cbytes; the loader must reject before walk_count.
+  uint8_t buf9[32];
+  memset(buf9, 0, sizeof buf9);
+  build_blosc1_header(buf9, CODEC_BLOSC_LZ4, 4096, 1024, 32, 4);
+  for (int i = 0; i < 4; ++i) {
+    buf9[16 + i * 4 + 0] = 0xff;
+    buf9[16 + i * 4 + 1] = 0xff;
+    buf9[16 + i * 4 + 2] = 0xff;
+    buf9[16 + i * 4 + 3] = 0xff;
+  }
+  EXPECT(expect_parse_err(CODEC_BLOSC_LZ4, buf9, 32, 4096, 9, pool) == 0);
+
+  // err=9 boundary: bs == cbytes (one past last byte; can't fit a
+  // 4-byte prefix, must be rejected).
+  uint8_t buf9b[32];
+  memset(buf9b, 0, sizeof buf9b);
+  build_blosc1_header(buf9b, CODEC_BLOSC_LZ4, 4096, 1024, 32, 4);
+  for (int i = 0; i < 4; ++i) {
+    const uint32_t bs = 32u; // cbytes
+    buf9b[16 + i * 4 + 0] = (uint8_t)(bs & 0xffu);
+    buf9b[16 + i * 4 + 1] = (uint8_t)((bs >> 8) & 0xffu);
+    buf9b[16 + i * 4 + 2] = (uint8_t)((bs >> 16) & 0xffu);
+    buf9b[16 + i * 4 + 3] = (uint8_t)((bs >> 24) & 0xffu);
+  }
+  EXPECT(expect_parse_err(CODEC_BLOSC_LZ4, buf9b, 32, 4096, 9, pool) == 0);
+
+  // err=9 boundary: bs == payload_lo - 1 (one byte below the bstart
+  // table's end; would land inside the table).
+  uint8_t buf9c[32];
+  memset(buf9c, 0, sizeof buf9c);
+  build_blosc1_header(buf9c, CODEC_BLOSC_LZ4, 4096, 1024, 32, 4);
+  for (int i = 0; i < 4; ++i) {
+    const uint32_t bs = 16u + 4u * 4u - 1u; // payload_lo - 1
+    buf9c[16 + i * 4 + 0] = (uint8_t)(bs & 0xffu);
+    buf9c[16 + i * 4 + 1] = (uint8_t)((bs >> 8) & 0xffu);
+    buf9c[16 + i * 4 + 2] = (uint8_t)((bs >> 16) & 0xffu);
+    buf9c[16 + i * 4 + 3] = (uint8_t)((bs >> 24) & 0xffu);
+  }
+  EXPECT(expect_parse_err(CODEC_BLOSC_LZ4, buf9c, 32, 4096, 9, pool) == 0);
+
+  // err=10: header.nbytes > DAMACY_BLOSC_MAX_CHUNK_UNCOMPRESSED_BYTES.
+  // Use UINT32_MAX so the prior nblocks ceil-div would have wrapped
+  // to 0 if the cap weren't enforced.
+  build_blosc1_header(hdr, CODEC_BLOSC_LZ4, 0xffffffffu, 2, 100, 4);
+  EXPECT(expect_parse_err(CODEC_BLOSC_LZ4, hdr, 100, 0xffffffffu, 10, pool) ==
+         0);
+
   // Spot-check the stringifier surface too.
   EXPECT(strcmp(blosc1_host_parse_err_str(0), "ok") == 0);
+  EXPECT(strcmp(blosc1_host_parse_err_str(10),
+                "header.nbytes > DAMACY_BLOSC_MAX_CHUNK_UNCOMPRESSED_BYTES") ==
+         0);
   EXPECT(strcmp(blosc1_host_parse_err_str(99), "unknown") == 0);
 
   threadpool_free(pool);
