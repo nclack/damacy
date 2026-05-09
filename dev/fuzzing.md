@@ -227,6 +227,16 @@ sees enough churn that regressions become a real concern — for now,
 running the two harnesses by hand before pushing JSON-parser changes
 is enough.
 
+### CI workflow
+
+`.github/workflows/fuzz.yml` runs all five harnesses nightly (07:00
+UTC) and on `workflow_dispatch`, 10 minutes per harness on
+`ubuntu-latest`. Corpus is cached per harness across runs. On a
+crash the matrix entry fails and uploads `crash-*` / `leak-*` /
+`oom-*` / `slow-unit-*` plus the corpus snapshot as an artifact named
+`<harness>-crashes-<run_id>`. Reproduce locally with
+`./build-fuzz/tests/fuzz/<harness> <crash-file>`.
+
 ## Adding a seed
 
 Seeds are tiny — a few bytes each — and they're what libFuzzer starts
