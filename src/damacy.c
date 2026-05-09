@@ -18,6 +18,8 @@
 #include "damacy.h"
 
 #include "assemble/assemble.h"
+#include "damacy_config.h"
+#include "damacy_stats.h"
 #include "decoder/bitshuffle.h"
 #include "decoder/blosc1.h"
 #include "decoder/blosc1_host.h"
@@ -26,7 +28,6 @@
 #include "decoder/decoder_zstd.h"
 #include "decoder/shuffle.h"
 #include "decoder/status_reduce.h"
-#include "dtype/dtype.h"
 #include "log/log.h"
 #include "planner/planner.h"
 #include "platform/platform.h"
@@ -41,7 +42,6 @@
 #include <cuda.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 // Per-batch hard cap. Bounds the planner output and the assemble
 // metadata buffer. Wave caps + chunk-uncompressed cap live in
@@ -88,60 +88,6 @@ lz4_subs_per_wave(uint8_t max_bpe)
 // at the alloc/free/memcpy boundary. Inverse direction
 // (CUdeviceptr → typed) needs the inverse cast inline.
 #define CUDPTR(p) ((CUdeviceptr)(uintptr_t)(p))
-
-static uint64_t
-monotonic_ns(void)
-{
-  struct timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
-}
-
-// Initialize a damacy_metric to a "no observations yet" state with a
-// stable name pointer.
-static void
-metric_init(struct damacy_metric* m, const char* name)
-{
-  m->name = name;
-  m->ms = 0.f;
-  m->best_ms = 1e30f;
-  m->input_bytes = 0;
-  m->output_bytes = 0;
-  m->count = 0;
-}
-
-// Record one observation (elapsed ms + per-stage byte totals) into a
-// cumulative damacy_metric. For stall-style metrics (no throughput),
-// pass 0 for both byte counters.
-static void
-metric_record(struct damacy_metric* m, float ms, uint64_t bin, uint64_t bout)
-{
-  m->ms += ms;
-  if (ms < m->best_ms)
-    m->best_ms = ms;
-  m->input_bytes += (double)bin;
-  m->output_bytes += (double)bout;
-  m->count += 1;
-}
-
-// Initialize all metrics in `s` to the no-observation state.
-static void
-stats_init(struct damacy_stats* s)
-{
-  memset(s, 0, sizeof(*s));
-  metric_init(&s->plan, "plan");
-  metric_init(&s->io, "io");
-  metric_init(&s->h2d, "h2d");
-  metric_init(&s->decompress, "decompress");
-  metric_init(&s->decompress_parse, "decompress.parse");
-  metric_init(&s->decompress_zstd, "decompress.zstd");
-  metric_init(&s->decompress_lz4, "decompress.lz4");
-  metric_init(&s->decompress_post, "decompress.post");
-  metric_init(&s->assemble, "assemble");
-  metric_init(&s->pop_wait_io, "pop_wait_io");
-  metric_init(&s->pop_wait_compute, "pop_wait_compute");
-  metric_init(&s->flush_wait, "flush_wait");
-}
 
 struct damacy_batch
 {
@@ -371,98 +317,6 @@ ctx_guard_exit(struct ctx_guard* g)
     cuCtxPopCurrent(NULL);
     g->active = 0;
   }
-}
-
-// --- dtype helpers --------------------------------------------------------
-
-static uint32_t
-damacy_dtype_bpe(enum damacy_dtype dt)
-{
-  switch (dt) {
-    case DAMACY_BF16:
-      return 2;
-    case DAMACY_F32:
-      return 4;
-  }
-  return 0;
-}
-
-// Cast support matrix: zarr source dtype → cfg destination dtype. Sources
-// are restricted to the common image types; integer→float and float→float
-// casts are valid for both bf16 and f32 destinations. Returns 1 if the
-// (src, dst) pair has a cast path the assemble kernel will accept.
-static int
-cast_path_supported(enum damacy_dtype dst, enum dtype src)
-{
-  switch (dst) {
-    case DAMACY_F32:
-    case DAMACY_BF16:
-      switch (src) {
-        case dtype_u8:
-        case dtype_u16:
-        case dtype_i16:
-        case dtype_u32:
-        case dtype_i32:
-        case dtype_f16:
-        case dtype_f32:
-          return 1;
-        default:
-          return 0;
-      }
-  }
-  return 0;
-}
-
-// --- config validation ----------------------------------------------------
-
-static enum damacy_status
-validate_config(const struct damacy_config* cfg)
-{
-  CHECK_SILENT(Invalid, cfg);
-  CHECK_SILENT(Invalid, cfg->batch_size > 0);
-  CHECK_SILENT(Invalid, cfg->lookahead_batches >= 2);
-  CHECK_SILENT(Invalid, cfg->n_io_threads > 0);
-  CHECK_SILENT(Invalid, cfg->n_io_threads <= DAMACY_MAX_IO_THREADS);
-  CHECK_SILENT(Invalid, cfg->host_buffer_bytes > 0);
-  CHECK_SILENT(Invalid, cfg->device_buffer_bytes > 0);
-  CHECK_SILENT(Invalid, cfg->n_zarrs_meta_cache > 0);
-  CHECK_SILENT(Invalid, cfg->n_shards_meta_cache > 0);
-  CHECK_SILENT(Invalid, damacy_dtype_bpe(cfg->dtype) > 0);
-  // 0 means "use the compile-time ceiling"; reject values that exceed it
-  // since they'd run past the per-wave LZ4 fanout SOA and nvcomp scratch
-  // sizing.
-  CHECK_SILENT(Invalid,
-               cfg->max_bytes_per_element <= DAMACY_BLOSC_MAX_TYPESIZE);
-  // Runtime per-chunk cap is bounded by the kernel-array ceiling.
-  CHECK_SILENT(Invalid,
-               cfg->max_chunk_uncompressed_bytes <=
-                 DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES);
-  return DAMACY_OK;
-Invalid:
-  return DAMACY_INVAL;
-}
-
-// Resolve the effective max-bytes-per-element from the config. Centralised
-// because both wave_init and damacy_create's pipeline-wide caps need it,
-// and mapping 0 → ceiling lives in one place.
-static uint8_t
-resolve_max_bpe(const struct damacy_config* cfg)
-{
-  return cfg->max_bytes_per_element ? cfg->max_bytes_per_element
-                                    : (uint8_t)DAMACY_BLOSC_MAX_TYPESIZE;
-}
-
-// Resolve the effective per-chunk uncompressed byte cap. 0 maps to the
-// 512 KB default; clamps to the compile-time ceiling for safety.
-static uint64_t
-resolve_max_chunk_uncompressed(const struct damacy_config* cfg)
-{
-  uint64_t v = cfg->max_chunk_uncompressed_bytes;
-  if (v == 0)
-    v = DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES;
-  if (v > DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES)
-    v = DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES;
-  return v;
 }
 
 // --- GPU memory budget ---------------------------------------------------
