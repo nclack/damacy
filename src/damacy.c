@@ -18,6 +18,7 @@
 #include "damacy.h"
 
 #include "assemble/assemble.h"
+#include "batch_pool/batch_pool.h"
 #include "damacy_config.h"
 #include "damacy_stats.h"
 #include "decoder/bitshuffle.h"
@@ -44,11 +45,6 @@
 #include <cuda.h>
 #include <stdlib.h>
 #include <string.h>
-
-// Per-batch hard cap. Bounds the planner output and the assemble
-// metadata buffer. Wave caps + chunk-uncompressed cap live in
-// damacy_limits.h since they're shared with kernel modules.
-#define DAMACY_MAX_CHUNKS_PER_BATCH 16384u
 
 // Poll interval inside damacy_pop's wait-loop. ~50 µs is short enough
 // that the boundary between wave stages doesn't add visible latency,
@@ -79,42 +75,6 @@ struct damacy_batch
   struct damacy* d;
   uint16_t slot_idx;
   uint64_t batch_id;
-};
-
-enum batch_slot_state
-{
-  BATCH_FREE = 0,
-  BATCH_FILLING, // planner has emitted; chunks may or may not be dispatched
-  BATCH_READY,   // chunks_remaining == 0; awaiting pop
-  BATCH_HELD,    // user holds the handle
-};
-
-struct damacy_batch_slot
-{
-  enum batch_slot_state state;
-  uint64_t batch_id;
-  uint32_t n_samples; // shape[0]: number of complete samples
-  void* dev_ptr;      // device output tensor (allocated lazily)
-
-  // Plan for this batch (filled by planner_plan, peeled by waves).
-  struct read_op* read_ops;         // size DAMACY_MAX_CHUNKS_PER_BATCH
-  struct chunk_plan* chunk_plans;   // size DAMACY_MAX_CHUNKS_PER_BATCH
-  struct sample_plan* sample_plans; // size cfg.batch_size
-  void* d_sample_plans;             // device mirror, uploaded once per batch
-  uint32_t n_sample_plans;          // == n_samples on success
-  uint32_t n_chunks;
-  uint32_t n_chunks_dispatched; // 0 .. n_chunks; chunks given to a wave
-  int32_t chunks_remaining;     // n_chunks - chunks completed via waves
-};
-
-struct damacy_batch_pool
-{
-  struct damacy_batch_slot slots[2];
-  uint64_t n_bytes;                     // size of one slot's output
-  uint8_t rank;                         // includes leading N axis
-  int64_t shape[DAMACY_MAX_RANK + 1];   // [batch_size, ...sample_axes]
-  int64_t strides[DAMACY_MAX_RANK + 1]; // row-major elements
-  int allocated;                        // shape established + dev_ptrs alloc'd
 };
 
 enum wave_state
@@ -289,61 +249,7 @@ ctx_guard_exit(struct ctx_guard* g)
   }
 }
 
-// --- batch pool -----------------------------------------------------------
-
-static int
-batch_slot_init(struct damacy_batch_slot* slot, uint32_t batch_size_cap)
-{
-  slot->read_ops = (struct read_op*)calloc(DAMACY_MAX_CHUNKS_PER_BATCH,
-                                           sizeof(struct read_op));
-  CHECK(Error, slot->read_ops);
-  slot->chunk_plans = (struct chunk_plan*)calloc(DAMACY_MAX_CHUNKS_PER_BATCH,
-                                                 sizeof(struct chunk_plan));
-  CHECK(Error, slot->chunk_plans);
-  slot->sample_plans =
-    (struct sample_plan*)calloc(batch_size_cap, sizeof(struct sample_plan));
-  CHECK(Error, slot->sample_plans);
-  CUdeviceptr dptr = 0;
-  if (cuMemAlloc(&dptr, (size_t)batch_size_cap * sizeof(struct sample_plan)) !=
-      CUDA_SUCCESS)
-    goto Error;
-  slot->d_sample_plans = (void*)(uintptr_t)dptr;
-  return 0;
-Error:
-  return 1;
-}
-
-// cuda_skip=1 leaks GPU resources (e.g. when ctx is no longer valid)
-// but still releases CPU heap.
-static void
-batch_slot_destroy(struct damacy_batch_slot* slot, int cuda_skip)
-{
-  if (!slot)
-    return;
-  // dev_ptr is owned by the batch_pool's lazy allocation; freed there.
-  free(slot->read_ops);
-  free(slot->chunk_plans);
-  free(slot->sample_plans);
-  if (!cuda_skip && slot->d_sample_plans)
-    cuMemFree(CUDPTR(slot->d_sample_plans));
-  memset(slot, 0, sizeof(*slot));
-}
-
-static void
-batch_pool_destroy(struct damacy_batch_pool* pool, int cuda_skip)
-{
-  if (!pool)
-    return;
-  for (int s = 0; s < 2; ++s) {
-    if (!cuda_skip && pool->slots[s].dev_ptr)
-      cuMemFree(CUDPTR(pool->slots[s].dev_ptr));
-    batch_slot_destroy(&pool->slots[s], cuda_skip);
-  }
-  memset(pool, 0, sizeof(*pool));
-}
-
-// Establish the shared output shape from the first sample's AABB and
-// allocate device tensors for both batch slots. Idempotent.
+// Lazy batch-output pool sizing + GPU-budget enforcement. Idempotent.
 static enum damacy_status
 batch_pool_allocate(struct damacy* self, const struct damacy_aabb* sample_aabb)
 {
@@ -351,28 +257,11 @@ batch_pool_allocate(struct damacy* self, const struct damacy_aabb* sample_aabb)
   if (pool->allocated)
     return DAMACY_OK;
 
-  uint8_t spatial_rank = sample_aabb->rank;
-  uint8_t full_rank = (uint8_t)(spatial_rank + 1);
-  CHECK_SILENT(Rank, full_rank <= DAMACY_MAX_RANK + 1);
+  enum damacy_status s = batch_pool_compute_layout(
+    pool, sample_aabb, self->cfg.batch_size, damacy_dtype_bpe(self->cfg.dtype));
+  if (s != DAMACY_OK)
+    return s;
 
-  uint32_t bpe = damacy_dtype_bpe(self->cfg.dtype);
-  int64_t spatial_volume = 1;
-  pool->shape[0] = (int64_t)self->cfg.batch_size;
-  for (uint8_t d = 0; d < spatial_rank; ++d) {
-    int64_t extent = sample_aabb->dims[d].end - sample_aabb->dims[d].beg;
-    CHECK_SILENT(Invalid, extent > 0);
-    pool->shape[d + 1] = extent;
-    spatial_volume *= extent;
-  }
-  pool->rank = full_rank;
-  pool->strides[full_rank - 1] = 1;
-  for (int d = (int)full_rank - 2; d >= 0; --d)
-    pool->strides[d] = pool->strides[d + 1] * pool->shape[d + 1];
-  pool->n_bytes =
-    (uint64_t)self->cfg.batch_size * (uint64_t)spatial_volume * (uint64_t)bpe;
-
-  // Lazy batch-output check against the GPU budget. Two slot tensors land
-  // here; the wave/batch-metadata totals were already committed at create.
   if (self->gpu_bytes_budget > 0) {
     uint64_t need = 2ull * pool->n_bytes;
     if (self->gpu_bytes_committed + need > self->gpu_bytes_budget) {
@@ -386,90 +275,11 @@ batch_pool_allocate(struct damacy* self, const struct damacy_aabb* sample_aabb)
     }
   }
 
-  for (int s = 0; s < 2; ++s) {
-    CUdeviceptr dptr = 0;
-    CR(CudaFail, cuMemAlloc(&dptr, pool->n_bytes));
-    pool->slots[s].dev_ptr = (void*)(uintptr_t)dptr;
-  }
+  s = batch_pool_alloc_dev(pool);
+  if (s != DAMACY_OK)
+    return s;
   self->gpu_bytes_committed += 2ull * pool->n_bytes;
-  pool->allocated = 1;
   return DAMACY_OK;
-
-Rank:
-  return DAMACY_RANK;
-Invalid:
-  return DAMACY_INVAL;
-CudaFail:
-  return DAMACY_CUDA;
-}
-
-static int
-sample_shape_matches_pool(const struct damacy* self,
-                          const struct damacy_aabb* aabb)
-{
-  uint8_t spatial_rank = (uint8_t)(self->batch_pool.rank - 1);
-  if (aabb->rank != spatial_rank)
-    return 0;
-  for (uint8_t d = 0; d < spatial_rank; ++d) {
-    int64_t extent = aabb->dims[d].end - aabb->dims[d].beg;
-    if (extent != self->batch_pool.shape[d + 1])
-      return 0;
-  }
-  return 1;
-}
-
-static int
-find_free_batch_slot(const struct damacy* self)
-{
-  for (int s = 0; s < 2; ++s)
-    if (self->batch_pool.slots[s].state == BATCH_FREE)
-      return s;
-  return -1;
-}
-
-// Find the oldest READY batch slot (lowest batch_id). Returns -1 if none.
-static int
-find_oldest_ready_slot(const struct damacy* self)
-{
-  int best = -1;
-  uint64_t best_id = UINT64_MAX;
-  for (int s = 0; s < 2; ++s) {
-    if (self->batch_pool.slots[s].state == BATCH_READY &&
-        self->batch_pool.slots[s].batch_id < best_id) {
-      best = s;
-      best_id = self->batch_pool.slots[s].batch_id;
-    }
-  }
-  return best;
-}
-
-// Same shape, but for FILLING slots. Used by damacy_flush to detect
-// whether more work needs to be drained.
-static int
-find_oldest_filling_slot(const struct damacy* self)
-{
-  int best = -1;
-  uint64_t best_id = UINT64_MAX;
-  for (int s = 0; s < 2; ++s) {
-    if (self->batch_pool.slots[s].state == BATCH_FILLING &&
-        self->batch_pool.slots[s].batch_id < best_id) {
-      best = s;
-      best_id = self->batch_pool.slots[s].batch_id;
-    }
-  }
-  return best;
-}
-
-// Any batch slot still in a non-terminal active state.
-static int
-any_batch_in_flight(const struct damacy* self)
-{
-  for (int s = 0; s < 2; ++s) {
-    enum batch_slot_state st = self->batch_pool.slots[s].state;
-    if (st == BATCH_FILLING || st == BATCH_READY || st == BATCH_HELD)
-      return 1;
-  }
-  return 0;
 }
 
 // --- wave -----------------------------------------------------------------
@@ -764,7 +574,7 @@ push_one(struct damacy* self, const struct damacy_sample* sample)
   if (sample->aabb.rank != meta->rank)
     return DAMACY_RANK;
   if (self->batch_pool.allocated &&
-      !sample_shape_matches_pool(self, &sample->aabb))
+      !sample_shape_matches_pool(&self->batch_pool, &sample->aabb))
     return DAMACY_INVAL;
 
   if (lookahead_push(&self->lookahead, sample))
@@ -1469,7 +1279,7 @@ kick_new_waves(struct damacy* self)
     }
     if (target_slot < 0) {
       // No FILLING slot has unfinished chunks. Try planning a new batch.
-      int free_slot = find_free_batch_slot(self);
+      int free_slot = find_free_batch_slot(&self->batch_pool);
       if (free_slot < 0)
         break; // both slots taken
       if (self->lookahead.size < self->cfg.batch_size)
@@ -1826,7 +1636,7 @@ damacy_pop(struct damacy* self, struct damacy_batch** out)
     if (r != DAMACY_OK)
       goto Done;
 
-    int slot_idx = find_oldest_ready_slot(self);
+    int slot_idx = find_oldest_ready_slot(&self->batch_pool);
     if (slot_idx >= 0) {
       struct damacy_batch_slot* slot = &self->batch_pool.slots[slot_idx];
       slot->state = BATCH_HELD;
@@ -1837,7 +1647,7 @@ damacy_pop(struct damacy* self, struct damacy_batch** out)
       r = DAMACY_OK;
       goto Done;
     }
-    if (!any_wave_in_flight(self) && !any_batch_in_flight(self) &&
+    if (!any_wave_in_flight(self) && !any_batch_in_flight(&self->batch_pool) &&
         self->lookahead.size < self->cfg.batch_size) {
       r = DAMACY_AGAIN;
       goto Done;
@@ -1903,14 +1713,14 @@ damacy_flush(struct damacy* self)
 
   // Plan a partial batch from the remaining lookahead, if any.
   if (self->lookahead.size > 0 && self->lookahead.size < self->cfg.batch_size) {
-    int free_slot = find_free_batch_slot(self);
+    int free_slot = find_free_batch_slot(&self->batch_pool);
     if (free_slot < 0) {
       // Both slots in use; drain one wave-cycle's worth and try again.
       // For step 5 we allow one drain pass; if still no slot, return AGAIN.
       r = advance_waves(self);
       if (r != DAMACY_OK)
         goto Done;
-      free_slot = find_free_batch_slot(self);
+      free_slot = find_free_batch_slot(&self->batch_pool);
       if (free_slot < 0) {
         r = DAMACY_AGAIN;
         goto Done;
@@ -1926,7 +1736,7 @@ damacy_flush(struct damacy* self)
   // Drain everything in flight by spinning the scheduler until no
   // FILLING slots remain.
   uint64_t flush_t0 = monotonic_ns();
-  while (any_wave_in_flight(self) || find_oldest_filling_slot(self) >= 0) {
+  while (any_wave_in_flight(self) || find_oldest_filling_slot(&self->batch_pool) >= 0) {
     r = advance_waves(self);
     if (r != DAMACY_OK)
       goto Done;

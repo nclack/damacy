@@ -44,6 +44,12 @@ add_cuda_lib(gpu_budget SOURCES gpu_budget/gpu_budget.h gpu_budget/gpu_budget.c
     LINKS decoder assemble planner log
 )
 
+# Two-slot batch state machine + lazy device-tensor pool. Owns planner
+# scratch (read_ops, chunk_plans, sample_plans + device mirror).
+add_cuda_lib(batch_pool SOURCES batch_pool/batch_pool.h batch_pool/batch_pool.c
+    LINKS planner log CUDA::cuda_driver
+)
+
 # Read-side store
 add_src_lib(store SOURCES store/store.h store/store.c store/store_fs.h store/store_fs.c
     LINKS io_queue platform_io strbuf log
@@ -109,6 +115,6 @@ add_cuda_lib(assemble SOURCES assemble/assemble.h assemble/assemble.cu
 add_cuda_lib(damacy SOURCES damacy.h damacy.c damacy_status.c
     LINKS platform planner zarr_meta_cache zarr_shard_cache zarr store
           decoder blosc1_host assemble dtype log lookahead gpu_budget
-          strbuf threadpool
+          batch_pool strbuf threadpool
           CUDA::cuda_driver
 )

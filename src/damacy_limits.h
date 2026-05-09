@@ -38,11 +38,14 @@
 // 8 GB-class GPU budget viable out of the box.
 #define DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES (512ull << 10) // 512 KB
 
-// Wave cap. Decoupled from the per-batch cap (DAMACY_MAX_CHUNKS_PER_BATCH
-// in damacy.c): nvcomp temp scratch is sized as MAX_CHUNKS_PER_WAVE ×
-// runtime_chunk_cap (× 2 waves), so we keep this small and let large
-// batches split across multiple waves.
+// Wave cap. Decoupled from the per-batch cap below: nvcomp temp scratch
+// is sized as MAX_CHUNKS_PER_WAVE × runtime_chunk_cap (× 2 waves), so we
+// keep this small and let large batches split across multiple waves.
 #define DAMACY_MAX_CHUNKS_PER_WAVE 512u
+
+// Per-batch hard cap. Bounds the planner output and the assemble
+// metadata buffer.
+#define DAMACY_MAX_CHUNKS_PER_BATCH 16384u
 
 // Sizes io_queue's per-worker arrays (see io_queue.posix.c). Generous:
 // consumer NVMe saturates well below 32 in-flight reads. Bump if a real
