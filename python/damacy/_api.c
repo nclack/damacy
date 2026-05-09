@@ -806,6 +806,7 @@ Pipeline_stats(PipelineObj* self, PyObject* Py_UNUSED(ignored))
     { "batches_emitted", st.batches_emitted },
     { "batches_truncated", st.batches_truncated },
     { "waves_emitted", st.waves_emitted },
+    { "chunks_dispatched", st.chunks_dispatched },
     { "gpu_bytes_committed", st.gpu_bytes_committed },
   };
   for (size_t i = 0; i < sizeof counters / sizeof counters[0]; ++i)
