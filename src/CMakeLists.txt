@@ -32,6 +32,12 @@ add_src_lib(threadpool SOURCES threadpool/threadpool.c threadpool/threadpool.h
 add_src_lib(io_queue SOURCES io_queue/io_queue.h LINKS platform_io log)
 add_platform_sources(io_queue io_queue/io_queue)
 
+# Push-side ring of pending samples. Owns uri-string copies; drain
+# transfers ownership to the planner's sample-slot array.
+add_src_lib(lookahead SOURCES lookahead/lookahead.h lookahead/lookahead.c
+    LINKS log
+)
+
 # Read-side store
 add_src_lib(store SOURCES store/store.h store/store.c store/store_fs.h store/store_fs.c
     LINKS io_queue platform_io strbuf log
@@ -96,6 +102,6 @@ add_cuda_lib(assemble SOURCES assemble/assemble.h assemble/assemble.cu
 # launch in assemble.cu).
 add_cuda_lib(damacy SOURCES damacy.h damacy.c damacy_status.c
     LINKS platform planner zarr_meta_cache zarr_shard_cache zarr store
-          decoder blosc1_host assemble dtype log strbuf threadpool
+          decoder blosc1_host assemble dtype log lookahead strbuf threadpool
           CUDA::cuda_driver
 )
