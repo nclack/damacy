@@ -2,13 +2,12 @@
 
 #include "log/log.h"
 #include "planner/planner.h"
+#include "util/cuda_check.h" // CU + CUDPTR
 #include "util/prelude.h"
 
 #include <cuda.h>
 #include <stdlib.h>
 #include <string.h>
-
-#define CUDPTR(p) ((CUdeviceptr)(uintptr_t)(p))
 
 int
 batch_slot_init(struct damacy_batch_slot* slot, uint32_t batch_size_cap)
@@ -37,7 +36,8 @@ batch_slot_destroy(struct damacy_batch_slot* slot, int cuda_skip)
 {
   if (!slot)
     return;
-  // dev_ptr is owned by the pool's lazy allocation; freed there.
+  // dev_ptr is owned by the pool's lazy allocation (batch_pool_alloc_dev)
+  // and freed in batch_pool_destroy — leave it alone here.
   free(slot->read_ops);
   free(slot->chunk_plans);
   free(slot->sample_plans);
