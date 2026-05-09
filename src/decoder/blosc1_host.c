@@ -36,6 +36,8 @@ blosc1_host_parse_err_str(uint8_t err)
       return "unsupported codec_id";
     case 9:
       return "bstart out of range";
+    case 10:
+      return "header.nbytes > DAMACY_BLOSC_MAX_CHUNK_UNCOMPRESSED_BYTES";
     default:
       return "unknown";
   }
@@ -112,15 +114,18 @@ walk_count(const uint8_t* p,
 
   uint32_t n_codec = 0;
   uint32_t n_raw = 0;
+  // end >= payload_lo >= 20 and cur <= end after the prefix read, so
+  // the subtractions below can't underflow (cf. h.cbytes cap in
+  // parse_count_one).
   for (uint32_t bi = 0; bi < h->nblocks; ++bi) {
     const uint32_t end = block_ends[bi];
     uint32_t cur = bstarts[bi];
     for (uint32_t k = 0; k < nstreams; ++k) {
-      if (cur + 4u > end)
+      if (cur > end - 4u)
         break;
       const uint32_t cb = read_u32_le(p + cur);
       cur += 4u;
-      if (cur + cb > end)
+      if (cb > end - cur)
         break;
       if (cb == per_stream_dst)
         ++n_raw;
@@ -182,7 +187,13 @@ parse_count_one(const struct blosc1_host_chunk* in,
     h.err = 2;
     goto Done;
   }
-  h.nblocks = (h.nbytes + h.blocksize - 1) / h.blocksize;
+  if (h.nbytes > DAMACY_BLOSC_MAX_CHUNK_UNCOMPRESSED_BYTES) {
+    h.err = 10;
+    goto Done;
+  }
+  // Safe ceil-div: with nbytes capped above, the addition can't overflow
+  // for any blocksize >= 1.
+  h.nblocks = h.nbytes / h.blocksize + (h.nbytes % h.blocksize != 0u);
   if (h.nbytes != in->decompressed_nbytes) {
     h.err = 3;
     goto Done;
@@ -216,7 +227,7 @@ parse_count_one(const struct blosc1_host_chunk* in,
   }
   for (uint32_t bi = 0; bi < h.nblocks; ++bi) {
     const uint32_t bs = read_u32_le(p + BLOSC1_HEADER_BYTES + 4u * bi);
-    if (bs < payload_lo || bs > h.cbytes) {
+    if (bs < payload_lo || bs >= h.cbytes) {
       h.err = 9;
       goto Done;
     }
@@ -286,16 +297,18 @@ emit_one(const struct blosc1_host_chunk* in,
 
   uint32_t k_codec = 0;
   uint32_t k_raw = 0;
+  // See walk_count: end and cur are bounded so the subtractions below
+  // can't underflow.
   for (uint32_t bi = 0; bi < h->nblocks; ++bi) {
     const uint32_t end = block_ends_slot[bi];
     const uint32_t block_dst_off = bi * h->blocksize;
     uint32_t cur = bstarts_slot[bi];
     for (uint32_t k = 0; k < nstreams; ++k) {
-      if (cur + 4u > end)
+      if (cur > end - 4u)
         break;
       const uint32_t cb = read_u32_le(p + cur);
       cur += 4u;
-      if (cur + cb > end)
+      if (cb > end - cur)
         break;
       void* dst = d_decomp + block_dst_off + k * per_stream_dst;
       if (cb == per_stream_dst) {
