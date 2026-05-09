@@ -5,7 +5,7 @@
 #include <cuda.h>
 #include <nvcomp.h>
 
-#define CR(label, expr)                                                        \
+#define CU(label, expr)                                                        \
   do {                                                                         \
     CUresult _r = (expr);                                                      \
     if (_r != CUDA_SUCCESS) {                                                  \

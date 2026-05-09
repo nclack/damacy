@@ -53,7 +53,7 @@
 
 // CUDA driver-API result check. Goes through log_error so it lands in
 // the same channel as the project's CHECK macros.
-#define CR(label, expr)                                                        \
+#define CU(label, expr)                                                        \
   do {                                                                         \
     CUresult _r = (expr);                                                      \
     if (_r != CUDA_SUCCESS) {                                                  \
@@ -233,7 +233,7 @@ ctx_guard_enter(struct damacy* d, struct ctx_guard* g)
   if (!d || d->retained_primary_device < 0)
     return DAMACY_OK;
   enum damacy_status s = DAMACY_CUDA;
-  CR(Fail, cuCtxPushCurrent(d->retained_primary));
+  CU(Fail, cuCtxPushCurrent(d->retained_primary));
   g->active = 1;
   return DAMACY_OK;
 Fail:
@@ -285,24 +285,24 @@ batch_pool_allocate(struct damacy* self, const struct damacy_aabb* sample_aabb)
 // --- wave -----------------------------------------------------------------
 
 // 4 pinned-host + 4 device allocs for one nvcomp fanout. Returns 0 ok,
-// 1 on first failure (logged via CR).
+// 1 on first failure (logged via CU).
 static int
 fanout_alloc_pinned(struct blosc1_host_fanout* h,
                     struct nvcomp_fanout* d,
                     size_t n)
 {
   CUdeviceptr dptr = 0;
-  CR(Fail, cuMemAllocHost((void**)&h->comp_ptrs, n * sizeof(void*)));
-  CR(Fail, cuMemAllocHost((void**)&h->comp_sizes, n * sizeof(size_t)));
-  CR(Fail, cuMemAllocHost((void**)&h->decomp_ptrs, n * sizeof(void*)));
-  CR(Fail, cuMemAllocHost((void**)&h->decomp_buf_sizes, n * sizeof(size_t)));
-  CR(Fail, cuMemAlloc(&dptr, n * sizeof(void*)));
+  CU(Fail, cuMemAllocHost((void**)&h->comp_ptrs, n * sizeof(void*)));
+  CU(Fail, cuMemAllocHost((void**)&h->comp_sizes, n * sizeof(size_t)));
+  CU(Fail, cuMemAllocHost((void**)&h->decomp_ptrs, n * sizeof(void*)));
+  CU(Fail, cuMemAllocHost((void**)&h->decomp_buf_sizes, n * sizeof(size_t)));
+  CU(Fail, cuMemAlloc(&dptr, n * sizeof(void*)));
   d->d_comp_ptrs = (const void**)(uintptr_t)dptr;
-  CR(Fail, cuMemAlloc(&dptr, n * sizeof(size_t)));
+  CU(Fail, cuMemAlloc(&dptr, n * sizeof(size_t)));
   d->d_comp_sizes = (size_t*)(uintptr_t)dptr;
-  CR(Fail, cuMemAlloc(&dptr, n * sizeof(void*)));
+  CU(Fail, cuMemAlloc(&dptr, n * sizeof(void*)));
   d->d_decomp_ptrs = (void**)(uintptr_t)dptr;
-  CR(Fail, cuMemAlloc(&dptr, n * sizeof(size_t)));
+  CU(Fail, cuMemAlloc(&dptr, n * sizeof(size_t)));
   d->d_decomp_buf_sizes = (size_t*)(uintptr_t)dptr;
   return 0;
 Fail:
@@ -316,16 +316,16 @@ fanout_upload(CUstream s,
               const struct blosc1_host_fanout* h,
               size_t n)
 {
-  CR(Fail,
+  CU(Fail,
      cuMemcpyHtoDAsync(
        CUDPTR(d->d_comp_ptrs), h->comp_ptrs, n * sizeof(void*), s));
-  CR(Fail,
+  CU(Fail,
      cuMemcpyHtoDAsync(
        CUDPTR(d->d_comp_sizes), h->comp_sizes, n * sizeof(size_t), s));
-  CR(Fail,
+  CU(Fail,
      cuMemcpyHtoDAsync(
        CUDPTR(d->d_decomp_ptrs), h->decomp_ptrs, n * sizeof(void*), s));
-  CR(Fail,
+  CU(Fail,
      cuMemcpyHtoDAsync(CUDPTR(d->d_decomp_buf_sizes),
                        h->decomp_buf_sizes,
                        n * sizeof(size_t),
@@ -348,38 +348,38 @@ wave_init(struct damacy_wave* wave,
   wave->host_slab_cap = host_slab_bytes;
   wave->dev_decompressed_cap = dev_decompressed_bytes;
 
-  CR(Error, cuMemAllocHost(&wave->host_slab, host_slab_bytes));
+  CU(Error, cuMemAllocHost(&wave->host_slab, host_slab_bytes));
   CUdeviceptr dptr = 0;
-  CR(Error, cuMemAlloc(&dptr, host_slab_bytes));
+  CU(Error, cuMemAlloc(&dptr, host_slab_bytes));
   wave->dev_compressed = (void*)(uintptr_t)dptr;
-  CR(Error, cuMemAlloc(&dptr, dev_decompressed_bytes));
+  CU(Error, cuMemAlloc(&dptr, dev_decompressed_bytes));
   wave->dev_decompressed = (void*)(uintptr_t)dptr;
 
   uint32_t cap = DAMACY_MAX_CHUNKS_PER_WAVE;
-  CR(Error,
+  CU(Error,
      cuMemAllocHost((void**)&wave->h_chunks,
                     (size_t)cap * sizeof(struct blosc1_host_chunk)));
-  CR(Error,
+  CU(Error,
      cuMemAllocHost((void**)&wave->scratch.hdrs,
                     (size_t)cap * sizeof(struct blosc1_chunk_hdr)));
-  CR(Error,
+  CU(Error,
      cuMemAllocHost((void**)&wave->scratch.counts,
                     (size_t)cap * sizeof(struct blosc1_chunk_counts)));
-  CR(Error,
+  CU(Error,
      cuMemAllocHost((void**)&wave->scratch.offsets,
                     (size_t)cap * sizeof(struct blosc1_chunk_offsets)));
   // Pure host scratch, but pinned for consistency with the rest of the
   // scratch arrays. cap * MAX_BLOCKS uint32_t each (~64 KB per array
   // at the current caps).
-  CR(Error,
+  CU(Error,
      cuMemAllocHost((void**)&wave->scratch.bstarts,
                     (size_t)cap * DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK *
                       sizeof(uint32_t)));
-  CR(Error,
+  CU(Error,
      cuMemAllocHost((void**)&wave->scratch.block_ends,
                     (size_t)cap * DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK *
                       sizeof(uint32_t)));
-  CR(Error,
+  CU(Error,
      cuMemAllocHost((void**)&wave->h_blosc1_totals,
                     sizeof(struct blosc1_totals)));
   wave->h_assemble_chunks =
@@ -389,10 +389,10 @@ wave_init(struct damacy_wave* wave,
     (struct store_read*)calloc(cap, sizeof(struct store_read));
   CHECK(Error, wave->store_reads);
 
-  CR(Error, cuMemAlloc(&dptr, (size_t)cap * sizeof(struct assemble_chunk)));
+  CU(Error, cuMemAlloc(&dptr, (size_t)cap * sizeof(struct assemble_chunk)));
   wave->d_assemble_chunks = (struct assemble_chunk*)(uintptr_t)dptr;
 
-  CR(Error, cuMemAlloc(&dptr, sizeof(struct blosc1_totals)));
+  CU(Error, cuMemAlloc(&dptr, sizeof(struct blosc1_totals)));
   wave->d_blosc1_totals = (struct blosc1_totals*)(uintptr_t)dptr;
 
   const size_t zsubs = DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE;
@@ -402,46 +402,46 @@ wave_init(struct damacy_wave* wave,
   if (fanout_alloc_pinned(&wave->h_lz4_fan, &wave->lz4_fan, lsubs))
     goto Error;
 
-  CR(Error,
+  CU(Error,
      cuMemAllocHost((void**)&wave->h_memcpy_ops,
                     DAMACY_MAX_BLOSC_MEMCPY_OPS_PER_WAVE *
                       sizeof(struct gpu_memcpy_op)));
-  CR(Error,
+  CU(Error,
      cuMemAllocHost((void**)&wave->h_unshuffle_ops,
                     DAMACY_MAX_BLOSC_SHUFFLE_OPS_PER_WAVE *
                       sizeof(struct gpu_shuffle_op)));
-  CR(Error,
+  CU(Error,
      cuMemAllocHost((void**)&wave->h_bitunshuffle_ops,
                     DAMACY_MAX_BLOSC_SHUFFLE_OPS_PER_WAVE *
                       sizeof(struct gpu_shuffle_op)));
-  CR(Error,
+  CU(Error,
      cuMemAlloc(&dptr,
                 DAMACY_MAX_BLOSC_MEMCPY_OPS_PER_WAVE *
                   sizeof(struct gpu_memcpy_op)));
   wave->d_memcpy_ops = (struct gpu_memcpy_op*)(uintptr_t)dptr;
-  CR(Error,
+  CU(Error,
      cuMemAlloc(&dptr,
                 DAMACY_MAX_BLOSC_SHUFFLE_OPS_PER_WAVE *
                   sizeof(struct gpu_shuffle_op)));
   wave->d_unshuffle_ops = (struct gpu_shuffle_op*)(uintptr_t)dptr;
-  CR(Error,
+  CU(Error,
      cuMemAlloc(&dptr,
                 DAMACY_MAX_BLOSC_SHUFFLE_OPS_PER_WAVE *
                   sizeof(struct gpu_shuffle_op)));
   wave->d_bitunshuffle_ops = (struct gpu_shuffle_op*)(uintptr_t)dptr;
-  CR(Error, cuMemAlloc(&dptr, dev_decompressed_bytes));
+  CU(Error, cuMemAlloc(&dptr, dev_decompressed_bytes));
   wave->dev_unshuffle_scratch = (void*)(uintptr_t)dptr;
 
-  CR(Error, cuEventCreate(&wave->ev.h2d_start, CU_EVENT_DEFAULT));
-  CR(Error, cuEventCreate(&wave->ev.bulk_h2d_end, CU_EVENT_DEFAULT));
-  CR(Error, cuEventCreate(&wave->ev.h2d_end, CU_EVENT_DEFAULT));
-  CR(Error, cuEventCreate(&wave->ev.decomp_start, CU_EVENT_DEFAULT));
-  CR(Error, cuEventCreate(&wave->ev.zstd_done, CU_EVENT_DEFAULT));
-  CR(Error, cuEventCreate(&wave->ev.lz4_done, CU_EVENT_DEFAULT));
-  CR(Error, cuEventCreate(&wave->ev.post_start, CU_EVENT_DEFAULT));
-  CR(Error, cuEventCreate(&wave->ev.decomp_end, CU_EVENT_DEFAULT));
-  CR(Error, cuEventCreate(&wave->ev.asm_start, CU_EVENT_DEFAULT));
-  CR(Error, cuEventCreate(&wave->ev.asm_end, CU_EVENT_DEFAULT));
+  CU(Error, cuEventCreate(&wave->ev.h2d_start, CU_EVENT_DEFAULT));
+  CU(Error, cuEventCreate(&wave->ev.bulk_h2d_end, CU_EVENT_DEFAULT));
+  CU(Error, cuEventCreate(&wave->ev.h2d_end, CU_EVENT_DEFAULT));
+  CU(Error, cuEventCreate(&wave->ev.decomp_start, CU_EVENT_DEFAULT));
+  CU(Error, cuEventCreate(&wave->ev.zstd_done, CU_EVENT_DEFAULT));
+  CU(Error, cuEventCreate(&wave->ev.lz4_done, CU_EVENT_DEFAULT));
+  CU(Error, cuEventCreate(&wave->ev.post_start, CU_EVENT_DEFAULT));
+  CU(Error, cuEventCreate(&wave->ev.decomp_end, CU_EVENT_DEFAULT));
+  CU(Error, cuEventCreate(&wave->ev.asm_start, CU_EVENT_DEFAULT));
+  CU(Error, cuEventCreate(&wave->ev.asm_end, CU_EVENT_DEFAULT));
 
   // nvcomp temp scratch is sized off min(runtime per-chunk cap × wave
   // chunks, runtime per-wave decompress budget). The runtime cap (set
@@ -830,8 +830,8 @@ log_blosc1_parse_errors(struct damacy* self, struct damacy_wave* wave)
 static enum damacy_status
 kick_h2d(struct damacy* self, struct damacy_wave* wave)
 {
-  CR(CudaFail, cuEventRecord(wave->ev.h2d_start, self->stream_h2d));
-  CR(CudaFail,
+  CU(CudaFail, cuEventRecord(wave->ev.h2d_start, self->stream_h2d));
+  CU(CudaFail,
      cuMemcpyHtoDAsync(CUDPTR(wave->dev_compressed),
                        wave->host_slab,
                        wave->host_used_bytes,
@@ -840,7 +840,7 @@ kick_h2d(struct damacy* self, struct damacy_wave* wave)
   // measures just the slab copy. The event may include a stream-idle
   // gap if the host parse outruns the bulk copy, but no extra ops are
   // folded in.
-  CR(CudaFail, cuEventRecord(wave->ev.bulk_h2d_end, self->stream_h2d));
+  CU(CudaFail, cuEventRecord(wave->ev.bulk_h2d_end, self->stream_h2d));
 
   build_blosc1_host_chunks(self, wave);
 
@@ -880,20 +880,20 @@ kick_h2d(struct damacy* self, struct damacy_wave* wave)
                     (size_t)tot->n_lz4) != DAMACY_OK)
     goto CudaFail;
   if (tot->n_memcpy > 0)
-    CR(CudaFail,
+    CU(CudaFail,
        cuMemcpyHtoDAsync(CUDPTR(wave->d_memcpy_ops),
                          wave->h_memcpy_ops,
                          (size_t)tot->n_memcpy * sizeof(struct gpu_memcpy_op),
                          self->stream_h2d));
   if (tot->n_unshuffle > 0)
-    CR(CudaFail,
+    CU(CudaFail,
        cuMemcpyHtoDAsync(CUDPTR(wave->d_unshuffle_ops),
                          wave->h_unshuffle_ops,
                          (size_t)tot->n_unshuffle *
                            sizeof(struct gpu_shuffle_op),
                          self->stream_h2d));
   if (tot->n_bitunshuffle > 0)
-    CR(CudaFail,
+    CU(CudaFail,
        cuMemcpyHtoDAsync(CUDPTR(wave->d_bitunshuffle_ops),
                          wave->h_bitunshuffle_ops,
                          (size_t)tot->n_bitunshuffle *
@@ -901,13 +901,13 @@ kick_h2d(struct damacy* self, struct damacy_wave* wave)
                          self->stream_h2d));
 
   // Zero so status_reduce's atomicAdds land in a clean n_codec_errors.
-  CR(CudaFail,
+  CU(CudaFail,
      cuMemsetD8Async(CUDPTR(wave->d_blosc1_totals),
                      0,
                      sizeof(struct blosc1_totals),
                      self->stream_h2d));
 
-  CR(CudaFail, cuEventRecord(wave->ev.h2d_end, self->stream_h2d));
+  CU(CudaFail, cuEventRecord(wave->ev.h2d_end, self->stream_h2d));
   wave->state = WAVE_H2D;
   return DAMACY_OK;
 CudaFail:
@@ -982,7 +982,7 @@ kick_codec_batches(struct damacy* self,
 {
   uint32_t* d_err = &wave->d_blosc1_totals->n_codec_errors;
   if (tot->n_zstd > 0) {
-    CR(CudaFail, cuStreamWaitEvent(self->stream_zstd, wave->ev.h2d_end, 0));
+    CU(CudaFail, cuStreamWaitEvent(self->stream_zstd, wave->ev.h2d_end, 0));
     if (decoder_zstd_batch_device(wave->zstd_decoder,
                                   self->stream_zstd,
                                   wave->zstd_fan.d_comp_ptrs,
@@ -997,10 +997,10 @@ kick_codec_batches(struct damacy* self,
           d_err,
           tot->n_zstd))
       goto DecodeFail;
-    CR(CudaFail, cuEventRecord(wave->ev.zstd_done, self->stream_zstd));
+    CU(CudaFail, cuEventRecord(wave->ev.zstd_done, self->stream_zstd));
   }
   if (tot->n_lz4 > 0) {
-    CR(CudaFail, cuStreamWaitEvent(self->stream_lz4, wave->ev.h2d_end, 0));
+    CU(CudaFail, cuStreamWaitEvent(self->stream_lz4, wave->ev.h2d_end, 0));
     if (decoder_lz4_batch_device(wave->lz4_decoder,
                                  self->stream_lz4,
                                  wave->lz4_fan.d_comp_ptrs,
@@ -1014,7 +1014,7 @@ kick_codec_batches(struct damacy* self,
                                      d_err,
                                      tot->n_lz4))
       goto DecodeFail;
-    CR(CudaFail, cuEventRecord(wave->ev.lz4_done, self->stream_lz4));
+    CU(CudaFail, cuEventRecord(wave->ev.lz4_done, self->stream_lz4));
   }
   return DAMACY_OK;
 DecodeFail:
@@ -1034,10 +1034,10 @@ kick_post_decode(struct damacy* self,
                  const struct blosc1_totals* tot)
 {
   if (tot->n_zstd > 0)
-    CR(CudaFail, cuStreamWaitEvent(s, wave->ev.zstd_done, 0));
+    CU(CudaFail, cuStreamWaitEvent(s, wave->ev.zstd_done, 0));
   if (tot->n_lz4 > 0)
-    CR(CudaFail, cuStreamWaitEvent(s, wave->ev.lz4_done, 0));
-  CR(CudaFail, cuEventRecord(wave->ev.post_start, s));
+    CU(CudaFail, cuStreamWaitEvent(s, wave->ev.lz4_done, 0));
+  CU(CudaFail, cuEventRecord(wave->ev.post_start, s));
 
   if (tot->n_memcpy > 0 &&
       decoder_memcpy_launch(s, wave->d_memcpy_ops, tot->n_memcpy))
@@ -1057,12 +1057,12 @@ kick_post_decode(struct damacy* self,
     goto DecodeFail;
   // Narrowed to the 4-byte n_codec_errors so the host parse's count
   // fields in h_blosc1_totals stay intact for drain_wave_metrics.
-  CR(CudaFail,
+  CU(CudaFail,
      cuMemcpyDtoHAsync(&wave->h_blosc1_totals->n_codec_errors,
                        CUDPTR(&wave->d_blosc1_totals->n_codec_errors),
                        sizeof(uint32_t),
                        s));
-  CR(CudaFail, cuEventRecord(wave->ev.decomp_end, s));
+  CU(CudaFail, cuEventRecord(wave->ev.decomp_end, s));
   return DAMACY_OK;
 DecodeFail:
   self->failed_status = DAMACY_DECODE;
@@ -1080,12 +1080,12 @@ kick_assemble(struct damacy* self, struct damacy_wave* wave, CUstream s)
     &self->batch_pool.slots[wave->batch_pool_slot];
 
   build_assemble_meta(self, wave);
-  CR(CudaFail,
+  CU(CudaFail,
      cuMemcpyHtoDAsync(CUDPTR(wave->d_assemble_chunks),
                        wave->h_assemble_chunks,
                        (size_t)wave->n_chunks * sizeof(struct assemble_chunk),
                        s));
-  CR(CudaFail, cuEventRecord(wave->ev.asm_start, s));
+  CU(CudaFail, cuEventRecord(wave->ev.asm_start, s));
   if (assemble_launch(s,
                       wave->assemble_rank,
                       (const struct sample_plan*)slot->d_sample_plans,
@@ -1099,7 +1099,7 @@ kick_assemble(struct damacy* self, struct damacy_wave* wave, CUstream s)
     self->failed_status = DAMACY_CUDA;
     return DAMACY_CUDA;
   }
-  CR(CudaFail, cuEventRecord(wave->ev.asm_end, s));
+  CU(CudaFail, cuEventRecord(wave->ev.asm_end, s));
   return DAMACY_OK;
 CudaFail:
   self->failed_status = DAMACY_CUDA;
@@ -1112,8 +1112,8 @@ static enum damacy_status
 kick_compute(struct damacy* self, struct damacy_wave* wave)
 {
   CUstream s = self->stream_compute;
-  CR(CudaFail, cuStreamWaitEvent(s, wave->ev.h2d_end, 0));
-  CR(CudaFail, cuEventRecord(wave->ev.decomp_start, s));
+  CU(CudaFail, cuStreamWaitEvent(s, wave->ev.h2d_end, 0));
+  CU(CudaFail, cuEventRecord(wave->ev.decomp_start, s));
 
   const struct blosc1_totals tot = *wave->h_blosc1_totals;
   enum damacy_status st = kick_codec_batches(self, wave, &tot);
@@ -1356,14 +1356,14 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   stats_init(&self->stats);
 
   s = DAMACY_CUDA;
-  CR(Fail, cuInit(0));
+  CU(Fail, cuInit(0));
 
   CUcontext caller_ctx = NULL;
-  CR(Fail, cuCtxGetCurrent(&caller_ctx));
+  CU(Fail, cuCtxGetCurrent(&caller_ctx));
   if (cfg->device >= 0) {
     if (caller_ctx) {
       CUdevice cur_dev;
-      CR(Fail, cuCtxGetDevice(&cur_dev));
+      CU(Fail, cuCtxGetDevice(&cur_dev));
       if ((int)cur_dev != cfg->device) {
         s = DAMACY_INVAL;
         log_error("damacy_create: Config.device=%d but a CUcontext is "
@@ -1376,9 +1376,9 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
       }
     }
     CUdevice dev;
-    CR(Fail, cuDeviceGet(&dev, cfg->device));
+    CU(Fail, cuDeviceGet(&dev, cfg->device));
     CUcontext primary = NULL;
-    CR(Fail, cuDevicePrimaryCtxRetain(&primary, dev));
+    CU(Fail, cuDevicePrimaryCtxRetain(&primary, dev));
     self->retained_primary_device = cfg->device;
     self->retained_primary = primary;
     self->cuda_device = cfg->device;
@@ -1389,7 +1389,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
       goto Fail;
     }
     CUdevice dev;
-    CR(Fail, cuCtxGetDevice(&dev));
+    CU(Fail, cuCtxGetDevice(&dev));
     self->cuda_device = (int)dev;
   }
 
@@ -1399,10 +1399,10 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
 
   // Non-blocking so damacy doesn't force-serialize against the legacy
   // default stream that some user code still lands on.
-  CR(Fail, cuStreamCreate(&self->stream_h2d, CU_STREAM_NON_BLOCKING));
-  CR(Fail, cuStreamCreate(&self->stream_compute, CU_STREAM_NON_BLOCKING));
-  CR(Fail, cuStreamCreate(&self->stream_zstd, CU_STREAM_NON_BLOCKING));
-  CR(Fail, cuStreamCreate(&self->stream_lz4, CU_STREAM_NON_BLOCKING));
+  CU(Fail, cuStreamCreate(&self->stream_h2d, CU_STREAM_NON_BLOCKING));
+  CU(Fail, cuStreamCreate(&self->stream_compute, CU_STREAM_NON_BLOCKING));
+  CU(Fail, cuStreamCreate(&self->stream_zstd, CU_STREAM_NON_BLOCKING));
+  CU(Fail, cuStreamCreate(&self->stream_lz4, CU_STREAM_NON_BLOCKING));
 
   self->compute_pool = threadpool_new((int)cfg->n_compute_threads);
   if (!self->compute_pool) {
