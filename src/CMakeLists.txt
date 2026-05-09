@@ -38,6 +38,12 @@ add_src_lib(lookahead SOURCES lookahead/lookahead.h lookahead/lookahead.c
     LINKS log
 )
 
+# GPU-memory predictor consulted at damacy_create. Pure: no allocations,
+# no driver calls. Reads cfg + decoder temp-byte queries.
+add_cuda_lib(gpu_budget SOURCES gpu_budget/gpu_budget.h gpu_budget/gpu_budget.c
+    LINKS decoder assemble planner log
+)
+
 # Read-side store
 add_src_lib(store SOURCES store/store.h store/store.c store/store_fs.h store/store_fs.c
     LINKS io_queue platform_io strbuf log
@@ -102,6 +108,7 @@ add_cuda_lib(assemble SOURCES assemble/assemble.h assemble/assemble.cu
 # launch in assemble.cu).
 add_cuda_lib(damacy SOURCES damacy.h damacy.c damacy_status.c
     LINKS platform planner zarr_meta_cache zarr_shard_cache zarr store
-          decoder blosc1_host assemble dtype log lookahead strbuf threadpool
+          decoder blosc1_host assemble dtype log lookahead gpu_budget
+          strbuf threadpool
           CUDA::cuda_driver
 )

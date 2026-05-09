@@ -28,6 +28,7 @@
 #include "decoder/decoder_zstd.h"
 #include "decoder/shuffle.h"
 #include "decoder/status_reduce.h"
+#include "gpu_budget/gpu_budget.h"
 #include "log/log.h"
 #include "lookahead/lookahead.h"
 #include "planner/planner.h"
@@ -48,23 +49,6 @@
 // metadata buffer. Wave caps + chunk-uncompressed cap live in
 // damacy_limits.h since they're shared with kernel modules.
 #define DAMACY_MAX_CHUNKS_PER_BATCH 16384u
-
-// Worst-case substream count per wave for blosc1-zstd: 1 substream per
-// blosc-block. blosc1-lz4 splits each block into `typesize` substreams,
-// so its per-wave cap scales with the runtime max_bytes_per_element knob
-// (resolve_max_bpe(cfg)) — see lz4_subs_per_wave().
-#define DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE                                    \
-  (DAMACY_MAX_CHUNKS_PER_WAVE * DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK)
-// Memcpy ops cap: every chunk could conceivably be MEMCPYED.
-#define DAMACY_MAX_BLOSC_MEMCPY_OPS_PER_WAVE DAMACY_MAX_CHUNKS_PER_WAVE
-#define DAMACY_MAX_BLOSC_SHUFFLE_OPS_PER_WAVE DAMACY_MAX_CHUNKS_PER_WAVE
-
-// Worst-case LZ4 substream count for one wave at the given typesize cap.
-static inline size_t
-lz4_subs_per_wave(uint8_t max_bpe)
-{
-  return (size_t)DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE * (size_t)max_bpe;
-}
 
 // Poll interval inside damacy_pop's wait-loop. ~50 µs is short enough
 // that the boundary between wave stages doesn't add visible latency,
@@ -303,108 +287,6 @@ ctx_guard_exit(struct ctx_guard* g)
     cuCtxPopCurrent(NULL);
     g->active = 0;
   }
-}
-
-// --- GPU memory budget ---------------------------------------------------
-
-// Categorised breakdown of expected device-resident bytes for the wave
-// pool plus per-batch metadata. Lazy batch-output tensors are accounted
-// separately at batch_pool_allocate time (size depends on first AABB).
-struct gpu_budget
-{
-  uint64_t dev_compressed;        // 2× host_per_wave (H2D mirror)
-  uint64_t dev_decompressed;      // 2× dev_per_wave
-  uint64_t dev_unshuffle_scratch; // 2× dev_per_wave
-  uint64_t blosc1_meta;           // 2× per-wave parse + assemble metadata
-  uint64_t fanout_soa;            // 2× per-wave nvcomp fanout SOA + op arrays
-  uint64_t nvcomp_temp;           // 2× (zstd_temp + lz4_temp + actual+status)
-  uint64_t batch_metadata;        // 2× cfg.batch_size × sizeof(sample_plan)
-  uint64_t total;
-};
-
-// Sum of struct-array allocs wave_init makes for blosc1 parse + assemble
-// metadata, scaled to one wave. With the parse moved to the host the only
-// device-resident blosc1 metadata is the totals struct used by status_reduce.
-static uint64_t
-wave_blosc1_meta_bytes(void)
-{
-  const uint64_t cap = (uint64_t)DAMACY_MAX_CHUNKS_PER_WAVE;
-  return cap * sizeof(struct assemble_chunk) + sizeof(struct blosc1_totals);
-}
-
-// One wave's nvcomp fanout SOA + memcpy/shuffle op arrays.
-static uint64_t
-wave_fanout_soa_bytes(uint8_t max_bpe)
-{
-  const uint64_t zsubs = (uint64_t)DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE;
-  const uint64_t lsubs = (uint64_t)lz4_subs_per_wave(max_bpe);
-  // Each codec fanout: 2× (void*) + 2× (size_t).
-  uint64_t soa = zsubs * (2 * sizeof(void*) + 2 * sizeof(size_t)) +
-                 lsubs * (2 * sizeof(void*) + 2 * sizeof(size_t));
-  soa += (uint64_t)DAMACY_MAX_BLOSC_MEMCPY_OPS_PER_WAVE *
-         sizeof(struct gpu_memcpy_op);
-  soa += 2ull * (uint64_t)DAMACY_MAX_BLOSC_SHUFFLE_OPS_PER_WAVE *
-         sizeof(struct gpu_shuffle_op);
-  return soa;
-}
-
-// Predicted nvcomp scratch (temp workspace + actual-size + status arrays)
-// for one wave, mirroring wave_init's capacity math.
-static enum damacy_status
-wave_nvcomp_bytes(const struct damacy_config* cfg, uint64_t* out)
-{
-  const uint64_t dev_per_wave = cfg->device_buffer_bytes / 2;
-  const uint64_t runtime_chunk_cap = resolve_max_chunk_uncompressed(cfg);
-  const uint8_t max_bpe = resolve_max_bpe(cfg);
-  const uint64_t zsubs = (uint64_t)DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE;
-  const uint64_t lsubs = (uint64_t)lz4_subs_per_wave(max_bpe);
-  const uint64_t cap_worst =
-    (uint64_t)DAMACY_MAX_CHUNKS_PER_WAVE * runtime_chunk_cap;
-  const uint64_t total_uncompressed =
-    dev_per_wave < cap_worst ? dev_per_wave : cap_worst;
-  uint64_t zstd_per = runtime_chunk_cap;
-  if (zstd_per > total_uncompressed && total_uncompressed > 0)
-    zstd_per = total_uncompressed;
-  uint64_t lz4_per = zstd_per / max_bpe;
-  if (lz4_per == 0)
-    lz4_per = 1;
-  size_t zstd_temp = 0, lz4_temp = 0;
-  if (decoder_zstd_query_temp_bytes(
-        zsubs, (size_t)zstd_per, (size_t)total_uncompressed, &zstd_temp))
-    return DAMACY_CUDA;
-  if (decoder_lz4_query_temp_bytes(
-        lsubs, (size_t)lz4_per, (size_t)total_uncompressed, &lz4_temp))
-    return DAMACY_CUDA;
-  // Per-codec actual-size (size_t) and status (int) output arrays.
-  *out = (uint64_t)zstd_temp + zsubs * sizeof(size_t) + zsubs * sizeof(int) +
-         (uint64_t)lz4_temp + lsubs * sizeof(size_t) + lsubs * sizeof(int);
-  return DAMACY_OK;
-}
-
-static enum damacy_status
-gpu_budget_compute(const struct damacy_config* cfg, struct gpu_budget* out)
-{
-  const uint64_t host_per_wave = cfg->host_buffer_bytes / 2;
-  const uint64_t dev_per_wave = cfg->device_buffer_bytes / 2;
-  const uint8_t max_bpe = resolve_max_bpe(cfg);
-
-  uint64_t per_wave_nvcomp = 0;
-  enum damacy_status s = wave_nvcomp_bytes(cfg, &per_wave_nvcomp);
-  if (s != DAMACY_OK)
-    return s;
-
-  out->dev_compressed = 2ull * host_per_wave;
-  out->dev_decompressed = 2ull * dev_per_wave;
-  out->dev_unshuffle_scratch = 2ull * dev_per_wave;
-  out->blosc1_meta = 2ull * wave_blosc1_meta_bytes();
-  out->fanout_soa = 2ull * wave_fanout_soa_bytes(max_bpe);
-  out->nvcomp_temp = 2ull * per_wave_nvcomp;
-  out->batch_metadata =
-    2ull * (uint64_t)cfg->batch_size * sizeof(struct sample_plan);
-  out->total = out->dev_compressed + out->dev_decompressed +
-               out->dev_unshuffle_scratch + out->blosc1_meta + out->fanout_soa +
-               out->nvcomp_temp + out->batch_metadata;
-  return DAMACY_OK;
 }
 
 // --- batch pool -----------------------------------------------------------
