@@ -52,7 +52,8 @@ struct damacy_batch_pool
   uint8_t rank;                         // includes leading N axis
   int64_t shape[DAMACY_MAX_RANK + 1];   // [batch_size, ...sample_axes]
   int64_t strides[DAMACY_MAX_RANK + 1]; // row-major elements
-  int allocated;                        // shape established + dev_ptrs alloc'd
+  int layout_set;                       // shape/strides/n_bytes computed
+  int allocated;                        // dev_ptrs alloc'd (implies layout_set)
 };
 
 // Returns 0 on success, non-zero on alloc failure.
@@ -60,17 +61,18 @@ int batch_slot_init(struct damacy_batch_slot* slot, uint32_t batch_size_cap);
 void batch_slot_destroy(struct damacy_batch_slot* slot, int cuda_skip);
 void batch_pool_destroy(struct damacy_batch_pool* pool, int cuda_skip);
 
-// Establishes shape/strides/n_bytes from the first sample's AABB.
-// Idempotent — re-uses existing layout once allocated. Does NOT touch
-// the GPU; the caller checks the budget against pool->n_bytes and then
-// calls batch_pool_alloc_dev.
+// Establishes shape/strides/n_bytes from the first sample's AABB. No
+// GPU touch. Idempotent on the same input — sets pool->layout_set on
+// first success and short-circuits subsequent calls. The caller checks
+// the budget against pool->n_bytes and then calls batch_pool_alloc_dev.
 enum damacy_status
 batch_pool_compute_layout(struct damacy_batch_pool* pool,
                           const struct damacy_aabb* sample_aabb,
                           uint32_t batch_size,
                           uint32_t bpe);
 
-// Allocates dev_ptr for both slots (size pool->n_bytes each). Idempotent.
+// Allocates dev_ptr for both slots (size pool->n_bytes each). Requires
+// pool->layout_set. Idempotent — sets pool->allocated on first success.
 // Caller bumps gpu_bytes_committed by 2 × pool->n_bytes on success.
 enum damacy_status batch_pool_alloc_dev(struct damacy_batch_pool* pool);
 

@@ -65,7 +65,7 @@ batch_pool_compute_layout(struct damacy_batch_pool* pool,
                           uint32_t batch_size,
                           uint32_t bpe)
 {
-  if (pool->allocated)
+  if (pool->layout_set)
     return DAMACY_OK;
 
   uint8_t spatial_rank = sample_aabb->rank;
@@ -86,6 +86,7 @@ batch_pool_compute_layout(struct damacy_batch_pool* pool,
     pool->strides[d] = pool->strides[d + 1] * pool->shape[d + 1];
   pool->n_bytes =
     (uint64_t)batch_size * (uint64_t)spatial_volume * (uint64_t)bpe;
+  pool->layout_set = 1;
   return DAMACY_OK;
 Rank:
   return DAMACY_RANK;
@@ -98,6 +99,8 @@ batch_pool_alloc_dev(struct damacy_batch_pool* pool)
 {
   if (pool->allocated)
     return DAMACY_OK;
+  if (!pool->layout_set)
+    return DAMACY_INVAL;
   for (int s = 0; s < 2; ++s) {
     CUdeviceptr dptr = 0;
     if (cuMemAlloc(&dptr, pool->n_bytes) != CUDA_SUCCESS) {
