@@ -32,6 +32,17 @@ add_src_lib(threadpool SOURCES threadpool/threadpool.c threadpool/threadpool.h
 add_src_lib(io_queue SOURCES io_queue/io_queue.h LINKS platform_io log)
 add_platform_sources(io_queue io_queue/io_queue)
 
+# Internal stats helpers (cumulative damacy_metric record / reset, plus a
+# project-local monotonic clock). Shared between damacy.c and wave/.
+add_src_lib(damacy_stats SOURCES damacy_stats.h damacy_stats.c)
+
+# Internal config helpers: dtype mapping, validate_config, and the
+# "0 means use the ceiling" knob resolvers. Shared between damacy.c,
+# gpu_budget/, and wave/.
+add_src_lib(damacy_config SOURCES damacy_config.h damacy_config.c
+    LINKS dtype log
+)
+
 # Push-side ring of pending samples. Owns uri-string copies; drain
 # transfers ownership to the planner's sample-slot array.
 add_src_lib(lookahead SOURCES lookahead/lookahead.h lookahead/lookahead.c
@@ -41,7 +52,7 @@ add_src_lib(lookahead SOURCES lookahead/lookahead.h lookahead/lookahead.c
 # GPU-memory predictor consulted at damacy_create. Pure: no allocations,
 # no driver calls. Reads cfg + decoder temp-byte queries.
 add_cuda_lib(gpu_budget SOURCES gpu_budget/gpu_budget.h gpu_budget/gpu_budget.c
-    LINKS decoder assemble planner log
+    LINKS decoder assemble planner log damacy_config
 )
 
 # Two-slot batch state machine + lazy device-tensor pool. Owns planner
@@ -52,11 +63,12 @@ add_cuda_lib(batch_pool SOURCES batch_pool/batch_pool.h batch_pool/batch_pool.c
 
 # In-flight wave: per-wave host slab + device decompress arena, blosc1
 # parse scratch, nvcomp fanout SOA, per-stage CUevents, decoders. Owns
-# the wave state machine (peel → H2D → codec → post-decode → assemble →
-# finalize) driven from damacy.c via advance_waves / kick_new_waves.
+# the per-wave state machine (peel → H2D → codec → post-decode →
+# assemble → finalize); damacy.c drives it via wave_pool_advance /
+# wave_pool_peel through a borrowed wave_ctx (no struct-damacy reach).
 add_cuda_lib(wave SOURCES wave/wave.h wave/wave.c
     LINKS decoder assemble store planner blosc1_host batch_pool
-          strbuf log CUDA::cuda_driver
+          damacy_stats damacy_config strbuf log CUDA::cuda_driver
 )
 
 # Read-side store
@@ -124,6 +136,6 @@ add_cuda_lib(assemble SOURCES assemble/assemble.h assemble/assemble.cu
 add_cuda_lib(damacy SOURCES damacy.h damacy.c damacy_status.c
     LINKS platform planner zarr_meta_cache zarr_shard_cache zarr store
           decoder blosc1_host assemble dtype log lookahead gpu_budget
-          batch_pool wave strbuf threadpool
+          batch_pool wave damacy_stats damacy_config strbuf threadpool
           CUDA::cuda_driver
 )
