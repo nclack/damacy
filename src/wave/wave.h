@@ -87,7 +87,7 @@ struct damacy_wave
 
   // Per-stage CUevents. ev.h2d_end is the cuStreamWaitEvent target on
   // stream_compute; ev.asm_end is the wave's "done" event polled in
-  // advance_waves.
+  // wave_pool_advance.
   struct wave_events
   {
     CUevent h2d_start;
@@ -144,12 +144,38 @@ enum damacy_status fanout_upload(CUstream s,
 int find_free_wave(const struct damacy_wave waves[2]);
 int any_wave_in_flight(const struct damacy_wave waves[2]);
 
-struct damacy;
+struct damacy_batch_pool;
+struct damacy_stats;
+struct store;
+struct threadpool;
 
-// Phase 1: poll each in-flight wave and advance state when its current
-// stage's event has retired. Sets self->failed_status on driver errors.
-enum damacy_status advance_waves(struct damacy* self);
+// Borrowed pointers / streams the wave-pool functions read from + into.
+// Built fresh by the orchestrator on each call; pointers alias into the
+// orchestrator's owning struct. Keeps wave/ free of any struct-damacy
+// reach.
+struct wave_ctx
+{
+  struct damacy_wave* waves; // 2 entries
+  struct damacy_batch_pool* pool;
+  struct store* store;
+  struct threadpool* compute_pool;
+  CUstream stream_h2d;
+  CUstream stream_compute;
+  CUstream stream_zstd;
+  CUstream stream_lz4;
+  struct damacy_stats* stats;
+  enum damacy_status* failed_status;
+  enum damacy_dtype dtype;
+};
 
-// Phase 2: kick new work into FREE wave slots, planning a fresh batch
-// (via damacy_plan_into_slot) if no FILLING slot has unfinished chunks.
-enum damacy_status kick_new_waves(struct damacy* self);
+// Drive each in-flight wave forward by one stage (IO retired → H2D,
+// h2d_end retired → compute, asm_end retired → finalize). Sets
+// *ctx->failed_status on driver errors.
+enum damacy_status wave_pool_advance(const struct wave_ctx* ctx);
+
+// Pack chunks from `slot_idx`'s remaining work into `wave_idx`, submit
+// IO, transition the wave to WAVE_IO. DAMACY_OOM if a single chunk is
+// larger than the wave's slabs.
+enum damacy_status wave_pool_peel(const struct wave_ctx* ctx,
+                                  uint16_t wave_idx,
+                                  uint16_t slot_idx);

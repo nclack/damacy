@@ -17,19 +17,9 @@
 
 #include "damacy.h"
 
-#include "assemble/assemble.h"
 #include "batch_pool/batch_pool.h"
 #include "damacy_config.h"
-#include "damacy_internal.h"
 #include "damacy_stats.h"
-#include "decoder/bitshuffle.h"
-#include "decoder/blosc1.h"
-#include "decoder/blosc1_host.h"
-#include "decoder/decoder_lz4.h"
-#include "decoder/decoder_memcpy.h"
-#include "decoder/decoder_zstd.h"
-#include "decoder/shuffle.h"
-#include "decoder/status_reduce.h"
 #include "gpu_budget/gpu_budget.h"
 #include "log/log.h"
 #include "lookahead/lookahead.h"
@@ -38,7 +28,6 @@
 #include "store/store.h"
 #include "threadpool/threadpool.h"
 #include "util/prelude.h"
-#include "util/strbuf.h"
 #include "wave/wave.h"
 #include "zarr/zarr_meta_cache.h"
 #include "zarr/zarr_metadata.h"
@@ -47,6 +36,75 @@
 #include <cuda.h>
 #include <stdlib.h>
 #include <string.h>
+
+// Internal handle returned by damacy_pop and consumed by damacy_release.
+// Only one is live at a time (the orchestrator's `handle` field).
+struct damacy_batch
+{
+  struct damacy* d;
+  uint16_t slot_idx;
+  uint64_t batch_id;
+};
+
+struct damacy
+{
+  struct damacy_config cfg;
+  enum damacy_status failed_status;
+  uint64_t next_batch_id;
+  uint64_t page_alignment;
+  int cuda_device;
+  // -1 = captured caller's ctx; else release at destroy.
+  int retained_primary_device;
+  // Pushed per-call by ctx_guard when retained.
+  CUcontext retained_primary;
+
+  // GPU memory budgeting. Lazy batch-output tensors are summed against
+  // gpu_bytes_budget at batch_pool_allocate. 0 budget = no cap.
+  uint64_t gpu_bytes_committed;
+  uint64_t gpu_bytes_budget;
+
+  struct store* store;
+  struct zarr_meta_cache* meta_cache;
+  struct zarr_shard_cache* shard_cache;
+  struct planner* planner;
+  CUstream stream_h2d;
+  CUstream stream_compute;
+  CUstream stream_zstd;
+  CUstream stream_lz4;
+
+  struct threadpool* compute_pool; // host blosc1 parse
+
+  struct damacy_lookahead lookahead;
+  struct damacy_batch_pool batch_pool;
+  struct damacy_wave waves[2];
+
+  // Sample working set used while planning one batch.
+  struct damacy_sample_slot* batch_samples;
+  struct damacy_sample* batch_stage;
+
+  struct damacy_batch handle;
+  struct damacy_stats stats;
+};
+
+// Borrowed view of self for wave/. Built on every call site that drives
+// the wave pool; no lifetime contract beyond the call.
+static struct wave_ctx
+make_wave_ctx(struct damacy* self)
+{
+  return (struct wave_ctx){
+    .waves = self->waves,
+    .pool = &self->batch_pool,
+    .store = self->store,
+    .compute_pool = self->compute_pool,
+    .stream_h2d = self->stream_h2d,
+    .stream_compute = self->stream_compute,
+    .stream_zstd = self->stream_zstd,
+    .stream_lz4 = self->stream_lz4,
+    .stats = &self->stats,
+    .failed_status = &self->failed_status,
+    .dtype = self->cfg.dtype,
+  };
+}
 
 // Poll interval inside damacy_pop's wait-loop. ~50 µs is short enough
 // that the boundary between wave stages doesn't add visible latency,
@@ -168,12 +226,9 @@ push_one(struct damacy* self, const struct damacy_sample* sample)
 
 // Drain n_samples from the lookahead, plan them into the given batch slot,
 // and transition it FREE→FILLING. If n_samples == 0 this is a no-op
-// returning OK. Exposed via damacy_internal.h so wave/ can drive batch
-// planning from kick_new_waves.
-enum damacy_status
-damacy_plan_into_slot(struct damacy* self,
-                      uint16_t slot_idx,
-                      uint32_t n_samples)
+// returning OK.
+static enum damacy_status
+plan_into_slot(struct damacy* self, uint16_t slot_idx, uint32_t n_samples)
 {
   if (n_samples == 0)
     return DAMACY_OK;
@@ -251,6 +306,42 @@ Cleanup:
   if (status != DAMACY_OK)
     self->failed_status = status;
   return status;
+}
+
+// Push work into FREE wave slots. When no FILLING slot has unfinished
+// chunks, plan a fresh batch from the lookahead (if a free batch slot
+// + a full batch's worth of samples are available) and loop.
+static enum damacy_status
+kick_new_waves(struct damacy* self)
+{
+  struct wave_ctx ctx = make_wave_ctx(self);
+  for (;;) {
+    int w = find_free_wave(self->waves);
+    if (w < 0)
+      break;
+
+    int target_slot = find_filling_slot_with_work(&self->batch_pool);
+    if (target_slot < 0) {
+      int free_slot = find_free_batch_slot(&self->batch_pool);
+      if (free_slot < 0)
+        break;
+      if (self->lookahead.size < self->cfg.batch_size)
+        break;
+      enum damacy_status s =
+        plan_into_slot(self, (uint16_t)free_slot, self->cfg.batch_size);
+      if (s != DAMACY_OK)
+        return s;
+      // Planned a new batch (possibly degenerate). Loop to either pick
+      // it up or look for more work.
+      continue;
+    }
+
+    enum damacy_status s =
+      wave_pool_peel(&ctx, (uint16_t)w, (uint16_t)target_slot);
+    if (s != DAMACY_OK)
+      return s;
+  }
+  return DAMACY_OK;
 }
 
 // --- public API: create / destroy ----------------------------------------
@@ -573,12 +664,13 @@ damacy_pop(struct damacy* self, struct damacy_batch** out)
   if (r != DAMACY_OK)
     return r;
 
+  struct wave_ctx ctx = make_wave_ctx(self);
   for (;;) {
-    r = advance_waves(self);
+    r = wave_pool_advance(&ctx);
     if (r != DAMACY_OK)
       goto Done;
     // finalize_wave can set failed_status on a post-decode codec error
-    // even when advance_waves itself returned OK; bail before handing
+    // even when wave_pool_advance itself returned OK; bail before handing
     // out a possibly-corrupt batch.
     if (self->failed_status != DAMACY_OK) {
       r = self->failed_status;
@@ -663,13 +755,15 @@ damacy_flush(struct damacy* self)
   if (r != DAMACY_OK)
     return r;
 
+  struct wave_ctx ctx = make_wave_ctx(self);
+
   // Plan a partial batch from the remaining lookahead, if any.
   if (self->lookahead.size > 0 && self->lookahead.size < self->cfg.batch_size) {
     int free_slot = find_free_batch_slot(&self->batch_pool);
     if (free_slot < 0) {
       // Both slots in use; drain one wave-cycle's worth and try again.
       // For step 5 we allow one drain pass; if still no slot, return AGAIN.
-      r = advance_waves(self);
+      r = wave_pool_advance(&ctx);
       if (r != DAMACY_OK)
         goto Done;
       free_slot = find_free_batch_slot(&self->batch_pool);
@@ -679,7 +773,7 @@ damacy_flush(struct damacy* self)
       }
     }
     uint32_t n = self->lookahead.size;
-    r = damacy_plan_into_slot(self, (uint16_t)free_slot, n);
+    r = plan_into_slot(self, (uint16_t)free_slot, n);
     if (r != DAMACY_OK)
       goto Done;
     self->stats.batches_truncated++;
@@ -689,7 +783,7 @@ damacy_flush(struct damacy* self)
   // FILLING slots remain.
   uint64_t flush_t0 = monotonic_ns();
   while (any_wave_in_flight(self->waves) || find_oldest_filling_slot(&self->batch_pool) >= 0) {
-    r = advance_waves(self);
+    r = wave_pool_advance(&ctx);
     if (r != DAMACY_OK)
       goto Done;
     r = kick_new_waves(self);
