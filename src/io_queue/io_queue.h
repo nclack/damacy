@@ -3,12 +3,13 @@
 // post() enqueues fn(ctx). Workers may execute jobs in parallel, finishing
 // in any order. record() captures the current sequence high-water mark.
 // io_event_wait() blocks until *every* job posted before that record()
-// call has finished, regardless of completion order. Internally the queue
-// tracks per-seq completion in a bitmap and advances retired_seq through
-// contiguous completions only.
+// call has finished, regardless of completion order. retired_seq advances
+// to the lowest seq still in flight or queued, derived from each worker's
+// currently-processing seq plus the queue's tail entry — no per-seq
+// bookkeeping, so out-of-order completion patterns can't desynchronize it.
 //
-// nthreads is encapsulated in the queue. nthreads=0 runs jobs synchronously
-// on the posting thread (useful for tests and tiny tools).
+// nthreads is encapsulated in the queue, capped at DAMACY_MAX_IO_THREADS.
+// nthreads=0 runs jobs synchronously on the posting thread.
 #pragma once
 
 #include <stdint.h>

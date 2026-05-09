@@ -44,6 +44,17 @@
 // batches split across multiple waves.
 #define DAMACY_MAX_CHUNKS_PER_WAVE 512u
 
+// Cap on cfg.n_io_threads. Consumer NVMe saturates well below 32 in-flight
+// reads; parallel filesystems / object stores still don't gain past this
+// in practice. The cap keeps io_queue's per-worker tracking statically
+// sized (see io_queue.posix.c). Bump if a real workload demonstrates a
+// need.
+#define DAMACY_MAX_IO_THREADS 32u
+
+// Initial io_queue ring capacity. Sized to absorb one full wave's worth
+// of posts (DAMACY_MAX_CHUNKS_PER_WAVE) without growing in steady state.
+#define DAMACY_IO_QUEUE_INITIAL_CAP 512u
+
 // Per-zarr-chunk blosc1 nblocks cap. Derivation:
 //   max chunk uncompressed = DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES (2 MB)
 //   blosc encoder min blocksize = 64 KB (compute_blocksize floor for

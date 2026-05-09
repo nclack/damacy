@@ -422,6 +422,7 @@ validate_config(const struct damacy_config* cfg)
   CHECK_SILENT(Invalid, cfg->batch_size > 0);
   CHECK_SILENT(Invalid, cfg->lookahead_batches >= 2);
   CHECK_SILENT(Invalid, cfg->n_io_threads > 0);
+  CHECK_SILENT(Invalid, cfg->n_io_threads <= DAMACY_MAX_IO_THREADS);
   CHECK_SILENT(Invalid, cfg->host_buffer_bytes > 0);
   CHECK_SILENT(Invalid, cfg->device_buffer_bytes > 0);
   CHECK_SILENT(Invalid, cfg->n_zarrs_meta_cache > 0);

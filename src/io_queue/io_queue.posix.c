@@ -1,8 +1,10 @@
 #include "io_queue/io_queue.h"
 
+#include "damacy_limits.h"
 #include "util/prelude.h"
 
 #include <pthread.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -14,24 +16,33 @@ struct io_job
   uint64_t seq;
 };
 
+// Per-worker scratch passed to pthread_create. Lives inside the queue so
+// teardown is just pthread_join + free(q).
+struct io_worker_arg
+{
+  struct io_queue* q;
+  int wid;
+};
+
 struct io_queue
 {
-  pthread_t* workers;
+  pthread_t workers[DAMACY_MAX_IO_THREADS];
+  struct io_worker_arg worker_args[DAMACY_MAX_IO_THREADS];
+  // Per-worker currently-processing seq; UINT64_MAX = idle. Read under
+  // q->mutex. Drives retired_seq (see advance_retired).
+  uint64_t worker_seq[DAMACY_MAX_IO_THREADS];
   int nworkers;
 
   pthread_mutex_t mutex;
   pthread_cond_t cond_not_empty;
   pthread_cond_t cond_retired;
 
+  // Ring buffer. head/tail are monotonic uint64_t; index via `% ring_cap`
+  // since ring_cap is no longer constrained to a power of two.
   struct io_job* ring;
-  uint64_t ring_cap; // power of 2; also the bitmap size
+  uint64_t ring_cap;
   uint64_t head;
   uint64_t tail;
-
-  // Per-seq completion bitmap, indexed by `seq mod ring_cap`.
-  // Set when the job for that seq has finished. Drained when retired_seq
-  // advances through contiguous bits.
-  uint8_t* completed;
 
   uint64_t next_seq;
   uint64_t retired_seq;
@@ -40,25 +51,36 @@ struct io_queue
   int started;
 };
 
-// Caller holds q->mutex.
+// Caller holds q->mutex. Recompute retired_seq from the lowest seq still
+// in flight (per-worker) or queued (ring tail). When everything is done
+// and the queue is empty, retired_seq catches up to next_seq.
 static void
-drain_completed(struct io_queue* q)
+advance_retired(struct io_queue* q)
 {
-  for (;;) {
-    uint64_t want = q->retired_seq + 1;
-    uint8_t* slot = &q->completed[want & (q->ring_cap - 1)];
-    if (!*slot)
-      break;
-    *slot = 0;
-    q->retired_seq = want;
+  uint64_t min_inflight = UINT64_MAX;
+  for (int i = 0; i < q->nworkers; ++i)
+    if (q->worker_seq[i] < min_inflight)
+      min_inflight = q->worker_seq[i];
+  if (q->tail < q->head) {
+    uint64_t tail_seq = q->ring[q->tail % q->ring_cap].seq;
+    if (tail_seq < min_inflight)
+      min_inflight = tail_seq;
   }
-  pthread_cond_broadcast(&q->cond_retired);
+  uint64_t new_retired =
+    (min_inflight == UINT64_MAX) ? q->next_seq : min_inflight - 1;
+  if (new_retired > q->retired_seq) {
+    q->retired_seq = new_retired;
+    pthread_cond_broadcast(&q->cond_retired);
+  }
 }
 
 static void*
 worker_thread(void* arg)
 {
-  struct io_queue* q = (struct io_queue*)arg;
+  struct io_worker_arg* wa = (struct io_worker_arg*)arg;
+  struct io_queue* q = wa->q;
+  const int wid = wa->wid;
+
   for (;;) {
     struct io_job job;
 
@@ -71,8 +93,11 @@ worker_thread(void* arg)
       break;
     }
 
-    job = q->ring[q->tail & (q->ring_cap - 1)];
+    job = q->ring[q->tail % q->ring_cap];
     q->tail++;
+    // Mark this worker as processing job.seq before dropping the mutex
+    // so the next advance_retired sees consistent state.
+    q->worker_seq[wid] = job.seq;
     pthread_mutex_unlock(&q->mutex);
 
     job.fn(job.ctx);
@@ -80,25 +105,21 @@ worker_thread(void* arg)
       job.ctx_free(job.ctx);
 
     pthread_mutex_lock(&q->mutex);
-    q->completed[job.seq & (q->ring_cap - 1)] = 1;
-    if (job.seq == q->retired_seq + 1)
-      drain_completed(q);
+    q->worker_seq[wid] = UINT64_MAX;
+    advance_retired(q);
     pthread_mutex_unlock(&q->mutex);
   }
   return NULL;
 }
 
-// Helper: free a partially-constructed io_queue from io_queue_create's
-// Fail label. Each leaf-free is NULL-safe; this just guards the
-// container deref.
+// Helper for io_queue_create's Fail label. Each leaf-free is NULL-safe;
+// this just guards the container deref.
 static void
 io_queue_free_partial(struct io_queue* q)
 {
   if (!q)
     return;
   free(q->ring);
-  free(q->completed);
-  free(q->workers);
   pthread_mutex_destroy(&q->mutex);
   pthread_cond_destroy(&q->cond_not_empty);
   pthread_cond_destroy(&q->cond_retired);
@@ -111,6 +132,7 @@ io_queue_create(int nthreads)
   struct io_queue* q = NULL;
 
   CHECK_SILENT(Fail, nthreads >= 0);
+  CHECK_SILENT(Fail, nthreads <= (int)DAMACY_MAX_IO_THREADS);
   q = (struct io_queue*)calloc(1, sizeof(*q));
   CHECK_SILENT(Fail, q);
 
@@ -120,18 +142,19 @@ io_queue_create(int nthreads)
   pthread_cond_init(&q->cond_not_empty, NULL);
   pthread_cond_init(&q->cond_retired, NULL);
 
-  q->ring_cap = 64;
+  for (int i = 0; i < (int)DAMACY_MAX_IO_THREADS; ++i)
+    q->worker_seq[i] = UINT64_MAX;
+
+  q->ring_cap = DAMACY_IO_QUEUE_INITIAL_CAP;
   q->ring = (struct io_job*)calloc(q->ring_cap, sizeof(struct io_job));
-  q->completed = (uint8_t*)calloc(q->ring_cap, sizeof(uint8_t));
   CHECK_SILENT(Fail, q->ring);
-  CHECK_SILENT(Fail, q->completed);
 
   q->nworkers = nthreads;
   if (nthreads > 0) {
-    q->workers = (pthread_t*)calloc((size_t)nthreads, sizeof(pthread_t));
-    CHECK_SILENT(Fail, q->workers);
     for (int i = 0; i < nthreads; ++i) {
-      if (pthread_create(&q->workers[i], NULL, worker_thread, q) != 0) {
+      q->worker_args[i] = (struct io_worker_arg){ .q = q, .wid = i };
+      if (pthread_create(
+            &q->workers[i], NULL, worker_thread, &q->worker_args[i]) != 0) {
         // Tear down already-started workers.
         pthread_mutex_lock(&q->mutex);
         q->shutdown = 1;
@@ -162,53 +185,37 @@ io_queue_destroy(struct io_queue* q)
   pthread_cond_broadcast(&q->cond_not_empty);
   pthread_mutex_unlock(&q->mutex);
 
-  if (q->started) {
+  if (q->started)
     for (int i = 0; i < q->nworkers; ++i)
       pthread_join(q->workers[i], NULL);
-  }
-  free(q->workers);
+
   free(q->ring);
-  free(q->completed);
   pthread_mutex_destroy(&q->mutex);
   pthread_cond_destroy(&q->cond_not_empty);
   pthread_cond_destroy(&q->cond_retired);
   free(q);
 }
 
-// Caller holds q->mutex; in-flight count must be 0 (head == tail) or all
-// jobs in the ring must be unretired (ie. the bitmap holds no live bits we
-// would lose). We grow only when the ring is full, which means head == tail
-// (mod ring_cap) and head - tail == ring_cap; reissuing the ring relocates
-// jobs but the completion bitmap must be remapped consistently.
+// Caller holds q->mutex. Grow the ring by ~1.2× plus a small constant —
+// log-many reallocs to reach equilibrium without 2× memory overshoot.
+// In-flight jobs are relocated to slots [0, count) and head/tail rebased.
+// retired_seq tracking is index-free, so no completion-bit bookkeeping
+// crosses this boundary.
 static int
 ring_grow(struct io_queue* q)
 {
-  uint64_t new_cap = q->ring_cap * 2;
+  uint64_t new_cap = q->ring_cap + q->ring_cap / 5u + 16u;
   struct io_job* new_ring =
     (struct io_job*)calloc(new_cap, sizeof(struct io_job));
-  uint8_t* new_done = (uint8_t*)calloc(new_cap, sizeof(uint8_t));
-  if (!new_ring || !new_done) {
-    free(new_ring);
-    free(new_done);
+  if (!new_ring)
     return 1;
-  }
 
   uint64_t count = q->head - q->tail;
-  for (uint64_t i = 0; i < count; ++i) {
-    struct io_job job = q->ring[(q->tail + i) & (q->ring_cap - 1)];
-    new_ring[i] = job;
-    // Remap the completion bit for this seq from old slot to new.
-    uint64_t old_slot = job.seq & (q->ring_cap - 1);
-    uint64_t new_slot = job.seq & (new_cap - 1);
-    new_done[new_slot] = q->completed[old_slot];
-    q->completed[old_slot] = 0;
-  }
-  // Any remaining set bits in q->completed are for seqs already retired —
-  // safe to drop. Replace ring + bitmap.
+  for (uint64_t i = 0; i < count; ++i)
+    new_ring[i] = q->ring[(q->tail + i) % q->ring_cap];
+
   free(q->ring);
-  free(q->completed);
   q->ring = new_ring;
-  q->completed = new_done;
   q->ring_cap = new_cap;
   q->head = count;
   q->tail = 0;
@@ -234,8 +241,10 @@ io_queue_post(struct io_queue* q,
     if (ctx_free)
       ctx_free(ctx);
     pthread_mutex_lock(&q->mutex);
-    q->retired_seq = my_seq;
-    pthread_cond_broadcast(&q->cond_retired);
+    if (my_seq > q->retired_seq) {
+      q->retired_seq = my_seq;
+      pthread_cond_broadcast(&q->cond_retired);
+    }
     pthread_mutex_unlock(&q->mutex);
     return 0;
   }
@@ -248,7 +257,7 @@ io_queue_post(struct io_queue* q,
     }
   }
   q->next_seq++;
-  q->ring[q->head & (q->ring_cap - 1)] = (struct io_job){
+  q->ring[q->head % q->ring_cap] = (struct io_job){
     .fn = fn,
     .ctx = ctx,
     .ctx_free = ctx_free,
