@@ -16,11 +16,16 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <errno.h>
+#include <pthread.h>
+#include <stdatomic.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/prctl.h>
 #include <time.h>
+#include <unistd.h>
 
 #define countof(a) (sizeof(a) / sizeof((a)[0]))
 
@@ -32,6 +37,111 @@ now_seconds(void)
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
+
+static uint64_t
+now_ns(void)
+{
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+
+// ---- watchdog + breadcrumbs -------------------------------------------------
+//
+// Bench has hung in CI mid-run with no signal of where it stopped. The
+// outer `timeout 5m` SIGKILLs without diagnostics, so cancelled runs
+// leave us guessing between cuInit/damacy_create/drive(). A thread-local
+// watchdog with a const-pointer breadcrumb is enough to localize: every
+// stage updates `g_bc_msg`, the hot push/pop path only pats the
+// timestamp, and the watchdog aborts with the last breadcrumb on stall.
+//
+// Disable by `BENCH_WATCHDOG_S=0`. Default 60s — well above warmup
+// init (zarr meta cold-fetch + nvcomp JIT) but below the workflow's
+// 5-minute outer timeout.
+static _Atomic(const char*) g_bc_msg = NULL;
+static _Atomic uint64_t g_bc_ns = 0;
+static atomic_bool g_watchdog_stop = false;
+
+static void
+diag(const char* msg)
+{
+  atomic_store_explicit(&g_bc_msg, msg, memory_order_relaxed);
+  atomic_store_explicit(&g_bc_ns, now_ns(), memory_order_relaxed);
+  fprintf(stderr, "[bench] %s\n", msg);
+  fflush(stderr);
+}
+
+static void
+pat(void)
+{
+  atomic_store_explicit(&g_bc_ns, now_ns(), memory_order_relaxed);
+}
+
+struct watchdog_args
+{
+  uint64_t timeout_ns;
+};
+
+static void*
+watchdog_thread(void* varg)
+{
+  const struct watchdog_args* a = (const struct watchdog_args*)varg;
+  for (;;) {
+    // 1s tick; coarse is fine — we're guarding against multi-minute hangs.
+    struct timespec ts = { .tv_sec = 1, .tv_nsec = 0 };
+    nanosleep(&ts, NULL);
+    if (atomic_load_explicit(&g_watchdog_stop, memory_order_relaxed))
+      return NULL;
+    uint64_t now = now_ns();
+    uint64_t last = atomic_load_explicit(&g_bc_ns, memory_order_relaxed);
+    if (last && now - last > a->timeout_ns) {
+      const char* bc = atomic_load_explicit(&g_bc_msg, memory_order_relaxed);
+      double stall_s = (double)(now - last) / 1e9;
+      fprintf(stderr,
+              "\n[watchdog] no progress for %.1fs; last breadcrumb: %s\n",
+              stall_s,
+              bc ? bc : "(none)");
+      fflush(stderr);
+      // abort() so the kernel writes a core (if ulimit -c allows) and
+      // GHA captures a non-zero exit before the outer `timeout` SIGKILLs.
+      abort();
+    }
+  }
+}
+
+static pthread_t g_watchdog_tid;
+static int g_watchdog_running = 0;
+
+static void
+watchdog_start(uint64_t* out_timeout_ns)
+{
+  const char* env = getenv("BENCH_WATCHDOG_S");
+  uint64_t s = env ? strtoull(env, NULL, 10) : 60ull;
+  *out_timeout_ns = s * 1000000000ull;
+  if (s == 0) {
+    fprintf(stderr, "[bench] watchdog disabled (BENCH_WATCHDOG_S=0)\n");
+    return;
+  }
+  static struct watchdog_args args; // outlives main; trivially OK.
+  args.timeout_ns = *out_timeout_ns;
+  if (pthread_create(&g_watchdog_tid, NULL, watchdog_thread, &args) == 0) {
+    g_watchdog_running = 1;
+    fprintf(stderr, "[bench] watchdog armed (%llus)\n", (unsigned long long)s);
+  } else {
+    fprintf(stderr, "[bench] warn: watchdog thread spawn failed\n");
+  }
+  fflush(stderr);
+}
+
+static void
+watchdog_stop(void)
+{
+  if (!g_watchdog_running)
+    return;
+  atomic_store_explicit(&g_watchdog_stop, true, memory_order_relaxed);
+  pthread_join(g_watchdog_tid, NULL);
+  g_watchdog_running = 0;
 }
 
 static int
@@ -474,6 +584,8 @@ drive(struct damacy* d,
       uint32_t consumed = (uint32_t)(pr.unconsumed.beg - slice.beg);
       cursor += consumed;
       pushed_local += consumed;
+      if (consumed)
+        pat();
       if (pr.status != DAMACY_OK && pr.status != DAMACY_AGAIN) {
         fprintf(stderr, "damacy_push: %s\n", damacy_status_str(pr.status));
         free(pool);
@@ -488,6 +600,7 @@ drive(struct damacy* d,
         *first_pop_t = now_seconds();
       ++popped_local;
       damacy_release(d, b);
+      pat();
     } else if (ps == DAMACY_AGAIN) {
       // pipeline not yet ready or no work pending; keep looping
     } else {
@@ -663,6 +776,13 @@ main(int argc, char** argv)
     fprintf(stderr, "usage: %s scenario.json\n", argv[0]);
     return 1;
   }
+  // YAMA ptrace_scope=1 blocks non-descendant ptrace; this lets us
+  // `cuda-gdb -p <pid>` from a sibling shell when chasing hangs.
+  // Bench-only — no security implication for a tool we're debugging.
+  (void)prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);
+  uint64_t watchdog_ns = 0;
+  watchdog_start(&watchdog_ns);
+  diag("startup");
   char* json_buf = NULL;
   size_t json_len = 0;
   if (slurp_file(argv[1], &json_buf, &json_len) != 0)
@@ -675,6 +795,7 @@ main(int argc, char** argv)
     free(json_buf);
     return 1;
   }
+  diag("scenario parsed");
 
   // damacy now wants absolute uris; prepend the scenario's store_root.
   char abs_fmt[DAMACY_MAX_PATH];
@@ -714,12 +835,14 @@ main(int argc, char** argv)
   struct rng rng = { .s = sc.sampling_seed ? sc.sampling_seed : 0xdeadbeefULL };
 
   // damacy_create requires a CUcontext current. Retain dev 0's primary.
+  diag("cuInit");
   if (cuInit(0) != CUDA_SUCCESS) {
     fprintf(stderr, "cuInit failed\n");
     uri_table_free(&uris);
     free(json_buf);
     return 1;
   }
+  diag("cuDevicePrimaryCtxRetain");
   CUdevice cu_dev = 0;
   CUcontext cu_ctx = NULL;
   if (cuDeviceGet(&cu_dev, 0) != CUDA_SUCCESS ||
@@ -731,6 +854,7 @@ main(int argc, char** argv)
     return 1;
   }
 
+  diag("damacy_create");
   double t_init_a = now_seconds();
   struct damacy* d = NULL;
   enum damacy_status cs = damacy_create(&cfg, &d);
@@ -741,6 +865,7 @@ main(int argc, char** argv)
     free(json_buf);
     return 1;
   }
+  diag("damacy_create ok");
 
   struct run_metrics rm = { 0 };
   rm.init_ms = (t_init_b - t_init_a) * 1e3;
@@ -752,6 +877,7 @@ main(int argc, char** argv)
   // Warmup: warms caches, codec init, kernel JIT. Drain in-flight then
   // reset stats so steady-state metrics are clean.
   if (sc.n_warmup_batches > 0) {
+    diag("warmup begin");
     if (drive(d,
               &sc,
               &uris,
@@ -765,6 +891,7 @@ main(int argc, char** argv)
       free(json_buf);
       return 1;
     }
+    diag("warmup flush");
     enum damacy_status fs = damacy_flush(d);
     if (fs != DAMACY_OK && fs != DAMACY_AGAIN)
       fprintf(stderr, "damacy_flush(warmup): %s\n", damacy_status_str(fs));
@@ -772,8 +899,10 @@ main(int argc, char** argv)
     while (damacy_pop(d, &b) == DAMACY_OK) {
       ++rm.popped;
       damacy_release(d, b);
+      pat();
     }
     damacy_stats_reset(d);
+    diag("warmup done");
   }
 
   rm.ttfb_ms = (t_first_pop > 0.0 ? (t_first_pop - t_first_push) : 0.0) * 1e3;
@@ -781,6 +910,7 @@ main(int argc, char** argv)
   // Steady-state run. drive() pushes exactly n_batches * batch_size
   // samples and pops exactly n_batches batches, so no trailing flush is
   // needed.
+  diag("steady begin");
   uint64_t pushed_steady = 0, popped_steady = 0;
   double t_steady_a = now_seconds();
   double t_first_pop_steady = 0.0;
@@ -816,15 +946,18 @@ main(int argc, char** argv)
   }
   double t_steady_b = now_seconds();
   rm.wall_ms = (t_steady_b - t_steady_a) * 1e3;
+  diag("steady done");
 
   rm.pushed += pushed_steady;
   rm.popped += popped_steady;
 
   damacy_stats_get(d, &rm.stats);
+  diag("damacy_destroy");
   damacy_destroy(d);
   uri_table_free(&uris);
 
   emit_results(&sc, &rm, stdout);
+  watchdog_stop();
   free(json_buf);
   return 0;
 }
