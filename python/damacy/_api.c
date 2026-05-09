@@ -1,16 +1,13 @@
 // Pipeline / Batch python bindings around the public C API.
 //
-// Lifetime model:
-//   Pipeline(...)      → damacy_create
-//   p.push(samples)    → damacy_push
-//   p.pop()            → damacy_pop, returns a Batch (GIL released while
-//   waiting) p.flush()          → damacy_flush p.stats()          →
-//   damacy_stats_get → dict batch.release()    → damacy_release; tp_dealloc
-//   auto-releases if forgotten batch.info         → dict snapshot of
-//   damacy_batch_info batch.__dlpack__   → DLPack capsule (handled in
-//   _dlpack.c)
+// Pipeline(...)   → damacy_create   p.push(s)  → damacy_push
+// p.pop()         → damacy_pop      p.flush()  → damacy_flush
+// p.stats()       → damacy_stats_get → dict
+// batch.release() → damacy_release (tp_dealloc auto-releases)
+// batch.info      → dict snapshot of damacy_batch_info
+// batch.__dlpack__ → DLPack v1 capsule
 //
-// All long-running C calls (pop, push, flush, destroy) release the GIL.
+// Long-running C calls (push/pop/flush/destroy/release) drop the GIL.
 
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
@@ -83,6 +80,39 @@ typedef struct DLManagedTensorVersioned
 } DLManagedTensorVersioned;
 
 // ---------- helpers ----------
+
+// Macros below contain `return` — kept UPPERCASE so the control-flow is
+// obvious at the call site.
+
+// Raise RuntimeError and return NULL if a Pipeline/Batch handle is dead.
+#define RETURN_IF_DESTROYED(obj, msg)                                          \
+  do {                                                                         \
+    if (!(obj)->handle) {                                                      \
+      PyErr_SetString(PyExc_RuntimeError, (msg));                              \
+      return NULL;                                                             \
+    }                                                                          \
+  } while (0)
+
+// Drop the GIL around a single statement. Py_BEGIN_/END_ALLOW_THREADS
+// expand to brace tokens, so `expr` lands inside their implicit block.
+#define WITH_GIL_RELEASED(expr)                                                \
+  do {                                                                         \
+    Py_BEGIN_ALLOW_THREADS expr;                                               \
+    Py_END_ALLOW_THREADS                                                       \
+  } while (0)
+
+// PyType_Ready + Py_INCREF + AddObject with rollback. Returns -1 on
+// failure, falling out of the enclosing PyInit_*-style function.
+#define ADD_TYPE(m, name, type)                                                \
+  do {                                                                         \
+    if (PyType_Ready(&(type)) < 0)                                             \
+      return -1;                                                               \
+    Py_INCREF(&(type));                                                        \
+    if (PyModule_AddObject((m), (name), (PyObject*)&(type)) < 0) {             \
+      Py_DECREF(&(type));                                                      \
+      return -1;                                                               \
+    }                                                                          \
+  } while (0)
 
 static int
 parse_dtype(PyObject* obj, enum damacy_dtype* out)
@@ -183,27 +213,28 @@ extern PyTypeObject BatchType;
 
 // ---------- Batch ----------
 
-static PyObject*
-Batch_release(BatchObj* self, PyObject* Py_UNUSED(ignored))
+// Idempotent: clears self->handle then releases under no-GIL.
+static void
+batch_do_release(BatchObj* self)
 {
   if (self->handle && self->parent && self->parent->handle) {
     struct damacy_batch* b = self->handle;
     self->handle = NULL;
-    Py_BEGIN_ALLOW_THREADS damacy_release(self->parent->handle, b);
-    Py_END_ALLOW_THREADS
+    WITH_GIL_RELEASED(damacy_release(self->parent->handle, b));
   }
+}
+
+static PyObject*
+Batch_release(BatchObj* self, PyObject* Py_UNUSED(ignored))
+{
+  batch_do_release(self);
   Py_RETURN_NONE;
 }
 
 static void
 Batch_dealloc(BatchObj* self)
 {
-  if (self->handle && self->parent && self->parent->handle) {
-    struct damacy_batch* b = self->handle;
-    self->handle = NULL;
-    Py_BEGIN_ALLOW_THREADS damacy_release(self->parent->handle, b);
-    Py_END_ALLOW_THREADS
-  }
+  batch_do_release(self);
   Py_XDECREF(self->parent);
   Py_TYPE(self)->tp_free((PyObject*)self);
 }
@@ -211,10 +242,7 @@ Batch_dealloc(BatchObj* self)
 static PyObject*
 Batch_info(BatchObj* self, void* Py_UNUSED(closure))
 {
-  if (!self->handle) {
-    PyErr_SetString(PyExc_RuntimeError, "Batch has been released");
-    return NULL;
-  }
+  RETURN_IF_DESTROYED(self, "Batch has been released");
   struct damacy_batch_info info;
   damacy_batch_info(self->handle, &info);
 
@@ -287,9 +315,8 @@ dlpack_deleter(DLManagedTensorVersioned* self)
 static void
 dlpack_capsule_destructor(PyObject* capsule)
 {
-  // Only fires if the capsule was never consumed (consumer rename →
-  // "used_dltensor" / "used_dltensor_versioned" before the deleter
-  // would otherwise run).
+  // Only fires when the capsule was never consumed; otherwise the
+  // consumer renames to "used_dltensor_versioned" and runs the deleter.
   const char* name = PyCapsule_GetName(capsule);
   if (!name)
     return;
@@ -382,10 +409,7 @@ Batch_dlpack(BatchObj* self, PyObject* args, PyObject* kw)
                     "damacy DLPack: copy=True not supported");
     return NULL;
   }
-  if (!self->handle) {
-    PyErr_SetString(PyExc_RuntimeError, "Batch has been released");
-    return NULL;
-  }
+  RETURN_IF_DESTROYED(self, "Batch has been released");
 
   struct damacy_batch_info info;
   damacy_batch_info(self->handle, &info);
@@ -446,10 +470,7 @@ Batch_dlpack(BatchObj* self, PyObject* args, PyObject* kw)
 static PyObject*
 Batch_dlpack_device(BatchObj* self, PyObject* Py_UNUSED(ignored))
 {
-  if (!self->handle) {
-    PyErr_SetString(PyExc_RuntimeError, "Batch has been released");
-    return NULL;
-  }
+  RETURN_IF_DESTROYED(self, "Batch has been released");
   struct damacy_batch_info info;
   damacy_batch_info(self->handle, &info);
   unsigned int ord = 0;
@@ -581,9 +602,8 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
 
   struct damacy* d = NULL;
   enum damacy_status s;
-  Py_BEGIN_ALLOW_THREADS s = damacy_create(&cfg, &d);
-  Py_END_ALLOW_THREADS if (s != DAMACY_OK)
-  {
+  WITH_GIL_RELEASED(s = damacy_create(&cfg, &d));
+  if (s != DAMACY_OK) {
     raise_status(s, "create");
     return -1;
   }
@@ -597,8 +617,7 @@ Pipeline_dealloc(PipelineObj* self)
   if (self->handle) {
     struct damacy* d = self->handle;
     self->handle = NULL;
-    Py_BEGIN_ALLOW_THREADS damacy_destroy(d);
-    Py_END_ALLOW_THREADS
+    WITH_GIL_RELEASED(damacy_destroy(d));
   }
   Py_TYPE(self)->tp_free((PyObject*)self);
 }
@@ -652,10 +671,7 @@ parse_sample(PyObject* obj, struct damacy_sample* out)
 static PyObject*
 Pipeline_push(PipelineObj* self, PyObject* arg)
 {
-  if (!self->handle) {
-    PyErr_SetString(PyExc_RuntimeError, "Pipeline has been destroyed");
-    return NULL;
-  }
+  RETURN_IF_DESTROYED(self, "Pipeline has been destroyed");
   if (!PyList_Check(arg) && !PyTuple_Check(arg)) {
     PyErr_SetString(PyExc_TypeError,
                     "push() expects a list or tuple of samples");
@@ -679,10 +695,9 @@ Pipeline_push(PipelineObj* self, PyObject* arg)
 
   struct damacy_sample_slice slice = { .beg = buf, .end = buf + n };
   struct damacy_push_result r;
-  Py_BEGIN_ALLOW_THREADS r = damacy_push(self->handle, slice);
-  Py_END_ALLOW_THREADS
+  WITH_GIL_RELEASED(r = damacy_push(self->handle, slice));
 
-    Py_ssize_t consumed = (Py_ssize_t)(r.unconsumed.beg - buf);
+  Py_ssize_t consumed = (Py_ssize_t)(r.unconsumed.beg - buf);
   PyMem_Free(buf);
 
   // OK / AGAIN are not errors at this layer — return the consumed count
@@ -698,27 +713,23 @@ Pipeline_push(PipelineObj* self, PyObject* arg)
 static PyObject*
 Pipeline_pop(PipelineObj* self, PyObject* Py_UNUSED(ignored))
 {
-  if (!self->handle) {
-    PyErr_SetString(PyExc_RuntimeError, "Pipeline has been destroyed");
-    return NULL;
-  }
+  RETURN_IF_DESTROYED(self, "Pipeline has been destroyed");
   struct damacy_batch* b = NULL;
   enum damacy_status s;
-  Py_BEGIN_ALLOW_THREADS s = damacy_pop(self->handle, &b);
-  Py_END_ALLOW_THREADS if (s != DAMACY_OK) return raise_status(s, "pop");
+  WITH_GIL_RELEASED(s = damacy_pop(self->handle, &b));
+  if (s != DAMACY_OK)
+    return raise_status(s, "pop");
   return (PyObject*)batch_new(self, b);
 }
 
 static PyObject*
 Pipeline_flush(PipelineObj* self, PyObject* Py_UNUSED(ignored))
 {
-  if (!self->handle) {
-    PyErr_SetString(PyExc_RuntimeError, "Pipeline has been destroyed");
-    return NULL;
-  }
+  RETURN_IF_DESTROYED(self, "Pipeline has been destroyed");
   enum damacy_status s;
-  Py_BEGIN_ALLOW_THREADS s = damacy_flush(self->handle);
-  Py_END_ALLOW_THREADS if (s != DAMACY_OK) return raise_status(s, "flush");
+  WITH_GIL_RELEASED(s = damacy_flush(self->handle));
+  if (s != DAMACY_OK)
+    return raise_status(s, "flush");
   Py_RETURN_NONE;
 }
 
@@ -743,10 +754,7 @@ metric_to_dict(const struct damacy_metric* m)
 static PyObject*
 Pipeline_stats(PipelineObj* self, PyObject* Py_UNUSED(ignored))
 {
-  if (!self->handle) {
-    PyErr_SetString(PyExc_RuntimeError, "Pipeline has been destroyed");
-    return NULL;
-  }
+  RETURN_IF_DESTROYED(self, "Pipeline has been destroyed");
   struct damacy_stats st;
   damacy_stats_get(self->handle, &st);
   return Py_BuildValue("{s:N,s:N,s:N,s:N,s:N,s:N,s:N,s:N,"
@@ -788,10 +796,7 @@ Pipeline_stats(PipelineObj* self, PyObject* Py_UNUSED(ignored))
 static PyObject*
 Pipeline_stats_reset(PipelineObj* self, PyObject* Py_UNUSED(ignored))
 {
-  if (!self->handle) {
-    PyErr_SetString(PyExc_RuntimeError, "Pipeline has been destroyed");
-    return NULL;
-  }
+  RETURN_IF_DESTROYED(self, "Pipeline has been destroyed");
   damacy_stats_reset(self->handle);
   Py_RETURN_NONE;
 }
@@ -799,10 +804,7 @@ Pipeline_stats_reset(PipelineObj* self, PyObject* Py_UNUSED(ignored))
 static PyObject*
 Pipeline_get_device(PipelineObj* self, void* Py_UNUSED(closure))
 {
-  if (!self->handle) {
-    PyErr_SetString(DamacyError, "Pipeline has been destroyed");
-    return NULL;
-  }
+  RETURN_IF_DESTROYED(self, "Pipeline has been destroyed");
   return PyLong_FromLong(damacy_get_device(self->handle));
 }
 
@@ -859,20 +861,8 @@ PyTypeObject PipelineType = {
 int
 api_register_types(PyObject* m)
 {
-  if (PyType_Ready(&PipelineType) < 0)
-    return -1;
-  if (PyType_Ready(&BatchType) < 0)
-    return -1;
-  Py_INCREF(&PipelineType);
-  if (PyModule_AddObject(m, "Pipeline", (PyObject*)&PipelineType) < 0) {
-    Py_DECREF(&PipelineType);
-    return -1;
-  }
-  Py_INCREF(&BatchType);
-  if (PyModule_AddObject(m, "Batch", (PyObject*)&BatchType) < 0) {
-    Py_DECREF(&BatchType);
-    return -1;
-  }
+  ADD_TYPE(m, "Pipeline", PipelineType);
+  ADD_TYPE(m, "Batch", BatchType);
 
   // DamacyError(message) — subclass of RuntimeError. Carries .status
   // (int, one of STATUS_*) and .what (str) attributes; the Python
