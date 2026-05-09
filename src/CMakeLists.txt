@@ -51,11 +51,12 @@ add_cuda_lib(batch_pool SOURCES batch_pool/batch_pool.h batch_pool/batch_pool.c
 )
 
 # In-flight wave: per-wave host slab + device decompress arena, blosc1
-# parse scratch, nvcomp fanout SOA, per-stage CUevents, decoders.
-# Lifecycle (init/destroy) only — kick / advance scheduling stays in damacy.c
-# until struct damacy is exposed via an internal header.
+# parse scratch, nvcomp fanout SOA, per-stage CUevents, decoders. Owns
+# the wave state machine (peel → H2D → codec → post-decode → assemble →
+# finalize) driven from damacy.c via advance_waves / kick_new_waves.
 add_cuda_lib(wave SOURCES wave/wave.h wave/wave.c
-    LINKS decoder assemble store log CUDA::cuda_driver
+    LINKS decoder assemble store planner blosc1_host batch_pool
+          strbuf log CUDA::cuda_driver
 )
 
 # Read-side store

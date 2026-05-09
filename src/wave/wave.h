@@ -143,3 +143,13 @@ enum damacy_status fanout_upload(CUstream s,
 // Pool-level predicates over a 2-wave array.
 int find_free_wave(const struct damacy_wave waves[2]);
 int any_wave_in_flight(const struct damacy_wave waves[2]);
+
+struct damacy;
+
+// Phase 1: poll each in-flight wave and advance state when its current
+// stage's event has retired. Sets self->failed_status on driver errors.
+enum damacy_status advance_waves(struct damacy* self);
+
+// Phase 2: kick new work into FREE wave slots, planning a fresh batch
+// (via damacy_plan_into_slot) if no FILLING slot has unfinished chunks.
+enum damacy_status kick_new_waves(struct damacy* self);
