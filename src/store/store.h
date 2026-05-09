@@ -26,7 +26,7 @@ extern "C"
   struct store_fs_config
   {
     const char* root; // root directory for keys; not owned
-    int nthreads;     // io_queue worker count (0 = synchronous)
+    int nthreads;     // io_queue worker count (>= 1)
   };
 
   // Create a filesystem-backed store. Returns NULL on failure.
