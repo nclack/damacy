@@ -1,7 +1,6 @@
-// Direct unit tests for io_queue. The store_fs path exercises the happy
-// case but never fills the ring (in-flight ≪ DAMACY_IO_QUEUE_INITIAL_CAP)
-// and never uses nthreads=0, so ring_grow and the synchronous fast path
-// were uncovered. These tests target those gaps.
+// Direct unit tests for io_queue. The store_fs path never fills the ring
+// or uses nthreads=0, so ring_grow, the sync path, and out-of-order
+// completion across multiple workers all need direct coverage here.
 #include "damacy_limits.h"
 #include "expect.h"
 #include "io_queue/io_queue.h"
@@ -10,9 +9,10 @@
 #include <sched.h>
 #include <stdatomic.h>
 #include <stdlib.h>
+#include <time.h>
 
-// Per-job ctx: heap-allocated, freed by inc_free. Carries two shared
-// counters so we can verify both fn and ctx_free were called N times.
+// Per-job ctx: heap-allocated, freed by inc_free. Tracks fn and free
+// invocation counts.
 struct ctx
 {
   atomic_int* runs;
@@ -43,8 +43,7 @@ inc_free(void* p)
   free(c);
 }
 
-// gate_job parks a worker on a CV until the test releases it. Used to
-// hold the (single) worker so subsequent posts pile up in the ring.
+// Parks a worker on a CV until the test releases it.
 struct gate
 {
   pthread_mutex_t m;
@@ -108,8 +107,8 @@ test_invalid_args(void)
 static int
 test_synchronous(void)
 {
-  // nthreads=0: jobs run on the posting thread, retired_seq advances
-  // before post() returns.
+  // nthreads=0: jobs run on the caller; retired_seq is up to date by
+  // the time post() returns (single poster).
   struct io_queue* q = io_queue_create(0);
   EXPECT(q);
 
@@ -154,8 +153,7 @@ test_basic_async(void)
 static int
 test_record_before_post(void)
 {
-  // record() with no posts returns seq=0; wait() must return immediately
-  // and query() must report retired.
+  // record() pre-post returns seq=0; wait/query both report retired.
   struct io_queue* q = io_queue_create(1);
   EXPECT(q);
   struct io_event ev = io_queue_record(q);
@@ -166,11 +164,58 @@ test_record_before_post(void)
 }
 
 static int
+test_out_of_order_completion(void)
+{
+  // Regression: with N workers all in-flight, retired_seq must reflect
+  // the lowest active seq even when higher seqs finish first. Releases
+  // gates in reverse seq order; ev[0] (seq=1) must stay unretired until
+  // gate[0] is released last.
+  enum
+  {
+    W = 4
+  };
+  struct io_queue* q = io_queue_create(W);
+  EXPECT(q);
+
+  struct gate gates[W];
+  struct io_event evs[W];
+  for (int i = 0; i < W; ++i)
+    gate_init(&gates[i]);
+
+  for (int i = 0; i < W; ++i) {
+    EXPECT(io_queue_post(q, gate_job, &gates[i], NULL) == 0);
+    evs[i] = io_queue_record(q);
+  }
+
+  // Confirm all W workers are concurrently parked in their gates.
+  for (int i = 0; i < W; ++i)
+    while (atomic_load(&gates[i].entered) == 0)
+      sched_yield();
+
+  for (int i = W - 1; i >= 1; --i)
+    gate_release(&gates[i]);
+
+  // Give workers ample time to run advance_retired. retired_seq must
+  // remain stuck at 0 because gate[0] still blocks seq=1.
+  struct timespec ts = { 0, 100 * 1000 * 1000 }; // 100ms
+  nanosleep(&ts, NULL);
+  EXPECT(!io_event_query(q, evs[0]));
+
+  gate_release(&gates[0]);
+  io_event_wait(q, evs[W - 1]);
+  EXPECT(io_event_query(q, evs[W - 1]));
+
+  io_queue_destroy(q);
+  for (int i = 0; i < W; ++i)
+    gate_destroy(&gates[i]);
+  return 0;
+}
+
+static int
 test_ring_grow(void)
 {
-  // Force ring_grow by occupying the sole worker with a blocking job
-  // and posting > 2 × DAMACY_IO_QUEUE_INITIAL_CAP trivial jobs so the
-  // ring grows at least twice (initial 512 → ~630 → ~772).
+  // Park the sole worker on a gate and post enough trivial jobs to
+  // force at least one ring_grow (initial cap 512 → ~630 → ~772).
   struct io_queue* q = io_queue_create(1);
   EXPECT(q);
 
@@ -178,17 +223,15 @@ test_ring_grow(void)
   gate_init(&g);
   EXPECT(io_queue_post(q, gate_job, &g, NULL) == 0);
 
-  // Spin until the gate job has actually started — only then is the
-  // worker parked and guaranteed not to drain the ring under us.
+  // Wait for the worker to enter the gate so it can't drain the ring.
   while (atomic_load(&g.entered) == 0)
     sched_yield();
 
   atomic_int runs = 0, frees = 0;
-  const int N = (int)DAMACY_IO_QUEUE_INITIAL_CAP + 256; // forces one grow
+  const int N = (int)DAMACY_IO_QUEUE_INITIAL_CAP + 256;
   for (int i = 0; i < N; ++i)
     EXPECT(io_queue_post(q, inc_run, ctx_new(&runs, &frees), inc_free) == 0);
 
-  // Release the worker; trivial jobs drain in posted order.
   gate_release(&g);
 
   struct io_event ev = io_queue_record(q);
@@ -208,6 +251,7 @@ main(void)
   RUN(test_synchronous);
   RUN(test_basic_async);
   RUN(test_record_before_post);
+  RUN(test_out_of_order_completion);
   RUN(test_ring_grow);
   log_info("all tests passed");
   return 0;

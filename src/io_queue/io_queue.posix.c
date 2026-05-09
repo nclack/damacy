@@ -16,8 +16,7 @@ struct io_job
   uint64_t seq;
 };
 
-// Per-worker scratch passed to pthread_create. Lives inside the queue so
-// teardown is just pthread_join + free(q).
+// Per-worker scratch passed to pthread_create.
 struct io_worker_arg
 {
   struct io_queue* q;
@@ -28,8 +27,8 @@ struct io_queue
 {
   pthread_t workers[DAMACY_MAX_IO_THREADS];
   struct io_worker_arg worker_args[DAMACY_MAX_IO_THREADS];
-  // Per-worker currently-processing seq; UINT64_MAX = idle. Read under
-  // q->mutex. Drives retired_seq (see advance_retired).
+  // Per-worker currently-processing seq; UINT64_MAX = idle. Drives
+  // retired_seq (see advance_retired). Guarded by q->mutex.
   uint64_t worker_seq[DAMACY_MAX_IO_THREADS];
   int nworkers;
 
@@ -37,8 +36,7 @@ struct io_queue
   pthread_cond_t cond_not_empty;
   pthread_cond_t cond_retired;
 
-  // Ring buffer. head/tail are monotonic uint64_t; index via `% ring_cap`
-  // since ring_cap is no longer constrained to a power of two.
+  // Ring buffer; head/tail monotonic, indexed via % ring_cap.
   struct io_job* ring;
   uint64_t ring_cap;
   uint64_t head;
@@ -47,13 +45,16 @@ struct io_queue
   uint64_t next_seq;
   uint64_t retired_seq;
 
+  // sync-mode (nworkers==0) only: count of fn()s currently running on
+  // posting threads. retired_seq advances to next_seq when this hits 0.
+  uint32_t sync_in_flight;
+
   int shutdown;
   int started;
 };
 
-// Caller holds q->mutex. Recompute retired_seq from the lowest seq still
-// in flight (per-worker) or queued (ring tail). When everything is done
-// and the queue is empty, retired_seq catches up to next_seq.
+// Caller holds q->mutex. retired_seq = (lowest in-flight or queued seq)
+// − 1, or next_seq when fully drained.
 static void
 advance_retired(struct io_queue* q)
 {
@@ -95,8 +96,8 @@ worker_thread(void* arg)
 
     job = q->ring[q->tail % q->ring_cap];
     q->tail++;
-    // Mark this worker as processing job.seq before dropping the mutex
-    // so the next advance_retired sees consistent state.
+    // Publish before dropping the mutex so advance_retired can't observe
+    // an in-flight seq as idle.
     q->worker_seq[wid] = job.seq;
     pthread_mutex_unlock(&q->mutex);
 
@@ -112,8 +113,7 @@ worker_thread(void* arg)
   return NULL;
 }
 
-// Helper for io_queue_create's Fail label. Each leaf-free is NULL-safe;
-// this just guards the container deref.
+// Fail-label helper for io_queue_create. Leaf-frees are NULL-safe.
 static void
 io_queue_free_partial(struct io_queue* q)
 {
@@ -132,24 +132,23 @@ io_queue_create(int nthreads)
   struct io_queue* q = NULL;
 
   CHECK_SILENT(Fail, nthreads >= 0);
-  CHECK_SILENT(Fail, nthreads <= (int)DAMACY_MAX_IO_THREADS);
+  CHECK_SILENT(Fail, (uint32_t)nthreads <= DAMACY_MAX_IO_THREADS);
   q = (struct io_queue*)calloc(1, sizeof(*q));
   CHECK_SILENT(Fail, q);
 
   // Init sync primitives first so io_queue_free_partial can always
-  // unconditionally destroy them.
+  // destroy them unconditionally.
   pthread_mutex_init(&q->mutex, NULL);
   pthread_cond_init(&q->cond_not_empty, NULL);
   pthread_cond_init(&q->cond_retired, NULL);
-
-  for (int i = 0; i < (int)DAMACY_MAX_IO_THREADS; ++i)
-    q->worker_seq[i] = UINT64_MAX;
 
   q->ring_cap = DAMACY_IO_QUEUE_INITIAL_CAP;
   q->ring = (struct io_job*)calloc(q->ring_cap, sizeof(struct io_job));
   CHECK_SILENT(Fail, q->ring);
 
   q->nworkers = nthreads;
+  for (int i = 0; i < nthreads; ++i)
+    q->worker_seq[i] = UINT64_MAX;
   if (nthreads > 0) {
     for (int i = 0; i < nthreads; ++i) {
       q->worker_args[i] = (struct io_worker_arg){ .q = q, .wid = i };
@@ -196,11 +195,9 @@ io_queue_destroy(struct io_queue* q)
   free(q);
 }
 
-// Caller holds q->mutex. Grow the ring by ~1.2× plus a small constant —
-// log-many reallocs to reach equilibrium without 2× memory overshoot.
-// In-flight jobs are relocated to slots [0, count) and head/tail rebased.
-// retired_seq tracking is index-free, so no completion-bit bookkeeping
-// crosses this boundary.
+// Caller holds q->mutex. ~1.2× + 16 growth; queued jobs relocate to
+// [0, count) and head/tail rebase. retired_seq is index-free, so no
+// remap crosses this boundary.
 static int
 ring_grow(struct io_queue* q)
 {
@@ -231,18 +228,23 @@ io_queue_post(struct io_queue* q,
   if (!q || !fn)
     return 1;
 
-  // nthreads == 0: synchronous fast path. Run on the caller, advance seq.
+  // nthreads == 0: run on the caller. Concurrent posters serialize via
+  // sync_in_flight so retired_seq only advances once every running fn()
+  // has returned — matching the multi-worker invariant.
   if (q->nworkers == 0) {
     pthread_mutex_lock(&q->mutex);
     q->next_seq++;
-    uint64_t my_seq = q->next_seq;
+    q->sync_in_flight++;
     pthread_mutex_unlock(&q->mutex);
+
     fn(ctx);
     if (ctx_free)
       ctx_free(ctx);
+
     pthread_mutex_lock(&q->mutex);
-    if (my_seq > q->retired_seq) {
-      q->retired_seq = my_seq;
+    q->sync_in_flight--;
+    if (q->sync_in_flight == 0 && q->retired_seq < q->next_seq) {
+      q->retired_seq = q->next_seq;
       pthread_cond_broadcast(&q->cond_retired);
     }
     pthread_mutex_unlock(&q->mutex);

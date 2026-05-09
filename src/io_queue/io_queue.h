@@ -9,7 +9,8 @@
 // bookkeeping, so out-of-order completion patterns can't desynchronize it.
 //
 // nthreads is encapsulated in the queue, capped at DAMACY_MAX_IO_THREADS.
-// nthreads=0 runs jobs synchronously on the posting thread.
+// nthreads=0 runs jobs synchronously on the posting thread; concurrent
+// posters share the same retired_seq invariant via an in-flight counter.
 #pragma once
 
 #include <stdint.h>

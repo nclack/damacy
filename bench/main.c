@@ -21,7 +21,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <unistd.h>
 
 #define countof(a) (sizeof(a) / sizeof((a)[0]))
 
