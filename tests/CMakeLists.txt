@@ -24,6 +24,7 @@ target_link_libraries(test_fixture PUBLIC log crc32c zarr)
 # code. add_damacy_test lives in cmake/Helpers.cmake.
 add_damacy_test(test_json json log)
 add_damacy_test(test_lru lru hash)
+add_damacy_test(test_io_queue io_queue log)
 add_damacy_test(test_zarr_meta_cache zarr_meta_cache zarr store test_fixture)
 add_damacy_test(test_zarr_shard_cache zarr_shard_cache zarr store test_fixture)
 add_damacy_test(test_planner planner zarr_meta_cache zarr_shard_cache zarr store test_fixture)
