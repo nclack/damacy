@@ -534,6 +534,8 @@ batch_new(PipelineObj* parent, struct damacy_batch* handle)
 static int
 Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
 {
+  // kws[] / format string / variable list mirror struct damacy_config —
+  // keep all three in sync when adding a field.
   static char* kws[] = { "batch_size",
                          "lookahead_batches",
                          "n_io_threads",
@@ -751,46 +753,71 @@ metric_to_dict(const struct damacy_metric* m)
                        (unsigned long long)m->count);
 }
 
+// Set key→value, stealing the value reference. Returns 0 on success,
+// -1 on error (decrements value on failure path).
+static int
+dict_set_steal(PyObject* d, const char* key, PyObject* value)
+{
+  if (!value)
+    return -1;
+  int rc = PyDict_SetItemString(d, key, value);
+  Py_DECREF(value);
+  return rc;
+}
+
 static PyObject*
 Pipeline_stats(PipelineObj* self, PyObject* Py_UNUSED(ignored))
 {
   RETURN_IF_DESTROYED(self, "Pipeline has been destroyed");
   struct damacy_stats st;
   damacy_stats_get(self->handle, &st);
-  return Py_BuildValue("{s:N,s:N,s:N,s:N,s:N,s:N,s:N,s:N,"
-                       "s:K,s:K,s:K,s:K,s:K,s:K,s:K,s:K}",
-                       "plan",
-                       metric_to_dict(&st.plan),
-                       "io",
-                       metric_to_dict(&st.io),
-                       "h2d",
-                       metric_to_dict(&st.h2d),
-                       "decompress",
-                       metric_to_dict(&st.decompress),
-                       "assemble",
-                       metric_to_dict(&st.assemble),
-                       "pop_wait_io",
-                       metric_to_dict(&st.pop_wait_io),
-                       "pop_wait_compute",
-                       metric_to_dict(&st.pop_wait_compute),
-                       "flush_wait",
-                       metric_to_dict(&st.flush_wait),
-                       "zarr_meta_hits",
-                       (unsigned long long)st.zarr_meta_hits,
-                       "zarr_meta_misses",
-                       (unsigned long long)st.zarr_meta_misses,
-                       "shard_idx_hits",
-                       (unsigned long long)st.shard_idx_hits,
-                       "shard_idx_misses",
-                       (unsigned long long)st.shard_idx_misses,
-                       "batches_emitted",
-                       (unsigned long long)st.batches_emitted,
-                       "batches_truncated",
-                       (unsigned long long)st.batches_truncated,
-                       "waves_emitted",
-                       (unsigned long long)st.waves_emitted,
-                       "gpu_bytes_committed",
-                       (unsigned long long)st.gpu_bytes_committed);
+
+  PyObject* d = PyDict_New();
+  if (!d)
+    return NULL;
+
+  const struct
+  {
+    const char* name;
+    const struct damacy_metric* m;
+  } metrics[] = {
+    { "plan", &st.plan },
+    { "io", &st.io },
+    { "h2d", &st.h2d },
+    { "decompress", &st.decompress },
+    { "assemble", &st.assemble },
+    { "pop_wait_io", &st.pop_wait_io },
+    { "pop_wait_compute", &st.pop_wait_compute },
+    { "flush_wait", &st.flush_wait },
+  };
+  for (size_t i = 0; i < sizeof metrics / sizeof metrics[0]; ++i)
+    if (dict_set_steal(d, metrics[i].name, metric_to_dict(metrics[i].m)) < 0)
+      goto Fail;
+
+  const struct
+  {
+    const char* name;
+    unsigned long long val;
+  } counters[] = {
+    { "zarr_meta_hits", st.zarr_meta_hits },
+    { "zarr_meta_misses", st.zarr_meta_misses },
+    { "shard_idx_hits", st.shard_idx_hits },
+    { "shard_idx_misses", st.shard_idx_misses },
+    { "batches_emitted", st.batches_emitted },
+    { "batches_truncated", st.batches_truncated },
+    { "waves_emitted", st.waves_emitted },
+    { "gpu_bytes_committed", st.gpu_bytes_committed },
+  };
+  for (size_t i = 0; i < sizeof counters / sizeof counters[0]; ++i)
+    if (dict_set_steal(
+          d, counters[i].name, PyLong_FromUnsignedLongLong(counters[i].val)) <
+        0)
+      goto Fail;
+
+  return d;
+Fail:
+  Py_DECREF(d);
+  return NULL;
 }
 
 static PyObject*
