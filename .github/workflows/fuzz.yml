@@ -1,0 +1,98 @@
+# Nightly libFuzzer run for the host-side parsers. CPU-only — fuzz mode
+# gates out CUDA (see CMakeLists.txt `if(NOT DAMACY_FUZZ)`), so this
+# fits a stock GitHub-hosted ubuntu runner. One matrix entry per
+# harness; each restores its own cached corpus, fuzzes for ~10 min,
+# saves the corpus back, and uploads crash artifacts on failure.
+
+name: fuzz
+
+on:
+  schedule:
+    # 07:00 UTC daily — off-peak for both US and EU.
+    - cron: '0 7 * * *'
+  workflow_dispatch:
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: fuzz_json_input
+            seeds: input
+          - name: fuzz_json_query
+            seeds: query
+          - name: fuzz_shard_index
+            seeds: shard_index
+          - name: fuzz_zarr_metadata
+            seeds: zarr_metadata
+          - name: fuzz_blosc1_host
+            seeds: blosc1_host
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ubuntu-latest (24.04) ships clang-18 in apt; libFuzzer needs
+      # clang. ninja-build is required by the fuzz CMake preset.
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang-18 cmake ninja-build
+          sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-18 100
+          sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-18 100
+          clang --version
+
+      # Persistent corpus per harness. Key includes the run id so each
+      # nightly writes a fresh entry; restore-keys lets the next run pick
+      # up the most recent prefix-match.
+      - name: Restore corpus cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build-fuzz/corpus/${{ matrix.seeds }}
+          key: fuzz-corpus-${{ matrix.name }}-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-${{ matrix.name }}-
+
+      - name: Configure
+        run: cmake --preset fuzz
+
+      - name: Build ${{ matrix.name }}
+        run: cmake --build build-fuzz --target ${{ matrix.name }} -j
+
+      - name: Run ${{ matrix.name }}
+        run: |
+          mkdir -p build-fuzz/corpus/${{ matrix.seeds }}
+          ./build-fuzz/tests/fuzz/${{ matrix.name }} \
+            -max_total_time=600 \
+            -rss_limit_mb=2048 \
+            -print_final_stats=1 \
+            build-fuzz/corpus/${{ matrix.seeds }} \
+            tests/fuzz/seeds/${{ matrix.seeds }}
+
+      - name: Save corpus cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: build-fuzz/corpus/${{ matrix.seeds }}
+          key: fuzz-corpus-${{ matrix.name }}-${{ github.run_id }}
+
+      # libFuzzer drops crash-/leak-/oom-/slow-unit- files in the cwd
+      # on failure; collect those plus the corpus snapshot for triage.
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}-crashes-${{ github.run_id }}
+          path: |
+            crash-*
+            leak-*
+            oom-*
+            slow-unit-*
+            build-fuzz/corpus/${{ matrix.seeds }}/
+          if-no-files-found: ignore
+          retention-days: 30
