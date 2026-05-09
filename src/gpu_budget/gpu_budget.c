@@ -10,9 +10,8 @@
 #include "decoder/shuffle.h"
 #include "planner/planner.h"
 
-// Sum of struct-array allocs wave_init makes for blosc1 parse + assemble
-// metadata, scaled to one wave. With the parse moved to the host the only
-// device-resident blosc1 metadata is the totals struct used by status_reduce.
+// Mirrors wave_init's blosc1 + assemble device-side allocs (one wave).
+// Keep in sync if wave_init grows new device-resident metadata.
 static uint64_t
 wave_blosc1_meta_bytes(void)
 {
@@ -20,7 +19,8 @@ wave_blosc1_meta_bytes(void)
   return cap * sizeof(struct assemble_chunk) + sizeof(struct blosc1_totals);
 }
 
-// One wave's nvcomp fanout SOA + memcpy/shuffle op arrays.
+// Mirrors wave_init's nvcomp fanout SOA + memcpy/shuffle op-array allocs
+// (one wave). Keep in sync if wave_init's fanout layout changes.
 static uint64_t
 wave_fanout_soa_bytes(uint8_t max_bpe)
 {
