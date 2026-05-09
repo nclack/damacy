@@ -20,6 +20,7 @@
 #include "batch_pool/batch_pool.h"
 #include "damacy_config.h"
 #include "damacy_stats.h"
+#include "util/cuda_check.h" // CU + CUDPTR
 #include "gpu_budget/gpu_budget.h"
 #include "log/log.h"
 #include "lookahead/lookahead.h"
@@ -67,16 +68,14 @@ struct damacy
   struct zarr_meta_cache* meta_cache;
   struct zarr_shard_cache* shard_cache;
   struct planner* planner;
-  CUstream stream_h2d;
-  CUstream stream_compute;
-  CUstream stream_zstd;
-  CUstream stream_lz4;
 
   struct threadpool* compute_pool; // host blosc1 parse
 
   struct damacy_lookahead lookahead;
   struct damacy_batch_pool batch_pool;
-  struct damacy_wave waves[2];
+  // Owns the 4 streams + both waves; built once in damacy_create and
+  // driven directly by the orchestrator (no per-call ctx building).
+  struct wave_pool wave_pool;
 
   // Sample working set used while planning one batch.
   struct damacy_sample_slot* batch_samples;
@@ -86,49 +85,10 @@ struct damacy
   struct damacy_stats stats;
 };
 
-// Borrowed view of self for wave/. Built on every call site that drives
-// the wave pool; no lifetime contract beyond the call.
-static struct wave_ctx
-make_wave_ctx(struct damacy* self)
-{
-  return (struct wave_ctx){
-    .waves = self->waves,
-    .pool = &self->batch_pool,
-    .store = self->store,
-    .compute_pool = self->compute_pool,
-    .stream_h2d = self->stream_h2d,
-    .stream_compute = self->stream_compute,
-    .stream_zstd = self->stream_zstd,
-    .stream_lz4 = self->stream_lz4,
-    .stats = &self->stats,
-    .failed_status = &self->failed_status,
-    .dtype = self->cfg.dtype,
-  };
-}
-
 // Poll interval inside damacy_pop's wait-loop. ~50 µs is short enough
 // that the boundary between wave stages doesn't add visible latency,
 // long enough that we don't burn a core spinning.
 #define DAMACY_POP_POLL_NS 50000
-
-// CUDA driver-API result check. Goes through log_error so it lands in
-// the same channel as the project's CHECK macros.
-#define CU(label, expr)                                                        \
-  do {                                                                         \
-    CUresult _r = (expr);                                                      \
-    if (_r != CUDA_SUCCESS) {                                                  \
-      const char* _msg = NULL;                                                 \
-      cuGetErrorString(_r, &_msg);                                             \
-      log_error("cu: %s -> %s", #expr, _msg ? _msg : "?");                     \
-      goto label;                                                              \
-    }                                                                          \
-  } while (0)
-
-// Driver API uses CUdeviceptr (uint64_t) for device pointers; we keep
-// our struct fields typed (void*, struct assemble_chunk*, ...) and cast
-// at the alloc/free/memcpy boundary. Inverse direction
-// (CUdeviceptr → typed) needs the inverse cast inline.
-#define CUDPTR(p) ((CUdeviceptr)(uintptr_t)(p))
 
 // --- ctx guard ------------------------------------------------------------
 
@@ -314,9 +274,8 @@ Cleanup:
 static enum damacy_status
 kick_new_waves(struct damacy* self)
 {
-  struct wave_ctx ctx = make_wave_ctx(self);
   for (;;) {
-    int w = find_free_wave(self->waves);
+    int w = find_free_wave(&self->wave_pool);
     if (w < 0)
       break;
 
@@ -337,7 +296,7 @@ kick_new_waves(struct damacy* self)
     }
 
     enum damacy_status s =
-      wave_pool_peel(&ctx, (uint16_t)w, (uint16_t)target_slot);
+      wave_pool_peel(&self->wave_pool, (uint16_t)w, (uint16_t)target_slot);
     if (s != DAMACY_OK)
       return s;
   }
@@ -354,22 +313,11 @@ destroy_inner(struct damacy* self, int cuda_skip)
   if (!self)
     return;
 
-  if (!cuda_skip) {
-    // NULL stream is the legacy default; the per-stream guard separates
-    // "we created this" from "never set in a partially-failed create".
-    CUstream* const streams[] = {
-      &self->stream_compute,
-      &self->stream_h2d,
-      &self->stream_zstd,
-      &self->stream_lz4,
-    };
-    for (size_t i = 0; i < countof(streams); ++i)
-      if (*streams[i]) {
-        cuStreamSynchronize(*streams[i]);
-        cuStreamDestroy(*streams[i]);
-        *streams[i] = NULL;
-      }
-  }
+  // wave_pool owns the 4 streams; its destroy syncs + destroys streams
+  // before freeing wave buffers, so any pending GPU work touching those
+  // buffers has retired by the time we fall through to batch_pool /
+  // planner cleanup.
+  wave_pool_destroy(&self->wave_pool, cuda_skip);
 
   threadpool_free(self->compute_pool);
   self->compute_pool = NULL;
@@ -379,8 +327,6 @@ destroy_inner(struct damacy* self, int cuda_skip)
   free(self->batch_samples);
   self->batch_samples = NULL;
   lookahead_destroy(&self->lookahead);
-  for (int w = 0; w < 2; ++w)
-    wave_destroy(&self->waves[w], cuda_skip);
   batch_pool_destroy(&self->batch_pool, cuda_skip);
 
   planner_destroy(self->planner);
@@ -462,13 +408,6 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   if (s != DAMACY_OK)
     goto Fail;
 
-  // Non-blocking so damacy doesn't force-serialize against the legacy
-  // default stream that some user code still lands on.
-  CU(Fail, cuStreamCreate(&self->stream_h2d, CU_STREAM_NON_BLOCKING));
-  CU(Fail, cuStreamCreate(&self->stream_compute, CU_STREAM_NON_BLOCKING));
-  CU(Fail, cuStreamCreate(&self->stream_zstd, CU_STREAM_NON_BLOCKING));
-  CU(Fail, cuStreamCreate(&self->stream_lz4, CU_STREAM_NON_BLOCKING));
-
   self->compute_pool = threadpool_new((int)cfg->n_compute_threads);
   if (!self->compute_pool) {
     s = DAMACY_OOM;
@@ -535,19 +474,22 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     CHECK(Fail,
           batch_slot_init(&self->batch_pool.slots[b], cfg->batch_size) == 0);
 
-  uint64_t host_per_wave = cfg->host_buffer_bytes / 2;
-  uint64_t dev_per_wave = cfg->device_buffer_bytes / 2;
   s = DAMACY_INVAL;
-  CHECK(Fail, host_per_wave > 0 && dev_per_wave > 0);
+  CHECK(Fail, cfg->host_buffer_bytes / 2 > 0 && cfg->device_buffer_bytes / 2 > 0);
   s = DAMACY_OOM;
   const uint8_t max_bpe = resolve_max_bpe(cfg);
-  for (int w = 0; w < 2; ++w)
-    CHECK(Fail,
-          wave_init(&self->waves[w],
-                    host_per_wave,
-                    dev_per_wave,
-                    max_bpe,
-                    runtime_chunk_cap) == 0);
+  CHECK(Fail,
+        wave_pool_init(&self->wave_pool,
+                       &self->batch_pool,
+                       self->store,
+                       self->compute_pool,
+                       &self->stats,
+                       &self->failed_status,
+                       cfg->dtype,
+                       cfg->host_buffer_bytes,
+                       cfg->device_buffer_bytes,
+                       max_bpe,
+                       runtime_chunk_cap) == 0);
 
   CHECK(Fail,
         lookahead_init(&self->lookahead,
@@ -568,6 +510,8 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
 
 Fail:
   if (self) {
+    // Order matters: destroy_inner runs cuStream*/cuMemFree* under the
+    // pushed ctx, then we pop the guard, then release the primary ctx.
     destroy_inner(self, 0);
     ctx_guard_exit(&cg);
     if (self->retained_primary_device >= 0)
@@ -664,9 +608,8 @@ damacy_pop(struct damacy* self, struct damacy_batch** out)
   if (r != DAMACY_OK)
     return r;
 
-  struct wave_ctx ctx = make_wave_ctx(self);
   for (;;) {
-    r = wave_pool_advance(&ctx);
+    r = wave_pool_advance(&self->wave_pool);
     if (r != DAMACY_OK)
       goto Done;
     // finalize_wave can set failed_status on a post-decode codec error
@@ -691,7 +634,8 @@ damacy_pop(struct damacy* self, struct damacy_batch** out)
       r = DAMACY_OK;
       goto Done;
     }
-    if (!any_wave_in_flight(self->waves) && !any_batch_in_flight(&self->batch_pool) &&
+    if (!any_wave_in_flight(&self->wave_pool) &&
+        !any_batch_in_flight(&self->batch_pool) &&
         self->lookahead.size < self->cfg.batch_size) {
       r = DAMACY_AGAIN;
       goto Done;
@@ -701,7 +645,7 @@ damacy_pop(struct damacy* self, struct damacy_batch** out)
     // what we'd most likely be waiting on; fall back to IO otherwise.
     int waiting_compute = 0;
     for (int w = 0; w < 2; ++w) {
-      enum wave_state ws = self->waves[w].state;
+      enum wave_state ws = self->wave_pool.waves[w].state;
       if (ws == WAVE_H2D || ws == WAVE_ASSEMBLE) {
         waiting_compute = 1;
         break;
@@ -755,15 +699,13 @@ damacy_flush(struct damacy* self)
   if (r != DAMACY_OK)
     return r;
 
-  struct wave_ctx ctx = make_wave_ctx(self);
-
   // Plan a partial batch from the remaining lookahead, if any.
   if (self->lookahead.size > 0 && self->lookahead.size < self->cfg.batch_size) {
     int free_slot = find_free_batch_slot(&self->batch_pool);
     if (free_slot < 0) {
       // Both slots in use; drain one wave-cycle's worth and try again.
       // For step 5 we allow one drain pass; if still no slot, return AGAIN.
-      r = wave_pool_advance(&ctx);
+      r = wave_pool_advance(&self->wave_pool);
       if (r != DAMACY_OK)
         goto Done;
       free_slot = find_free_batch_slot(&self->batch_pool);
@@ -782,14 +724,15 @@ damacy_flush(struct damacy* self)
   // Drain everything in flight by spinning the scheduler until no
   // FILLING slots remain.
   uint64_t flush_t0 = monotonic_ns();
-  while (any_wave_in_flight(self->waves) || find_oldest_filling_slot(&self->batch_pool) >= 0) {
-    r = wave_pool_advance(&ctx);
+  while (any_wave_in_flight(&self->wave_pool) ||
+         find_oldest_filling_slot(&self->batch_pool) >= 0) {
+    r = wave_pool_advance(&self->wave_pool);
     if (r != DAMACY_OK)
       goto Done;
     r = kick_new_waves(self);
     if (r != DAMACY_OK)
       goto Done;
-    if (any_wave_in_flight(self->waves))
+    if (any_wave_in_flight(&self->wave_pool))
       platform_sleep_ns(DAMACY_POP_POLL_NS);
   }
   metric_record(&self->stats.flush_wait,
@@ -820,7 +763,7 @@ damacy_batch_info(const struct damacy_batch* b, struct damacy_batch_info* out)
   out->device_ptr = slot->dev_ptr;
   out->rank = self->batch_pool.rank;
   out->dtype = self->cfg.dtype;
-  out->ready_stream = (void*)self->stream_compute;
+  out->ready_stream = (void*)self->wave_pool.stream_compute;
   out->batch_id = slot->batch_id;
   for (uint8_t d = 0; d < self->batch_pool.rank; ++d)
     out->shape[d] = self->batch_pool.shape[d];

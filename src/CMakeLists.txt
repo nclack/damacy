@@ -50,9 +50,10 @@ add_src_lib(lookahead SOURCES lookahead/lookahead.h lookahead/lookahead.c
 )
 
 # GPU-memory predictor consulted at damacy_create. Pure: no allocations,
-# no driver calls. Reads cfg + decoder temp-byte queries.
+# no driver calls. Defers per-wave sizing to wave_predict_bytes() so
+# wave/ stays the single source of truth for what wave_init allocates.
 add_cuda_lib(gpu_budget SOURCES gpu_budget/gpu_budget.h gpu_budget/gpu_budget.c
-    LINKS decoder assemble planner log damacy_config
+    LINKS wave planner log damacy_config
 )
 
 # Two-slot batch state machine + lazy device-tensor pool. Owns planner
@@ -62,10 +63,10 @@ add_cuda_lib(batch_pool SOURCES batch_pool/batch_pool.h batch_pool/batch_pool.c
 )
 
 # In-flight wave: per-wave host slab + device decompress arena, blosc1
-# parse scratch, nvcomp fanout SOA, per-stage CUevents, decoders. Owns
-# the per-wave state machine (peel → H2D → codec → post-decode →
-# assemble → finalize); damacy.c drives it via wave_pool_advance /
-# wave_pool_peel through a borrowed wave_ctx (no struct-damacy reach).
+# parse scratch, nvcomp fanout SOA, per-stage CUevents, decoders. Also
+# owns the wave_pool aggregate (4 streams + both waves + borrowed
+# pointers into the orchestrator); damacy.c keeps one inline and drives
+# it through wave_pool_advance / wave_pool_peel.
 add_cuda_lib(wave SOURCES wave/wave.h wave/wave.c
     LINKS decoder assemble store planner blosc1_host batch_pool
           damacy_stats damacy_config strbuf log CUDA::cuda_driver
