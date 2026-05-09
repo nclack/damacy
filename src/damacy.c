@@ -284,6 +284,59 @@ batch_pool_allocate(struct damacy* self, const struct damacy_aabb* sample_aabb)
 
 // --- wave -----------------------------------------------------------------
 
+// 4 pinned-host + 4 device allocs for one nvcomp fanout. Returns 0 ok,
+// 1 on first failure (logged via CR).
+static int
+fanout_alloc_pinned(struct blosc1_host_fanout* h,
+                    struct nvcomp_fanout* d,
+                    size_t n)
+{
+  CUdeviceptr dptr = 0;
+  CR(Fail, cuMemAllocHost((void**)&h->comp_ptrs, n * sizeof(void*)));
+  CR(Fail, cuMemAllocHost((void**)&h->comp_sizes, n * sizeof(size_t)));
+  CR(Fail, cuMemAllocHost((void**)&h->decomp_ptrs, n * sizeof(void*)));
+  CR(Fail, cuMemAllocHost((void**)&h->decomp_buf_sizes, n * sizeof(size_t)));
+  CR(Fail, cuMemAlloc(&dptr, n * sizeof(void*)));
+  d->d_comp_ptrs = (const void**)(uintptr_t)dptr;
+  CR(Fail, cuMemAlloc(&dptr, n * sizeof(size_t)));
+  d->d_comp_sizes = (size_t*)(uintptr_t)dptr;
+  CR(Fail, cuMemAlloc(&dptr, n * sizeof(void*)));
+  d->d_decomp_ptrs = (void**)(uintptr_t)dptr;
+  CR(Fail, cuMemAlloc(&dptr, n * sizeof(size_t)));
+  d->d_decomp_buf_sizes = (size_t*)(uintptr_t)dptr;
+  return 0;
+Fail:
+  return 1;
+}
+
+// H2D the 4 SOA arrays of one fanout in lockstep onto `s`.
+static enum damacy_status
+fanout_upload(CUstream s,
+              const struct nvcomp_fanout* d,
+              const struct blosc1_host_fanout* h,
+              size_t n)
+{
+  CR(Fail,
+     cuMemcpyHtoDAsync(
+       CUDPTR(d->d_comp_ptrs), h->comp_ptrs, n * sizeof(void*), s));
+  CR(Fail,
+     cuMemcpyHtoDAsync(
+       CUDPTR(d->d_comp_sizes), h->comp_sizes, n * sizeof(size_t), s));
+  CR(Fail,
+     cuMemcpyHtoDAsync(
+       CUDPTR(d->d_decomp_ptrs), h->decomp_ptrs, n * sizeof(void*), s));
+  CR(Fail,
+     cuMemcpyHtoDAsync(CUDPTR(d->d_decomp_buf_sizes),
+                       h->decomp_buf_sizes,
+                       n * sizeof(size_t),
+                       s));
+  return DAMACY_OK;
+Fail:
+  return DAMACY_CUDA;
+}
+
+static void wave_destroy(struct damacy_wave* wave, int cuda_skip);
+
 static int
 wave_init(struct damacy_wave* wave,
           uint64_t host_slab_bytes,
@@ -344,45 +397,10 @@ wave_init(struct damacy_wave* wave,
 
   const size_t zsubs = DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE;
   const size_t lsubs = lz4_subs_per_wave(max_bpe);
-  CR(
-    Error,
-    cuMemAllocHost((void**)&wave->h_zstd_fan.comp_ptrs, zsubs * sizeof(void*)));
-  CR(Error,
-     cuMemAllocHost((void**)&wave->h_zstd_fan.comp_sizes,
-                    zsubs * sizeof(size_t)));
-  CR(Error,
-     cuMemAllocHost((void**)&wave->h_zstd_fan.decomp_ptrs,
-                    zsubs * sizeof(void*)));
-  CR(Error,
-     cuMemAllocHost((void**)&wave->h_zstd_fan.decomp_buf_sizes,
-                    zsubs * sizeof(size_t)));
-  CR(Error,
-     cuMemAllocHost((void**)&wave->h_lz4_fan.comp_ptrs, lsubs * sizeof(void*)));
-  CR(Error,
-     cuMemAllocHost((void**)&wave->h_lz4_fan.comp_sizes,
-                    lsubs * sizeof(size_t)));
-  CR(Error,
-     cuMemAllocHost((void**)&wave->h_lz4_fan.decomp_ptrs,
-                    lsubs * sizeof(void*)));
-  CR(Error,
-     cuMemAllocHost((void**)&wave->h_lz4_fan.decomp_buf_sizes,
-                    lsubs * sizeof(size_t)));
-  CR(Error, cuMemAlloc(&dptr, zsubs * sizeof(void*)));
-  wave->zstd_fan.d_comp_ptrs = (const void**)(uintptr_t)dptr;
-  CR(Error, cuMemAlloc(&dptr, zsubs * sizeof(size_t)));
-  wave->zstd_fan.d_comp_sizes = (size_t*)(uintptr_t)dptr;
-  CR(Error, cuMemAlloc(&dptr, zsubs * sizeof(void*)));
-  wave->zstd_fan.d_decomp_ptrs = (void**)(uintptr_t)dptr;
-  CR(Error, cuMemAlloc(&dptr, zsubs * sizeof(size_t)));
-  wave->zstd_fan.d_decomp_buf_sizes = (size_t*)(uintptr_t)dptr;
-  CR(Error, cuMemAlloc(&dptr, lsubs * sizeof(void*)));
-  wave->lz4_fan.d_comp_ptrs = (const void**)(uintptr_t)dptr;
-  CR(Error, cuMemAlloc(&dptr, lsubs * sizeof(size_t)));
-  wave->lz4_fan.d_comp_sizes = (size_t*)(uintptr_t)dptr;
-  CR(Error, cuMemAlloc(&dptr, lsubs * sizeof(void*)));
-  wave->lz4_fan.d_decomp_ptrs = (void**)(uintptr_t)dptr;
-  CR(Error, cuMemAlloc(&dptr, lsubs * sizeof(size_t)));
-  wave->lz4_fan.d_decomp_buf_sizes = (size_t*)(uintptr_t)dptr;
+  if (fanout_alloc_pinned(&wave->h_zstd_fan, &wave->zstd_fan, zsubs))
+    goto Error;
+  if (fanout_alloc_pinned(&wave->h_lz4_fan, &wave->lz4_fan, lsubs))
+    goto Error;
 
   CR(Error,
      cuMemAllocHost((void**)&wave->h_memcpy_ops,
@@ -455,6 +473,9 @@ wave_init(struct damacy_wave* wave,
   CHECK(Error, wave->lz4_decoder);
   return 0;
 Error:
+  // Make the partial-init cleanup explicit instead of relying on the
+  // outer destroy_inner walking a zero-initialized wave.
+  wave_destroy(wave, 0);
   return 1;
 }
 
@@ -846,50 +867,18 @@ kick_h2d(struct damacy* self, struct damacy_wave* wave)
   }
 
   const struct blosc1_totals* tot = wave->h_blosc1_totals;
-  if (tot->n_zstd > 0) {
-    CR(CudaFail,
-       cuMemcpyHtoDAsync(CUDPTR(wave->zstd_fan.d_comp_ptrs),
-                         wave->h_zstd_fan.comp_ptrs,
-                         (size_t)tot->n_zstd * sizeof(void*),
-                         self->stream_h2d));
-    CR(CudaFail,
-       cuMemcpyHtoDAsync(CUDPTR(wave->zstd_fan.d_comp_sizes),
-                         wave->h_zstd_fan.comp_sizes,
-                         (size_t)tot->n_zstd * sizeof(size_t),
-                         self->stream_h2d));
-    CR(CudaFail,
-       cuMemcpyHtoDAsync(CUDPTR(wave->zstd_fan.d_decomp_ptrs),
-                         wave->h_zstd_fan.decomp_ptrs,
-                         (size_t)tot->n_zstd * sizeof(void*),
-                         self->stream_h2d));
-    CR(CudaFail,
-       cuMemcpyHtoDAsync(CUDPTR(wave->zstd_fan.d_decomp_buf_sizes),
-                         wave->h_zstd_fan.decomp_buf_sizes,
-                         (size_t)tot->n_zstd * sizeof(size_t),
-                         self->stream_h2d));
-  }
-  if (tot->n_lz4 > 0) {
-    CR(CudaFail,
-       cuMemcpyHtoDAsync(CUDPTR(wave->lz4_fan.d_comp_ptrs),
-                         wave->h_lz4_fan.comp_ptrs,
-                         (size_t)tot->n_lz4 * sizeof(void*),
-                         self->stream_h2d));
-    CR(CudaFail,
-       cuMemcpyHtoDAsync(CUDPTR(wave->lz4_fan.d_comp_sizes),
-                         wave->h_lz4_fan.comp_sizes,
-                         (size_t)tot->n_lz4 * sizeof(size_t),
-                         self->stream_h2d));
-    CR(CudaFail,
-       cuMemcpyHtoDAsync(CUDPTR(wave->lz4_fan.d_decomp_ptrs),
-                         wave->h_lz4_fan.decomp_ptrs,
-                         (size_t)tot->n_lz4 * sizeof(void*),
-                         self->stream_h2d));
-    CR(CudaFail,
-       cuMemcpyHtoDAsync(CUDPTR(wave->lz4_fan.d_decomp_buf_sizes),
-                         wave->h_lz4_fan.decomp_buf_sizes,
-                         (size_t)tot->n_lz4 * sizeof(size_t),
-                         self->stream_h2d));
-  }
+  if (tot->n_zstd > 0 &&
+      fanout_upload(self->stream_h2d,
+                    &wave->zstd_fan,
+                    &wave->h_zstd_fan,
+                    (size_t)tot->n_zstd) != DAMACY_OK)
+    goto CudaFail;
+  if (tot->n_lz4 > 0 &&
+      fanout_upload(self->stream_h2d,
+                    &wave->lz4_fan,
+                    &wave->h_lz4_fan,
+                    (size_t)tot->n_lz4) != DAMACY_OK)
+    goto CudaFail;
   if (tot->n_memcpy > 0)
     CR(CudaFail,
        cuMemcpyHtoDAsync(CUDPTR(wave->d_memcpy_ops),
@@ -1265,18 +1254,7 @@ kick_new_waves(struct damacy* self)
     if (w < 0)
       break;
 
-    // Find a batch slot with chunks left to dispatch.
-    int target_slot = -1;
-    uint64_t oldest = UINT64_MAX;
-    for (int s = 0; s < 2; ++s) {
-      struct damacy_batch_slot* slot = &self->batch_pool.slots[s];
-      if (slot->state == BATCH_FILLING &&
-          slot->n_chunks_dispatched < slot->n_chunks &&
-          slot->batch_id < oldest) {
-        target_slot = s;
-        oldest = slot->batch_id;
-      }
-    }
+    int target_slot = find_filling_slot_with_work(&self->batch_pool);
     if (target_slot < 0) {
       // No FILLING slot has unfinished chunks. Try planning a new batch.
       int free_slot = find_free_batch_slot(&self->batch_pool);

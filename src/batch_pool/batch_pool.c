@@ -166,6 +166,23 @@ find_oldest_filling_slot(const struct damacy_batch_pool* pool)
 }
 
 int
+find_filling_slot_with_work(const struct damacy_batch_pool* pool)
+{
+  int best = -1;
+  uint64_t best_id = UINT64_MAX;
+  for (int s = 0; s < 2; ++s) {
+    const struct damacy_batch_slot* slot = &pool->slots[s];
+    if (slot->state == BATCH_FILLING &&
+        slot->n_chunks_dispatched < slot->n_chunks &&
+        slot->batch_id < best_id) {
+      best = s;
+      best_id = slot->batch_id;
+    }
+  }
+  return best;
+}
+
+int
 any_batch_in_flight(const struct damacy_batch_pool* pool)
 {
   for (int s = 0; s < 2; ++s) {

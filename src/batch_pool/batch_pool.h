@@ -77,9 +77,11 @@ enum damacy_status batch_pool_alloc_dev(struct damacy_batch_pool* pool);
 int sample_shape_matches_pool(const struct damacy_batch_pool* pool,
                               const struct damacy_aabb* aabb);
 
-// All four return -1 / 0 if the predicate is unmet. find_oldest_*
-// scans by lowest batch_id.
+// All return -1 / 0 if the predicate is unmet. find_oldest_*
+// scans by lowest batch_id. find_filling_slot_with_work additionally
+// requires n_chunks_dispatched < n_chunks (used by the wave scheduler).
 int find_free_batch_slot(const struct damacy_batch_pool* pool);
 int find_oldest_ready_slot(const struct damacy_batch_pool* pool);
 int find_oldest_filling_slot(const struct damacy_batch_pool* pool);
+int find_filling_slot_with_work(const struct damacy_batch_pool* pool);
 int any_batch_in_flight(const struct damacy_batch_pool* pool);
