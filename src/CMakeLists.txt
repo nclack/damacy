@@ -50,6 +50,14 @@ add_cuda_lib(batch_pool SOURCES batch_pool/batch_pool.h batch_pool/batch_pool.c
     LINKS planner log CUDA::cuda_driver
 )
 
+# In-flight wave: per-wave host slab + device decompress arena, blosc1
+# parse scratch, nvcomp fanout SOA, per-stage CUevents, decoders.
+# Lifecycle (init/destroy) only — kick / advance scheduling stays in damacy.c
+# until struct damacy is exposed via an internal header.
+add_cuda_lib(wave SOURCES wave/wave.h wave/wave.c
+    LINKS decoder assemble store log CUDA::cuda_driver
+)
+
 # Read-side store
 add_src_lib(store SOURCES store/store.h store/store.c store/store_fs.h store/store_fs.c
     LINKS io_queue platform_io strbuf log
@@ -115,6 +123,6 @@ add_cuda_lib(assemble SOURCES assemble/assemble.h assemble/assemble.cu
 add_cuda_lib(damacy SOURCES damacy.h damacy.c damacy_status.c
     LINKS platform planner zarr_meta_cache zarr_shard_cache zarr store
           decoder blosc1_host assemble dtype log lookahead gpu_budget
-          batch_pool strbuf threadpool
+          batch_pool wave strbuf threadpool
           CUDA::cuda_driver
 )
