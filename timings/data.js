@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778286960992,
+  "lastUpdate": 1778331954198,
   "repoUrl": "https://github.com/nclack/damacy",
   "entries": {
     "damacy timings": [
@@ -487,6 +487,128 @@ window.BENCHMARK_DATA = {
           {
             "name": "damacy/mixed/decompress.post.ms_avg",
             "value": 0.936173,
+            "unit": "ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Nathan Clack",
+            "username": "nclack",
+            "email": "nclack@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "fda3292956ce03f0db173a93580c9a1d57d6f328",
+          "message": "ctx_guard at every public API entry (#25)\n\nPush the retained primary CUcontext per public API call instead of for\nthe pipeline lifetime, restoring the caller's thread state on every\nreturn.\n\nCloses #21.",
+          "timestamp": "2026-05-09T00:24:11Z",
+          "url": "https://github.com/nclack/damacy/commit/fda3292956ce03f0db173a93580c9a1d57d6f328"
+        },
+        "date": 1778331953068,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "damacy/default/init",
+            "value": 131.384,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/time_to_first_batch",
+            "value": 377.003,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/wall",
+            "value": 9259.04,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/io.ms_avg",
+            "value": 4.20669,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/h2d.ms_avg",
+            "value": 6.04711,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/decompress.ms_avg",
+            "value": 13.7084,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/assemble.ms_avg",
+            "value": 1.80528,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/decompress.parse.ms_avg",
+            "value": 0.0142385,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/decompress.zstd.ms_avg",
+            "value": 19.1869,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/decompress.post.ms_avg",
+            "value": 0.00848038,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/init",
+            "value": 128.384,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/time_to_first_batch",
+            "value": 216.283,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/wall",
+            "value": 9794.9,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/io.ms_avg",
+            "value": 4.20024,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/h2d.ms_avg",
+            "value": 6.15921,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/decompress.ms_avg",
+            "value": 14.6659,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/assemble.ms_avg",
+            "value": 1.80033,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/decompress.parse.ms_avg",
+            "value": 0.0767814,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/decompress.zstd.ms_avg",
+            "value": 20.1793,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/decompress.post.ms_avg",
+            "value": 0.927328,
             "unit": "ms"
           }
         ]
