@@ -22,7 +22,9 @@ extern "C"
   // nthreads in [1, DAMACY_MAX_IO_THREADS]. Returns NULL on failure.
   struct io_queue* io_queue_create(int nthreads);
 
-  // Drains queued jobs, then joins workers. Hangs if any in-flight fn()
+  // Drains queued jobs, then joins workers. Caller must ensure no
+  // io_queue_post() is concurrent with or follows this call; racing posts
+  // may leak ctx_free or use-after-free. Hangs if any in-flight fn()
   // blocks; the caller is responsible for unblocking them.
   void io_queue_destroy(struct io_queue* q);
 
@@ -35,6 +37,9 @@ extern "C"
 
   struct io_event io_queue_record(struct io_queue* q);
 
+  // Blocks until ev.seq is retired, or the queue shuts down — callers
+  // that need to disambiguate should check io_queue_is_shutdown() after
+  // the wait.
   void io_event_wait(const struct io_queue* q, struct io_event ev);
 
   // Non-blocking io_event_wait; non-zero iff retired.
