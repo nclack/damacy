@@ -33,9 +33,9 @@ static const char* const k_zarr_format[] = {
 };
 
 static const char* const k_dtype[] = {
-  "uint8",   "uint16", "uint32", "uint64", "int8",    "int16",
-  "int32",   "int64",  "float16", "float32", "float64", "complex64",
-  "bool",    "",       "uint128",
+  "uint8",   "uint16",    "uint32", "uint64",  "int8",
+  "int16",   "int32",     "int64",  "float16", "float32",
+  "float64", "complex64", "bool",   "",        "uint128",
 };
 
 static const char* const k_shape[] = {
@@ -101,7 +101,7 @@ static size_t
 append(char* dst, size_t off, size_t cap, const char* s)
 {
   size_t n = strlen(s);
-  if (off + n >= cap)
+  if (off == SIZE_MAX || off + n >= cap)
     return SIZE_MAX;
   memcpy(dst + off, s, n);
   return off + n;
@@ -140,12 +140,14 @@ LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
   off = append(doc,
                off,
                DOC_CAP,
-               "\",\"chunk_grid\":{\"name\":\"regular\",\"configuration\":{\"chunk_shape\":");
+               "\",\"chunk_grid\":{\"name\":\"regular\",\"configuration\":{"
+               "\"chunk_shape\":");
   off = append(doc, off, DOC_CAP, outer);
   off = append(doc,
                off,
                DOC_CAP,
-               "}},\"codecs\":[{\"name\":\"sharding_indexed\",\"configuration\":{\"chunk_shape\":");
+               "}},\"codecs\":[{\"name\":\"sharding_indexed\","
+               "\"configuration\":{\"chunk_shape\":");
   off = append(doc, off, DOC_CAP, inner);
   off = append(doc, off, DOC_CAP, ",\"codecs\":");
   off = append(doc, off, DOC_CAP, codecs);

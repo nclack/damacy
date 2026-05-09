@@ -13,7 +13,7 @@
 
 // Worst-case substream count for one chunk: nblocks ≤ 32 *
 // nstreams_per_block ≤ DAMACY_BLOSC_MAX_TYPESIZE.
-#define K_MAX_SUBS \
+#define K_MAX_SUBS                                                             \
   (DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK * DAMACY_BLOSC_MAX_TYPESIZE)
 
 static void
@@ -71,6 +71,8 @@ try_one(const uint8_t* data, size_t size, uint8_t codec_id, uint32_t dec_nbytes)
   });
 }
 
+// TODO: share with the parser via a blosc1_read_header helper if more
+// fuzz harnesses end up needing the same byte-order glue.
 static uint32_t
 read_u32_le(const uint8_t* p)
 {
