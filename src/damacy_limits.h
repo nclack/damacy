@@ -52,6 +52,13 @@
 // workload demonstrates need.
 #define DAMACY_MAX_IO_THREADS 32u
 
+// Upper bound on cfg.n_compute_threads. The compute pool fans the
+// blosc1 host parse out across CPU cores; 32 is well past the largest
+// EPYC/Threadripper core count typical in a host today, and rejecting
+// pathological configs early keeps threadpool_new from clamping or
+// failing later. 0 is allowed (synchronous parse on the caller).
+#define DAMACY_MAX_COMPUTE_THREADS 32u
+
 // Sized to absorb one full wave (DAMACY_MAX_CHUNKS_PER_WAVE) without
 // growing. Must be a power of two — io_queue indexes via bitmask.
 #define DAMACY_IO_QUEUE_INITIAL_CAP 512u
