@@ -46,8 +46,9 @@ validate_config(const struct damacy_config* cfg)
   CHECK_SILENT(Invalid, cfg->n_io_threads > 0);
   CHECK_SILENT(Invalid, cfg->n_io_threads <= DAMACY_MAX_IO_THREADS);
   CHECK_SILENT(Invalid, cfg->n_compute_threads <= DAMACY_MAX_COMPUTE_THREADS);
-  CHECK_SILENT(Invalid, cfg->host_buffer_bytes > 0);
-  CHECK_SILENT(Invalid, cfg->device_buffer_bytes > 0);
+  // Both buffers are split in half across the two waves, so ≥ 2 bytes.
+  CHECK_SILENT(Invalid, cfg->host_buffer_bytes / 2 > 0);
+  CHECK_SILENT(Invalid, cfg->device_buffer_bytes / 2 > 0);
   CHECK_SILENT(Invalid, cfg->n_zarrs_meta_cache > 0);
   CHECK_SILENT(Invalid, cfg->n_shards_meta_cache > 0);
   CHECK_SILENT(Invalid, damacy_dtype_bpe(cfg->dtype) > 0);

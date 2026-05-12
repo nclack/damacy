@@ -204,7 +204,9 @@ int wave_pool_init(struct wave_pool* wp,
 void wave_pool_destroy(struct wave_pool* wp, int cuda_skip);
 
 // 4 pinned-host + 4 device allocs for one nvcomp fanout. Returns 0 ok,
-// 1 on first failure (logged).
+// 1 on first failure (logged). Partial-failure cleanup relies on `h`
+// and `d` being zero-initialized by the caller — wave_destroy then
+// NULL-checks each pointer and frees only what was set.
 int fanout_alloc_pinned(struct blosc1_host_fanout* h,
                         struct nvcomp_fanout* d,
                         size_t n);

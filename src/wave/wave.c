@@ -8,7 +8,7 @@
 #include "log/log.h"
 #include "planner/planner.h"
 #include "store/store.h"
-#include "util/cuda_check.h" // CU + CUDPTR
+#include "util/cuda_check.h"
 #include "util/prelude.h"
 #include "util/strbuf.h"
 
@@ -580,8 +580,6 @@ CudaFail:
   return DAMACY_CUDA;
 }
 
-// Build per-wave-chunk assemble metadata. Sets
-// wave->assemble_max_blocks_per_chunk and wave->assemble_rank.
 static void
 build_assemble_meta(const struct wave_pool* wp, struct damacy_wave* wave)
 {
@@ -821,9 +819,8 @@ drain_wave_metrics(const struct wave_pool* wp, struct damacy_wave* wave)
                   wave->assemble_out_bytes);
 }
 
-// asm_end signaled — drain timings, decrement chunks_remaining, READY
-// the slot when zero, free the wave. Surfaces any nvcomp status errors
-// before the slot transitions so damacy_pop's failed_status check bails.
+// Surfaces nvcomp errors before the slot transitions so damacy_pop's
+// failed_status check can bail before handing out the batch.
 static void
 finalize_wave(struct wave_pool* wp, struct damacy_wave* wave)
 {

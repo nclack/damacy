@@ -36,6 +36,7 @@ metric_record(struct damacy_metric* m, float ms, uint64_t bin, uint64_t bout)
 void
 stats_init(struct damacy_stats* s)
 {
+  // memset first; metric_init then overwrites best_ms to a large sentinel.
   memset(s, 0, sizeof(*s));
   metric_init(&s->plan, "plan");
   metric_init(&s->io, "io");

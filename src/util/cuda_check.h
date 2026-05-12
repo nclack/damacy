@@ -1,8 +1,5 @@
-// CUDA driver-API check macros + the CUdeviceptr cast helper. Split out
-// of decoder/decoder_check.h so non-decoder modules (damacy.c,
-// batch_pool, wave) don't have to drag in nvcomp.h just to log a
-// driver error. decoder/decoder_check.h re-includes this and adds the
-// NV() macro on top.
+// CUDA driver-API check macros + the CUdeviceptr cast helper.
+// decoder/decoder_check.h re-includes this and adds NV() for nvcomp.
 #pragma once
 
 #include "log/log.h"
