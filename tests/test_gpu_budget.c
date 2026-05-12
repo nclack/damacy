@@ -28,7 +28,6 @@ mk_cfg(uint64_t host_bytes, uint64_t dev_bytes, uint32_t chunk_cap)
     .dtype = DAMACY_F32,
     .max_chunk_uncompressed_bytes = chunk_cap,
     .max_gpu_memory_bytes = 0,
-    .max_bytes_per_element = 0,
     .device = -1,
     .n_compute_threads = 0,
   };

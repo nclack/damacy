@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field, field_validator
 
 SrcDType = Literal["u8", "u16", "i16", "u32", "i32", "f16", "f32"]
 DstDType = Literal["f32", "bf16"]
-Codec = Literal["none", "zstd", "blosc-zstd", "blosc-lz4"]
+Codec = Literal["none", "zstd", "blosc-zstd"]
 
 NUMPY_DTYPE = {
     "u8": "uint8",

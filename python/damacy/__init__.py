@@ -357,8 +357,6 @@ class Config:
             rejected at create.
         max_gpu_memory_bytes: Hard cap on GPU memory allocated for
             wave-resident buffers and batch-output pools. 0 = no cap.
-        max_bytes_per_element: Largest source dtype size (bytes) the
-            pipeline will accept; 0 = the codec ceiling.
         device: CUDA device index to bind. ``None`` (default) captures
             the current ``CUcontext`` on the calling thread; pass an
             int (e.g. ``local_rank``) to retain that device's primary
@@ -376,7 +374,6 @@ class Config:
     n_shards_meta_cache: int
     max_chunk_uncompressed_bytes: int
     max_gpu_memory_bytes: int
-    max_bytes_per_element: int
     device: int | None
 
     def __init__(
@@ -393,7 +390,6 @@ class Config:
         n_shards_meta_cache: int = 256,
         max_chunk_uncompressed_bytes: int = 0,
         max_gpu_memory_bytes: int = 0,
-        max_bytes_per_element: int = 0,
         device: int | None = None,
     ) -> None:
         # Custom __init__ rather than __post_init__ so the constructor
@@ -428,7 +424,6 @@ class Config:
         set_(self, "n_shards_meta_cache", n_shards_meta_cache)
         set_(self, "max_chunk_uncompressed_bytes", max_chunk_uncompressed_bytes)
         set_(self, "max_gpu_memory_bytes", max_gpu_memory_bytes)
-        set_(self, "max_bytes_per_element", max_bytes_per_element)
         set_(self, "device", device)
 
 
@@ -694,7 +689,6 @@ class Pipeline:
                 dtype=int(config.dtype),  # already coerced by Config.__init__
                 max_chunk_uncompressed_bytes=config.max_chunk_uncompressed_bytes,
                 max_gpu_memory_bytes=config.max_gpu_memory_bytes,
-                max_bytes_per_element=config.max_bytes_per_element,
                 device=-1 if config.device is None else int(config.device),
             )
         except _native.DamacyError as exc:

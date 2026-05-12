@@ -18,7 +18,6 @@
 #include "damacy_limits.h"
 #include "decoder/blosc1.h"
 #include "decoder/blosc1_host.h"
-#include "decoder/decoder_lz4.h"
 #include "decoder/decoder_memcpy.h"
 #include "decoder/decoder_zstd.h"
 #include "decoder/shuffle.h"
@@ -57,7 +56,6 @@ struct damacy_wave
   struct blosc1_host_chunk* h_chunks;
   struct blosc1_host_scratch scratch;
   struct blosc1_host_fanout h_zstd_fan;
-  struct blosc1_host_fanout h_lz4_fan;
   struct gpu_memcpy_op* h_memcpy_ops;
   struct gpu_shuffle_op* h_unshuffle_ops;
   struct gpu_shuffle_op* h_bitunshuffle_ops;
@@ -66,9 +64,8 @@ struct damacy_wave
   // status_reduce atomicAdds into n_codec_errors; finalize_wave reads.
   struct blosc1_totals* d_blosc1_totals;
 
-  // Device SOA mirrors of the host fanout (H2D'd in kick_h2d).
+  // Device SOA mirror of the host fanout (H2D'd in kick_h2d).
   struct nvcomp_fanout zstd_fan;
-  struct nvcomp_fanout lz4_fan;
 
   struct gpu_memcpy_op* d_memcpy_ops;
   struct gpu_shuffle_op* d_unshuffle_ops;
@@ -100,8 +97,7 @@ struct damacy_wave
     CUevent h2d_end;      // + fanout/op H2Ds + d_blosc1_totals zero done
     CUevent decomp_start;
     CUevent zstd_done;
-    CUevent lz4_done;
-    CUevent post_start; // stream_compute resumes after waiting on codec streams
+    CUevent post_start; // stream_compute resumes after waiting on stream_zstd
     CUevent decomp_end;
     CUevent asm_start;
     CUevent asm_end;
@@ -118,10 +114,9 @@ struct damacy_wave
   uint64_t decomp_out_bytes;
   uint64_t assemble_out_bytes;
 
-  // Per-wave decoders: nvCOMP scratch is not safe to share across
+  // Per-wave decoder: nvCOMP scratch is not safe to share across
   // in-flight waves.
   struct decoder_zstd* zstd_decoder;
-  struct decoder_lz4* lz4_decoder;
 };
 
 struct damacy_batch_pool;
@@ -141,7 +136,6 @@ struct wave_pool
   CUstream stream_h2d;
   CUstream stream_compute;
   CUstream stream_zstd;
-  CUstream stream_lz4;
 
   // Borrowed (owned by struct damacy / its members). Set in wave_pool_init
   // and never updated.
@@ -170,7 +164,6 @@ struct wave_alloc_summary
 enum damacy_status
 wave_predict_bytes(uint64_t host_slab_bytes,
                    uint64_t dev_decompressed_bytes,
-                   uint8_t max_bpe,
                    uint64_t max_chunk_uncompressed_bytes,
                    struct wave_alloc_summary* out);
 
@@ -178,7 +171,6 @@ wave_predict_bytes(uint64_t host_slab_bytes,
 int wave_init(struct damacy_wave* wave,
               uint64_t host_slab_bytes,
               uint64_t dev_decompressed_bytes,
-              uint8_t max_bpe,
               uint64_t max_chunk_uncompressed_bytes);
 
 void wave_destroy(struct damacy_wave* wave, int cuda_skip);
@@ -195,7 +187,6 @@ int wave_pool_init(struct wave_pool* wp,
                    enum damacy_dtype dtype,
                    uint64_t host_buffer_bytes,
                    uint64_t device_buffer_bytes,
-                   uint8_t max_bpe,
                    uint64_t max_chunk_uncompressed_bytes);
 
 // Sync + destroy streams, then wave_destroy each wave. cuda_skip=1

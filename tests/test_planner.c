@@ -466,16 +466,52 @@ run_blosc_codec_id_case(const char* cname, uint8_t expected_codec_id)
   return 0;
 }
 
+// Planner rejects blosc1-lz4 with DAMACY_INVAL (codec is no longer supported).
 static int
-test_codec_id_blosc_lz4(void)
+run_blosc_lz4_rejected_case(const char* cname)
 {
-  return run_blosc_codec_id_case("lz4", CODEC_BLOSC_LZ4);
+  char json[1024];
+  int n = snprintf(json, sizeof json, BLOSC_ZARR_JSON_FMT, cname);
+  EXPECT(n > 0 && (size_t)n < sizeof json);
+
+  const uint64_t offsets[4] = { 0, 100, 200, 300 };
+  const uint64_t nbytes[4] = { 32, 32, 32, 32 };
+  struct fixture f = { 0 };
+  if (fixture_init_with_json(&f, json, offsets, nbytes))
+    return 1;
+
+  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  int64_t dst_strides[3];
+  mk_dst_strides_2d(1, 4, 8, dst_strides);
+
+  struct read_op reads[8] = { 0 };
+  struct chunk_plan chunks[8] = { 0 };
+  struct sample_plan samples[4] = { 0 };
+  struct planner_output out = {
+    .read_ops = reads,
+    .read_ops_cap = 8,
+    .chunk_plans = chunks,
+    .chunk_plans_cap = 8,
+    .sample_plans = samples,
+    .sample_plans_cap = 4,
+  };
+  EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) ==
+         DAMACY_INVAL);
+
+  fixture_destroy(&f);
+  return 0;
 }
 
 static int
-test_codec_id_blosc_lz4hc(void)
+test_codec_id_blosc_lz4_rejected(void)
 {
-  return run_blosc_codec_id_case("lz4hc", CODEC_BLOSC_LZ4);
+  return run_blosc_lz4_rejected_case("lz4");
+}
+
+static int
+test_codec_id_blosc_lz4hc_rejected(void)
+{
+  return run_blosc_lz4_rejected_case("lz4hc");
 }
 
 static int
@@ -561,8 +597,8 @@ main(void)
   RUN(test_two_samples_indices);
   RUN(test_empty_chunks_fail);
   RUN(test_page_alignment);
-  RUN(test_codec_id_blosc_lz4);
-  RUN(test_codec_id_blosc_lz4hc);
+  RUN(test_codec_id_blosc_lz4_rejected);
+  RUN(test_codec_id_blosc_lz4hc_rejected);
   RUN(test_codec_id_blosc_zstd);
   RUN(test_codec_id_none);
   RUN(test_codec_id_blosc_unknown_cname);

@@ -75,7 +75,7 @@ test_create_preserves_caller_ctx(void)
   snprintf(p, sizeof p, "%s/foo", root);
   int64_t shape[2] = { 8, 16 }, inner[2] = { 4, 8 }, shard[2] = { 8, 16 };
   EXPECT(fixture_write_zarr_codec(
-           p, shape, inner, shard, 2, "uint16", 0, "blosc-lz4") == 0);
+           p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
 
   struct damacy_config cfg = mk_cfg(root);
   struct damacy* d = NULL;
@@ -131,7 +131,7 @@ test_create_explicit_device_no_ctx(void)
   snprintf(p, sizeof p, "%s/foo", root);
   int64_t shape[2] = { 8, 16 }, inner[2] = { 4, 8 }, shard[2] = { 8, 16 };
   EXPECT(fixture_write_zarr_codec(
-           p, shape, inner, shard, 2, "uint16", 0, "blosc-lz4") == 0);
+           p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
 
   struct damacy_config cfg = mk_cfg(root);
   cfg.device = 0;
@@ -190,7 +190,7 @@ test_explicit_device_does_not_leak_ctx_between_calls(void)
   snprintf(p, sizeof p, "%s/foo", root);
   int64_t shape[2] = { 4, 8 }, inner[2] = { 2, 4 }, shard[2] = { 4, 8 };
   EXPECT(fixture_write_zarr_codec(
-           p, shape, inner, shard, 2, "uint16", 0, "blosc-lz4") == 0);
+           p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
 
   struct damacy_config cfg = mk_cfg(root);
   cfg.device = 0;
@@ -251,7 +251,7 @@ test_pop_error_path_restores_caller_ctx(void)
   snprintf(p, sizeof p, "%s/foo", root);
   int64_t shape[2] = { 4, 8 }, inner[2] = { 2, 4 }, shard[2] = { 4, 8 };
   EXPECT(fixture_write_zarr_codec(
-           p, shape, inner, shard, 2, "uint16", 0, "blosc-lz4") == 0);
+           p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
 
   struct damacy_config cfg = mk_cfg(root);
   cfg.device = 0;

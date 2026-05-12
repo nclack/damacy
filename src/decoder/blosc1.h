@@ -43,7 +43,6 @@ extern "C"
   struct blosc1_chunk_counts
   {
     uint32_t n_zstd;
-    uint32_t n_lz4;
     uint32_t n_memcpy;
     uint32_t n_unshuffle;
     uint32_t n_bitunshuffle;
@@ -52,7 +51,6 @@ extern "C"
   struct blosc1_chunk_offsets
   {
     uint32_t zstd_off;
-    uint32_t lz4_off;
     uint32_t memcpy_off;
     uint32_t unshuffle_off;
     uint32_t bitunshuffle_off;
@@ -61,7 +59,6 @@ extern "C"
   struct blosc1_totals
   {
     uint32_t n_zstd;
-    uint32_t n_lz4;
     uint32_t n_memcpy;
     uint32_t n_unshuffle;
     uint32_t n_bitunshuffle;

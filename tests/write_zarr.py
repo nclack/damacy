@@ -42,15 +42,6 @@ def make_compressors(codec: str, dtype: np.dtype):
                 typesize=int(dtype.itemsize),
             )
         ]
-    if codec == "blosc-lz4":
-        return [
-            BloscCodec(
-                cname=BloscCname.lz4,
-                clevel=3,
-                shuffle=BloscShuffle.shuffle,
-                typesize=int(dtype.itemsize),
-            )
-        ]
     raise SystemExit(f"unknown --codec {codec!r}")
 
 
@@ -80,7 +71,7 @@ def main() -> int:
     ap.add_argument(
         "--codec",
         default="zstd",
-        choices=["none", "zstd", "blosc-zstd", "blosc-lz4"],
+        choices=["none", "zstd", "blosc-zstd"],
         help="inner codec inside the sharding wrapper",
     )
     args = ap.parse_args()

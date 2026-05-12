@@ -261,6 +261,11 @@ planner_plan(struct planner* self,
       return DAMACY_RANK;
     if ((uint8_t)(meta->rank + 1) != dst_full_rank)
       return DAMACY_RANK;
+    if (meta->inner_codec.id == CODEC_BLOSC_LZ4) {
+      log_error("planner: blosc1-lz4 inner codec is not supported (uri=%s)",
+                sample->uri);
+      return DAMACY_INVAL;
+    }
 
     uint64_t inner_per_shard_dim[DAMACY_MAX_RANK];
     if (zarr_metadata_inner_per_shard(meta, inner_per_shard_dim, NULL))

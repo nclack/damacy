@@ -4,7 +4,6 @@
 #include "decoder/bitshuffle.h"
 #include "decoder/blosc1.h"
 #include "decoder/blosc1_host.h"
-#include "decoder/decoder_lz4.h"
 #include "decoder/decoder_memcpy.h"
 #include "decoder/decoder_zstd.h"
 #include "decoder/shuffle.h"
@@ -33,12 +32,7 @@ struct fixture
 };
 
 static const struct fixture k_fixtures[] = {
-  { "lz4_noshuffle_ts4", CODEC_BLOSC_LZ4 },
-  { "lz4_shuffle_ts4", CODEC_BLOSC_LZ4 },
   { "zstd_noshuffle_ts4", CODEC_BLOSC_ZSTD },
-  { "lz4_noshuffle_ts1", CODEC_BLOSC_LZ4 },
-  { "lz4_noshuffle_ts4_mb", CODEC_BLOSC_LZ4 },
-  { "lz4_bitshuffle_ts4", CODEC_BLOSC_LZ4 },
 };
 
 static int
@@ -156,12 +150,6 @@ run_one(const struct fixture* fx, struct threadpool* pool, CUstream stream)
   void** zstd_decomp_ptrs = (void**)calloc(kMaxSubs, sizeof(*zstd_decomp_ptrs));
   size_t* zstd_decomp_sizes =
     (size_t*)calloc(kMaxSubs, sizeof(*zstd_decomp_sizes));
-  const void** lz4_comp_ptrs =
-    (const void**)calloc(kMaxSubs, sizeof(*lz4_comp_ptrs));
-  size_t* lz4_comp_sizes = (size_t*)calloc(kMaxSubs, sizeof(*lz4_comp_sizes));
-  void** lz4_decomp_ptrs = (void**)calloc(kMaxSubs, sizeof(*lz4_decomp_ptrs));
-  size_t* lz4_decomp_sizes =
-    (size_t*)calloc(kMaxSubs, sizeof(*lz4_decomp_sizes));
   struct gpu_memcpy_op* memcpy_ops =
     (struct gpu_memcpy_op*)calloc(kMaxSubs, sizeof(*memcpy_ops));
   struct gpu_shuffle_op unsh = { 0 };
@@ -174,12 +162,6 @@ run_one(const struct fixture* fx, struct threadpool* pool, CUstream stream)
     .decomp_ptrs = zstd_decomp_ptrs,
     .decomp_buf_sizes = zstd_decomp_sizes,
   };
-  struct blosc1_host_fanout host_lz4 = {
-    .comp_ptrs = lz4_comp_ptrs,
-    .comp_sizes = lz4_comp_sizes,
-    .decomp_ptrs = lz4_decomp_ptrs,
-    .decomp_buf_sizes = lz4_decomp_sizes,
-  };
 
   EXPECT(blosc1_host_parse(&(struct blosc1_host_parse_args){
            .pool = pool,
@@ -187,7 +169,6 @@ run_one(const struct fixture* fx, struct threadpool* pool, CUstream stream)
            .n_chunks = 1,
            .scratch = scratch,
            .zstd = host_zstd,
-           .lz4 = host_lz4,
            .memcpy_ops = memcpy_ops,
            .unshuffle_ops = &unsh,
            .bitunshuffle_ops = &bitunsh,
@@ -212,16 +193,11 @@ run_one(const struct fixture* fx, struct threadpool* pool, CUstream stream)
   EXPECT(h_totals.n_memcpy == 0);
 
   CUdeviceptr d_zstd_cp = 0, d_zstd_cs = 0, d_zstd_dp = 0, d_zstd_ds = 0;
-  CUdeviceptr d_lz4_cp = 0, d_lz4_cs = 0, d_lz4_dp = 0, d_lz4_ds = 0;
   CUdeviceptr d_memcpy_ops = 0, d_unsh = 0, d_bitunsh = 0;
   EXPECT(cuMemAlloc(&d_zstd_cp, kMaxSubs * sizeof(void*)) == CUDA_SUCCESS);
   EXPECT(cuMemAlloc(&d_zstd_cs, kMaxSubs * sizeof(size_t)) == CUDA_SUCCESS);
   EXPECT(cuMemAlloc(&d_zstd_dp, kMaxSubs * sizeof(void*)) == CUDA_SUCCESS);
   EXPECT(cuMemAlloc(&d_zstd_ds, kMaxSubs * sizeof(size_t)) == CUDA_SUCCESS);
-  EXPECT(cuMemAlloc(&d_lz4_cp, kMaxSubs * sizeof(void*)) == CUDA_SUCCESS);
-  EXPECT(cuMemAlloc(&d_lz4_cs, kMaxSubs * sizeof(size_t)) == CUDA_SUCCESS);
-  EXPECT(cuMemAlloc(&d_lz4_dp, kMaxSubs * sizeof(void*)) == CUDA_SUCCESS);
-  EXPECT(cuMemAlloc(&d_lz4_ds, kMaxSubs * sizeof(size_t)) == CUDA_SUCCESS);
   EXPECT(cuMemAlloc(&d_memcpy_ops, kMaxSubs * sizeof(struct gpu_memcpy_op)) ==
          CUDA_SUCCESS);
   EXPECT(cuMemAlloc(&d_unsh, sizeof(struct gpu_shuffle_op)) == CUDA_SUCCESS);
@@ -242,23 +218,6 @@ run_one(const struct fixture* fx, struct threadpool* pool, CUstream stream)
     EXPECT(cuMemcpyHtoDAsync(d_zstd_ds,
                              zstd_decomp_sizes,
                              h_totals.n_zstd * sizeof(size_t),
-                             stream) == CUDA_SUCCESS);
-  }
-  if (h_totals.n_lz4 > 0) {
-    EXPECT(cuMemcpyHtoDAsync(
-             d_lz4_cp, lz4_comp_ptrs, h_totals.n_lz4 * sizeof(void*), stream) ==
-           CUDA_SUCCESS);
-    EXPECT(cuMemcpyHtoDAsync(d_lz4_cs,
-                             lz4_comp_sizes,
-                             h_totals.n_lz4 * sizeof(size_t),
-                             stream) == CUDA_SUCCESS);
-    EXPECT(cuMemcpyHtoDAsync(d_lz4_dp,
-                             lz4_decomp_ptrs,
-                             h_totals.n_lz4 * sizeof(void*),
-                             stream) == CUDA_SUCCESS);
-    EXPECT(cuMemcpyHtoDAsync(d_lz4_ds,
-                             lz4_decomp_sizes,
-                             h_totals.n_lz4 * sizeof(size_t),
                              stream) == CUDA_SUCCESS);
   }
   if (h_hdr.shuffle) {
@@ -286,20 +245,6 @@ run_one(const struct fixture* fx, struct threadpool* pool, CUstream stream)
                                      h_totals.n_zstd) == 0);
     EXPECT(cuStreamSynchronize(stream) == CUDA_SUCCESS);
     decoder_zstd_destroy(z);
-  }
-  if (h_totals.n_lz4 > 0) {
-    struct decoder_lz4* l =
-      decoder_lz4_create(h_totals.n_lz4, max_substream_uncompressed, raw_n);
-    EXPECT(l);
-    EXPECT(decoder_lz4_batch_device(l,
-                                    stream,
-                                    (const void**)(uintptr_t)d_lz4_cp,
-                                    (size_t*)(uintptr_t)d_lz4_cs,
-                                    (void**)(uintptr_t)d_lz4_dp,
-                                    (size_t*)(uintptr_t)d_lz4_ds,
-                                    h_totals.n_lz4) == 0);
-    EXPECT(cuStreamSynchronize(stream) == CUDA_SUCCESS);
-    decoder_lz4_destroy(l);
   }
 
   CUdeviceptr d_scratch = 0;
@@ -335,10 +280,6 @@ run_one(const struct fixture* fx, struct threadpool* pool, CUstream stream)
   free(zstd_comp_sizes);
   free(zstd_decomp_ptrs);
   free(zstd_decomp_sizes);
-  free(lz4_comp_ptrs);
-  free(lz4_comp_sizes);
-  free(lz4_decomp_ptrs);
-  free(lz4_decomp_sizes);
   free(memcpy_ops);
   cuMemFree(d_comp);
   cuMemFree(d_decomp);
@@ -346,10 +287,6 @@ run_one(const struct fixture* fx, struct threadpool* pool, CUstream stream)
   cuMemFree(d_zstd_cs);
   cuMemFree(d_zstd_dp);
   cuMemFree(d_zstd_ds);
-  cuMemFree(d_lz4_cp);
-  cuMemFree(d_lz4_cs);
-  cuMemFree(d_lz4_dp);
-  cuMemFree(d_lz4_ds);
   cuMemFree(d_memcpy_ops);
   cuMemFree(d_unsh);
   cuMemFree(d_bitunsh);
@@ -369,7 +306,10 @@ build_blosc1_header(uint8_t* h,
 {
   h[0] = 0;
   h[1] = 0;
-  uint8_t compformat = (codec_id == CODEC_BLOSC_LZ4) ? 1u : 4u;
+  // CODEC_BLOSC_ZSTD => compformat 4. Other codec values are rejected at
+  // parse with err=8 before compformat is inspected.
+  (void)codec_id;
+  uint8_t compformat = 4u;
   h[2] = (uint8_t)((compformat & 0x07u) << 5);
   h[3] = typesize;
   for (int i = 0; i < 4; ++i)
@@ -416,12 +356,7 @@ expect_parse_err(uint8_t codec_id,
   size_t zcs = 0;
   void* zdp = NULL;
   size_t zds = 0;
-  const void* lcp = NULL;
-  size_t lcs = 0;
-  void* ldp = NULL;
-  size_t lds = 0;
   struct blosc1_host_fanout zfan = { &zcp, &zcs, &zdp, &zds };
-  struct blosc1_host_fanout lfan = { &lcp, &lcs, &ldp, &lds };
   struct gpu_memcpy_op mop = { 0 };
   struct gpu_shuffle_op sop = { 0 };
   struct gpu_shuffle_op bop = { 0 };
@@ -432,7 +367,6 @@ expect_parse_err(uint8_t codec_id,
     .n_chunks = 1,
     .scratch = scratch,
     .zstd = zfan,
-    .lz4 = lfan,
     .memcpy_ops = &mop,
     .unshuffle_ops = &sop,
     .bitunshuffle_ops = &bop,
@@ -454,31 +388,34 @@ test_bad_header(void)
   uint8_t hdr[16];
 
   // err=1: compressed_nbytes < 16 (header read short-circuits)
-  build_blosc1_header(hdr, CODEC_BLOSC_LZ4, 4096, 1024, 100, 4);
-  EXPECT(expect_parse_err(CODEC_BLOSC_LZ4, hdr, 8, 4096, 1, pool) == 0);
+  build_blosc1_header(hdr, CODEC_BLOSC_ZSTD, 4096, 1024, 100, 4);
+  EXPECT(expect_parse_err(CODEC_BLOSC_ZSTD, hdr, 8, 4096, 1, pool) == 0);
 
   // err=2: header.blocksize == 0
-  build_blosc1_header(hdr, CODEC_BLOSC_LZ4, 4096, 0, 100, 4);
-  EXPECT(expect_parse_err(CODEC_BLOSC_LZ4, hdr, 100, 4096, 2, pool) == 0);
+  build_blosc1_header(hdr, CODEC_BLOSC_ZSTD, 4096, 0, 100, 4);
+  EXPECT(expect_parse_err(CODEC_BLOSC_ZSTD, hdr, 100, 4096, 2, pool) == 0);
 
   // err=3: header.nbytes != decompressed_nbytes
-  build_blosc1_header(hdr, CODEC_BLOSC_LZ4, 4096, 1024, 100, 4);
-  EXPECT(expect_parse_err(CODEC_BLOSC_LZ4, hdr, 100, 8192, 3, pool) == 0);
+  build_blosc1_header(hdr, CODEC_BLOSC_ZSTD, 4096, 1024, 100, 4);
+  EXPECT(expect_parse_err(CODEC_BLOSC_ZSTD, hdr, 100, 8192, 3, pool) == 0);
 
   // err=4: header.cbytes != compressed_nbytes
-  build_blosc1_header(hdr, CODEC_BLOSC_LZ4, 4096, 1024, 100, 4);
-  EXPECT(expect_parse_err(CODEC_BLOSC_LZ4, hdr, 200, 4096, 4, pool) == 0);
+  build_blosc1_header(hdr, CODEC_BLOSC_ZSTD, 4096, 1024, 100, 4);
+  EXPECT(expect_parse_err(CODEC_BLOSC_ZSTD, hdr, 200, 4096, 4, pool) == 0);
 
   // err=6: typesize == 0
-  build_blosc1_header(hdr, CODEC_BLOSC_LZ4, 4096, 1024, 100, 0);
-  EXPECT(expect_parse_err(CODEC_BLOSC_LZ4, hdr, 100, 4096, 6, pool) == 0);
+  build_blosc1_header(hdr, CODEC_BLOSC_ZSTD, 4096, 1024, 100, 0);
+  EXPECT(expect_parse_err(CODEC_BLOSC_ZSTD, hdr, 100, 4096, 6, pool) == 0);
 
-  // err=7: compformat (zstd's 4) doesn't match BLOSC_LZ4 codec
+  // err=7: header.compformat doesn't match codec_id. Build a zstd
+  // header then overwrite compformat to the legacy lz4 value (1) so
+  // it no longer matches BLOSC_ZSTD's expected 4.
   build_blosc1_header(hdr, CODEC_BLOSC_ZSTD, 4096, 1024, 100, 4);
-  EXPECT(expect_parse_err(CODEC_BLOSC_LZ4, hdr, 100, 4096, 7, pool) == 0);
+  hdr[2] = (uint8_t)((1u & 0x07u) << 5);
+  EXPECT(expect_parse_err(CODEC_BLOSC_ZSTD, hdr, 100, 4096, 7, pool) == 0);
 
   // err=8: unsupported codec_id
-  build_blosc1_header(hdr, CODEC_BLOSC_LZ4, 4096, 1024, 100, 4);
+  build_blosc1_header(hdr, CODEC_BLOSC_ZSTD, 4096, 1024, 100, 4);
   EXPECT(expect_parse_err(99u, hdr, 100, 4096, 8, pool) == 0);
 
   // err=9: bstart out of range. Build a valid 16+4*nblocks header
@@ -487,20 +424,20 @@ test_bad_header(void)
   // is far past cbytes; the loader must reject before walk_count.
   uint8_t buf9[32];
   memset(buf9, 0, sizeof buf9);
-  build_blosc1_header(buf9, CODEC_BLOSC_LZ4, 4096, 1024, 32, 4);
+  build_blosc1_header(buf9, CODEC_BLOSC_ZSTD, 4096, 1024, 32, 4);
   for (int i = 0; i < 4; ++i) {
     buf9[16 + i * 4 + 0] = 0xff;
     buf9[16 + i * 4 + 1] = 0xff;
     buf9[16 + i * 4 + 2] = 0xff;
     buf9[16 + i * 4 + 3] = 0xff;
   }
-  EXPECT(expect_parse_err(CODEC_BLOSC_LZ4, buf9, 32, 4096, 9, pool) == 0);
+  EXPECT(expect_parse_err(CODEC_BLOSC_ZSTD, buf9, 32, 4096, 9, pool) == 0);
 
   // err=9 boundary: bs == cbytes (one past last byte; can't fit a
   // 4-byte prefix, must be rejected).
   uint8_t buf9b[32];
   memset(buf9b, 0, sizeof buf9b);
-  build_blosc1_header(buf9b, CODEC_BLOSC_LZ4, 4096, 1024, 32, 4);
+  build_blosc1_header(buf9b, CODEC_BLOSC_ZSTD, 4096, 1024, 32, 4);
   for (int i = 0; i < 4; ++i) {
     const uint32_t bs = 32u; // cbytes
     buf9b[16 + i * 4 + 0] = (uint8_t)(bs & 0xffu);
@@ -508,13 +445,13 @@ test_bad_header(void)
     buf9b[16 + i * 4 + 2] = (uint8_t)((bs >> 16) & 0xffu);
     buf9b[16 + i * 4 + 3] = (uint8_t)((bs >> 24) & 0xffu);
   }
-  EXPECT(expect_parse_err(CODEC_BLOSC_LZ4, buf9b, 32, 4096, 9, pool) == 0);
+  EXPECT(expect_parse_err(CODEC_BLOSC_ZSTD, buf9b, 32, 4096, 9, pool) == 0);
 
   // err=9 boundary: bs == payload_lo - 1 (one byte below the bstart
   // table's end; would land inside the table).
   uint8_t buf9c[32];
   memset(buf9c, 0, sizeof buf9c);
-  build_blosc1_header(buf9c, CODEC_BLOSC_LZ4, 4096, 1024, 32, 4);
+  build_blosc1_header(buf9c, CODEC_BLOSC_ZSTD, 4096, 1024, 32, 4);
   for (int i = 0; i < 4; ++i) {
     const uint32_t bs = 16u + 4u * 4u - 1u; // payload_lo - 1
     buf9c[16 + i * 4 + 0] = (uint8_t)(bs & 0xffu);
@@ -522,13 +459,13 @@ test_bad_header(void)
     buf9c[16 + i * 4 + 2] = (uint8_t)((bs >> 16) & 0xffu);
     buf9c[16 + i * 4 + 3] = (uint8_t)((bs >> 24) & 0xffu);
   }
-  EXPECT(expect_parse_err(CODEC_BLOSC_LZ4, buf9c, 32, 4096, 9, pool) == 0);
+  EXPECT(expect_parse_err(CODEC_BLOSC_ZSTD, buf9c, 32, 4096, 9, pool) == 0);
 
   // err=10: header.nbytes > DAMACY_BLOSC_MAX_CHUNK_UNCOMPRESSED_BYTES.
   // Use UINT32_MAX so the prior nblocks ceil-div would have wrapped
   // to 0 if the cap weren't enforced.
-  build_blosc1_header(hdr, CODEC_BLOSC_LZ4, 0xffffffffu, 2, 100, 4);
-  EXPECT(expect_parse_err(CODEC_BLOSC_LZ4, hdr, 100, 0xffffffffu, 10, pool) ==
+  build_blosc1_header(hdr, CODEC_BLOSC_ZSTD, 0xffffffffu, 2, 100, 4);
+  EXPECT(expect_parse_err(CODEC_BLOSC_ZSTD, hdr, 100, 0xffffffffu, 10, pool) ==
          0);
 
   // Spot-check the stringifier surface too.

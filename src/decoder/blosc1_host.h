@@ -56,7 +56,6 @@ extern "C"
     uint32_t n_chunks;
     struct blosc1_host_scratch scratch;
     struct blosc1_host_fanout zstd;
-    struct blosc1_host_fanout lz4;
     struct gpu_memcpy_op* memcpy_ops;
     struct gpu_shuffle_op* unshuffle_ops;
     struct gpu_shuffle_op* bitunshuffle_ops;

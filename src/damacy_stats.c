@@ -44,7 +44,6 @@ stats_init(struct damacy_stats* s)
   metric_init(&s->decompress, "decompress");
   metric_init(&s->decompress_parse, "decompress.parse");
   metric_init(&s->decompress_zstd, "decompress.zstd");
-  metric_init(&s->decompress_lz4, "decompress.lz4");
   metric_init(&s->decompress_post, "decompress.post");
   metric_init(&s->assemble, "assemble");
   metric_init(&s->pop_wait_io, "pop_wait_io");

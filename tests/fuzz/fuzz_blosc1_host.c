@@ -11,10 +11,9 @@
 
 #define countof(arr) (sizeof(arr) / sizeof((arr)[0]))
 
-// Worst-case substream count for one chunk: nblocks ≤ 32 *
-// nstreams_per_block ≤ DAMACY_BLOSC_MAX_TYPESIZE.
-#define K_MAX_SUBS                                                             \
-  (DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK * DAMACY_BLOSC_MAX_TYPESIZE)
+// Worst-case substream count for one chunk: 1 substream per blosc-block
+// (CODEC_BLOSC_ZSTD).
+#define K_MAX_SUBS DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK
 
 static void
 try_one(const uint8_t* data, size_t size, uint8_t codec_id, uint32_t dec_nbytes)
@@ -46,12 +45,7 @@ try_one(const uint8_t* data, size_t size, uint8_t codec_id, uint32_t dec_nbytes)
   size_t zcs[K_MAX_SUBS] = { 0 };
   void* zdp[K_MAX_SUBS] = { 0 };
   size_t zds[K_MAX_SUBS] = { 0 };
-  const void* lcp[K_MAX_SUBS] = { 0 };
-  size_t lcs[K_MAX_SUBS] = { 0 };
-  void* ldp[K_MAX_SUBS] = { 0 };
-  size_t lds[K_MAX_SUBS] = { 0 };
   struct blosc1_host_fanout zfan = { zcp, zcs, zdp, zds };
-  struct blosc1_host_fanout lfan = { lcp, lcs, ldp, lds };
   struct gpu_memcpy_op mops[K_MAX_SUBS] = { 0 };
   struct gpu_shuffle_op sop = { 0 };
   struct gpu_shuffle_op bop = { 0 };
@@ -63,7 +57,6 @@ try_one(const uint8_t* data, size_t size, uint8_t codec_id, uint32_t dec_nbytes)
     .n_chunks = 1,
     .scratch = scratch,
     .zstd = zfan,
-    .lz4 = lfan,
     .memcpy_ops = mops,
     .unshuffle_ops = &sop,
     .bitunshuffle_ops = &bop,
@@ -88,7 +81,6 @@ LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
   // size and header.nbytes == derived dec_nbytes).
   if (size >= 16) {
     const uint32_t honest_dec = read_u32_le(data + 4);
-    try_one(data, size, CODEC_BLOSC_LZ4, honest_dec);
     try_one(data, size, CODEC_BLOSC_ZSTD, honest_dec);
   }
 
@@ -98,7 +90,6 @@ LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
     0u, 1u, 64u, 1024u, 65536u, 0xffffffffu,
   };
   for (size_t i = 0; i < countof(mismatched); ++i) {
-    try_one(data, size, CODEC_BLOSC_LZ4, mismatched[i]);
     try_one(data, size, CODEC_BLOSC_ZSTD, mismatched[i]);
   }
 

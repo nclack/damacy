@@ -9,7 +9,6 @@ gpu_budget_compute(const struct damacy_config* cfg, struct gpu_budget* out)
 {
   const uint64_t host_per_wave = cfg->host_buffer_bytes / 2;
   const uint64_t dev_per_wave = cfg->device_buffer_bytes / 2;
-  const uint8_t max_bpe = resolve_max_bpe(cfg);
   const uint64_t runtime_chunk_cap = resolve_max_chunk_uncompressed(cfg);
 
   // Single source of truth for one wave's device-resident bytes lives
@@ -17,7 +16,7 @@ gpu_budget_compute(const struct damacy_config* cfg, struct gpu_budget* out)
   // two waves in flight.
   struct wave_alloc_summary per_wave = { 0 };
   enum damacy_status s = wave_predict_bytes(
-    host_per_wave, dev_per_wave, max_bpe, runtime_chunk_cap, &per_wave);
+    host_per_wave, dev_per_wave, runtime_chunk_cap, &per_wave);
   if (s != DAMACY_OK)
     return s;
 
