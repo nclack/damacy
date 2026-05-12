@@ -55,9 +55,9 @@ decoder_zstd_create(size_t max_batch_size,
   d->max_batch = max_batch_size;
 
   CUdeviceptr dptr = 0;
-  CR(Fail, cuMemAlloc(&dptr, max_batch_size * sizeof(size_t)));
+  CU(Fail, cuMemAlloc(&dptr, max_batch_size * sizeof(size_t)));
   d->d_uncompressed_actual_sizes = (size_t*)(uintptr_t)dptr;
-  CR(Fail, cuMemAlloc(&dptr, max_batch_size * sizeof(nvcompStatus_t)));
+  CU(Fail, cuMemAlloc(&dptr, max_batch_size * sizeof(nvcompStatus_t)));
   d->d_statuses = (nvcompStatus_t*)(uintptr_t)dptr;
 
   nvcompBatchedZstdDecompressOpts_t opts =
@@ -71,7 +71,7 @@ decoder_zstd_create(size_t max_batch_size,
                                                  max_total_uncompressed_bytes));
   d->temp_bytes = temp_bytes;
   if (temp_bytes > 0) {
-    CR(Fail, cuMemAlloc(&dptr, temp_bytes));
+    CU(Fail, cuMemAlloc(&dptr, temp_bytes));
     d->d_temp = (void*)(uintptr_t)dptr;
   }
 

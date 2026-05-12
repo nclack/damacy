@@ -28,6 +28,7 @@ add_damacy_test(test_io_queue io_queue log)
 add_damacy_test(test_zarr_meta_cache zarr_meta_cache zarr store test_fixture)
 add_damacy_test(test_zarr_shard_cache zarr_shard_cache zarr store test_fixture)
 add_damacy_test(test_planner planner zarr_meta_cache zarr_shard_cache zarr store test_fixture)
+add_damacy_test(test_lookahead lookahead log)
 
 # End-to-end smoke test: requires CUDA + nvCOMP, so guarded against
 # DAMACY_FUZZ (which disables the CUDA-linked damacy target). Also
@@ -37,6 +38,8 @@ if(NOT DAMACY_FUZZ)
     add_damacy_test(test_damacy_blosc damacy test_fixture)
     add_damacy_test(test_damacy_caps damacy decoder test_fixture CUDA::cuda_driver)
     add_damacy_test(test_damacy_ctx damacy test_fixture CUDA::cuda_driver)
+    add_damacy_test(test_batch_pool batch_pool log CUDA::cuda_driver)
+    add_damacy_test(test_gpu_budget gpu_budget log CUDA::cuda_driver)
     add_damacy_test(test_assemble assemble CUDA::cuda_driver CUDA::cudart_static)
     add_damacy_test(test_decoder decoder CUDA::cuda_driver)
     add_damacy_test(test_blosc1 blosc1_host decoder threadpool zarr CUDA::cuda_driver)

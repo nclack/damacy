@@ -38,16 +38,26 @@
 // 8 GB-class GPU budget viable out of the box.
 #define DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES (512ull << 10) // 512 KB
 
-// Wave cap. Decoupled from the per-batch cap (DAMACY_MAX_CHUNKS_PER_BATCH
-// in damacy.c): nvcomp temp scratch is sized as MAX_CHUNKS_PER_WAVE ×
-// runtime_chunk_cap (× 2 waves), so we keep this small and let large
-// batches split across multiple waves.
+// Wave cap. Decoupled from the per-batch cap below: nvcomp temp scratch
+// is sized as MAX_CHUNKS_PER_WAVE × runtime_chunk_cap (× 2 waves), so we
+// keep this small and let large batches split across multiple waves.
 #define DAMACY_MAX_CHUNKS_PER_WAVE 512u
+
+// Per-batch hard cap. Bounds the planner output and the assemble
+// metadata buffer.
+#define DAMACY_MAX_CHUNKS_PER_BATCH 16384u
 
 // Sizes io_queue's per-worker arrays (see io_queue.posix.c). Generous:
 // consumer NVMe saturates well below 32 in-flight reads. Bump if a real
 // workload demonstrates need.
 #define DAMACY_MAX_IO_THREADS 32u
+
+// Upper bound on cfg.n_compute_threads. The compute pool fans the
+// blosc1 host parse out across CPU cores; 32 is well past the largest
+// EPYC/Threadripper core count typical in a host today, and rejecting
+// pathological configs early keeps threadpool_new from clamping or
+// failing later. 0 is allowed (synchronous parse on the caller).
+#define DAMACY_MAX_COMPUTE_THREADS 32u
 
 // Sized to absorb one full wave (DAMACY_MAX_CHUNKS_PER_WAVE) without
 // growing. Must be a power of two — io_queue indexes via bitmask.
@@ -67,3 +77,19 @@
 // of the runtime DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES cap (which gates
 // the planner, not the parser).
 #define DAMACY_BLOSC_MAX_CHUNK_UNCOMPRESSED_BYTES (16ull << 20) // 16 MB
+
+// Worst-case substream count per wave for blosc1-zstd: 1 substream per
+// blosc-block. blosc1-lz4 splits each block into `typesize` substreams,
+// so its per-wave cap scales with the runtime max_bytes_per_element knob
+// (resolve_max_bpe(cfg)) — see lz4_subs_per_wave().
+#define DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE                                    \
+  (DAMACY_MAX_CHUNKS_PER_WAVE * DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK)
+// Memcpy + (bit)unshuffle ops cap: every chunk could be MEMCPY/SHUFFLE'd.
+#define DAMACY_MAX_BLOSC_MEMCPY_OPS_PER_WAVE DAMACY_MAX_CHUNKS_PER_WAVE
+#define DAMACY_MAX_BLOSC_SHUFFLE_OPS_PER_WAVE DAMACY_MAX_CHUNKS_PER_WAVE
+
+static inline uint64_t
+lz4_subs_per_wave(uint8_t max_bpe)
+{
+  return (uint64_t)DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE * (uint64_t)max_bpe;
+}
