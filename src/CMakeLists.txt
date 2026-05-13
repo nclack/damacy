@@ -5,6 +5,21 @@
 # onto log_error, so any module that uses prelude must link this target.
 add_src_lib(log SOURCES log/log.h log/log.c ${PROJECT_SOURCE_DIR}/src/damacy_log.h)
 
+# Phase 6 observability: NVTX wrappers + named CUDA streams.
+# DAMACY_NVTX_ENABLED=ON (default for non-fuzz builds) links the
+# header-only NVTX v3 against CUDA::nvtx3 and compiles the wrappers in
+# nvtx/nvtx.c. OFF picks up the inline no-op flavor in nvtx/nvtx.h
+# instead — call sites stay zero-cost. Toggle via:
+#   cmake -B build -DDAMACY_NVTX_ENABLED=ON|OFF
+# Fuzz builds always OFF (no CUDA, and the timeline isn't interesting
+# in libFuzzer). The .c is always in the source list (gives the static
+# lib a linker language); its body is #if-gated on DAMACY_NVTX_ENABLED.
+add_cuda_lib(damacy_nvtx SOURCES nvtx/nvtx.h nvtx/nvtx.c LINKS CUDA::cuda_driver)
+if(NOT DAMACY_FUZZ AND DAMACY_NVTX_ENABLED)
+    target_link_libraries(damacy_nvtx PUBLIC CUDA::nvtx3)
+    target_compile_definitions(damacy_nvtx PUBLIC DAMACY_NVTX_ENABLED=1)
+endif()
+
 # Foundational types
 add_src_lib(dtype     SOURCES dtype/dtype.c dtype/dtype.h)
 
@@ -69,7 +84,7 @@ add_cuda_lib(batch_pool SOURCES batch_pool/batch_pool.h batch_pool/batch_pool.c
 # it through wave_pool_advance / wave_pool_peel.
 add_cuda_lib(wave SOURCES wave/wave.h wave/wave.c
     LINKS decoder assemble store planner blosc1_host batch_pool
-          damacy_stats damacy_config strbuf log CUDA::cuda_driver
+          damacy_stats damacy_config damacy_nvtx strbuf log CUDA::cuda_driver
 )
 
 # Read-side store
@@ -136,6 +151,6 @@ add_cuda_lib(assemble SOURCES assemble/assemble.h assemble/assemble.cu
 add_cuda_lib(damacy SOURCES damacy.h damacy.c damacy_status.c
     LINKS platform planner zarr_meta_cache zarr_shard_cache zarr store
           decoder blosc1_host assemble dtype log lookahead gpu_budget
-          batch_pool wave damacy_stats damacy_config strbuf threadpool
-          CUDA::cuda_driver
+          batch_pool wave damacy_stats damacy_config damacy_nvtx strbuf
+          threadpool CUDA::cuda_driver
 )

@@ -12,14 +12,15 @@
 #include "batch_pool/batch_pool.h"
 #include "damacy_config.h"
 #include "damacy_stats.h"
-#include "util/cuda_check.h"
 #include "gpu_budget/gpu_budget.h"
 #include "log/log.h"
 #include "lookahead/lookahead.h"
+#include "nvtx/nvtx.h"
 #include "planner/planner.h"
 #include "platform/platform.h"
 #include "store/store.h"
 #include "threadpool/threadpool.h"
+#include "util/cuda_check.h"
 #include "util/prelude.h"
 #include "wave/wave.h"
 #include "zarr/zarr_meta_cache.h"
@@ -615,6 +616,7 @@ damacy_pop(struct damacy* self, struct damacy_batch** out)
   if (r != DAMACY_OK)
     return r;
 
+  damacy_nvtx_range_push("damacy_pop");
   for (;;) {
     r = wave_pool_advance(&self->wave_pool);
     if (r != DAMACY_OK)
@@ -666,6 +668,7 @@ damacy_pop(struct damacy* self, struct damacy_batch** out)
   }
 
 Done:
+  damacy_nvtx_range_pop();
   ctx_guard_exit(&cg);
   return r;
 

@@ -29,6 +29,13 @@ option(
     OFF
 )
 
+# DAMACY_NVTX_ENABLED — Phase 6 timeline observability. ON wires the
+# nvtx/ wrappers to NVTX v3 (CUDA::nvtx3, header-only) so Nsight Systems
+# sees per-wave ranges and named streams. OFF compiles call sites to
+# inline no-ops via static inlines in src/nvtx/nvtx.h. Defaults ON for
+# non-fuzz builds; src/CMakeLists.txt forces OFF under DAMACY_FUZZ.
+option(DAMACY_NVTX_ENABLED "Enable NVTX timeline instrumentation" ON)
+
 # DAMACY_COVERAGE — gcov-style instrumentation on the `warnings` interface
 # target so every src lib/test inherits --coverage. Intended for CI; not
 # compatible with DAMACY_FUZZ (which uses clang source-based coverage).
