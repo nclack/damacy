@@ -66,6 +66,12 @@ struct damacy_wave
 
   // Device SOA mirror of the host fanout (H2D'd in kick_h2d).
   struct nvcomp_fanout zstd_fan;
+  // Per-wave substream-fanout cap. wave_init seeds it at
+  // DAMACY_BLOSC_ZSTD_INITIAL_BATCH_CAP; kick_h2d grows just this wave's
+  // h_zstd_fan + zstd_fan when n_chunks * MAX_BLOCKS exceeds it. The
+  // other wave's fanout is independent — its SOA stays untouched during
+  // a grow of this wave.
+  uint32_t fanout_cap;
 
   struct gpu_memcpy_op* d_memcpy_ops;
   struct gpu_shuffle_op* d_unshuffle_ops;
@@ -133,16 +139,15 @@ struct wave_pool
 
   // Pool-shared zstd decoder. Decodes serialize FIFO on stream_decode
   // (at most one wave's decode in-flight), so a single nvcomp temp +
-  // status + actual-sizes allocation suffices for both waves.
-  //
-  // Substream-batch cap on this decoder + both waves' fanout SOAs is
-  // observe-and-grow: starts at DAMACY_BLOSC_ZSTD_INITIAL_BATCH_CAP and
-  // bumps to the next power of 2 when a wave's substream count exceeds
-  // the current cap, capped at DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE.
+  // status + actual-sizes allocation suffices for both waves. The
+  // decoder's substream cap is observe-and-grow: starts at
+  // DAMACY_BLOSC_ZSTD_INITIAL_BATCH_CAP and bumps to the next power of
+  // 2 when a wave's substream count exceeds it. Per-wave fanout SOAs
+  // are grown independently — see damacy_wave.fanout_cap.
   struct decoder_zstd* zstd_decoder;
 
-  // Cached at wave_pool_init so wave_pool_grow_zstd_batch can replay
-  // the per-substream + per-batch upper bounds without re-resolving cfg.
+  // Cached at wave_pool_init so the decoder grow path can replay the
+  // per-substream + per-batch upper bounds without re-resolving cfg.
   uint64_t dev_per_wave;
   uint64_t max_chunk_uncompressed_bytes;
 

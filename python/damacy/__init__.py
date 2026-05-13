@@ -357,6 +357,10 @@ class Config:
             rejected at create.
         max_gpu_memory_bytes: Hard cap on GPU memory allocated for
             wave-resident buffers and batch-output pools. 0 = no cap.
+            The predicted budget covers the initial allocation only;
+            the zstd decoder scratch and per-wave fanout SOAs may grow
+            at runtime up to the structural ceiling, and those grows
+            are not currently re-checked against this cap.
         device: CUDA device index to bind. ``None`` (default) captures
             the current ``CUcontext`` on the calling thread; pass an
             int (e.g. ``local_rank``) to retain that device's primary

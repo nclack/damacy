@@ -90,7 +90,13 @@ class Batch:
         """Returns (kDLCUDA=2, ordinal)."""
 
 class Pipeline:
-    """Native streaming-pipeline handle."""
+    """Native streaming-pipeline handle.
+
+    Note: `max_gpu_memory_bytes` is enforced against the initial
+    allocation. The zstd decoder scratch and per-wave fanout SOAs may
+    grow at runtime up to the structural ceiling without being re-checked
+    against the cap.
+    """
 
     def __init__(
         self,

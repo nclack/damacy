@@ -35,8 +35,12 @@ extern "C"
   // actual-size array) for the new cap. CALLER MUST ensure no decode
   // launched against this decoder is still in-flight — typically by
   // cuStreamSynchronize on the decode stream. Returns 0 on success;
-  // on failure the decoder is left destroyed-internally (no live device
-  // pointers) and 1 is returned. The new cap replaces the old one.
+  // on failure the decoder is left destroyed-internally with no live
+  // device pointers and `decoder_zstd_cur_max_batch == 0`, and 1 is
+  // returned. The new cap replaces the old one. The zombie state is
+  // still safe to pass to decoder_zstd_destroy, but the caller MUST NOT
+  // call grow again on the same decoder — short-circuit on
+  // cur_max_batch == 0 instead.
   int decoder_zstd_grow(struct decoder_zstd*,
                         size_t new_max_batch_size,
                         size_t max_chunk_uncompressed_bytes,

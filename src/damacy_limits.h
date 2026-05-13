@@ -79,10 +79,25 @@
 
 // Worst-case substream count per wave for blosc1-zstd: 1 substream per
 // blosc-block. Acts as the hard ceiling for the observe-and-grow runtime
-// cap on the shared zstd decoder + per-wave fanout SOA: a grow request
-// past this value fails the wave with DAMACY_OOM rather than reallocating.
+// cap on the shared zstd decoder + per-wave fanout SOA.
 #define DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE                                    \
   (DAMACY_MAX_CHUNKS_PER_WAVE * DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK)
+// Per-wave's tight substream upper bound (n_chunks * MAX_BLOCKS_PER_CHUNK)
+// is structurally <= DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE because peel caps
+// n_chunks at DAMACY_MAX_CHUNKS_PER_WAVE. The grow path relies on this so
+// it never has to enforce a runtime ceiling. `static_assert` is a C11
+// keyword in C and works under C++17; works in both translation units.
+#ifdef __cplusplus
+static_assert((uint64_t)DAMACY_MAX_CHUNKS_PER_WAVE *
+                  DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK <=
+                DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE,
+              "wave substream ceiling must cover peel cap");
+#else
+_Static_assert((uint64_t)DAMACY_MAX_CHUNKS_PER_WAVE *
+                   DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK <=
+                 DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE,
+               "wave substream ceiling must cover peel cap");
+#endif
 // Initial substream-batch cap for the pool-shared zstd decoder + per-wave
 // fanout SOAs. Sized off a typical wave (hundreds of substreams) rather
 // than the hard ceiling above; grows on demand when a wave's actual
