@@ -781,6 +781,7 @@ Pipeline_stats(PipelineObj* self, PyObject* Py_UNUSED(ignored))
     { "io", &st.io },
     { "h2d", &st.h2d },
     { "decompress", &st.decompress },
+    { "decompress_parse", &st.decompress_parse },
     { "assemble", &st.assemble },
     { "pop_wait_io", &st.pop_wait_io },
     { "pop_wait_compute", &st.pop_wait_compute },

@@ -213,12 +213,11 @@ extern "C"
     struct damacy_metric io;
     struct damacy_metric h2d;
     struct damacy_metric decompress;
-    // Sub-stages summing to ~decompress.ms. parse is host wall-clock
-    // around the blosc1 chunk-header parse (overlaps the bulk H2D);
-    // zstd is the nvcomp batch; post is memcpy + (bit)unshuffle.
+    // Host wall-clock around the blosc1 chunk-header parse (overlaps
+    // the bulk H2D). nvcomp + post-decode kernels share stream_decode
+    // so they're no longer separately measurable; both fold into
+    // `decompress` above.
     struct damacy_metric decompress_parse;
-    struct damacy_metric decompress_zstd;
-    struct damacy_metric decompress_post;
     struct damacy_metric assemble;
     struct damacy_metric pop_wait_io;
     struct damacy_metric pop_wait_compute;

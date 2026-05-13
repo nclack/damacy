@@ -4,6 +4,7 @@
 #include "damacy_config.h"
 #include "damacy_stats.h"
 #include "decoder/bitshuffle.h"
+#include "decoder/shuffle.h"
 #include "decoder/status_reduce.h"
 #include "log/log.h"
 #include "planner/planner.h"
@@ -165,9 +166,9 @@ wave_init(struct damacy_wave* wave,
   CU(Error,
      cuMemAllocHost((void**)&wave->h_blosc1_totals,
                     sizeof(struct blosc1_totals)));
-  wave->h_assemble_chunks =
-    (struct assemble_chunk*)calloc(cap, sizeof(struct assemble_chunk));
-  CHECK(Error, wave->h_assemble_chunks);
+  CU(Error,
+     cuMemAllocHost((void**)&wave->h_assemble_chunks,
+                    (size_t)cap * sizeof(struct assemble_chunk)));
   wave->store_reads =
     (struct store_read*)calloc(cap, sizeof(struct store_read));
   CHECK(Error, wave->store_reads);
@@ -216,8 +217,6 @@ wave_init(struct damacy_wave* wave,
   CU(Error, cuEventCreate(&wave->ev.bulk_h2d_end, CU_EVENT_DEFAULT));
   CU(Error, cuEventCreate(&wave->ev.h2d_end, CU_EVENT_DEFAULT));
   CU(Error, cuEventCreate(&wave->ev.decomp_start, CU_EVENT_DEFAULT));
-  CU(Error, cuEventCreate(&wave->ev.zstd_done, CU_EVENT_DEFAULT));
-  CU(Error, cuEventCreate(&wave->ev.post_start, CU_EVENT_DEFAULT));
   CU(Error, cuEventCreate(&wave->ev.decomp_end, CU_EVENT_DEFAULT));
   CU(Error, cuEventCreate(&wave->ev.asm_start, CU_EVENT_DEFAULT));
   CU(Error, cuEventCreate(&wave->ev.asm_end, CU_EVENT_DEFAULT));
@@ -267,6 +266,7 @@ wave_destroy(struct damacy_wave* wave, int cuda_skip)
       wave->h_memcpy_ops,
       wave->h_unshuffle_ops,
       wave->h_bitunshuffle_ops,
+      wave->h_assemble_chunks,
     };
     for (size_t i = 0; i < countof(host_ptrs); ++i)
       if (host_ptrs[i])
@@ -290,14 +290,12 @@ wave_destroy(struct damacy_wave* wave, int cuda_skip)
         cuMemFree(CUDPTR(dev_ptrs[i]));
     CUevent* const events[] = { &wave->ev.h2d_start,  &wave->ev.bulk_h2d_end,
                                 &wave->ev.h2d_end,    &wave->ev.decomp_start,
-                                &wave->ev.zstd_done,  &wave->ev.post_start,
                                 &wave->ev.decomp_end, &wave->ev.asm_start,
                                 &wave->ev.asm_end };
     for (size_t i = 0; i < countof(events); ++i)
       if (*events[i])
         cuEventDestroy_v2(*events[i]);
   }
-  free(wave->h_assemble_chunks);
   free(wave->store_reads);
   memset(wave, 0, sizeof(*wave));
 }
@@ -325,8 +323,7 @@ wave_pool_init(struct wave_pool* wp,
   // Non-blocking so damacy doesn't force-serialize against the legacy
   // default stream that some user code still lands on.
   CU(Fail, cuStreamCreate(&wp->stream_h2d, CU_STREAM_NON_BLOCKING));
-  CU(Fail, cuStreamCreate(&wp->stream_compute, CU_STREAM_NON_BLOCKING));
-  CU(Fail, cuStreamCreate(&wp->stream_zstd, CU_STREAM_NON_BLOCKING));
+  CU(Fail, cuStreamCreate(&wp->stream_decode, CU_STREAM_NON_BLOCKING));
 
   const uint64_t host_per_wave = host_buffer_bytes / 2;
   const uint64_t dev_per_wave = device_buffer_bytes / 2;
@@ -351,9 +348,8 @@ wave_pool_destroy(struct wave_pool* wp, int cuda_skip)
     // Sync + destroy streams before freeing wave buffers so any pending
     // GPU work touching those buffers has retired.
     CUstream* const streams[] = {
-      &wp->stream_compute,
+      &wp->stream_decode,
       &wp->stream_h2d,
-      &wp->stream_zstd,
     };
     for (size_t i = 0; i < countof(streams); ++i)
       if (*streams[i]) {
@@ -453,7 +449,7 @@ record_io_metric(const struct wave_pool* wp, const struct damacy_wave* wave)
 }
 
 // Bulk H2D, host parse overlapping the DMA, fanout/op H2Ds, then
-// h2d_end. Codec streams + stream_compute gate on h2d_end.
+// h2d_end. stream_decode gates on h2d_end before nvcomp launch.
 static enum damacy_status
 kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
 {
@@ -576,19 +572,20 @@ build_assemble_meta(const struct wave_pool* wp, struct damacy_wave* wave)
   wave->assemble_max_blocks_per_chunk = max_bpc;
 }
 
-// Zstd nvcomp batch on stream_zstd, gated on h2d_end and recording
-// zstd_done on completion. A small reduce kernel sums non-zero nvcomp
-// statuses into n_codec_errors.
+// Nvcomp zstd batch + post-decode (memcpy / (bit)unshuffle) on
+// stream_decode in FIFO order. decomp_start brackets the nvcomp launch;
+// decomp_end fires after the post-decode kernels complete.
 static enum damacy_status
-kick_codec_batches(struct wave_pool* wp,
-                   struct damacy_wave* wave,
-                   const struct blosc1_totals* tot)
+kick_decode(struct wave_pool* wp,
+            struct damacy_wave* wave,
+            const struct blosc1_totals* tot)
 {
+  CUstream s = wp->stream_decode;
   uint32_t* d_err = &wave->d_blosc1_totals->n_codec_errors;
+  CU(CudaFail, cuEventRecord(wave->ev.decomp_start, s));
   if (tot->n_zstd > 0) {
-    CU(CudaFail, cuStreamWaitEvent(wp->stream_zstd, wave->ev.h2d_end, 0));
     if (decoder_zstd_batch_device(wave->zstd_decoder,
-                                  wp->stream_zstd,
+                                  s,
                                   wave->zstd_fan.d_comp_ptrs,
                                   wave->zstd_fan.d_comp_sizes,
                                   wave->zstd_fan.d_decomp_ptrs,
@@ -596,34 +593,9 @@ kick_codec_batches(struct wave_pool* wp,
                                   tot->n_zstd))
       goto DecodeFail;
     if (decoder_status_reduce_launch(
-          wp->stream_zstd,
-          decoder_zstd_d_statuses(wave->zstd_decoder),
-          d_err,
-          tot->n_zstd))
+          s, decoder_zstd_d_statuses(wave->zstd_decoder), d_err, tot->n_zstd))
       goto DecodeFail;
-    CU(CudaFail, cuEventRecord(wave->ev.zstd_done, wp->stream_zstd));
   }
-  return DAMACY_OK;
-DecodeFail:
-  *wp->failed_status = DAMACY_DECODE;
-  return DAMACY_DECODE;
-CudaFail:
-  *wp->failed_status = DAMACY_CUDA;
-  return DAMACY_CUDA;
-}
-
-// Re-join the zstd codec stream onto stream_compute, then run
-// CODEC_NONE / chunk-MEMCPYED bulk copies and the (bit)unshuffle filters.
-static enum damacy_status
-kick_post_decode(struct wave_pool* wp,
-                 struct damacy_wave* wave,
-                 CUstream s,
-                 const struct blosc1_totals* tot)
-{
-  if (tot->n_zstd > 0)
-    CU(CudaFail, cuStreamWaitEvent(s, wave->ev.zstd_done, 0));
-  CU(CudaFail, cuEventRecord(wave->ev.post_start, s));
-
   if (tot->n_memcpy > 0 &&
       decoder_memcpy_launch(s, wave->d_memcpy_ops, tot->n_memcpy))
     goto DecodeFail;
@@ -658,8 +630,9 @@ CudaFail:
 }
 
 static enum damacy_status
-kick_assemble(struct wave_pool* wp, struct damacy_wave* wave, CUstream s)
+kick_assemble(struct wave_pool* wp, struct damacy_wave* wave)
 {
+  CUstream s = wp->stream_decode;
   struct damacy_batch_slot* slot = &wp->pool->slots[wave->batch_pool_slot];
 
   build_assemble_meta(wp, wave);
@@ -689,23 +662,18 @@ CudaFail:
   return DAMACY_CUDA;
 }
 
-// Codec batches on parallel streams gate on h2d_end; memcpy +
-// (un)shuffles fold back onto stream_compute; then assemble.
+// stream_decode gates on stream_h2d's h2d_end, then nvcomp decode +
+// post-decode + assemble all run in FIFO on stream_decode.
 static enum damacy_status
 kick_compute(struct wave_pool* wp, struct damacy_wave* wave)
 {
-  CUstream s = wp->stream_compute;
-  CU(CudaFail, cuStreamWaitEvent(s, wave->ev.h2d_end, 0));
-  CU(CudaFail, cuEventRecord(wave->ev.decomp_start, s));
+  CU(CudaFail, cuStreamWaitEvent(wp->stream_decode, wave->ev.h2d_end, 0));
 
   const struct blosc1_totals tot = *wave->h_blosc1_totals;
-  enum damacy_status st = kick_codec_batches(wp, wave, &tot);
+  enum damacy_status st = kick_decode(wp, wave, &tot);
   if (st != DAMACY_OK)
     return st;
-  st = kick_post_decode(wp, wave, s, &tot);
-  if (st != DAMACY_OK)
-    return st;
-  st = kick_assemble(wp, wave, s);
+  st = kick_assemble(wp, wave);
   if (st != DAMACY_OK)
     return st;
 
@@ -735,14 +703,6 @@ drain_wave_metrics(const struct wave_pool* wp, struct damacy_wave* wave)
                   wave->decomp_in_bytes,
                   wave->decomp_out_bytes);
   metric_record(&st->decompress_parse, wave->parse_ms, 0, 0);
-  const struct blosc1_totals tot = *wave->h_blosc1_totals;
-  if (tot.n_zstd > 0 &&
-      cuEventElapsedTime(&ms, wave->ev.h2d_end, wave->ev.zstd_done) ==
-        CUDA_SUCCESS)
-    metric_record(&st->decompress_zstd, ms, 0, 0);
-  if (cuEventElapsedTime(&ms, wave->ev.post_start, wave->ev.decomp_end) ==
-      CUDA_SUCCESS)
-    metric_record(&st->decompress_post, ms, 0, 0);
   if (cuEventElapsedTime(&ms, wave->ev.asm_start, wave->ev.asm_end) ==
       CUDA_SUCCESS)
     metric_record(&st->assemble,
