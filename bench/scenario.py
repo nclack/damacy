@@ -79,8 +79,11 @@ class Pipeline(BaseModel):
     dtype: DstDType = "f32"
     lookahead_batches: int = Field(gt=0)
     n_io_threads: int = Field(gt=0)
-    host_buffer_mb: int = Field(gt=0)
-    device_buffer_mb: int = Field(gt=0)
+    max_gpu_memory_mb: int = 0  # 0 → library default
+    max_chunk_uncompressed_mb: int = 0  # 0 → library default
+    # Deprecated; kept so older scenarios still load.
+    host_buffer_mb: int = 0
+    device_buffer_mb: int = 0
     n_zarrs_meta_cache: int = 4096
     n_shards_meta_cache: int = 16384
 
@@ -124,6 +127,7 @@ class Counters(BaseModel):
     zarr_meta_misses: int
     shard_idx_hits: int
     shard_idx_misses: int
+    gpu_bytes_committed: int = 0
 
 
 class Derived(BaseModel):

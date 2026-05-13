@@ -25,8 +25,8 @@
     "dtype": "f32",
     "lookahead_batches": 4,
     "n_io_threads": 4,
-    "host_buffer_mb": 64,
-    "device_buffer_mb": 128,
+    "max_gpu_memory_mb": 512,
+    "max_chunk_uncompressed_mb": 1,
     "n_zarrs_meta_cache": 16,
     "n_shards_meta_cache": 64
   }

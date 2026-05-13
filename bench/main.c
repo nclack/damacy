@@ -112,8 +112,8 @@ struct scenario
   // pipeline
   uint32_t lookahead_batches;
   uint32_t n_io_threads;
-  uint64_t host_buffer_bytes;
-  uint64_t device_buffer_bytes;
+  uint64_t max_gpu_memory_bytes;         // 0 → library default
+  uint32_t max_chunk_uncompressed_bytes; // 0 → library default
   uint32_t n_zarrs_meta_cache;
   uint32_t n_shards_meta_cache;
 
@@ -321,11 +321,12 @@ parse_scenario(struct cslice src, struct scenario* sc)
     static const struct json_query p_io[] = {
       { QUERY_KEY, .key = "pipeline" }, { QUERY_KEY, .key = "n_io_threads" }
     };
-    static const struct json_query p_h[] = {
-      { QUERY_KEY, .key = "pipeline" }, { QUERY_KEY, .key = "host_buffer_mb" }
-    };
-    static const struct json_query p_d[] = {
-      { QUERY_KEY, .key = "pipeline" }, { QUERY_KEY, .key = "device_buffer_mb" }
+    static const struct json_query p_g[] = { { QUERY_KEY, .key = "pipeline" },
+                                             { QUERY_KEY,
+                                               .key = "max_gpu_memory_mb" } };
+    static const struct json_query p_c[] = {
+      { QUERY_KEY, .key = "pipeline" },
+      { QUERY_KEY, .key = "max_chunk_uncompressed_mb" }
     };
     static const struct json_query p_zm[] = { { QUERY_KEY, .key = "pipeline" },
                                               { QUERY_KEY,
@@ -340,12 +341,10 @@ parse_scenario(struct cslice src, struct scenario* sc)
     if (read_uint(src, p_io, countof(p_io), &v))
       return 1;
     sc->n_io_threads = (uint32_t)v;
-    if (read_uint(src, p_h, countof(p_h), &v))
-      return 1;
-    sc->host_buffer_bytes = v << 20;
-    if (read_uint(src, p_d, countof(p_d), &v))
-      return 1;
-    sc->device_buffer_bytes = v << 20;
+    read_uint_opt(src, p_g, countof(p_g), &v, 0);
+    sc->max_gpu_memory_bytes = v << 20;
+    read_uint_opt(src, p_c, countof(p_c), &v, 0);
+    sc->max_chunk_uncompressed_bytes = (uint32_t)(v << 20);
     read_uint_opt(src, p_zm, countof(p_zm), &v, 4096);
     sc->n_zarrs_meta_cache = (uint32_t)v;
     read_uint_opt(src, p_sm, countof(p_sm), &v, 16384);
@@ -599,6 +598,8 @@ emit_results(const struct scenario* sc, const struct run_metrics* rm, FILE* out)
   jw_uint(&jw, rm->stats.shard_idx_hits);
   jw_key(&jw, "shard_idx_misses");
   jw_uint(&jw, rm->stats.shard_idx_misses);
+  jw_key(&jw, "gpu_bytes_committed");
+  jw_uint(&jw, rm->stats.gpu_bytes_committed);
   jw_object_end(&jw);
 
   // Derived numbers.
@@ -700,8 +701,8 @@ main(int argc, char** argv)
     .batch_size = sc.batch_size,
     .lookahead_batches = sc.lookahead_batches,
     .n_io_threads = sc.n_io_threads,
-    .host_buffer_bytes = sc.host_buffer_bytes,
-    .device_buffer_bytes = sc.device_buffer_bytes,
+    .max_gpu_memory_bytes = sc.max_gpu_memory_bytes,
+    .max_chunk_uncompressed_bytes = sc.max_chunk_uncompressed_bytes,
     .n_zarrs_meta_cache = sc.n_zarrs_meta_cache,
     .n_shards_meta_cache = sc.n_shards_meta_cache,
     .dtype = sc.dtype,
