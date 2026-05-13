@@ -13,10 +13,17 @@ gpu_budget_compute(const struct damacy_config* cfg, struct gpu_budget* out)
 
   // Single source of truth for one wave's device-resident bytes lives
   // in wave/. Pool-level totals are 2× because the orchestrator keeps
-  // two waves in flight.
+  // two waves in flight. The shared nvcomp scratch is queried
+  // separately and counted once.
   struct wave_alloc_summary per_wave = { 0 };
-  enum damacy_status s = wave_predict_bytes(
-    host_per_wave, dev_per_wave, runtime_chunk_cap, &per_wave);
+  enum damacy_status s =
+    wave_predict_bytes(host_per_wave, dev_per_wave, &per_wave);
+  if (s != DAMACY_OK)
+    return s;
+
+  uint64_t nvcomp_temp = 0;
+  s = wave_pool_shared_predict_bytes(
+    dev_per_wave, runtime_chunk_cap, &nvcomp_temp);
   if (s != DAMACY_OK)
     return s;
 
@@ -25,7 +32,7 @@ gpu_budget_compute(const struct damacy_config* cfg, struct gpu_budget* out)
   out->dev_unshuffle_scratch = 2ull * per_wave.dev_unshuffle_scratch;
   out->blosc1_meta = 2ull * per_wave.blosc1_meta;
   out->fanout_soa = 2ull * per_wave.fanout_soa;
-  out->nvcomp_temp = 2ull * per_wave.nvcomp_temp;
+  out->nvcomp_temp = nvcomp_temp;
   out->batch_metadata =
     2ull * (uint64_t)cfg->batch_size * sizeof(struct sample_plan);
   out->total = out->dev_compressed + out->dev_decompressed +

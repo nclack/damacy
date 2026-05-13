@@ -134,7 +134,7 @@ same stream make the timeline trivially readable.
 
 ---
 
-### Phase 3 — Move `decoder_zstd` to `wave_pool`
+### Phase 3 — Move `decoder_zstd` to `wave_pool` — **DONE**
 
 **Goal**: one nvcomp temp allocation, one `d_uncompressed_actual_sizes`,
 one `d_statuses`. Sized for one wave's worth of substreams (not the

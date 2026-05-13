@@ -20,7 +20,9 @@ extern "C"
                                            size_t max_chunk_uncompressed_bytes,
                                            size_t max_total_uncompressed_bytes);
 
-  void decoder_zstd_destroy(struct decoder_zstd*);
+  // cuda_skip=1 skips the device frees (on context-lost teardown) but
+  // still releases the host struct so it doesn't leak.
+  void decoder_zstd_destroy(struct decoder_zstd*, int cuda_skip);
 
   // Stream-async batched zstd decompress. The four input arrays are
   // already on the device — typically populated by an upstream GPU

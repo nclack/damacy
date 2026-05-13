@@ -111,10 +111,6 @@ struct damacy_wave
   uint64_t decomp_in_bytes;
   uint64_t decomp_out_bytes;
   uint64_t assemble_out_bytes;
-
-  // Per-wave decoder: nvCOMP scratch is not safe to share across
-  // in-flight waves.
-  struct decoder_zstd* zstd_decoder;
 };
 
 struct damacy_batch_pool;
@@ -135,6 +131,11 @@ struct wave_pool
   CUstream stream_h2d;
   CUstream stream_decode;
 
+  // Pool-shared zstd decoder. Decodes serialize FIFO on stream_decode
+  // (at most one wave's decode in-flight), so a single nvcomp temp +
+  // status + actual-sizes allocation suffices for both waves.
+  struct decoder_zstd* zstd_decoder;
+
   // Borrowed (owned by struct damacy / its members). Set in wave_pool_init
   // and never updated.
   struct damacy_batch_pool* pool;
@@ -147,8 +148,8 @@ struct wave_pool
 
 // Predicted device-resident byte cost of one wave (wave_init's GPU
 // allocs only). gpu_budget/ doubles the per-component sums for the
-// 2-wave pool. Returns DAMACY_OK on success; non-OK if a decoder query
-// fails.
+// 2-wave pool. The shared nvcomp scratch is queried separately via
+// wave_pool_shared_predict_bytes (counted once, not 2×).
 struct wave_alloc_summary
 {
   uint64_t dev_compressed;        // dev_compressed alloc (mirrors host slab)
@@ -156,20 +157,26 @@ struct wave_alloc_summary
   uint64_t dev_unshuffle_scratch; // matches dev_decompressed extent
   uint64_t blosc1_meta;           // d_assemble_chunks + d_blosc1_totals
   uint64_t fanout_soa;            // device fanouts + memcpy/shuffle op SOAs
-  uint64_t nvcomp_temp;           // nvcomp scratch + actual-size + status
 };
 
 enum damacy_status
 wave_predict_bytes(uint64_t host_slab_bytes,
                    uint64_t dev_decompressed_bytes,
-                   uint64_t max_chunk_uncompressed_bytes,
                    struct wave_alloc_summary* out);
+
+// Pool-shared nvcomp scratch (temp + actual-size + status). Sized for
+// one wave's worth of substreams since decodes serialize FIFO on
+// stream_decode. Returns DAMACY_OK on success; non-OK if a decoder
+// query fails.
+enum damacy_status
+wave_pool_shared_predict_bytes(uint64_t dev_decompressed_bytes,
+                               uint64_t max_chunk_uncompressed_bytes,
+                               uint64_t* out_nvcomp_temp);
 
 // Returns 0 on success, 1 on failure (after self-cleanup).
 int wave_init(struct damacy_wave* wave,
               uint64_t host_slab_bytes,
-              uint64_t dev_decompressed_bytes,
-              uint64_t max_chunk_uncompressed_bytes);
+              uint64_t dev_decompressed_bytes);
 
 void wave_destroy(struct damacy_wave* wave, int cuda_skip);
 

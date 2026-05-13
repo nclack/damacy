@@ -64,22 +64,33 @@ Fail:
   return DAMACY_CUDA;
 }
 
-// Substream cap: zstd is one blosc-block per substream. Shared by
-// wave_init (for its nvcomp scratch sizing) and wave_predict_bytes (for
-// the GPU budget).
+// Substream/batch caps the shared zstd decoder is sized against. zsubs
+// is the worst-case substream count, zstd_per is the per-substream
+// uncompressed upper bound, total_uncompressed is the per-batch sum.
+// Single source of truth used by wave_pool_init (decoder scratch
+// sizing) and wave_pool_shared_predict_bytes (GPU budget).
 static void
-wave_substream_caps(uint64_t dev_decompressed_bytes,
-                    uint64_t max_chunk_uncompressed_bytes,
-                    uint64_t* out_zstd_per,
-                    uint64_t* out_total_uncompressed)
+wave_decoder_caps(uint64_t dev_decompressed_bytes,
+                  uint64_t max_chunk_uncompressed_bytes,
+                  uint64_t* out_zsubs,
+                  uint64_t* out_zstd_per,
+                  uint64_t* out_total_uncompressed)
 {
+  *out_zsubs = (uint64_t)DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE;
+  // Caller's config validation should preclude this; guard explicitly
+  // so downstream nvcomp queries never see zero-sized inputs.
+  if (dev_decompressed_bytes == 0 || max_chunk_uncompressed_bytes == 0) {
+    *out_zstd_per = 0;
+    *out_total_uncompressed = 0;
+    return;
+  }
   const uint64_t cap_chunks = (uint64_t)DAMACY_MAX_CHUNKS_PER_WAVE;
   const uint64_t runtime_chunk_cap = max_chunk_uncompressed_bytes;
   const uint64_t cap_worst = cap_chunks * runtime_chunk_cap;
   const uint64_t total_uncompressed =
     dev_decompressed_bytes < cap_worst ? dev_decompressed_bytes : cap_worst;
   uint64_t zstd_per = runtime_chunk_cap;
-  if (zstd_per > total_uncompressed && total_uncompressed > 0)
+  if (zstd_per > total_uncompressed)
     zstd_per = total_uncompressed;
   *out_zstd_per = zstd_per;
   *out_total_uncompressed = total_uncompressed;
@@ -88,7 +99,6 @@ wave_substream_caps(uint64_t dev_decompressed_bytes,
 enum damacy_status
 wave_predict_bytes(uint64_t host_slab_bytes,
                    uint64_t dev_decompressed_bytes,
-                   uint64_t max_chunk_uncompressed_bytes,
                    struct wave_alloc_summary* out)
 {
   const uint64_t cap = (uint64_t)DAMACY_MAX_CHUNKS_PER_WAVE;
@@ -104,18 +114,26 @@ wave_predict_bytes(uint64_t host_slab_bytes,
                       sizeof(struct gpu_memcpy_op) +
                     2ull * (uint64_t)DAMACY_MAX_BLOSC_SHUFFLE_OPS_PER_WAVE *
                       sizeof(struct gpu_shuffle_op);
+  return DAMACY_OK;
+}
 
-  uint64_t zstd_per = 0, total_uncompressed = 0;
-  wave_substream_caps(dev_decompressed_bytes,
-                      max_chunk_uncompressed_bytes,
-                      &zstd_per,
-                      &total_uncompressed);
+enum damacy_status
+wave_pool_shared_predict_bytes(uint64_t dev_decompressed_bytes,
+                               uint64_t max_chunk_uncompressed_bytes,
+                               uint64_t* out_nvcomp_temp)
+{
+  uint64_t zsubs = 0, zstd_per = 0, total_uncompressed = 0;
+  wave_decoder_caps(dev_decompressed_bytes,
+                    max_chunk_uncompressed_bytes,
+                    &zsubs,
+                    &zstd_per,
+                    &total_uncompressed);
 
   size_t zstd_temp = 0;
   if (decoder_zstd_query_temp_bytes(
         zsubs, (size_t)zstd_per, (size_t)total_uncompressed, &zstd_temp))
     return DAMACY_CUDA;
-  out->nvcomp_temp =
+  *out_nvcomp_temp =
     (uint64_t)zstd_temp + zsubs * sizeof(size_t) + zsubs * sizeof(int);
   return DAMACY_OK;
 }
@@ -123,8 +141,7 @@ wave_predict_bytes(uint64_t host_slab_bytes,
 int
 wave_init(struct damacy_wave* wave,
           uint64_t host_slab_bytes,
-          uint64_t dev_decompressed_bytes,
-          uint64_t max_chunk_uncompressed_bytes)
+          uint64_t dev_decompressed_bytes)
 {
   // Self-zero so wave_destroy on the failure path doesn't free
   // uninitialized pointers — caller may have passed stack memory.
@@ -221,20 +238,6 @@ wave_init(struct damacy_wave* wave,
   CU(Error, cuEventCreate(&wave->ev.asm_start, CU_EVENT_DEFAULT));
   CU(Error, cuEventCreate(&wave->ev.asm_end, CU_EVENT_DEFAULT));
 
-  // nvcomp temp scratch is sized off min(runtime per-chunk cap × wave
-  // chunks, runtime per-wave decompress budget). The runtime cap (set
-  // by cfg.max_chunk_uncompressed_bytes; default 512 KB) is the lever
-  // that lets users keep nvcomp scratch small on tight GPU budgets while
-  // still letting the compile-time ceiling stretch to 2 MB on bigger devices.
-  uint64_t zstd_per = 0, total_uncompressed = 0;
-  wave_substream_caps(dev_decompressed_bytes,
-                      max_chunk_uncompressed_bytes,
-                      &zstd_per,
-                      &total_uncompressed);
-  wave->zstd_decoder = decoder_zstd_create(DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE,
-                                           (size_t)zstd_per,
-                                           (size_t)total_uncompressed);
-  CHECK(Error, wave->zstd_decoder);
   return 0;
 Error:
   // Make the partial-init cleanup explicit instead of relying on the
@@ -249,7 +252,6 @@ wave_destroy(struct damacy_wave* wave, int cuda_skip)
   if (!wave)
     return;
   if (!cuda_skip) {
-    decoder_zstd_destroy(wave->zstd_decoder);
     void* const host_ptrs[] = {
       wave->host_slab,
       wave->h_chunks,
@@ -327,11 +329,21 @@ wave_pool_init(struct wave_pool* wp,
 
   const uint64_t host_per_wave = host_buffer_bytes / 2;
   const uint64_t dev_per_wave = device_buffer_bytes / 2;
+
+  // Shared decoder is sized for one wave's worth of substreams since
+  // decodes serialize FIFO on stream_decode (M=1 in-flight).
+  uint64_t zsubs = 0, zstd_per = 0, total_uncompressed = 0;
+  wave_decoder_caps(dev_per_wave,
+                    max_chunk_uncompressed_bytes,
+                    &zsubs,
+                    &zstd_per,
+                    &total_uncompressed);
+  wp->zstd_decoder = decoder_zstd_create(
+    (size_t)zsubs, (size_t)zstd_per, (size_t)total_uncompressed);
+  CHECK(Fail, wp->zstd_decoder);
+
   for (int w = 0; w < 2; ++w)
-    if (wave_init(&wp->waves[w],
-                  host_per_wave,
-                  dev_per_wave,
-                  max_chunk_uncompressed_bytes) != 0)
+    if (wave_init(&wp->waves[w], host_per_wave, dev_per_wave) != 0)
       goto Fail;
   return 0;
 Fail:
@@ -344,22 +356,26 @@ wave_pool_destroy(struct wave_pool* wp, int cuda_skip)
 {
   if (!wp)
     return;
+  CUstream* const streams[] = { &wp->stream_decode, &wp->stream_h2d };
   if (!cuda_skip) {
-    // Sync + destroy streams before freeing wave buffers so any pending
-    // GPU work touching those buffers has retired.
-    CUstream* const streams[] = {
-      &wp->stream_decode,
-      &wp->stream_h2d,
-    };
+    // Sync streams (but don't destroy yet) so any pending GPU work
+    // touching wave + shared-decoder buffers has retired before we
+    // free those buffers.
+    for (size_t i = 0; i < countof(streams); ++i)
+      if (*streams[i])
+        cuStreamSynchronize(*streams[i]);
+  }
+  for (int w = 0; w < 2; ++w)
+    wave_destroy(&wp->waves[w], cuda_skip);
+  decoder_zstd_destroy(wp->zstd_decoder, cuda_skip);
+  wp->zstd_decoder = NULL;
+  if (!cuda_skip) {
     for (size_t i = 0; i < countof(streams); ++i)
       if (*streams[i]) {
-        cuStreamSynchronize(*streams[i]);
         cuStreamDestroy(*streams[i]);
         *streams[i] = NULL;
       }
   }
-  for (int w = 0; w < 2; ++w)
-    wave_destroy(&wp->waves[w], cuda_skip);
   // Borrowed pointers — owner frees them.
   wp->pool = NULL;
   wp->store = NULL;
@@ -584,7 +600,7 @@ kick_decode(struct wave_pool* wp,
   uint32_t* d_err = &wave->d_blosc1_totals->n_codec_errors;
   CU(CudaFail, cuEventRecord(wave->ev.decomp_start, s));
   if (tot->n_zstd > 0) {
-    if (decoder_zstd_batch_device(wave->zstd_decoder,
+    if (decoder_zstd_batch_device(wp->zstd_decoder,
                                   s,
                                   wave->zstd_fan.d_comp_ptrs,
                                   wave->zstd_fan.d_comp_sizes,
@@ -593,7 +609,7 @@ kick_decode(struct wave_pool* wp,
                                   tot->n_zstd))
       goto DecodeFail;
     if (decoder_status_reduce_launch(
-          s, decoder_zstd_d_statuses(wave->zstd_decoder), d_err, tot->n_zstd))
+          s, decoder_zstd_d_statuses(wp->zstd_decoder), d_err, tot->n_zstd))
       goto DecodeFail;
   }
   if (tot->n_memcpy > 0 &&
@@ -825,6 +841,12 @@ wave_pool_advance(struct wave_pool* wp)
       case WAVE_H2D: {
         CUresult qe = cuEventQuery(wave->ev.h2d_end);
         if (qe == CUDA_SUCCESS) {
+          // Both kicks enqueue decode + status-reduce against the
+          // shared decoder scratch (d_temp, d_statuses,
+          // d_uncompressed_actual_sizes) on stream_decode. Safety
+          // relies on stream FIFO: wave A's decode + status-reduce
+          // fully retire before wave B's decode launches. Reordering
+          // this loop would break the invariant.
           enum damacy_status s = kick_compute(wp, wave);
           if (s != DAMACY_OK)
             return s;
