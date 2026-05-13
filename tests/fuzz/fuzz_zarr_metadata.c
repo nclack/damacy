@@ -68,6 +68,9 @@ static const char* const k_inner_shape[] = {
 static const char* const k_inner_codecs[] = {
   "[{\"name\":\"bytes\"}]",
   "[{\"name\":\"bytes\"},{\"name\":\"zstd\",\"configuration\":{\"level\":3}}]",
+  // lz4 / lz4hc intentionally exercise the planner's rejection path:
+  // zarr_metadata.c still parses these names and assigns CODEC_BLOSC_LZ4,
+  // which the planner then rejects. Keep them in the corpus.
   "[{\"name\":\"bytes\"},{\"name\":\"blosc\",\"configuration\":{\"cname\":\"lz4\"}}]",
   "[{\"name\":\"bytes\"},{\"name\":\"blosc\",\"configuration\":{\"cname\":\"zstd\"}}]",
   "[{\"name\":\"blosc\",\"configuration\":{\"cname\":\"lz4hc\"}}]",

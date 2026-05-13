@@ -61,7 +61,7 @@ def write_zarr_script() -> Path:
 
 @pytest.fixture
 def tiny_zarr(tmp_path: Path, write_zarr_script: Path) -> str:
-    """A 2D u16 zarr (8x16, single 8x16 shard, 4x8 inner chunks, blosc-lz4).
+    """A 2D u16 zarr (8x16, single 8x16 shard, 4x8 inner chunks, blosc-zstd).
     Returns the absolute uri."""
     if not _have_uv():
         pytest.skip("uv not on PATH; needed to materialise the zarr fixture")
@@ -84,7 +84,7 @@ def tiny_zarr(tmp_path: Path, write_zarr_script: Path) -> str:
         "--offset",
         "0",
         "--codec",
-        "blosc-lz4",
+        "blosc-zstd",
     ]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
@@ -117,7 +117,7 @@ def tiny_zarr_no_cast(tmp_path: Path, write_zarr_script: Path) -> str:
         "--dtype",
         "int64",
         "--codec",
-        "blosc-lz4",
+        "blosc-zstd",
     ]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:

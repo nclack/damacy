@@ -1,4 +1,3 @@
-#include "decoder/decoder_lz4.h"
 #include "decoder/decoder_memcpy.h"
 #include "decoder/decoder_zstd.h"
 #include "expect.h"
@@ -16,11 +15,6 @@ test_create_destroy(void)
   EXPECT(z);
   decoder_zstd_destroy(z);
   decoder_zstd_destroy(NULL);
-
-  struct decoder_lz4* l = decoder_lz4_create(64, 64 * 1024, 64 * 64 * 1024);
-  EXPECT(l);
-  decoder_lz4_destroy(l);
-  decoder_lz4_destroy(NULL);
 
   return 0;
 }

@@ -47,7 +47,7 @@ extern "C"
                          int64_t fill_offset);
 
   // Same, but with a configurable inner codec. `codec` is one of "zstd",
-  // "blosc-zstd", "blosc-lz4" (matching tests/write_zarr.py --codec).
+  // "blosc-zstd" (matching tests/write_zarr.py --codec).
   int fixture_write_zarr_codec(const char* path,
                                const int64_t* shape,
                                const int64_t* inner,

@@ -4,9 +4,8 @@
 //
 // Test cases:
 //   test_full_array_blosc_zstd          — single zarr, blosc(zstd) codec
-//   test_full_array_blosc_lz4           — single zarr, blosc(lz4) codec
-//   test_partial_crossing_chunks_blosc  — sub-window across 4 blosc-lz4 chunks
-//   test_four_codecs_mixed_batch        — none + zstd + blosc-zstd + blosc-lz4
+//   test_partial_crossing_chunks_blosc  — sub-window across 4 blosc-zstd chunks
+//   test_three_codecs_mixed_batch        — none + zstd + blosc-zstd × 2
 //   test_multi_wave_per_batch           — one batch that exceeds per-wave
 //                                         caps; pipeline must split it
 //                                         into ≥2 waves of the same batch
@@ -105,7 +104,7 @@ run_full_array(const char* codec)
   char p[256];
   snprintf(p, sizeof p, "%s/foo", root);
   // 16×32 uint16 = 1 KB; inner 8×16 = 256 B per chunk; 4 chunks per
-  // shard. Big enough that blosc compresses with shuffle+lz4/zstd.
+  // shard. Big enough that blosc compresses with shuffle+zstd.
   int64_t shape[2] = { 16, 32 }, inner[2] = { 8, 16 }, shard[2] = { 16, 32 };
   EXPECT(fixture_write_zarr_codec(
            p, shape, inner, shard, 2, "uint16", 0, codec) == 0);
@@ -134,14 +133,8 @@ test_full_array_blosc_zstd(void)
   return run_full_array("blosc-zstd");
 }
 
-static int
-test_full_array_blosc_lz4(void)
-{
-  return run_full_array("blosc-lz4");
-}
-
 // Sub-window y[3,11) x[5,27) crosses the 2x2 inner-chunk grid;
-// exercises the blosc-lz4 + shuffle path with partial intersections.
+// exercises the blosc-zstd + shuffle path with partial intersections.
 static int
 test_partial_crossing_chunks_blosc(void)
 {
@@ -151,7 +144,7 @@ test_partial_crossing_chunks_blosc(void)
   snprintf(p, sizeof p, "%s/foo", root);
   int64_t shape[2] = { 16, 32 }, inner[2] = { 8, 16 }, shard[2] = { 16, 32 };
   EXPECT(fixture_write_zarr_codec(
-           p, shape, inner, shard, 2, "uint16", 0, "blosc-lz4") == 0);
+           p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
 
   struct damacy_config cfg = mk_cfg(root, 1);
   struct damacy* d = NULL;
@@ -172,17 +165,16 @@ test_partial_crossing_chunks_blosc(void)
   return 0;
 }
 
-// Four zarrs (none, zstd, blosc-zstd, blosc-lz4), one sample each in a
-// batch_size=4 batch. All four codecs route through the unified blosc1
-// GPU pipeline; the wave dispatches to memcpy + nvcomp_zstd + nvcomp_lz4
-// in parallel.
+// Four zarrs (none, zstd, blosc-zstd × 2), one sample each in a
+// batch_size=4 batch. All three supported codecs route through the
+// unified blosc1 GPU pipeline; the wave dispatches to memcpy + nvcomp_zstd.
 static int
-test_four_codecs_mixed_batch(void)
+test_three_codecs_mixed_batch(void)
 {
   char root[64];
   EXPECT(mkdtemp_root(root, sizeof root) == 0);
-  const char* names[4] = { "n", "z", "bz", "bl" };
-  const char* codecs[4] = { "none", "zstd", "blosc-zstd", "blosc-lz4" };
+  const char* names[4] = { "n", "z", "bz1", "bz2" };
+  const char* codecs[4] = { "none", "zstd", "blosc-zstd", "blosc-zstd" };
   const int64_t offsets[4] = { 0, 1000, 2000, 3000 };
   int64_t shape[2] = { 16, 32 }, inner[2] = { 8, 16 }, shard[2] = { 16, 32 };
   char paths[4][256];
@@ -224,13 +216,11 @@ test_four_codecs_mixed_batch(void)
   damacy_release(d, b);
 
   // Sub-stage metrics: blosc1 GPU pipeline must have stamped each
-  // wave's parse and post events. zstd and lz4 are codec-conditional
-  // but this batch contains both.
+  // wave's parse and post events. zstd is the only inner codec supported.
   struct damacy_stats st;
   damacy_stats_get(d, &st);
   EXPECT(st.decompress_parse.count > 0);
   EXPECT(st.decompress_zstd.count > 0);
-  EXPECT(st.decompress_lz4.count > 0);
   EXPECT(st.decompress_post.count > 0);
 
   damacy_destroy(d);
@@ -255,7 +245,7 @@ test_multi_wave_per_batch(void)
   // Mix of codecs so the multi-wave path also exercises mixed-codec
   // routing within and across waves.
   const char* names[4] = { "a", "b", "c", "d" };
-  const char* codecs[4] = { "blosc-lz4", "blosc-zstd", "zstd", "blosc-lz4" };
+  const char* codecs[4] = { "blosc-zstd", "blosc-zstd", "zstd", "blosc-zstd" };
   const int64_t offsets[4] = { 0, 1000, 2000, 3000 };
   int64_t shape[2] = { 16, 32 }, inner[2] = { 8, 16 }, shard[2] = { 16, 32 };
   char paths[4][256];
@@ -328,9 +318,8 @@ main(void)
 {
   EXPECT(cuda_init_primary() == 0);
   RUN(test_full_array_blosc_zstd);
-  RUN(test_full_array_blosc_lz4);
   RUN(test_partial_crossing_chunks_blosc);
-  RUN(test_four_codecs_mixed_batch);
+  RUN(test_three_codecs_mixed_batch);
   RUN(test_multi_wave_per_batch);
   log_info("all tests passed");
   return 0;

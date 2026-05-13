@@ -167,7 +167,7 @@ def test_oversize_chunk_surfaces_at_pop(tmp_path, write_zarr_script):
     cmd = [
         "uv", "run", "--script", str(write_zarr_script),
         "--out", str(out), "--shape", "8,16", "--inner", "8,16",
-        "--shard", "8,16", "--dtype", "uint16", "--codec", "blosc-lz4",
+        "--shard", "8,16", "--dtype", "uint16", "--codec", "blosc-zstd",
     ]  # fmt: skip
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:

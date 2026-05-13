@@ -85,7 +85,6 @@ def main() -> int:
         "assemble",
         "decompress.parse",
         "decompress.zstd",
-        "decompress.lz4",
         "decompress.post",
     )
     for stage in tracked_stages:

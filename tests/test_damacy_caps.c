@@ -16,7 +16,6 @@
 
 #include "cuda_init.h"
 #include "damacy.h"
-#include "decoder/decoder_lz4.h"
 #include "decoder/decoder_zstd.h"
 #include "fixture.h"
 
@@ -72,7 +71,7 @@ test_create_default_caps(void)
   snprintf(p, sizeof p, "%s/foo", root);
   int64_t shape[2] = { 8, 16 }, inner[2] = { 4, 8 }, shard[2] = { 8, 16 };
   EXPECT(fixture_write_zarr_codec(
-           p, shape, inner, shard, 2, "uint16", 0, "blosc-lz4") == 0);
+           p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
 
   struct damacy_config cfg = mk_cfg(root, 1);
   // Both runtime knobs at 0 — defaults: 512 KB chunk cap, no GPU cap.
@@ -106,7 +105,7 @@ test_oversize_chunk_rejected(void)
   snprintf(p, sizeof p, "%s/foo", root);
   int64_t shape[2] = { 8, 16 }, inner[2] = { 8, 16 }, shard[2] = { 8, 16 };
   EXPECT(fixture_write_zarr_codec(
-           p, shape, inner, shard, 2, "uint16", 0, "blosc-lz4") == 0);
+           p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
 
   struct damacy_config cfg = mk_cfg(root, 1);
   cfg.max_chunk_uncompressed_bytes = 128; // 8x16 u16 = 256 B → over
@@ -182,10 +181,6 @@ test_chunk_cap_shrinks_nvcomp(void)
          0);
   // nvcomp's scratch grows with per-substream cap; smaller cap mustn't
   // ask for more memory than the larger one.
-  EXPECT(small <= large);
-
-  EXPECT(decoder_lz4_query_temp_bytes(batch, 4096, total, &small) == 0);
-  EXPECT(decoder_lz4_query_temp_bytes(batch, 512ull << 10, total, &large) == 0);
   EXPECT(small <= large);
 
   cuDevicePrimaryCtxRelease(dev);

@@ -546,7 +546,6 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                          "dtype",
                          "max_chunk_uncompressed_bytes",
                          "max_gpu_memory_bytes",
-                         "max_bytes_per_element",
                          "device",
                          "n_compute_threads",
                          NULL };
@@ -560,12 +559,11 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   PyObject* dtype_obj = NULL;
   unsigned int max_chunk_uncompressed = 0;
   unsigned long long max_gpu_bytes = 0;
-  unsigned char max_bytes_per_element = 0;
   int device = -1;
   unsigned int n_compute = 0;
   if (!PyArg_ParseTupleAndKeywords(args,
                                    kw,
-                                   "IIIKKIIOI|KBiI",
+                                   "IIIKKIIOI|KiI",
                                    kws,
                                    &batch_size,
                                    &lookahead,
@@ -577,7 +575,6 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                                    &dtype_obj,
                                    &max_chunk_uncompressed,
                                    &max_gpu_bytes,
-                                   &max_bytes_per_element,
                                    &device,
                                    &n_compute))
     return -1;
@@ -597,7 +594,6 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
     .dtype = dt,
     .max_chunk_uncompressed_bytes = max_chunk_uncompressed,
     .max_gpu_memory_bytes = (uint64_t)max_gpu_bytes,
-    .max_bytes_per_element = max_bytes_per_element,
     .device = device,
     .n_compute_threads = n_compute,
   };

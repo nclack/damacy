@@ -70,7 +70,6 @@
 //   ⇒ worst-case nblocks = 2 MB / 64 KB = 32.
 // Inputs with more blocks are rejected at parse with DAMACY_DECODE.
 #define DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK 32u
-#define DAMACY_BLOSC_MAX_TYPESIZE 8u
 
 // Defensive cap on header.nbytes parsed from a blosc1 chunk. Prevents
 // overflow in the nblocks ceil-div for adversarial inputs, independent
@@ -79,17 +78,9 @@
 #define DAMACY_BLOSC_MAX_CHUNK_UNCOMPRESSED_BYTES (16ull << 20) // 16 MB
 
 // Worst-case substream count per wave for blosc1-zstd: 1 substream per
-// blosc-block. blosc1-lz4 splits each block into `typesize` substreams,
-// so its per-wave cap scales with the runtime max_bytes_per_element knob
-// (resolve_max_bpe(cfg)) — see lz4_subs_per_wave().
+// blosc-block.
 #define DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE                                    \
   (DAMACY_MAX_CHUNKS_PER_WAVE * DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK)
 // Memcpy + (bit)unshuffle ops cap: every chunk could be MEMCPY/SHUFFLE'd.
 #define DAMACY_MAX_BLOSC_MEMCPY_OPS_PER_WAVE DAMACY_MAX_CHUNKS_PER_WAVE
 #define DAMACY_MAX_BLOSC_SHUFFLE_OPS_PER_WAVE DAMACY_MAX_CHUNKS_PER_WAVE
-
-static inline uint64_t
-lz4_subs_per_wave(uint8_t max_bpe)
-{
-  return (uint64_t)DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE * (uint64_t)max_bpe;
-}

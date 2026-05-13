@@ -453,7 +453,6 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
           batch_slot_init(&self->batch_pool.slots[b], cfg->batch_size) == 0);
 
   s = DAMACY_OOM;
-  const uint8_t max_bpe = resolve_max_bpe(cfg);
   CHECK(Fail,
         wave_pool_init(&self->wave_pool,
                        &self->batch_pool,
@@ -464,7 +463,6 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
                        cfg->dtype,
                        cfg->host_buffer_bytes,
                        cfg->device_buffer_bytes,
-                       max_bpe,
                        runtime_chunk_cap) == 0);
 
   CHECK(Fail,

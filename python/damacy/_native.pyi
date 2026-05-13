@@ -104,7 +104,6 @@ class Pipeline:
         dtype: str | int,
         max_chunk_uncompressed_bytes: int,
         max_gpu_memory_bytes: int = 0,
-        max_bytes_per_element: int = 0,
         device: int = -1,
         n_compute_threads: int = 0,
     ) -> None: ...

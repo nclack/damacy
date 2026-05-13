@@ -104,15 +104,6 @@ extern "C"
     // without a cast path error with DAMACY_DTYPE at push.
     enum damacy_dtype dtype;
 
-    // Largest dtype size (bytes) the pipeline will accept across pushed
-    // zarrs. Bounds the blosc1-lz4 substream split and so sizes the LZ4
-    // fanout SOA + nvcomp temp scratch tighter than the
-    // DAMACY_BLOSC_MAX_TYPESIZE compile-time ceiling. 0 means "use the
-    // ceiling"; values > DAMACY_BLOSC_MAX_TYPESIZE are rejected at
-    // create time. Typical values: 2 (u16/i16/f16-only), 4 (32-bit),
-    // 8 (64-bit, the ceiling).
-    uint8_t max_bytes_per_element;
-
     // Largest uncompressed chunk size damacy will accept. nvcomp temp
     // scratch is sized for this; chunks exceeding this at planner are
     // rejected with DAMACY_INVAL. 0 means "use
@@ -224,11 +215,9 @@ extern "C"
     struct damacy_metric decompress;
     // Sub-stages summing to ~decompress.ms. parse is host wall-clock
     // around the blosc1 chunk-header parse (overlaps the bulk H2D);
-    // zstd / lz4 are per-codec nvcomp batches; post is memcpy +
-    // (bit)unshuffle.
+    // zstd is the nvcomp batch; post is memcpy + (bit)unshuffle.
     struct damacy_metric decompress_parse;
     struct damacy_metric decompress_zstd;
-    struct damacy_metric decompress_lz4;
     struct damacy_metric decompress_post;
     struct damacy_metric assemble;
     struct damacy_metric pop_wait_io;

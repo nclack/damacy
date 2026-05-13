@@ -15,8 +15,5 @@ int cast_path_supported(enum damacy_dtype dst, enum dtype src);
 
 enum damacy_status validate_config(const struct damacy_config* cfg);
 
-// 0 → compile-time ceiling.
-uint8_t resolve_max_bpe(const struct damacy_config* cfg);
-
 // 0 → 512 KB default; clamps to the kernel-array ceiling.
 uint64_t resolve_max_chunk_uncompressed(const struct damacy_config* cfg);

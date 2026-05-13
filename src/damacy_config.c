@@ -53,20 +53,11 @@ validate_config(const struct damacy_config* cfg)
   CHECK_SILENT(Invalid, cfg->n_shards_meta_cache > 0);
   CHECK_SILENT(Invalid, damacy_dtype_bpe(cfg->dtype) > 0);
   CHECK_SILENT(Invalid,
-               cfg->max_bytes_per_element <= DAMACY_BLOSC_MAX_TYPESIZE);
-  CHECK_SILENT(Invalid,
                cfg->max_chunk_uncompressed_bytes <=
                  DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES);
   return DAMACY_OK;
 Invalid:
   return DAMACY_INVAL;
-}
-
-uint8_t
-resolve_max_bpe(const struct damacy_config* cfg)
-{
-  return cfg->max_bytes_per_element ? cfg->max_bytes_per_element
-                                    : (uint8_t)DAMACY_BLOSC_MAX_TYPESIZE;
 }
 
 uint64_t
