@@ -2,9 +2,10 @@
 // slab, device decompress arena, blosc1 parse scratch, nvcomp fanout SOAs,
 // and the per-stage CUevents the scheduler polls.
 //
-// wave_pool: aggregate that owns both waves, the four CUstreams the
-// scheduler drives, and borrowed pointers into the rest of the
-// orchestrator (batch_pool, store, threadpool, stats, failed_status).
+// wave_pool: aggregate that owns both waves, the two CUstreams the
+// scheduler drives (stream_h2d, stream_decode), and borrowed pointers
+// into the rest of the orchestrator (batch_pool, store, threadpool,
+// stats, failed_status).
 // damacy.c holds one inline wave_pool and calls wave_pool_advance /
 // wave_pool_peel directly — no per-call ctx building.
 //
@@ -15,12 +16,10 @@
 
 #include "assemble/assemble.h"
 #include "damacy.h"
-#include "damacy_limits.h"
 #include "decoder/blosc1.h"
 #include "decoder/blosc1_host.h"
 #include "decoder/decoder_memcpy.h"
 #include "decoder/decoder_zstd.h"
-#include "decoder/shuffle.h"
 #include "store/store.h"
 
 #include <cuda.h>
@@ -52,7 +51,8 @@ struct damacy_wave
   uint64_t dev_decompressed_cap;
 
   // blosc1 host-parse state (all pinned). parse fills these; the fanout
-  // / op records H2D onto stream_h2d for codec + post-decode stages.
+  // / op records H2D onto stream_h2d for codec + post-decode stages on
+  // stream_decode.
   struct blosc1_host_chunk* h_chunks;
   struct blosc1_host_scratch scratch;
   struct blosc1_host_fanout h_zstd_fan;
@@ -88,7 +88,7 @@ struct damacy_wave
   struct store_event io_event;
 
   // Per-stage CUevents. ev.h2d_end is the cuStreamWaitEvent target on
-  // stream_compute; ev.asm_end is the wave's "done" event polled in
+  // stream_decode; ev.asm_end is the wave's "done" event polled in
   // wave_pool_advance.
   struct wave_events
   {
@@ -96,8 +96,6 @@ struct damacy_wave
     CUevent bulk_h2d_end; // bulk slab H2D done; used for stats.h2d
     CUevent h2d_end;      // + fanout/op H2Ds + d_blosc1_totals zero done
     CUevent decomp_start;
-    CUevent zstd_done;
-    CUevent post_start; // stream_compute resumes after waiting on stream_zstd
     CUevent decomp_end;
     CUevent asm_start;
     CUevent asm_end;
@@ -124,7 +122,7 @@ struct damacy_stats;
 struct store;
 struct threadpool;
 
-// Owns the two in-flight waves, the four CUstreams the scheduler drives,
+// Owns the two in-flight waves, the two CUstreams the scheduler drives,
 // and borrowed pointers into the rest of the orchestrator. Lives inside
 // struct damacy; passed to all wave functions by pointer.
 struct wave_pool
@@ -132,10 +130,10 @@ struct wave_pool
   struct damacy_wave waves[2];
 
   // wave_pool owns these — created in wave_pool_init, destroyed in
-  // wave_pool_destroy.
+  // wave_pool_destroy. stream_decode carries nvcomp decode +
+  // post-decode (memcpy / (bit)unshuffle) + assemble in FIFO order.
   CUstream stream_h2d;
-  CUstream stream_compute;
-  CUstream stream_zstd;
+  CUstream stream_decode;
 
   // Borrowed (owned by struct damacy / its members). Set in wave_pool_init
   // and never updated.

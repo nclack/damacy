@@ -480,6 +480,7 @@ class Stats:
     io: Metric
     h2d: Metric
     decompress: Metric
+    decompress_parse: Metric
     assemble: Metric
     pop_wait_io: Metric
     pop_wait_compute: Metric
@@ -491,6 +492,7 @@ class Stats:
     batches_emitted: int
     batches_truncated: int
     waves_emitted: int
+    chunks_dispatched: int
     gpu_bytes_committed: int
 
     @classmethod
@@ -501,6 +503,7 @@ class Stats:
             io=m(st["io"]),
             h2d=m(st["h2d"]),
             decompress=m(st["decompress"]),
+            decompress_parse=m(st["decompress_parse"]),
             assemble=m(st["assemble"]),
             pop_wait_io=m(st["pop_wait_io"]),
             pop_wait_compute=m(st["pop_wait_compute"]),
@@ -512,6 +515,7 @@ class Stats:
             batches_emitted=st["batches_emitted"],
             batches_truncated=st["batches_truncated"],
             waves_emitted=st["waves_emitted"],
+            chunks_dispatched=st["chunks_dispatched"],
             gpu_bytes_committed=st["gpu_bytes_committed"],
         )
 

@@ -738,7 +738,7 @@ damacy_batch_info(const struct damacy_batch* b, struct damacy_batch_info* out)
   out->device_ptr = slot->dev_ptr;
   out->rank = self->batch_pool.rank;
   out->dtype = self->cfg.dtype;
-  out->ready_stream = (void*)self->wave_pool.stream_compute;
+  out->ready_stream = (void*)self->wave_pool.stream_decode;
   out->batch_id = slot->batch_id;
   for (uint8_t d = 0; d < self->batch_pool.rank; ++d)
     out->shape[d] = self->batch_pool.shape[d];

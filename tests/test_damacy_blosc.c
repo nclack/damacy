@@ -215,13 +215,12 @@ test_three_codecs_mixed_batch(void)
                expected_f32_from_u16_2d(y, x, 32, offsets[i]));
   damacy_release(d, b);
 
-  // Sub-stage metrics: blosc1 GPU pipeline must have stamped each
-  // wave's parse and post events. zstd is the only inner codec supported.
+  // Sub-stage metrics: blosc1 GPU pipeline must have stamped the parse
+  // and combined decode events. zstd is the only inner codec supported.
   struct damacy_stats st;
   damacy_stats_get(d, &st);
   EXPECT(st.decompress_parse.count > 0);
-  EXPECT(st.decompress_zstd.count > 0);
-  EXPECT(st.decompress_post.count > 0);
+  EXPECT(st.decompress.count > 0);
 
   damacy_destroy(d);
   fixture_rm_tree(root);

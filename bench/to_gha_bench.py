@@ -75,17 +75,15 @@ def main() -> int:
                     "value": timings[key],
                 }
             )
-    # Aggregate decompress + per-codec sub-stages. The mixed scenario
-    # exercises zstd and blosc-zstd; tracking only the aggregate would
-    # hide codec-specific regressions.
+    # Aggregate decompress + the host-parse sub-stage. nvcomp +
+    # post-decode share stream_decode in FIFO and no longer surface
+    # separately.
     tracked_stages = (
         "io",
         "h2d",
         "decompress",
         "assemble",
         "decompress.parse",
-        "decompress.zstd",
-        "decompress.post",
     )
     for stage in tracked_stages:
         v = stage_avg(stage)
