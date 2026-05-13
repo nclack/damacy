@@ -5,10 +5,11 @@
 #include "wave/wave.h"
 
 enum damacy_status
-gpu_budget_compute(const struct damacy_config* cfg, struct gpu_budget* out)
+gpu_budget_compute(const struct damacy_config* cfg,
+                   uint64_t host_slab_per_wave,
+                   uint64_t dev_decompressed_per_wave,
+                   struct gpu_budget* out)
 {
-  const uint64_t host_per_wave = cfg->host_buffer_bytes / 2;
-  const uint64_t dev_per_wave = cfg->device_buffer_bytes / 2;
   const uint64_t runtime_chunk_cap = resolve_max_chunk_uncompressed(cfg);
 
   // Single source of truth for one wave's device-resident bytes lives
@@ -16,14 +17,14 @@ gpu_budget_compute(const struct damacy_config* cfg, struct gpu_budget* out)
   // two waves in flight. The shared nvcomp scratch is queried
   // separately and counted once.
   struct wave_alloc_summary per_wave = { 0 };
-  enum damacy_status s =
-    wave_predict_bytes(host_per_wave, dev_per_wave, &per_wave);
+  enum damacy_status s = wave_predict_bytes(
+    host_slab_per_wave, dev_decompressed_per_wave, &per_wave);
   if (s != DAMACY_OK)
     return s;
 
   uint64_t nvcomp_temp = 0;
   s = wave_pool_shared_predict_bytes(
-    dev_per_wave, runtime_chunk_cap, &nvcomp_temp);
+    dev_decompressed_per_wave, runtime_chunk_cap, &nvcomp_temp);
   if (s != DAMACY_OK)
     return s;
 

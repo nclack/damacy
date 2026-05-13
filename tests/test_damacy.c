@@ -48,8 +48,6 @@ mk_cfg(const char* root, uint32_t batch_size)
     .batch_size = batch_size,
     .lookahead_batches = 2,
     .n_io_threads = 1,
-    .host_buffer_bytes = 64ull << 10,
-    .device_buffer_bytes = 64ull << 10,
     .n_zarrs_meta_cache = 4,
     .n_shards_meta_cache = 4,
     .dtype = DAMACY_F32,

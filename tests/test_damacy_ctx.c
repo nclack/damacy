@@ -39,8 +39,6 @@ mk_cfg(const char* root)
     .batch_size = 1,
     .lookahead_batches = 2,
     .n_io_threads = 1,
-    .host_buffer_bytes = 1ull << 20,
-    .device_buffer_bytes = 1ull << 20,
     .n_zarrs_meta_cache = 4,
     .n_shards_meta_cache = 4,
     .dtype = DAMACY_F32,

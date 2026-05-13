@@ -89,9 +89,12 @@ extern "C"
     // the calling thread; total parallelism is n_compute_threads + 1.
     uint32_t n_compute_threads;
 
-    // Streaming buffers (split in half across two wave slots internally)
-    uint64_t host_buffer_bytes;   // pinned staging; sized for IO bw
-    uint64_t device_buffer_bytes; // device decompress scratch
+    // DEPRECATED (Phase 5): retained for source compatibility but
+    // ignored. Internal sizing is now derived from max_gpu_memory_bytes.
+    // A one-line warning is logged at damacy_create if either is set.
+    // Will be removed in a future release.
+    uint64_t host_buffer_bytes;
+    uint64_t device_buffer_bytes;
 
     // LRU caps (FDs are cached per-key by the fs store; not bounded here).
     uint32_t n_zarrs_meta_cache;
@@ -112,19 +115,19 @@ extern "C"
     // ceiling, 2 MB) are rejected at create time.
     uint32_t max_chunk_uncompressed_bytes;
 
-    // Hard cap on total GPU memory damacy will allocate for wave-resident
-    // buffers and per-batch metadata. damacy_create returns DAMACY_OOM
-    // (with a log_error breakdown) if the wave config would exceed this.
-    // damacy_push returns DAMACY_OOM if the lazily-sized batch-output
-    // pool, computed from the first sample's AABB, would push past it.
-    // 0 = no cap (driver OOM, current behaviour).
-    //
-    // The predicted budget reflects the INITIAL allocation. The
-    // zstd decoder scratch and per-wave fanout SOAs are observe-and-grow:
-    // a wave whose substream count exceeds the initial floor will
-    // reallocate the scratch + that wave's fanout up to the structural
-    // ceiling. These post-create grows are not currently re-checked
-    // against this cap.
+    // PRIMARY BUDGET KNOB (Phase 5). Hard cap on total GPU memory damacy
+    // will allocate for wave-resident buffers, the shared decoder
+    // scratch, per-wave fanout SOAs, and per-batch metadata. Internal
+    // sizing (host slab, device decompress arena, nvcomp temp, …) is
+    // derived from this value. 0 selects the legacy default
+    // (DAMACY_DEFAULT_MAX_GPU_MEMORY_BYTES). damacy_create returns
+    // DAMACY_OOM (with a log_error breakdown) if even the smallest
+    // viable wave geometry would exceed this. damacy_push returns
+    // DAMACY_OOM if the lazily-sized batch-output pool, computed from
+    // the first sample's AABB, would push past it. Observe-and-grow
+    // paths (zstd decoder scratch, per-wave fanout) also enforce this
+    // cap at grow time and return DAMACY_OOM if the new size would
+    // exceed it.
     uint64_t max_gpu_memory_bytes;
 
     // -1 captures current CUcontext; >= 0 retains the primary for that
@@ -140,6 +143,22 @@ extern "C"
   // primary for that device and pushes it on the calling thread.
   enum damacy_status damacy_create(const struct damacy_config* cfg,
                                    struct damacy** out);
+
+  // Log a one-line-per-field description of the geometry damacy would
+  // resolve from `cfg` at damacy_create time: input max_gpu_memory_bytes
+  // plus the derived host_slab_per_wave, dev_decompressed_per_wave,
+  // initial nvcomp temp, initial allocation, headroom reserved for the
+  // observe-and-grow paths, and remaining slack. Emitted at LOG_INFO
+  // through the standard log/log.h dispatcher. Useful when diagnosing
+  // "why does damacy use N MB" without standing the instance up.
+  //
+  // Requires a live CUDA context on the calling thread: the resolver
+  // and gpu_budget_compute call into nvcomp's decoder_zstd_query_temp_bytes
+  // to size scratch. With no current context the function still
+  // returns, but logs a "gpu_budget_compute failed" /
+  // "wave_pool_resolve_sizing failed" line and stops short of the
+  // per-component breakdown. NULL cfg is safe (logs and returns).
+  void damacy_config_describe(const struct damacy_config* cfg);
 
   // The CUDA device index this instance is bound to.
   int damacy_get_device(const struct damacy* d);

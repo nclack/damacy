@@ -17,3 +17,8 @@ enum damacy_status validate_config(const struct damacy_config* cfg);
 
 // 0 → 512 KB default; clamps to the kernel-array ceiling.
 uint64_t resolve_max_chunk_uncompressed(const struct damacy_config* cfg);
+
+// 0 → DAMACY_DEFAULT_MAX_GPU_MEMORY_BYTES (legacy ~1 GB default).
+// Phase 5 primary budget knob — every other GPU-allocation sizing
+// derives from this.
+uint64_t resolve_max_gpu_memory(const struct damacy_config* cfg);

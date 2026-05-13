@@ -205,6 +205,154 @@ wave_pool_shared_predict_bytes(uint64_t dev_decompressed_bytes,
   return DAMACY_OK;
 }
 
+// Worst-case GPU footprint for one resolved geometry: assumes both
+// per-wave fanout SOAs and the shared decoder scratch grow all the way
+// to DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE. Used by the resolver so the
+// chosen geometry leaves headroom for observe-and-grow without the
+// grow paths surprise-tripping the budget.
+static enum damacy_status
+predict_pool_total(uint64_t host_slab_per_wave,
+                   uint64_t dev_per_wave,
+                   uint64_t max_chunk_uncompressed_bytes,
+                   uint32_t batch_size,
+                   uint64_t* out_total)
+{
+  struct wave_alloc_summary per_wave = { 0 };
+  enum damacy_status s =
+    wave_predict_bytes(host_slab_per_wave, dev_per_wave, &per_wave);
+  if (s != DAMACY_OK)
+    return s;
+
+  // Worst-case shared decoder scratch.
+  const uint64_t zsubs_max = (uint64_t)DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE;
+  uint64_t zstd_per = 0, total_uncompressed = 0;
+  wave_decoder_caps(zsubs_max,
+                    dev_per_wave,
+                    max_chunk_uncompressed_bytes,
+                    &zstd_per,
+                    &total_uncompressed);
+  size_t zstd_temp_max = 0;
+  if (decoder_zstd_query_temp_bytes(
+        (size_t)zsubs_max, (size_t)zstd_per, (size_t)total_uncompressed,
+        &zstd_temp_max))
+    return DAMACY_CUDA;
+  const uint64_t nvcomp_temp_max = (uint64_t)zstd_temp_max +
+                                   zsubs_max * sizeof(size_t) +
+                                   zsubs_max * sizeof(int);
+
+  // Per-wave fanout SOA grown to the structural ceiling. wave_predict_bytes
+  // counted the *initial* slice; rewrite that component to assume max.
+  const uint64_t zsubs_init = (uint64_t)DAMACY_BLOSC_ZSTD_INITIAL_BATCH_CAP;
+  const uint64_t bytes_per_sub = 2ull * sizeof(void*) + 2ull * sizeof(size_t);
+  const uint64_t fanout_slice_init = zsubs_init * bytes_per_sub;
+  const uint64_t fanout_slice_max = zsubs_max * bytes_per_sub;
+  const uint64_t fanout_soa_worst =
+    per_wave.fanout_soa - fanout_slice_init + fanout_slice_max;
+
+  uint64_t total =
+    2ull * (per_wave.dev_compressed + per_wave.dev_decompressed +
+            per_wave.dev_unshuffle_scratch + per_wave.blosc1_meta +
+            fanout_soa_worst) +
+    nvcomp_temp_max +
+    2ull * (uint64_t)batch_size * sizeof(struct sample_plan);
+  *out_total = total;
+  return DAMACY_OK;
+}
+
+enum damacy_status
+wave_pool_resolve_sizing(uint64_t max_gpu_memory_bytes,
+                         uint64_t max_chunk_uncompressed_bytes,
+                         uint32_t batch_size,
+                         struct wave_pool_sizing* out)
+{
+  // Smallest viable geometry: hold at least one chunk at the runtime
+  // cap per wave. host_slab_per_wave needs to fit a compressed chunk;
+  // the dev arena holds it uncompressed. Use max_chunk_uncompressed_bytes
+  // for both — real compressed payload is bounded by the uncompressed
+  // size, so this is a tight lower bound.
+  const uint64_t min_per_wave = max_chunk_uncompressed_bytes;
+  uint64_t total_min = 0;
+  enum damacy_status s = predict_pool_total(min_per_wave,
+                                            min_per_wave,
+                                            max_chunk_uncompressed_bytes,
+                                            batch_size,
+                                            &total_min);
+  if (s != DAMACY_OK)
+    return s;
+  if (total_min > max_gpu_memory_bytes) {
+    log_error("damacy: max_gpu_memory_bytes=%llu too small to fit even one "
+              "chunk per wave (predicted=%llu, max_chunk_uncompressed=%llu)",
+              (unsigned long long)max_gpu_memory_bytes,
+              (unsigned long long)total_min,
+              (unsigned long long)max_chunk_uncompressed_bytes);
+    return DAMACY_OOM;
+  }
+
+  // dev_compressed + dev_decompressed + dev_unshuffle_scratch all
+  // scale 1:1 with per_wave; 2× for two waves. 6 = 2 × 3.
+  //   total_min + 6 * delta_per_wave <= cap
+  //   ⇒ delta_per_wave_max = (cap - total_min) / 6
+  // Round down to a 1 MB granularity so resolved values are readable
+  // in logs; the back-off loop below catches any overshoot from the
+  // approximation.
+  //
+  // CAREFUL: the 6 divisor only holds while this resolver assigns the
+  // same `per_wave` value to both out->host_slab_per_wave and
+  // out->dev_decompressed_per_wave below — that's what makes a single
+  // delta scale dev_compressed (= host_slab_per_wave),
+  // dev_decompressed, and dev_unshuffle_scratch in lockstep. If you
+  // ever split host vs dev sizing, also split the divisor accordingly.
+  // The assert after the assignment locks this in.
+  const uint64_t headroom = max_gpu_memory_bytes - total_min;
+  const uint64_t delta_per_wave_cap = headroom / 6;
+  const uint64_t step = 1ull << 20; // 1 MB granularity
+  uint64_t per_wave = min_per_wave + (delta_per_wave_cap / step) * step;
+  if (per_wave < min_per_wave)
+    per_wave = min_per_wave;
+
+  uint64_t predicted = 0;
+  s = predict_pool_total(per_wave,
+                         per_wave,
+                         max_chunk_uncompressed_bytes,
+                         batch_size,
+                         &predicted);
+  if (s != DAMACY_OK)
+    return s;
+  while (predicted > max_gpu_memory_bytes && per_wave > min_per_wave) {
+    per_wave -= step;
+    if (per_wave < min_per_wave)
+      per_wave = min_per_wave;
+    s = predict_pool_total(per_wave,
+                           per_wave,
+                           max_chunk_uncompressed_bytes,
+                           batch_size,
+                           &predicted);
+    if (s != DAMACY_OK)
+      return s;
+  }
+  // The back-off loop is guaranteed to terminate at per_wave ==
+  // min_per_wave with predicted <= max_gpu_memory_bytes: the top-level
+  // check above already rejected total_min > max, and per_wave ==
+  // min_per_wave reproduces total_min. So no post-loop OOM branch is
+  // needed — the top-level reject is the only path that surfaces a
+  // too-small budget.
+
+  out->host_slab_per_wave = per_wave;
+  out->dev_decompressed_per_wave = per_wave;
+  out->worst_case_total_bytes = predicted;
+  // Lock in the invariant the divisor=6 derivation depends on.
+  // Cheap: this resolver runs once per damacy_create.
+  if (out->host_slab_per_wave != out->dev_decompressed_per_wave) {
+    log_error("damacy: resolver invariant broken: host_slab_per_wave=%llu "
+              "!= dev_decompressed_per_wave=%llu (the 6=2*3 divisor "
+              "assumes a single per_wave scales both)",
+              (unsigned long long)out->host_slab_per_wave,
+              (unsigned long long)out->dev_decompressed_per_wave);
+    return DAMACY_INVAL;
+  }
+  return DAMACY_OK;
+}
+
 int
 wave_init(struct damacy_wave* wave,
           uint64_t host_slab_bytes,
@@ -363,9 +511,11 @@ wave_pool_init(struct wave_pool* wp,
                struct damacy_stats* stats,
                enum damacy_status* failed_status,
                enum damacy_dtype dtype,
-               uint64_t host_buffer_bytes,
-               uint64_t device_buffer_bytes,
-               uint64_t max_chunk_uncompressed_bytes)
+               uint64_t host_slab_per_wave,
+               uint64_t dev_decompressed_per_wave,
+               uint64_t max_chunk_uncompressed_bytes,
+               uint64_t max_gpu_memory_bytes,
+               uint64_t* gpu_bytes_committed)
 {
   memset(wp, 0, sizeof(*wp));
   wp->pool = pool;
@@ -374,14 +524,16 @@ wave_pool_init(struct wave_pool* wp,
   wp->stats = stats;
   wp->failed_status = failed_status;
   wp->dtype = dtype;
+  wp->max_gpu_memory_bytes = max_gpu_memory_bytes;
+  wp->gpu_bytes_committed = gpu_bytes_committed;
 
   // Non-blocking so damacy doesn't force-serialize against the legacy
   // default stream that some user code still lands on.
   CU(Fail, cuStreamCreate(&wp->stream_h2d, CU_STREAM_NON_BLOCKING));
   CU(Fail, cuStreamCreate(&wp->stream_decode, CU_STREAM_NON_BLOCKING));
 
-  const uint64_t host_per_wave = host_buffer_bytes / 2;
-  const uint64_t dev_per_wave = device_buffer_bytes / 2;
+  const uint64_t host_per_wave = host_slab_per_wave;
+  const uint64_t dev_per_wave = dev_decompressed_per_wave;
   wp->dev_per_wave = dev_per_wave;
   wp->max_chunk_uncompressed_bytes = max_chunk_uncompressed_bytes;
 
@@ -450,8 +602,19 @@ wave_pool_destroy(struct wave_pool* wp, int cuda_skip)
 // the largest `need` peel can produce. Returns DAMACY_OK or DAMACY_CUDA;
 // on CUDA failure the wave's fanout pointers are NULL (fanout_free zeros
 // them) and wave_destroy stays safe.
+// Device-resident bytes per substream in a fanout SOA: 2 pointers and
+// 2 size_t (mirrors fanout_alloc_pinned). Pinned-host fanout bytes
+// don't count against the GPU budget.
+static uint64_t
+fanout_dev_bytes_per_sub(void)
+{
+  return (uint64_t)(2 * sizeof(void*) + 2 * sizeof(size_t));
+}
+
 static enum damacy_status
-wave_grow_fanout(struct damacy_wave* wave, size_t need)
+wave_grow_fanout(struct wave_pool* wp,
+                 struct damacy_wave* wave,
+                 size_t need)
 {
   if (need <= (size_t)wave->fanout_cap)
     return DAMACY_OK;
@@ -460,15 +623,39 @@ wave_grow_fanout(struct damacy_wave* wave, size_t need)
     new_cap = (size_t)DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE;
 
   const uint32_t cur = wave->fanout_cap;
+
+  // Phase 5: enforce the GPU budget on grow. delta is the net device
+  // bytes added; if committed + delta would breach the cap, reject
+  // before freeing the existing fanout so the wave stays usable on
+  // failure.
+  const uint64_t delta_bytes =
+    (uint64_t)(new_cap - (size_t)cur) * fanout_dev_bytes_per_sub();
+  if (wp->max_gpu_memory_bytes > 0 && wp->gpu_bytes_committed) {
+    const uint64_t committed = *wp->gpu_bytes_committed;
+    if (committed + delta_bytes > wp->max_gpu_memory_bytes) {
+      log_error("wave fanout grow would exceed GPU budget: "
+                "committed=%llu delta=%llu cap=%llu need=%zu new_cap=%zu",
+                (unsigned long long)committed,
+                (unsigned long long)delta_bytes,
+                (unsigned long long)wp->max_gpu_memory_bytes,
+                need,
+                new_cap);
+      return DAMACY_OOM;
+    }
+  }
+
   fanout_free_pinned(&wave->h_zstd_fan, &wave->zstd_fan);
   wave->fanout_cap = 0;
   if (fanout_alloc_pinned(&wave->h_zstd_fan, &wave->zstd_fan, new_cap) != 0)
     return DAMACY_CUDA;
   wave->fanout_cap = (uint32_t)new_cap;
-  log_info("wave fanout: grew %u -> %zu (need=%zu)",
+  if (wp->gpu_bytes_committed)
+    *wp->gpu_bytes_committed += delta_bytes;
+  log_info("wave fanout: grew %u -> %zu (need=%zu, +%llu bytes)",
            (unsigned)cur,
            new_cap,
-           need);
+           need,
+           (unsigned long long)delta_bytes);
   return DAMACY_OK;
 }
 
@@ -486,6 +673,30 @@ wave_grow_fanout(struct damacy_wave* wave, size_t need)
 // On decoder_zstd_grow failure the decoder is left zombie
 // (cur_max_batch == 0); subsequent kick_h2d calls short-circuit on
 // that and surface DAMACY_CUDA without re-attempting the grow.
+// Predicted nvcomp scratch bytes for the shared decoder at the given
+// substream batch cap. Includes nvcomp temp + actual-size + status
+// arrays — matches wave_pool_shared_predict_bytes's accounting.
+static enum damacy_status
+predict_decoder_scratch_bytes(uint64_t zsubs,
+                              uint64_t dev_per_wave,
+                              uint64_t max_chunk_uncompressed_bytes,
+                              uint64_t* out_bytes)
+{
+  uint64_t zstd_per = 0, total_uncompressed = 0;
+  wave_decoder_caps(zsubs,
+                    dev_per_wave,
+                    max_chunk_uncompressed_bytes,
+                    &zstd_per,
+                    &total_uncompressed);
+  size_t zstd_temp = 0;
+  if (decoder_zstd_query_temp_bytes(
+        (size_t)zsubs, (size_t)zstd_per, (size_t)total_uncompressed, &zstd_temp))
+    return DAMACY_CUDA;
+  *out_bytes =
+    (uint64_t)zstd_temp + zsubs * sizeof(size_t) + zsubs * sizeof(int);
+  return DAMACY_OK;
+}
+
 static enum damacy_status
 wave_pool_grow_decoder(struct wave_pool* wp, size_t need)
 {
@@ -501,6 +712,39 @@ wave_pool_grow_decoder(struct wave_pool* wp, size_t need)
   size_t new_cap = next_pow2_size(need);
   if (new_cap > (size_t)DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE)
     new_cap = (size_t)DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE;
+
+  // Phase 5: enforce the GPU budget. Compute the byte delta from the
+  // current decoder scratch to the proposed one. If the change would
+  // push past the cap, return OOM before touching the device.
+  uint64_t old_bytes = 0, new_bytes = 0;
+  enum damacy_status sp = predict_decoder_scratch_bytes(
+    (uint64_t)cur,
+    wp->dev_per_wave,
+    wp->max_chunk_uncompressed_bytes,
+    &old_bytes);
+  if (sp != DAMACY_OK)
+    return sp;
+  sp = predict_decoder_scratch_bytes(
+    (uint64_t)new_cap,
+    wp->dev_per_wave,
+    wp->max_chunk_uncompressed_bytes,
+    &new_bytes);
+  if (sp != DAMACY_OK)
+    return sp;
+  const uint64_t delta_bytes = new_bytes > old_bytes ? new_bytes - old_bytes : 0;
+  if (wp->max_gpu_memory_bytes > 0 && wp->gpu_bytes_committed) {
+    const uint64_t committed = *wp->gpu_bytes_committed;
+    if (committed + delta_bytes > wp->max_gpu_memory_bytes) {
+      log_error("zstd decoder grow would exceed GPU budget: "
+                "committed=%llu delta=%llu cap=%llu need=%zu new_cap=%zu",
+                (unsigned long long)committed,
+                (unsigned long long)delta_bytes,
+                (unsigned long long)wp->max_gpu_memory_bytes,
+                need,
+                new_cap);
+      return DAMACY_OOM;
+    }
+  }
 
   // Any prior decode launched against the shared scratch must retire
   // before we free it. FIFO on stream_decode means this also drains
@@ -519,7 +763,13 @@ wave_pool_grow_decoder(struct wave_pool* wp, size_t need)
                         (size_t)total_uncompressed) != 0)
     goto CudaFail;
 
-  log_info("zstd decoder: grew %zu -> %zu (need=%zu)", cur, new_cap, need);
+  if (wp->gpu_bytes_committed)
+    *wp->gpu_bytes_committed += delta_bytes;
+  log_info("zstd decoder: grew %zu -> %zu (need=%zu, +%llu bytes)",
+           cur,
+           new_cap,
+           need,
+           (unsigned long long)delta_bytes);
   return DAMACY_OK;
 
 CudaFail:
@@ -634,7 +884,7 @@ kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
   // stream_decode first.
   const size_t need_zsubs =
     (size_t)wave->n_chunks * (size_t)DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK;
-  enum damacy_status gs = wave_grow_fanout(wave, need_zsubs);
+  enum damacy_status gs = wave_grow_fanout(wp, wave, need_zsubs);
   if (gs == DAMACY_OK)
     gs = wave_pool_grow_decoder(wp, need_zsubs);
   if (gs != DAMACY_OK) {

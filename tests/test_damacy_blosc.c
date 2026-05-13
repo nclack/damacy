@@ -12,6 +12,19 @@
 //   test_wave_grows_substream_cap       — single wave with >32 chunks forces
 //                                         per-wave fanout + decoder-scratch
 //                                         grow past the 1024 initial floor
+//   test_grow_inside_tight_budget       — Phase 5: tight budget + grow load;
+//                                         resolver's worst-case reservation
+//                                         keeps the grow inside the cap
+//   test_grow_decoder_rejected_at_inflated_committed
+//                                       — Phase 5: inflate gpu_bytes_committed
+//                                         so batch_pool + fanout grow fit but
+//                                         the decoder grow's ~7 MB delta
+//                                         exceeds the cap; pop returns
+//                                         DAMACY_OOM via the grow path
+//   test_batch_pool_rejected_at_inflated_committed
+//                                       — Phase 5: inflate fully to the cap,
+//                                         batch-output pool allocation fails
+//                                         before the grow paths run
 
 #include "cuda_init.h"
 #include "damacy.h"
@@ -39,8 +52,6 @@ mk_cfg(const char* root, uint32_t batch_size)
     .batch_size = batch_size,
     .lookahead_batches = 2,
     .n_io_threads = 1,
-    .host_buffer_bytes = 1ull << 20,
-    .device_buffer_bytes = 1ull << 20,
     .n_zarrs_meta_cache = 4,
     .n_shards_meta_cache = 4,
     .dtype = DAMACY_F32,
@@ -259,19 +270,25 @@ test_multi_wave_per_batch(void)
       0);
   }
 
-  // peel_wave's per-chunk read_op is page-aligned (typically 4 KiB), so
-  // host_slab_cap = host_buffer_bytes/2 must fit at least one full
-  // page. We pick host = 64 KiB → 32 KiB/wave → ~8 chunks/wave; the
-  // 16-chunk batch spills into 2 waves of the same batch slot.
+  // Tight max_gpu_memory_bytes + small chunk cap drives the resolver
+  // to pick the minimum per-wave geometry (one chunk per wave). With
+  // max_chunk_uncompressed_bytes = 4 KiB and a budget just barely big
+  // enough to fit total_min, dev_decompressed_per_wave lands near
+  // 4 KiB. peel_wave's per-chunk read_op is page-aligned (typically
+  // 4 KiB), so the 16-chunk batch spills into ≥2 waves of the same
+  // batch slot.
   struct damacy_config cfg = {
     .batch_size = 4,
     .lookahead_batches = 2,
     .n_io_threads = 1,
-    .host_buffer_bytes = 64ull << 10,
-    .device_buffer_bytes = 64ull << 10,
     .n_zarrs_meta_cache = 4,
     .n_shards_meta_cache = 4,
     .dtype = DAMACY_F32,
+    .max_chunk_uncompressed_bytes = 4ull << 10,
+    // Just enough to fit the resolver minimum (one chunk per wave at
+    // worst-case-grow accounting); per_wave lands near the floor so
+    // the 16-chunk batch spills into ≥2 waves of the same batch slot.
+    .max_gpu_memory_bytes = 116ull << 20,
     .device = -1,
   };
   struct damacy* d = NULL;
@@ -340,15 +357,12 @@ test_wave_grows_substream_cap(void)
   EXPECT(fixture_write_zarr_codec(
            p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
 
-  // host_slab = 512 KiB/wave: 64 chunks × 4 KiB page alignment = 256 KiB
-  // fits with headroom. dev = 512 KiB/wave: 64 × 256 B = 16 KiB
-  // decompressed easily fits.
+  // Default-budget per-wave geometry easily holds 64 chunks (256 B
+  // decompressed each).
   struct damacy_config cfg = {
     .batch_size = 1,
     .lookahead_batches = 2,
     .n_io_threads = 1,
-    .host_buffer_bytes = 1ull << 20,
-    .device_buffer_bytes = 1ull << 20,
     .n_zarrs_meta_cache = 4,
     .n_shards_meta_cache = 4,
     .dtype = DAMACY_F32,
@@ -400,6 +414,155 @@ test_wave_grows_substream_cap(void)
   return 0;
 }
 
+// Test-only hook from src/damacy.c. See its docstring there.
+extern uint64_t
+damacy_set_gpu_bytes_committed_for_test(struct damacy* d, uint64_t v);
+
+// Phase 5: the resolver pre-reserves the worst-case grow footprint at
+// damacy_create, so the observe-and-grow paths never trip the budget
+// when run inside a successfully-created instance. Replays the
+// substream-grow workload at a tight budget (resolved per-wave near
+// the floor) and asserts the run completes without DAMACY_OOM.
+static int
+test_grow_inside_tight_budget(void)
+{
+  char root[64];
+  EXPECT(mkdtemp_root(root, sizeof root) == 0);
+  char p[256];
+  snprintf(p, sizeof p, "%s/foo", root);
+  int64_t shape[2] = { 256, 32 }, inner[2] = { 8, 16 }, shard[2] = { 256, 32 };
+  EXPECT(fixture_write_zarr_codec(
+           p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
+
+  struct damacy_config cfg = {
+    .batch_size = 1,
+    .lookahead_batches = 2,
+    .n_io_threads = 1,
+    .n_zarrs_meta_cache = 4,
+    .n_shards_meta_cache = 4,
+    .dtype = DAMACY_F32,
+    .max_chunk_uncompressed_bytes = 4ull << 10,
+    .max_gpu_memory_bytes = 120ull << 20,
+    .device = -1,
+  };
+  struct damacy* d = NULL;
+  EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
+
+  struct damacy_sample s = mk_sample(p, 0, 256, 0, 32);
+  struct damacy_sample_slice slice = { .beg = &s, .end = &s + 1 };
+  EXPECT(damacy_push(d, slice).status == DAMACY_OK);
+
+  // 64 chunks × 32 blocks/chunk = 2048 substreams, > the 1024 initial
+  // floor, so both fanout + decoder grows fire inside the tight budget.
+  // The grow paths must not return DAMACY_OOM here — the resolver
+  // reserved the worst-case footprint.
+  struct damacy_batch* b = NULL;
+  EXPECT(damacy_pop(d, &b) == DAMACY_OK);
+  damacy_release(d, b);
+
+  damacy_destroy(d);
+  fixture_rm_tree(root);
+  return 0;
+}
+
+// Phase 5: exercise the grow-time DAMACY_OOM path in wave_pool_grow_decoder.
+// The resolver normally reserves enough headroom that grows always
+// succeed; we forcibly inflate gpu_bytes_committed via a test-only hook
+// so the decoder grow's delta (~7 MB at the cap-jump from 1024 to 2048
+// substreams) would push past the cap. The smaller batch-output pool
+// (~64 KB) and fanout grow (~32 KB) still fit, so the failure lands in
+// the decoder-grow OOM branch specifically. damacy_pop surfaces the
+// failed_status as DAMACY_OOM.
+//
+// wave_grow_fanout's OOM check is structurally identical to the decoder
+// one but its delta is tiny (32 KB at this cap-jump), so isolating it
+// from the batch-output pool's earlier check would require a smaller
+// batch_pool need than the fanout delta — not reachable with the
+// workloads here. The check is exercised in passing (it evaluates and
+// returns OK on every grow) and is covered by code review.
+static int
+test_grow_decoder_rejected_at_inflated_committed(void)
+{
+  char root[64];
+  EXPECT(mkdtemp_root(root, sizeof root) == 0);
+  char p[256];
+  snprintf(p, sizeof p, "%s/foo", root);
+  int64_t shape[2] = { 256, 32 }, inner[2] = { 8, 16 }, shard[2] = { 256, 32 };
+  EXPECT(fixture_write_zarr_codec(
+           p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
+
+  struct damacy_config cfg = {
+    .batch_size = 1,
+    .lookahead_batches = 2,
+    .n_io_threads = 1,
+    .n_zarrs_meta_cache = 4,
+    .n_shards_meta_cache = 4,
+    .dtype = DAMACY_F32,
+    .max_chunk_uncompressed_bytes = 4ull << 10,
+    .max_gpu_memory_bytes = 120ull << 20,
+    .device = -1,
+  };
+  struct damacy* d = NULL;
+  EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
+
+  // Pick a small headroom: 1 MB. Enough for the lazy batch-output pool
+  // (64 KB) and the fanout grow (32 KB delta), but well short of the
+  // decoder-grow delta (~7 MB jumping from 1024 → 2048 substreams).
+  // So batch_pool_allocate + fanout grow both pass; the decoder grow
+  // is the one that surfaces DAMACY_OOM.
+  const uint64_t headroom = 1ull << 20;
+  (void)damacy_set_gpu_bytes_committed_for_test(
+    d, cfg.max_gpu_memory_bytes - headroom);
+
+  struct damacy_sample s = mk_sample(p, 0, 256, 0, 32);
+  struct damacy_sample_slice slice = { .beg = &s, .end = &s + 1 };
+  EXPECT(damacy_push(d, slice).status == DAMACY_OK);
+
+  struct damacy_batch* b = NULL;
+  EXPECT(damacy_pop(d, &b) == DAMACY_OOM);
+
+  damacy_destroy(d);
+  fixture_rm_tree(root);
+  return 0;
+}
+
+// Phase 5: exercise the batch-output pool's OOM branch with the
+// gpu_bytes_committed counter inflated to the cap. Belt-and-suspenders
+// alongside test_grow_decoder_rejected_at_inflated_committed: that
+// test only covers the decoder grow; this one shows that the same
+// hook plus a much tighter headroom trips the earlier
+// batch_pool_allocate check, so neither grow path is reached.
+static int
+test_batch_pool_rejected_at_inflated_committed(void)
+{
+  char root[64];
+  EXPECT(mkdtemp_root(root, sizeof root) == 0);
+  char p[256];
+  snprintf(p, sizeof p, "%s/foo", root);
+  int64_t shape[2] = { 8, 16 }, inner[2] = { 4, 8 }, shard[2] = { 8, 16 };
+  EXPECT(fixture_write_zarr_codec(
+           p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
+
+  struct damacy_config cfg = mk_cfg(root, 1);
+  cfg.max_gpu_memory_bytes = 120ull << 20;
+  struct damacy* d = NULL;
+  EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
+
+  // No headroom at all — any byte added is over the cap.
+  (void)damacy_set_gpu_bytes_committed_for_test(d, cfg.max_gpu_memory_bytes);
+
+  struct damacy_sample s = mk_sample(p, 0, 8, 0, 16);
+  struct damacy_sample_slice slice = { .beg = &s, .end = &s + 1 };
+  EXPECT(damacy_push(d, slice).status == DAMACY_OK);
+
+  struct damacy_batch* b = NULL;
+  EXPECT(damacy_pop(d, &b) == DAMACY_OOM);
+
+  damacy_destroy(d);
+  fixture_rm_tree(root);
+  return 0;
+}
+
 int
 main(void)
 {
@@ -409,6 +572,9 @@ main(void)
   RUN(test_three_codecs_mixed_batch);
   RUN(test_multi_wave_per_batch);
   RUN(test_wave_grows_substream_cap);
+  RUN(test_grow_inside_tight_budget);
+  RUN(test_grow_decoder_rejected_at_inflated_committed);
+  RUN(test_batch_pool_rejected_at_inflated_committed);
   log_info("all tests passed");
   return 0;
 }

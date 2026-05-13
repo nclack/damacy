@@ -393,19 +393,53 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     goto Fail;
   }
 
-  // Wave-resident bytes checked here; batch-output tensors (sized from
-  // the first AABB) are checked separately at batch_pool_allocate.
-  self->gpu_bytes_budget = cfg->max_gpu_memory_bytes;
+  // Phase 5: max_gpu_memory_bytes is the primary knob. Apply the legacy
+  // default (~1 GB) if the user left it at 0. host_buffer_bytes /
+  // device_buffer_bytes are deprecated; warn once if either is set,
+  // then ignore the value. Log the *resolved* cap so the migration case
+  // (deprecated fields set, max_gpu_memory_bytes left at 0) reports a
+  // useful number rather than "current: 0 bytes".
+  const uint64_t resolved_max_gpu = resolve_max_gpu_memory(cfg);
+  const uint64_t runtime_chunk_cap = resolve_max_chunk_uncompressed(cfg);
+  self->gpu_bytes_budget = resolved_max_gpu;
+  if (cfg->host_buffer_bytes || cfg->device_buffer_bytes)
+    log_warn("damacy: host_buffer_bytes / device_buffer_bytes are deprecated "
+             "(Phase 5); ignored. Use max_gpu_memory_bytes to size the "
+             "pipeline (resolved: %llu bytes).",
+             (unsigned long long)resolved_max_gpu);
+
+  // Resolve per-wave geometry from the budget; rejects with OOM if even
+  // the minimum (one chunk per wave) doesn't fit. Then call
+  // gpu_budget_compute against the resolved geometry to seed
+  // gpu_bytes_committed — the grow paths read this back when checking
+  // whether a new allocation would breach the cap.
+  struct wave_pool_sizing sizing = { 0 };
+  s = wave_pool_resolve_sizing(
+    resolved_max_gpu, runtime_chunk_cap, cfg->batch_size, &sizing);
+  if (s != DAMACY_OK)
+    goto Fail;
   {
     struct gpu_budget budget = { 0 };
-    s = gpu_budget_compute(cfg, &budget);
+    s = gpu_budget_compute(cfg,
+                           sizing.host_slab_per_wave,
+                           sizing.dev_decompressed_per_wave,
+                           &budget);
     if (s != DAMACY_OK)
       goto Fail;
     self->gpu_bytes_committed = budget.total;
-    if (self->gpu_bytes_budget > 0 &&
-        self->gpu_bytes_committed > self->gpu_bytes_budget) {
+    log_info("damacy: resolved geometry from max_gpu_memory_bytes=%llu: "
+             "host_slab_per_wave=%llu dev_decompressed_per_wave=%llu "
+             "initial_nvcomp_temp=%llu predicted_total=%llu",
+             (unsigned long long)resolved_max_gpu,
+             (unsigned long long)sizing.host_slab_per_wave,
+             (unsigned long long)sizing.dev_decompressed_per_wave,
+             (unsigned long long)budget.nvcomp_temp,
+             (unsigned long long)budget.total);
+    // Resolver guarantees this fits; assert defensively in case the
+    // accounting drifts. A breach here is a bug, not user input.
+    if (self->gpu_bytes_committed > self->gpu_bytes_budget) {
       log_error(
-        "damacy: GPU budget exceeded at create: total=%llu cap=%llu "
+        "damacy: post-resolve drift: total=%llu cap=%llu "
         "(dev_compressed=%llu dev_decompressed=%llu unshuffle_scratch=%llu "
         "blosc1_meta=%llu fanout_soa=%llu nvcomp_temp=%llu batch_meta=%llu)",
         (unsigned long long)budget.total,
@@ -439,7 +473,6 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     zarr_shard_cache_create(self->store, cfg->n_shards_meta_cache);
   CHECK(Fail, self->shard_cache);
 
-  const uint64_t runtime_chunk_cap = resolve_max_chunk_uncompressed(cfg);
   struct planner_config pcfg = {
     .meta_cache = self->meta_cache,
     .shard_cache = self->shard_cache,
@@ -461,9 +494,11 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
                        &self->stats,
                        &self->failed_status,
                        cfg->dtype,
-                       cfg->host_buffer_bytes,
-                       cfg->device_buffer_bytes,
-                       runtime_chunk_cap) == 0);
+                       sizing.host_slab_per_wave,
+                       sizing.dev_decompressed_per_wave,
+                       runtime_chunk_cap,
+                       resolved_max_gpu,
+                       &self->gpu_bytes_committed) == 0);
 
   CHECK(Fail,
         lookahead_init(&self->lookahead,
@@ -777,4 +812,89 @@ damacy_stats_reset(struct damacy* self)
   if (!self)
     return;
   stats_init(&self->stats);
+}
+
+// Test-only hook. Overwrites gpu_bytes_committed so unit tests can drive
+// the observe-and-grow OOM path without having to fabricate a workload
+// that escapes the resolver's worst-case reservation. Returns the prior
+// value. Not declared in damacy.h — tests forward-declare it with
+// extern; production code must not call it.
+uint64_t
+damacy_set_gpu_bytes_committed_for_test(struct damacy* self, uint64_t v)
+{
+  if (!self)
+    return 0;
+  const uint64_t prev = self->gpu_bytes_committed;
+  self->gpu_bytes_committed = v;
+  return prev;
+}
+
+void
+damacy_config_describe(const struct damacy_config* cfg)
+{
+  if (!cfg) {
+    log_info("damacy_config_describe: NULL config");
+    return;
+  }
+  const uint64_t resolved_max_gpu = resolve_max_gpu_memory(cfg);
+  const uint64_t runtime_chunk_cap = resolve_max_chunk_uncompressed(cfg);
+  log_info("damacy_config_describe: input max_gpu_memory_bytes=%llu "
+           "(resolved=%llu, max_chunk_uncompressed_bytes=%llu, batch_size=%u)",
+           (unsigned long long)cfg->max_gpu_memory_bytes,
+           (unsigned long long)resolved_max_gpu,
+           (unsigned long long)runtime_chunk_cap,
+           (unsigned)cfg->batch_size);
+  if (cfg->host_buffer_bytes || cfg->device_buffer_bytes)
+    log_info("damacy_config_describe: host_buffer_bytes=%llu / "
+             "device_buffer_bytes=%llu are deprecated and ignored",
+             (unsigned long long)cfg->host_buffer_bytes,
+             (unsigned long long)cfg->device_buffer_bytes);
+
+  struct wave_pool_sizing sizing = { 0 };
+  enum damacy_status rs = wave_pool_resolve_sizing(
+    resolved_max_gpu, runtime_chunk_cap, cfg->batch_size, &sizing);
+  if (rs != DAMACY_OK) {
+    log_info("damacy_config_describe: wave_pool_resolve_sizing failed (%s)",
+             damacy_status_str(rs));
+    return;
+  }
+  struct gpu_budget budget = { 0 };
+  if (gpu_budget_compute(cfg,
+                         sizing.host_slab_per_wave,
+                         sizing.dev_decompressed_per_wave,
+                         &budget) != DAMACY_OK) {
+    log_info("damacy_config_describe: gpu_budget_compute failed");
+    return;
+  }
+  log_info("damacy_config_describe: host_slab_per_wave=%llu "
+           "dev_decompressed_per_wave=%llu",
+           (unsigned long long)sizing.host_slab_per_wave,
+           (unsigned long long)sizing.dev_decompressed_per_wave);
+  log_info("damacy_config_describe: dev_compressed=%llu dev_decompressed=%llu "
+           "unshuffle_scratch=%llu blosc1_meta=%llu fanout_soa=%llu "
+           "nvcomp_temp=%llu batch_metadata=%llu",
+           (unsigned long long)budget.dev_compressed,
+           (unsigned long long)budget.dev_decompressed,
+           (unsigned long long)budget.dev_unshuffle_scratch,
+           (unsigned long long)budget.blosc1_meta,
+           (unsigned long long)budget.fanout_soa,
+           (unsigned long long)budget.nvcomp_temp,
+           (unsigned long long)budget.batch_metadata);
+  // budget.total is the *initial* allocation (initial fanout / decoder
+  // floors); sizing.worst_case_total_bytes is the post-grow worst case
+  // the resolver pre-reserved against the cap. Their difference is the
+  // grow-time headroom; the cap minus the worst case is unused slack.
+  const uint64_t initial_alloc = budget.total;
+  const uint64_t worst_case = sizing.worst_case_total_bytes;
+  const uint64_t reserved_for_grow =
+    worst_case > initial_alloc ? worst_case - initial_alloc : 0;
+  const uint64_t slack =
+    resolved_max_gpu > worst_case ? resolved_max_gpu - worst_case : 0;
+  log_info("damacy_config_describe: initial_alloc=%llu reserved_for_grow=%llu "
+           "worst_case_total=%llu slack=%llu cap=%llu",
+           (unsigned long long)initial_alloc,
+           (unsigned long long)reserved_for_grow,
+           (unsigned long long)worst_case,
+           (unsigned long long)slack,
+           (unsigned long long)resolved_max_gpu);
 }
