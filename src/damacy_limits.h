@@ -38,6 +38,11 @@
 // 8 GB-class GPU budget viable out of the box.
 #define DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES (512ull << 10) // 512 KB
 
+// Default for damacy_config.max_gpu_memory_bytes when the user leaves
+// it at 0. ~1 GB matches the legacy "host_buffer_bytes = 1 GB" sizing
+// callers picked pre-Phase-5 and fits comfortably on consumer GPUs.
+#define DAMACY_DEFAULT_MAX_GPU_MEMORY_BYTES (1ull << 30) // 1 GB
+
 // Wave cap. Decoupled from the per-batch cap below: nvcomp temp scratch
 // is sized as MAX_CHUNKS_PER_WAVE × runtime_chunk_cap (× 2 waves), so we
 // keep this small and let large batches split across multiple waves.

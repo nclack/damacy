@@ -200,7 +200,7 @@ substreams when typical waves dispatch hundreds.
 
 ---
 
-### Phase 5 — Make `max_gpu_memory_bytes` the primary budget knob
+### Phase 5 — Make `max_gpu_memory_bytes` the primary budget knob — **DONE**
 
 **Goal**: one user-facing GPU memory ceiling; everything else
 internally derived.

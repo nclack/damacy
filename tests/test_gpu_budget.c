@@ -1,7 +1,7 @@
 // Unit tests for src/gpu_budget/. Verifies that:
 //   - gpu_budget_compute returns OK on a sane config
 //   - .total equals the sum of its parts (no field drift)
-//   - .total scales 2× when host/device buffer bytes double
+//   - .total scales with the resolved per-wave geometry
 //   - smaller max_chunk_uncompressed_bytes shrinks .nvcomp_temp
 //
 // Needs CUDA because wave_predict_bytes routes through
@@ -15,14 +15,12 @@
 #include <stdio.h>
 
 static struct damacy_config
-mk_cfg(uint64_t host_bytes, uint64_t dev_bytes, uint32_t chunk_cap)
+mk_cfg(uint32_t chunk_cap)
 {
   return (struct damacy_config){
     .batch_size = 4,
     .lookahead_batches = 2,
     .n_io_threads = 1,
-    .host_buffer_bytes = host_bytes,
-    .device_buffer_bytes = dev_bytes,
     .n_zarrs_meta_cache = 4,
     .n_shards_meta_cache = 4,
     .dtype = DAMACY_F32,
@@ -36,31 +34,30 @@ mk_cfg(uint64_t host_bytes, uint64_t dev_bytes, uint32_t chunk_cap)
 static int
 test_total_is_sum_of_parts(void)
 {
-  struct damacy_config cfg = mk_cfg(2ull << 20, 2ull << 20, 0);
+  struct damacy_config cfg = mk_cfg(0);
   struct gpu_budget b = { 0 };
-  EXPECT(gpu_budget_compute(&cfg, &b) == DAMACY_OK);
+  const uint64_t host = 2ull << 20;
+  const uint64_t dev = 2ull << 20;
+  EXPECT(gpu_budget_compute(&cfg, host, dev, &b) == DAMACY_OK);
   uint64_t expect = b.dev_compressed + b.dev_decompressed +
                     b.dev_unshuffle_scratch + b.blosc1_meta + b.fanout_soa +
                     b.nvcomp_temp + b.batch_metadata;
   EXPECT(b.total == expect);
-  // dev_compressed should mirror host_buffer_bytes (2× host_per_wave =
-  // host_buffer_bytes); both waves accounted via the 2× in gpu_budget.
-  EXPECT(b.dev_compressed == cfg.host_buffer_bytes);
-  EXPECT(b.dev_decompressed == cfg.device_buffer_bytes);
-  EXPECT(b.dev_unshuffle_scratch == cfg.device_buffer_bytes);
+  // dev_compressed mirrors 2× host_slab_per_wave; dev_decompressed and
+  // unshuffle_scratch mirror 2× dev_decompressed_per_wave.
+  EXPECT(b.dev_compressed == 2 * host);
+  EXPECT(b.dev_decompressed == 2 * dev);
+  EXPECT(b.dev_unshuffle_scratch == 2 * dev);
   return 0;
 }
 
 static int
 test_scales_with_buffers(void)
 {
-  struct damacy_config small_cfg = mk_cfg(1ull << 20, 1ull << 20, 0);
-  struct damacy_config big_cfg = mk_cfg(2ull << 20, 2ull << 20, 0);
+  struct damacy_config cfg = mk_cfg(0);
   struct gpu_budget small = { 0 }, big = { 0 };
-  EXPECT(gpu_budget_compute(&small_cfg, &small) == DAMACY_OK);
-  EXPECT(gpu_budget_compute(&big_cfg, &big) == DAMACY_OK);
-  // dev_compressed / dev_decompressed / dev_unshuffle_scratch are the
-  // dominant axis-aligned terms — they double.
+  EXPECT(gpu_budget_compute(&cfg, 1ull << 20, 1ull << 20, &small) == DAMACY_OK);
+  EXPECT(gpu_budget_compute(&cfg, 2ull << 20, 2ull << 20, &big) == DAMACY_OK);
   EXPECT(big.dev_compressed == 2 * small.dev_compressed);
   EXPECT(big.dev_decompressed == 2 * small.dev_decompressed);
   EXPECT(big.dev_unshuffle_scratch == 2 * small.dev_unshuffle_scratch);
@@ -74,20 +71,18 @@ test_chunk_cap_shrinks_nvcomp_temp(void)
 {
   // Same buffer sizes, only the per-chunk cap differs. The smaller cap
   // bounds nvcomp's per-substream allocation, so .nvcomp_temp shrinks.
-  // Buffer is sized so big_cap's per-wave decompressed arena (128 MB)
+  // dev buffer is sized so big_cap's per-wave decompressed arena (128 MB)
   // exceeds small_cap's cap_worst (DAMACY_MAX_CHUNKS_PER_WAVE *
-  // max_chunk_uncompressed_bytes = 512 * 64 KB = 32 MB), so the two
-  // configs report different total_uncompressed and the per-substream
-  // cap actually moves nvcomp's scratch.
-  struct damacy_config small_cap = mk_cfg(2ull << 20, 256ull << 20, 64ull << 10);
-  struct damacy_config big_cap = mk_cfg(2ull << 20, 256ull << 20, 1ull << 20);
+  // max_chunk_uncompressed_bytes = 512 * 64 KB = 32 MB), so the per-
+  // substream cap actually moves nvcomp's scratch.
+  struct damacy_config small_cap = mk_cfg(64ull << 10);
+  struct damacy_config big_cap = mk_cfg(1ull << 20);
   struct gpu_budget small = { 0 }, big = { 0 };
-  EXPECT(gpu_budget_compute(&small_cap, &small) == DAMACY_OK);
-  EXPECT(gpu_budget_compute(&big_cap, &big) == DAMACY_OK);
-  // Strict shrink — temp scales with max_chunk_uncompressed_bytes via
-  // the per-substream uncompressed cap.
+  const uint64_t host = 2ull << 20;
+  const uint64_t dev = 256ull << 20;
+  EXPECT(gpu_budget_compute(&small_cap, host, dev, &small) == DAMACY_OK);
+  EXPECT(gpu_budget_compute(&big_cap, host, dev, &big) == DAMACY_OK);
   EXPECT(small.nvcomp_temp < big.nvcomp_temp);
-  // Other fields are unaffected by the chunk cap.
   EXPECT(small.dev_compressed == big.dev_compressed);
   EXPECT(small.fanout_soa == big.fanout_soa);
   return 0;

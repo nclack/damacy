@@ -41,8 +41,6 @@ def _base_config(dtype: str | int | damacy.Dtype = "f32") -> Config:
     """
     return Config(
         batch_size=1,
-        host_buffer_bytes=1 << 20,
-        device_buffer_bytes=1 << 20,
         dtype=dtype,
         lookahead_batches=2,
         n_io_threads=1,
@@ -284,38 +282,15 @@ def test_push_error_drops_offending_iterator(tiny_zarr):
 
 def test_config_validates_eagerly():
     with pytest.raises(ValueError, match="batch_size"):
-        Config(
-            batch_size=0,
-            host_buffer_bytes=1 << 20,
-            device_buffer_bytes=1 << 20,
-        )
+        Config(batch_size=0)
     with pytest.raises(ValueError, match="lookahead_batches"):
-        Config(
-            batch_size=1,
-            host_buffer_bytes=1 << 20,
-            device_buffer_bytes=1 << 20,
-            lookahead_batches=1,
-        )
+        Config(batch_size=1, lookahead_batches=1)
     with pytest.raises(ValueError, match="n_io_threads"):
-        Config(
-            batch_size=1,
-            host_buffer_bytes=1 << 20,
-            device_buffer_bytes=1 << 20,
-            n_io_threads=0,
-        )
+        Config(batch_size=1, n_io_threads=0)
     with pytest.raises(ValueError, match="host/device_buffer_bytes"):
-        Config(
-            batch_size=1,
-            host_buffer_bytes=0,
-            device_buffer_bytes=1 << 20,
-        )
+        Config(batch_size=1, host_buffer_bytes=-1)
     with pytest.raises(ValueError, match="max_chunk_uncompressed_bytes"):
-        Config(
-            batch_size=1,
-            host_buffer_bytes=1 << 20,
-            device_buffer_bytes=1 << 20,
-            max_chunk_uncompressed_bytes=-1,
-        )
+        Config(batch_size=1, max_chunk_uncompressed_bytes=-1)
 
 
 def test_config_dtype_coerced():

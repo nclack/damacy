@@ -92,10 +92,15 @@ class Batch:
 class Pipeline:
     """Native streaming-pipeline handle.
 
-    Note: `max_gpu_memory_bytes` is enforced against the initial
-    allocation. The zstd decoder scratch and per-wave fanout SOAs may
-    grow at runtime up to the structural ceiling without being re-checked
-    against the cap.
+    Phase 5: ``max_gpu_memory_bytes`` is the primary budget knob. The
+    create-time resolver picks per-wave geometry that fits inside the
+    budget *including* worst-case observe-and-grow headroom for the
+    shared decoder scratch and per-wave fanout SOAs, so grows inside a
+    successfully-created instance never trip the cap.
+
+    ``host_buffer_bytes`` / ``device_buffer_bytes`` are deprecated.
+    Setting them is accepted for source compatibility but the values
+    are ignored — internal sizing derives from ``max_gpu_memory_bytes``.
     """
 
     def __init__(
@@ -103,8 +108,8 @@ class Pipeline:
         batch_size: int,
         lookahead_batches: int,
         n_io_threads: int,
-        host_buffer_bytes: int,
-        device_buffer_bytes: int,
+        host_buffer_bytes: int,  # DEPRECATED (Phase 5): ignored
+        device_buffer_bytes: int,  # DEPRECATED (Phase 5): ignored
         n_zarrs_meta_cache: int,
         n_shards_meta_cache: int,
         dtype: str | int,

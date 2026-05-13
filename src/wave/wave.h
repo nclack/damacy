@@ -44,9 +44,9 @@ struct damacy_wave
   uint64_t host_used_bytes;
 
   // Wave-owned device + pinned-host buffers.
-  void* host_slab;        // pinned, cfg.host_buffer_bytes / 2
+  void* host_slab;        // pinned, sized by wave_pool_resolve_sizing
   void* dev_compressed;   // mirrors host_slab on device
-  void* dev_decompressed; // arena, cfg.device_buffer_bytes / 2
+  void* dev_decompressed; // arena, sized by wave_pool_resolve_sizing
   uint64_t host_slab_cap;
   uint64_t dev_decompressed_cap;
 
@@ -151,6 +151,14 @@ struct wave_pool
   uint64_t dev_per_wave;
   uint64_t max_chunk_uncompressed_bytes;
 
+  // Phase 5 budget enforcement. max_gpu_memory_bytes is the resolved
+  // ceiling (legacy default applied) and is non-zero. gpu_bytes_committed
+  // is a pointer back into struct damacy so wave_pool and damacy share
+  // one accounting variable. Grow paths read both: a grow that pushes
+  // committed past the ceiling returns DAMACY_OOM and skips the alloc.
+  uint64_t max_gpu_memory_bytes;
+  uint64_t* gpu_bytes_committed;
+
   // Borrowed (owned by struct damacy / its members). Set in wave_pool_init
   // and never updated.
   struct damacy_batch_pool* pool;
@@ -188,6 +196,28 @@ wave_pool_shared_predict_bytes(uint64_t dev_decompressed_bytes,
                                uint64_t max_chunk_uncompressed_bytes,
                                uint64_t* out_nvcomp_temp);
 
+// Phase 5 wave geometry resolver. Picks the per-wave host slab and
+// dev_decompressed extents that fit inside `max_gpu_memory_bytes` once
+// every other component (2× wave, 1× nvcomp scratch, fanout SOAs,
+// blosc1 meta, batch_metadata) is accounted for. The resolver insists
+// on holding at least one chunk at `max_chunk_uncompressed_bytes` per
+// wave; if the smallest viable geometry doesn't fit, returns
+// DAMACY_OOM with a logged breakdown so the user knows what to raise.
+//
+// batch_size is the cfg.batch_size that batch_metadata is sized off.
+struct wave_pool_sizing
+{
+  uint64_t host_slab_per_wave;     // pinned-host + dev_compressed mirror
+  uint64_t dev_decompressed_per_wave; // dev_decompressed + unshuffle scratch
+  uint64_t predicted_total_bytes;  // sum at this geometry (matches gpu_budget)
+};
+
+enum damacy_status
+wave_pool_resolve_sizing(uint64_t max_gpu_memory_bytes,
+                         uint64_t max_chunk_uncompressed_bytes,
+                         uint32_t batch_size,
+                         struct wave_pool_sizing* out);
+
 // Returns 0 on success, 1 on failure (after self-cleanup).
 int wave_init(struct damacy_wave* wave,
               uint64_t host_slab_bytes,
@@ -196,8 +226,12 @@ int wave_init(struct damacy_wave* wave,
 void wave_destroy(struct damacy_wave* wave, int cuda_skip);
 
 // Create both streams + initialize both waves and wire borrowed
-// pointers. Returns 0 on success, 1 on failure (after self-cleanup so
-// the caller can free the enclosing struct).
+// pointers. host_slab_per_wave / dev_decompressed_per_wave come from
+// wave_pool_resolve_sizing. max_gpu_memory_bytes + gpu_bytes_committed
+// drive Phase 5 grow-time budget enforcement; gpu_bytes_committed must
+// point at a uint64_t the caller owns. Returns 0 on success, 1 on
+// failure (after self-cleanup so the caller can free the enclosing
+// struct).
 int wave_pool_init(struct wave_pool* wp,
                    struct damacy_batch_pool* pool,
                    struct store* store,
@@ -205,9 +239,11 @@ int wave_pool_init(struct wave_pool* wp,
                    struct damacy_stats* stats,
                    enum damacy_status* failed_status,
                    enum damacy_dtype dtype,
-                   uint64_t host_buffer_bytes,
-                   uint64_t device_buffer_bytes,
-                   uint64_t max_chunk_uncompressed_bytes);
+                   uint64_t host_slab_per_wave,
+                   uint64_t dev_decompressed_per_wave,
+                   uint64_t max_chunk_uncompressed_bytes,
+                   uint64_t max_gpu_memory_bytes,
+                   uint64_t* gpu_bytes_committed);
 
 // Sync + destroy streams, then wave_destroy each wave. cuda_skip=1
 // leaks GPU resources but still releases the host heap (used when the

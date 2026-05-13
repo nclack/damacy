@@ -46,9 +46,9 @@ validate_config(const struct damacy_config* cfg)
   CHECK_SILENT(Invalid, cfg->n_io_threads > 0);
   CHECK_SILENT(Invalid, cfg->n_io_threads <= DAMACY_MAX_IO_THREADS);
   CHECK_SILENT(Invalid, cfg->n_compute_threads <= DAMACY_MAX_COMPUTE_THREADS);
-  // Both buffers are split in half across the two waves, so ≥ 2 bytes.
-  CHECK_SILENT(Invalid, cfg->host_buffer_bytes / 2 > 0);
-  CHECK_SILENT(Invalid, cfg->device_buffer_bytes / 2 > 0);
+  // host_buffer_bytes / device_buffer_bytes are deprecated (Phase 5);
+  // no longer validated. Internal sizing derives from
+  // max_gpu_memory_bytes.
   CHECK_SILENT(Invalid, cfg->n_zarrs_meta_cache > 0);
   CHECK_SILENT(Invalid, cfg->n_shards_meta_cache > 0);
   CHECK_SILENT(Invalid, damacy_dtype_bpe(cfg->dtype) > 0);
@@ -68,5 +68,14 @@ resolve_max_chunk_uncompressed(const struct damacy_config* cfg)
     v = DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES;
   if (v > DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES)
     v = DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES;
+  return v;
+}
+
+uint64_t
+resolve_max_gpu_memory(const struct damacy_config* cfg)
+{
+  uint64_t v = cfg->max_gpu_memory_bytes;
+  if (v == 0)
+    v = DAMACY_DEFAULT_MAX_GPU_MEMORY_BYTES;
   return v;
 }

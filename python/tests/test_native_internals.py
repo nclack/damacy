@@ -59,8 +59,8 @@ def test_native_damacy_error_carries_status_and_what():
             batch_size=1,
             lookahead_batches=2,
             n_io_threads=1,
-            host_buffer_bytes=1 << 20,
-            device_buffer_bytes=1 << 20,
+            host_buffer_bytes=0,  # deprecated, ignored
+            device_buffer_bytes=0,  # deprecated, ignored
             n_zarrs_meta_cache=4,
             n_shards_meta_cache=4,
             dtype="f32",

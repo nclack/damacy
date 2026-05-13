@@ -11,8 +11,7 @@ Typical use::
 
     cfg = damacy.Config(
         batch_size=8,
-        host_buffer_bytes=1 << 30,
-        device_buffer_bytes=1 << 30,
+        max_gpu_memory_bytes=1 << 30,  # 1 GiB GPU budget
         dtype="bf16",
     )
     samples = [
@@ -320,8 +319,7 @@ class Config:
     Build variants with :func:`dataclasses.replace`:
 
     >>> import dataclasses
-    >>> base = Config(batch_size=8,
-    ...               host_buffer_bytes=1 << 30, device_buffer_bytes=1 << 30)
+    >>> base = Config(batch_size=8, max_gpu_memory_bytes=1 << 30)
     >>> base.dtype is Dtype.F32
     True
     >>> dataclasses.replace(base, batch_size=64).batch_size
@@ -332,16 +330,28 @@ class Config:
     of ``"f32"`` / ``"float32"`` / ``"bf16"`` / ``"bfloat16"`` for the
     ``dtype`` argument; the stored field is always a :class:`Dtype`.
 
-    >>> Config(batch_size=0,
-    ...        host_buffer_bytes=1, device_buffer_bytes=1)
+    >>> Config(batch_size=0)
     Traceback (most recent call last):
         ...
     ValueError: batch_size must be >= 1 (got 0)
 
     Attributes:
         batch_size: Samples per batch (>= 1).
-        host_buffer_bytes: Pinned-host staging budget; sized for IO bw.
-        device_buffer_bytes: Device decompress-scratch budget.
+        max_gpu_memory_bytes: Primary GPU budget knob (Phase 5). Hard
+            cap on GPU memory allocated for wave-resident buffers,
+            decoder scratch, per-wave fanout SOAs, and batch-output
+            pools. 0 selects the legacy default (~1 GB). Internal
+            sizing (host slab, dev decompress arena, nvcomp temp) is
+            derived from this value; the create-time resolver also
+            reserves the worst-case observe-and-grow footprint so
+            grows inside a successfully-created instance never trip
+            the cap.
+        host_buffer_bytes: DEPRECATED (Phase 5). Setting this is
+            allowed for source compatibility but the value is ignored;
+            a one-line warning is logged. Use ``max_gpu_memory_bytes``
+            to size the pipeline. Will be removed in a future release.
+        device_buffer_bytes: DEPRECATED (Phase 5). Same treatment as
+            ``host_buffer_bytes``.
         dtype: Destination dtype for assembled batches.
         lookahead_batches: User-side push-queue depth (>= 2).
         n_io_threads: IO worker threads (>= 1).
@@ -355,12 +365,6 @@ class Config:
             the pipeline accepts; 0 selects the C default (512 KB).
             Values exceeding :data:`MAX_CHUNK_UNCOMPRESSED_BYTES` are
             rejected at create.
-        max_gpu_memory_bytes: Hard cap on GPU memory allocated for
-            wave-resident buffers and batch-output pools. 0 = no cap.
-            The predicted budget covers the initial allocation only;
-            the zstd decoder scratch and per-wave fanout SOAs may grow
-            at runtime up to the structural ceiling, and those grows
-            are not currently re-checked against this cap.
         device: CUDA device index to bind. ``None`` (default) captures
             the current ``CUcontext`` on the calling thread; pass an
             int (e.g. ``local_rank``) to retain that device's primary
@@ -368,8 +372,8 @@ class Config:
     """
 
     batch_size: int
-    host_buffer_bytes: int
-    device_buffer_bytes: int
+    host_buffer_bytes: int  # DEPRECATED (Phase 5); ignored
+    device_buffer_bytes: int  # DEPRECATED (Phase 5); ignored
     dtype: Dtype
     lookahead_batches: int
     n_io_threads: int
@@ -384,8 +388,9 @@ class Config:
         self,
         *,
         batch_size: int,
-        host_buffer_bytes: int,
-        device_buffer_bytes: int,
+        max_gpu_memory_bytes: int = 0,
+        host_buffer_bytes: int = 0,
+        device_buffer_bytes: int = 0,
         dtype: Dtype | str | int = Dtype.F32,
         lookahead_batches: int = 2,
         n_io_threads: int = 4,
@@ -393,7 +398,6 @@ class Config:
         n_zarrs_meta_cache: int = 64,
         n_shards_meta_cache: int = 256,
         max_chunk_uncompressed_bytes: int = 0,
-        max_gpu_memory_bytes: int = 0,
         device: int | None = None,
     ) -> None:
         # Custom __init__ rather than __post_init__ so the constructor
@@ -412,10 +416,20 @@ class Config:
             raise ValueError(
                 f"n_compute_threads must be >= 0 (got {n_compute_threads})"
             )
-        if host_buffer_bytes <= 0 or device_buffer_bytes <= 0:
-            raise ValueError("host/device_buffer_bytes must be positive")
+        if host_buffer_bytes < 0 or device_buffer_bytes < 0:
+            raise ValueError("host/device_buffer_bytes must be >= 0")
         if max_chunk_uncompressed_bytes < 0:
             raise ValueError("max_chunk_uncompressed_bytes must be >= 0")
+        if max_gpu_memory_bytes < 0:
+            raise ValueError("max_gpu_memory_bytes must be >= 0")
+        if host_buffer_bytes or device_buffer_bytes:
+            warnings.warn(
+                "Config.host_buffer_bytes / device_buffer_bytes are "
+                "deprecated (Phase 5); values are ignored. Use "
+                "max_gpu_memory_bytes to size the pipeline.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         set_ = object.__setattr__  # frozen=True forbids `self.x = ...`
         set_(self, "batch_size", batch_size)
         set_(self, "host_buffer_bytes", host_buffer_bytes)
