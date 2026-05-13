@@ -147,9 +147,17 @@ extern "C"
   // Log a one-line-per-field description of the geometry damacy would
   // resolve from `cfg` at damacy_create time: input max_gpu_memory_bytes
   // plus the derived host_slab_per_wave, dev_decompressed_per_wave,
-  // initial nvcomp temp, and total predicted bytes. Emitted at LOG_INFO
+  // initial nvcomp temp, initial allocation, headroom reserved for the
+  // observe-and-grow paths, and remaining slack. Emitted at LOG_INFO
   // through the standard log/log.h dispatcher. Useful when diagnosing
   // "why does damacy use N MB" without standing the instance up.
+  //
+  // Requires a live CUDA context on the calling thread: the resolver
+  // and gpu_budget_compute call into nvcomp's decoder_zstd_query_temp_bytes
+  // to size scratch. With no current context the function still
+  // returns, but logs a "gpu_budget_compute failed" /
+  // "wave_pool_resolve_sizing failed" line and stops short of the
+  // per-component breakdown. NULL cfg is safe (logs and returns).
   void damacy_config_describe(const struct damacy_config* cfg);
 
   // The CUDA device index this instance is bound to.

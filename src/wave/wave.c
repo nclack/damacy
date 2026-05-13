@@ -295,6 +295,14 @@ wave_pool_resolve_sizing(uint64_t max_gpu_memory_bytes,
   // Round down to a 1 MB granularity so resolved values are readable
   // in logs; the back-off loop below catches any overshoot from the
   // approximation.
+  //
+  // CAREFUL: the 6 divisor only holds while this resolver assigns the
+  // same `per_wave` value to both out->host_slab_per_wave and
+  // out->dev_decompressed_per_wave below — that's what makes a single
+  // delta scale dev_compressed (= host_slab_per_wave),
+  // dev_decompressed, and dev_unshuffle_scratch in lockstep. If you
+  // ever split host vs dev sizing, also split the divisor accordingly.
+  // The assert after the assignment locks this in.
   const uint64_t headroom = max_gpu_memory_bytes - total_min;
   const uint64_t delta_per_wave_cap = headroom / 6;
   const uint64_t step = 1ull << 20; // 1 MB granularity
@@ -322,17 +330,26 @@ wave_pool_resolve_sizing(uint64_t max_gpu_memory_bytes,
     if (s != DAMACY_OK)
       return s;
   }
-  if (predicted > max_gpu_memory_bytes) {
-    log_error("damacy: budget resolver could not fit minimum geometry "
-              "(predicted=%llu cap=%llu)",
-              (unsigned long long)predicted,
-              (unsigned long long)max_gpu_memory_bytes);
-    return DAMACY_OOM;
-  }
+  // The back-off loop is guaranteed to terminate at per_wave ==
+  // min_per_wave with predicted <= max_gpu_memory_bytes: the top-level
+  // check above already rejected total_min > max, and per_wave ==
+  // min_per_wave reproduces total_min. So no post-loop OOM branch is
+  // needed — the top-level reject is the only path that surfaces a
+  // too-small budget.
 
   out->host_slab_per_wave = per_wave;
   out->dev_decompressed_per_wave = per_wave;
-  out->predicted_total_bytes = predicted;
+  out->worst_case_total_bytes = predicted;
+  // Lock in the invariant the divisor=6 derivation depends on.
+  // Cheap: this resolver runs once per damacy_create.
+  if (out->host_slab_per_wave != out->dev_decompressed_per_wave) {
+    log_error("damacy: resolver invariant broken: host_slab_per_wave=%llu "
+              "!= dev_decompressed_per_wave=%llu (the 6=2*3 divisor "
+              "assumes a single per_wave scales both)",
+              (unsigned long long)out->host_slab_per_wave,
+              (unsigned long long)out->dev_decompressed_per_wave);
+    return DAMACY_INVAL;
+  }
   return DAMACY_OK;
 }
 

@@ -209,7 +209,13 @@ struct wave_pool_sizing
 {
   uint64_t host_slab_per_wave;     // pinned-host + dev_compressed mirror
   uint64_t dev_decompressed_per_wave; // dev_decompressed + unshuffle scratch
-  uint64_t predicted_total_bytes;  // sum at this geometry (matches gpu_budget)
+  // Worst-case post-grow pool footprint at this geometry: assumes both
+  // per-wave fanout SOAs and the shared decoder scratch have grown all
+  // the way to DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE. gpu_budget_compute
+  // (which uses the initial floor) returns the smaller initial number;
+  // the delta is the headroom reserved for observe-and-grow. Always
+  // <= max_gpu_memory_bytes by resolver construction.
+  uint64_t worst_case_total_bytes;
 };
 
 enum damacy_status

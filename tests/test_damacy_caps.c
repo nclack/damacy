@@ -230,9 +230,11 @@ test_deprecated_buffer_fields(void)
 }
 
 // damacy_config_describe should run safely on a sane config without
-// constructing a damacy instance and without touching CUDA driver
-// state. Output goes through log/log.h — no return value to check;
-// we just want it not to crash.
+// constructing a damacy instance. It does call into nvcomp via
+// decoder_zstd_query_temp_bytes, so a live CUDA context is required —
+// cuda_init_primary in main() retains the primary on dev 0 before any
+// describe call. Output goes through log/log.h — no return value to
+// check; we just want it not to crash.
 static int
 test_config_describe(void)
 {

@@ -293,6 +293,24 @@ def test_config_validates_eagerly():
         Config(batch_size=1, max_chunk_uncompressed_bytes=-1)
 
 
+def test_host_buffer_bytes_emits_deprecation_warning():
+    with pytest.warns(DeprecationWarning, match="deprecated"):
+        Config(batch_size=8, max_gpu_memory_bytes=1 << 30, host_buffer_bytes=1)
+
+
+def test_device_buffer_bytes_emits_deprecation_warning():
+    with pytest.warns(DeprecationWarning, match="deprecated"):
+        Config(batch_size=8, max_gpu_memory_bytes=1 << 30, device_buffer_bytes=1)
+
+
+def test_no_deprecation_warning_at_default_zero(recwarn):
+    # Both deprecated knobs left at 0 (the default) — no DeprecationWarning
+    # should fire from Config construction.
+    Config(batch_size=8, max_gpu_memory_bytes=1 << 30)
+    ours = [w for w in recwarn.list if issubclass(w.category, DeprecationWarning)]
+    assert ours == []
+
+
 def test_config_dtype_coerced():
     cfg = _base_config(dtype="bf16")
     assert cfg.dtype is damacy.Dtype.BF16
