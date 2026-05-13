@@ -118,6 +118,13 @@ extern "C"
     // damacy_push returns DAMACY_OOM if the lazily-sized batch-output
     // pool, computed from the first sample's AABB, would push past it.
     // 0 = no cap (driver OOM, current behaviour).
+    //
+    // The predicted budget reflects the INITIAL allocation. The
+    // zstd decoder scratch and per-wave fanout SOAs are observe-and-grow:
+    // a wave whose substream count exceeds the initial floor will
+    // reallocate the scratch + that wave's fanout up to the structural
+    // ceiling. These post-create grows are not currently re-checked
+    // against this cap.
     uint64_t max_gpu_memory_bytes;
 
     // -1 captures current CUcontext; >= 0 retains the primary for that

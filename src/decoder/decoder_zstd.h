@@ -10,6 +10,8 @@ extern "C"
 
   struct decoder_zstd;
 
+  // max_batch_size is the initial substream-batch cap; decoder_zstd_grow
+  // bumps it when a wave's substream count exceeds it.
   // max_chunk_uncompressed_bytes is the per-substream upper bound
   // (controls nvcomp's per-block scratch). max_total_uncompressed_bytes
   // is the upper bound on the SUM of decompressed bytes across one
@@ -23,6 +25,26 @@ extern "C"
   // cuda_skip=1 skips the device frees (on context-lost teardown) but
   // still releases the host struct so it doesn't leak.
   void decoder_zstd_destroy(struct decoder_zstd*, int cuda_skip);
+
+  // Current substream batch cap. decoder_zstd_batch_device rejects calls
+  // with n > this. Pool-level grow trigger compares the wave's predicted
+  // substream count against this.
+  size_t decoder_zstd_cur_max_batch(const struct decoder_zstd*);
+
+  // Reallocate the decoder's per-batch device scratch (temp + statuses +
+  // actual-size array) for the new cap. CALLER MUST ensure no decode
+  // launched against this decoder is still in-flight — typically by
+  // cuStreamSynchronize on the decode stream. Returns 0 on success;
+  // on failure the decoder is left destroyed-internally with no live
+  // device pointers and `decoder_zstd_cur_max_batch == 0`, and 1 is
+  // returned. The new cap replaces the old one. The zombie state is
+  // still safe to pass to decoder_zstd_destroy, but the caller MUST NOT
+  // call grow again on the same decoder — short-circuit on
+  // cur_max_batch == 0 instead.
+  int decoder_zstd_grow(struct decoder_zstd*,
+                        size_t new_max_batch_size,
+                        size_t max_chunk_uncompressed_bytes,
+                        size_t max_total_uncompressed_bytes);
 
   // Stream-async batched zstd decompress. The four input arrays are
   // already on the device — typically populated by an upstream GPU

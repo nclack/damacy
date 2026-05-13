@@ -19,6 +19,32 @@ test_create_destroy(void)
   return 0;
 }
 
+// decoder_zstd_grow must (a) advance cur_max_batch on success and
+// (b) preserve usability — pointers to internal scratch (statuses) are
+// non-null and a subsequent decode-size check (n <= max_batch) holds.
+// Regression target: kick_h2d's grow path relies on cur_max_batch
+// monotonically increasing post-grow and the scratch remaining live.
+static int
+test_grow(void)
+{
+  const size_t init = 8, big = 64;
+  struct decoder_zstd* z = decoder_zstd_create(init, 64 * 1024, 8 * 64 * 1024);
+  EXPECT(z);
+  EXPECT(decoder_zstd_cur_max_batch(z) == init);
+  EXPECT(decoder_zstd_d_statuses(z) != NULL);
+
+  EXPECT(decoder_zstd_grow(z, big, 64 * 1024, big * 64 * 1024) == 0);
+  EXPECT(decoder_zstd_cur_max_batch(z) == big);
+  EXPECT(decoder_zstd_d_statuses(z) != NULL);
+
+  // Successive grows compose.
+  EXPECT(decoder_zstd_grow(z, big * 2, 64 * 1024, big * 2 * 64 * 1024) == 0);
+  EXPECT(decoder_zstd_cur_max_batch(z) == big * 2);
+
+  decoder_zstd_destroy(z, 0);
+  return 0;
+}
+
 // Run a small batch of memcpy ops on the GPU and verify byte-for-byte.
 // 3 ops: aligned-16 sized, unaligned size, and unaligned-source pointer.
 static int
@@ -89,6 +115,7 @@ main(void)
   EXPECT(cuCtxSetCurrent(ctx) == CUDA_SUCCESS);
 
   RUN(test_create_destroy);
+  RUN(test_grow);
   RUN(test_memcpy_kernel);
 
   cuDevicePrimaryCtxRelease(dev);

@@ -13,6 +13,7 @@
 #include "util/prelude.h"
 #include "util/strbuf.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -37,6 +38,66 @@ fanout_alloc_pinned(struct blosc1_host_fanout* h,
   return 0;
 Fail:
   return 1;
+}
+
+void
+fanout_free_pinned(struct blosc1_host_fanout* h, struct nvcomp_fanout* d)
+{
+  if (h) {
+    void* host_ptrs[] = {
+      (void*)h->comp_ptrs,
+      h->comp_sizes,
+      h->decomp_ptrs,
+      h->decomp_buf_sizes,
+    };
+    for (size_t i = 0; i < countof(host_ptrs); ++i)
+      if (host_ptrs[i])
+        cuMemFreeHost(host_ptrs[i]);
+    h->comp_ptrs = NULL;
+    h->comp_sizes = NULL;
+    h->decomp_ptrs = NULL;
+    h->decomp_buf_sizes = NULL;
+  }
+  if (d) {
+    void* dev_ptrs[] = {
+      (void*)d->d_comp_ptrs,
+      d->d_comp_sizes,
+      d->d_decomp_ptrs,
+      d->d_decomp_buf_sizes,
+    };
+    for (size_t i = 0; i < countof(dev_ptrs); ++i)
+      if (dev_ptrs[i])
+        cuMemFree(CUDPTR(dev_ptrs[i]));
+    d->d_comp_ptrs = NULL;
+    d->d_comp_sizes = NULL;
+    d->d_decomp_ptrs = NULL;
+    d->d_decomp_buf_sizes = NULL;
+  }
+}
+
+// Next power of 2 ≥ v, with a floor of 1. Used to round the runtime
+// substream cap up so the grow path doesn't fire on every wave with a
+// few-substream increment. On 32-bit size_t the >>32 shift is a no-op
+// (v already has all its bits filled by the prior cascade); on 64-bit
+// it propagates into the upper half. SIZE_MAX is clamped: the cascade
+// fills every bit and the +1 wraps to 0, so the function returns 0 on
+// SIZE_MAX rather than a valid power of 2. Callers must bound `v`
+// against a real ceiling before calling.
+static size_t
+next_pow2_size(size_t v)
+{
+  if (v <= 1)
+    return 1;
+  --v;
+  v |= v >> 1;
+  v |= v >> 2;
+  v |= v >> 4;
+  v |= v >> 8;
+  v |= v >> 16;
+#if SIZE_MAX > 0xFFFFFFFFu
+  v |= v >> 32;
+#endif
+  return v + 1;
 }
 
 enum damacy_status
@@ -64,19 +125,20 @@ Fail:
   return DAMACY_CUDA;
 }
 
-// Substream/batch caps the shared zstd decoder is sized against. zsubs
-// is the worst-case substream count, zstd_per is the per-substream
-// uncompressed upper bound, total_uncompressed is the per-batch sum.
-// Single source of truth used by wave_pool_init (decoder scratch
-// sizing) and wave_pool_shared_predict_bytes (GPU budget).
+// Per-substream + per-batch upper bounds for the shared zstd decoder
+// given an externally-chosen substream-batch cap `zsubs`. zstd_per is
+// the per-substream uncompressed upper bound (controls nvcomp's
+// per-block scratch); total_uncompressed is the per-batch sum, capped
+// at the per-wave decompressed arena since that's the real ceiling.
+// Used by both initial sizing (zsubs = initial floor) and grow
+// (zsubs = post-grow cap).
 static void
-wave_decoder_caps(uint64_t dev_decompressed_bytes,
+wave_decoder_caps(uint64_t zsubs,
+                  uint64_t dev_decompressed_bytes,
                   uint64_t max_chunk_uncompressed_bytes,
-                  uint64_t* out_zsubs,
                   uint64_t* out_zstd_per,
                   uint64_t* out_total_uncompressed)
 {
-  *out_zsubs = (uint64_t)DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE;
   // Caller's config validation should preclude this; guard explicitly
   // so downstream nvcomp queries never see zero-sized inputs.
   if (dev_decompressed_bytes == 0 || max_chunk_uncompressed_bytes == 0) {
@@ -84,9 +146,8 @@ wave_decoder_caps(uint64_t dev_decompressed_bytes,
     *out_total_uncompressed = 0;
     return;
   }
-  const uint64_t cap_chunks = (uint64_t)DAMACY_MAX_CHUNKS_PER_WAVE;
   const uint64_t runtime_chunk_cap = max_chunk_uncompressed_bytes;
-  const uint64_t cap_worst = cap_chunks * runtime_chunk_cap;
+  const uint64_t cap_worst = zsubs * runtime_chunk_cap;
   const uint64_t total_uncompressed =
     dev_decompressed_bytes < cap_worst ? dev_decompressed_bytes : cap_worst;
   uint64_t zstd_per = runtime_chunk_cap;
@@ -102,7 +163,10 @@ wave_predict_bytes(uint64_t host_slab_bytes,
                    struct wave_alloc_summary* out)
 {
   const uint64_t cap = (uint64_t)DAMACY_MAX_CHUNKS_PER_WAVE;
-  const uint64_t zsubs = (uint64_t)DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE;
+  // Initial floor — pool may grow this at runtime (observe-and-grow).
+  // Predict the *initial* footprint; later grows are accounted via
+  // wave_pool_shared_predict_bytes the same way.
+  const uint64_t zsubs = (uint64_t)DAMACY_BLOSC_ZSTD_INITIAL_BATCH_CAP;
 
   out->dev_compressed = host_slab_bytes;
   out->dev_decompressed = dev_decompressed_bytes;
@@ -122,10 +186,13 @@ wave_pool_shared_predict_bytes(uint64_t dev_decompressed_bytes,
                                uint64_t max_chunk_uncompressed_bytes,
                                uint64_t* out_nvcomp_temp)
 {
-  uint64_t zsubs = 0, zstd_per = 0, total_uncompressed = 0;
-  wave_decoder_caps(dev_decompressed_bytes,
+  // Predict the *initial* decoder scratch; observe-and-grow may raise
+  // this at runtime up to DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE.
+  const uint64_t zsubs = (uint64_t)DAMACY_BLOSC_ZSTD_INITIAL_BATCH_CAP;
+  uint64_t zstd_per = 0, total_uncompressed = 0;
+  wave_decoder_caps(zsubs,
+                    dev_decompressed_bytes,
                     max_chunk_uncompressed_bytes,
-                    &zsubs,
                     &zstd_per,
                     &total_uncompressed);
 
@@ -196,9 +263,12 @@ wave_init(struct damacy_wave* wave,
   CU(Error, cuMemAlloc(&dptr, sizeof(struct blosc1_totals)));
   wave->d_blosc1_totals = (struct blosc1_totals*)(uintptr_t)dptr;
 
-  const size_t zsubs = DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE;
+  // Initial per-wave fanout cap — kick_h2d grows this wave's SOA when
+  // n_chunks * MAX_BLOCKS exceeds it. Independent of the other wave.
+  const size_t zsubs = DAMACY_BLOSC_ZSTD_INITIAL_BATCH_CAP;
   if (fanout_alloc_pinned(&wave->h_zstd_fan, &wave->zstd_fan, zsubs))
     goto Error;
+  wave->fanout_cap = (uint32_t)zsubs;
 
   CU(Error,
      cuMemAllocHost((void**)&wave->h_memcpy_ops,
@@ -253,39 +323,22 @@ wave_destroy(struct damacy_wave* wave, int cuda_skip)
     return;
   if (!cuda_skip) {
     void* const host_ptrs[] = {
-      wave->host_slab,
-      wave->h_chunks,
-      wave->scratch.hdrs,
-      wave->scratch.counts,
-      wave->scratch.offsets,
-      wave->scratch.bstarts,
-      wave->scratch.block_ends,
-      wave->h_blosc1_totals,
-      (void*)wave->h_zstd_fan.comp_ptrs,
-      wave->h_zstd_fan.comp_sizes,
-      wave->h_zstd_fan.decomp_ptrs,
-      wave->h_zstd_fan.decomp_buf_sizes,
-      wave->h_memcpy_ops,
-      wave->h_unshuffle_ops,
-      wave->h_bitunshuffle_ops,
+      wave->host_slab,        wave->h_chunks,        wave->scratch.hdrs,
+      wave->scratch.counts,   wave->scratch.offsets, wave->scratch.bstarts,
+      wave->scratch.block_ends, wave->h_blosc1_totals, wave->h_memcpy_ops,
+      wave->h_unshuffle_ops,  wave->h_bitunshuffle_ops,
       wave->h_assemble_chunks,
     };
     for (size_t i = 0; i < countof(host_ptrs); ++i)
       if (host_ptrs[i])
         cuMemFreeHost(host_ptrs[i]);
+    // Pinned fanout (host + device) — same NULL-safe per-pointer pattern.
+    fanout_free_pinned(&wave->h_zstd_fan, &wave->zstd_fan);
     void* const dev_ptrs[] = {
-      wave->dev_compressed,
-      wave->dev_decompressed,
-      wave->d_assemble_chunks,
-      wave->d_blosc1_totals,
-      (void*)wave->zstd_fan.d_comp_ptrs,
-      wave->zstd_fan.d_comp_sizes,
-      wave->zstd_fan.d_decomp_ptrs,
-      wave->zstd_fan.d_decomp_buf_sizes,
-      wave->d_memcpy_ops,
-      wave->d_unshuffle_ops,
-      wave->d_bitunshuffle_ops,
-      wave->dev_unshuffle_scratch,
+      wave->dev_compressed,    wave->dev_decompressed,
+      wave->d_assemble_chunks, wave->d_blosc1_totals,
+      wave->d_memcpy_ops,      wave->d_unshuffle_ops,
+      wave->d_bitunshuffle_ops,wave->dev_unshuffle_scratch,
     };
     for (size_t i = 0; i < countof(dev_ptrs); ++i)
       if (dev_ptrs[i])
@@ -329,13 +382,17 @@ wave_pool_init(struct wave_pool* wp,
 
   const uint64_t host_per_wave = host_buffer_bytes / 2;
   const uint64_t dev_per_wave = device_buffer_bytes / 2;
+  wp->dev_per_wave = dev_per_wave;
+  wp->max_chunk_uncompressed_bytes = max_chunk_uncompressed_bytes;
 
-  // Shared decoder is sized for one wave's worth of substreams since
-  // decodes serialize FIFO on stream_decode (M=1 in-flight).
-  uint64_t zsubs = 0, zstd_per = 0, total_uncompressed = 0;
-  wave_decoder_caps(dev_per_wave,
+  // Initial floor for the shared decoder; wave_pool_grow_decoder bumps
+  // it lazily when a wave's substream count exceeds the current cap.
+  // Per-wave fanout SOAs grow independently via wave_grow_fanout.
+  const uint64_t zsubs = (uint64_t)DAMACY_BLOSC_ZSTD_INITIAL_BATCH_CAP;
+  uint64_t zstd_per = 0, total_uncompressed = 0;
+  wave_decoder_caps(zsubs,
+                    dev_per_wave,
                     max_chunk_uncompressed_bytes,
-                    &zsubs,
                     &zstd_per,
                     &total_uncompressed);
   wp->zstd_decoder = decoder_zstd_create(
@@ -382,6 +439,92 @@ wave_pool_destroy(struct wave_pool* wp, int cuda_skip)
   wp->compute_pool = NULL;
   wp->stats = NULL;
   wp->failed_status = NULL;
+}
+
+// Grow ONE wave's fanout SOA (host pinned + device) to fit `need`
+// substreams. Caller (kick_h2d) ensures this is only called BEFORE the
+// wave's own fanout_upload, so no stream is reading the SOA — the
+// other wave's fanout lives in a different allocation and is untouched.
+// new_cap is next_pow2(need), clamped at the structural ceiling
+// (DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE), which by static_assert is also
+// the largest `need` peel can produce. Returns DAMACY_OK or DAMACY_CUDA;
+// on CUDA failure the wave's fanout pointers are NULL (fanout_free zeros
+// them) and wave_destroy stays safe.
+static enum damacy_status
+wave_grow_fanout(struct damacy_wave* wave, size_t need)
+{
+  if (need <= (size_t)wave->fanout_cap)
+    return DAMACY_OK;
+  size_t new_cap = next_pow2_size(need);
+  if (new_cap > (size_t)DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE)
+    new_cap = (size_t)DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE;
+
+  const uint32_t cur = wave->fanout_cap;
+  fanout_free_pinned(&wave->h_zstd_fan, &wave->zstd_fan);
+  wave->fanout_cap = 0;
+  if (fanout_alloc_pinned(&wave->h_zstd_fan, &wave->zstd_fan, new_cap) != 0)
+    return DAMACY_CUDA;
+  wave->fanout_cap = (uint32_t)new_cap;
+  log_info("wave fanout: grew %u -> %zu (need=%zu)",
+           (unsigned)cur,
+           new_cap,
+           need);
+  return DAMACY_OK;
+}
+
+// Grow the pool's shared zstd decoder scratch (d_temp + d_statuses +
+// d_uncompressed_actual_sizes) to fit `need` substreams in a single
+// batch. Triggered from kick_h2d when a wave's upper-bound substream
+// count exceeds the decoder's current cap. The scratch is monotonic and
+// wave-agnostic; growing it never disturbs any wave's fanout SOA.
+//
+// Synchronizes stream_decode first so any prior decode reading the
+// to-be-freed scratch has retired. stream_h2d is NOT touched — the
+// other wave's queued fanout_upload writes to ITS OWN SOA, not the
+// decoder scratch we're freeing.
+//
+// On decoder_zstd_grow failure the decoder is left zombie
+// (cur_max_batch == 0); subsequent kick_h2d calls short-circuit on
+// that and surface DAMACY_CUDA without re-attempting the grow.
+static enum damacy_status
+wave_pool_grow_decoder(struct wave_pool* wp, size_t need)
+{
+  const size_t cur = decoder_zstd_cur_max_batch(wp->zstd_decoder);
+  if (cur == 0) {
+    // Prior grow left the decoder destroyed-internally. Re-growing
+    // would leak the partial state and still fail; surface CUDA.
+    log_error("zstd decoder: cur_max_batch=0 (prior grow failed)");
+    return DAMACY_CUDA;
+  }
+  if (need <= cur)
+    return DAMACY_OK;
+  size_t new_cap = next_pow2_size(need);
+  if (new_cap > (size_t)DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE)
+    new_cap = (size_t)DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE;
+
+  // Any prior decode launched against the shared scratch must retire
+  // before we free it. FIFO on stream_decode means this also drains
+  // pending post-decode + assemble.
+  CU(CudaFail, cuStreamSynchronize(wp->stream_decode));
+
+  uint64_t zstd_per = 0, total_uncompressed = 0;
+  wave_decoder_caps((uint64_t)new_cap,
+                    wp->dev_per_wave,
+                    wp->max_chunk_uncompressed_bytes,
+                    &zstd_per,
+                    &total_uncompressed);
+  if (decoder_zstd_grow(wp->zstd_decoder,
+                        new_cap,
+                        (size_t)zstd_per,
+                        (size_t)total_uncompressed) != 0)
+    goto CudaFail;
+
+  log_info("zstd decoder: grew %zu -> %zu (need=%zu)", cur, new_cap, need);
+  return DAMACY_OK;
+
+CudaFail:
+  *wp->failed_status = DAMACY_CUDA;
+  return DAMACY_CUDA;
 }
 
 int
@@ -480,6 +623,26 @@ kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
   CU(CudaFail, cuEventRecord(wave->ev.bulk_h2d_end, wp->stream_h2d));
 
   build_blosc1_host_chunks(wp, wave);
+
+  // Tight upper bound on zstd substream count for THIS wave — every
+  // chunk could be blosc(zstd) with the maximum number of blosc-blocks.
+  // need_zsubs <= DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE by the
+  // damacy_limits static_assert (peel caps n_chunks). The fanout grow
+  // is per-wave: the OTHER wave's SOA is a separate allocation and
+  // untouched here, so this can run safely while the other wave is in
+  // WAVE_H2D / WAVE_ASSEMBLE. The decoder-scratch grow synchronizes
+  // stream_decode first.
+  const size_t need_zsubs =
+    (size_t)wave->n_chunks * (size_t)DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK;
+  enum damacy_status gs = wave_grow_fanout(wave, need_zsubs);
+  if (gs == DAMACY_OK)
+    gs = wave_pool_grow_decoder(wp, need_zsubs);
+  if (gs != DAMACY_OK) {
+    record_io_metric(wp, wave);
+    cuEventRecord(wave->ev.h2d_end, wp->stream_h2d);
+    *wp->failed_status = gs;
+    return gs;
+  }
 
   uint64_t parse_t0 = monotonic_ns();
   int rc = blosc1_host_parse(&(struct blosc1_host_parse_args){

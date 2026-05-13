@@ -14,7 +14,9 @@ _Static_assert(sizeof(nvcompStatus_t) == sizeof(int),
 
 // Per-batch nvcomp output arrays (actual sizes, statuses) and the temp
 // workspace are owned here. The four input arrays come from the caller's
-// device-side fanout (populated by the blosc1 emit kernel).
+// device-side fanout (populated by the blosc1 emit kernel). max_batch is
+// the *current* allocated cap and grows in lockstep with the pool's
+// fanout SOA when a wave's substream count exceeds it.
 struct decoder_zstd
 {
   size_t max_batch;
@@ -24,37 +26,40 @@ struct decoder_zstd
   size_t temp_bytes;
 };
 
-void
-decoder_zstd_destroy(struct decoder_zstd* d, int cuda_skip)
+// Frees the three device buffers; called by destroy and by grow before
+// re-alloc. Sets the freed slots back to NULL so a subsequent grow
+// failure leaves the struct safely re-destroyable.
+static void
+release_device_buffers(struct decoder_zstd* d)
 {
-  if (!d)
-    return;
-  if (!cuda_skip) {
-    void* dev_ptrs[] = {
-      (void*)d->d_uncompressed_actual_sizes,
-      (void*)d->d_statuses,
-      (void*)d->d_temp,
-    };
-    for (size_t i = 0; i < sizeof dev_ptrs / sizeof *dev_ptrs; ++i)
-      if (dev_ptrs[i])
-        cuMemFree(CUDPTR(dev_ptrs[i]));
+  if (d->d_uncompressed_actual_sizes) {
+    cuMemFree(CUDPTR(d->d_uncompressed_actual_sizes));
+    d->d_uncompressed_actual_sizes = NULL;
   }
-  free(d);
+  if (d->d_statuses) {
+    cuMemFree(CUDPTR(d->d_statuses));
+    d->d_statuses = NULL;
+  }
+  if (d->d_temp) {
+    cuMemFree(CUDPTR(d->d_temp));
+    d->d_temp = NULL;
+  }
+  d->temp_bytes = 0;
+  d->max_batch = 0;
 }
 
-struct decoder_zstd*
-decoder_zstd_create(size_t max_batch_size,
-                    size_t max_chunk_uncompressed_bytes,
-                    size_t max_total_uncompressed_bytes)
+// Allocates the three device buffers for the given cap. Caller must have
+// freed any prior buffers first. Returns 0 on success; on failure d is
+// in the partial state release_device_buffers expects (every set slot is
+// safe to free), and 1 is returned.
+static int
+alloc_device_buffers(struct decoder_zstd* d,
+                     size_t max_batch_size,
+                     size_t max_chunk_uncompressed_bytes,
+                     size_t max_total_uncompressed_bytes)
 {
-  struct decoder_zstd* d = NULL;
-
   CHECK(Fail, max_batch_size > 0);
   CHECK(Fail, max_chunk_uncompressed_bytes > 0);
-
-  d = (struct decoder_zstd*)calloc(1, sizeof(*d));
-  CHECK(Fail, d);
-  d->max_batch = max_batch_size;
 
   CUdeviceptr dptr = 0;
   CU(Fail, cuMemAlloc(&dptr, max_batch_size * sizeof(size_t)));
@@ -76,12 +81,63 @@ decoder_zstd_create(size_t max_batch_size,
     CU(Fail, cuMemAlloc(&dptr, temp_bytes));
     d->d_temp = (void*)(uintptr_t)dptr;
   }
+  d->max_batch = max_batch_size;
+  return 0;
+Fail:
+  return 1;
+}
 
+void
+decoder_zstd_destroy(struct decoder_zstd* d, int cuda_skip)
+{
+  if (!d)
+    return;
+  if (!cuda_skip)
+    release_device_buffers(d);
+  free(d);
+}
+
+struct decoder_zstd*
+decoder_zstd_create(size_t max_batch_size,
+                    size_t max_chunk_uncompressed_bytes,
+                    size_t max_total_uncompressed_bytes)
+{
+  struct decoder_zstd* d = (struct decoder_zstd*)calloc(1, sizeof(*d));
+  CHECK(Fail, d);
+  if (alloc_device_buffers(d,
+                           max_batch_size,
+                           max_chunk_uncompressed_bytes,
+                           max_total_uncompressed_bytes) != 0)
+    goto Fail;
   return d;
-
 Fail:
   decoder_zstd_destroy(d, 0);
   return NULL;
+}
+
+size_t
+decoder_zstd_cur_max_batch(const struct decoder_zstd* d)
+{
+  return d ? d->max_batch : 0;
+}
+
+int
+decoder_zstd_grow(struct decoder_zstd* d,
+                  size_t new_max_batch_size,
+                  size_t max_chunk_uncompressed_bytes,
+                  size_t max_total_uncompressed_bytes)
+{
+  CHECK(Fail, d);
+  CHECK(Fail, new_max_batch_size >= d->max_batch);
+  release_device_buffers(d);
+  if (alloc_device_buffers(d,
+                           new_max_batch_size,
+                           max_chunk_uncompressed_bytes,
+                           max_total_uncompressed_bytes) != 0)
+    goto Fail;
+  return 0;
+Fail:
+  return 1;
 }
 
 const int*
