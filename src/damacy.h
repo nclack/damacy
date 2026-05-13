@@ -130,6 +130,12 @@ extern "C"
     // exceed it.
     uint64_t max_gpu_memory_bytes;
 
+    // Subtracted from max_gpu_memory_bytes before sizing wave-resident
+    // buffers, so the lazy batch-output pool fits at first push.
+    // Set to the expected pool size: 2 * batch_size * sample_volume *
+    // dtype_bpe. 0 = no reservation.
+    uint64_t batch_output_reserve_bytes;
+
     // -1 captures current CUcontext; >= 0 retains the primary for that
     // device internally and rejects a current context on another device.
     int device;

@@ -409,14 +409,29 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
              "pipeline (resolved: %llu bytes).",
              (unsigned long long)resolved_max_gpu);
 
-  // Resolve per-wave geometry from the budget; rejects with OOM if even
-  // the minimum (one chunk per wave) doesn't fit. Then call
-  // gpu_budget_compute against the resolved geometry to seed
+  // Subtract the batch-output reserve before sizing wave-resident
+  // buffers; the resolver is greedy, so without this carve-out the
+  // lazy pool has no room at first push.
+  const uint64_t pool_reserve = cfg->batch_output_reserve_bytes;
+  if (pool_reserve >= resolved_max_gpu) {
+    log_error("damacy: batch_output_reserve_bytes=%llu >= "
+              "max_gpu_memory_bytes=%llu; nothing left for wave-resident "
+              "buffers",
+              (unsigned long long)pool_reserve,
+              (unsigned long long)resolved_max_gpu);
+    s = DAMACY_INVAL;
+    goto Fail;
+  }
+  const uint64_t resolver_budget = resolved_max_gpu - pool_reserve;
+
+  // Resolve per-wave geometry from the resolver budget; rejects with
+  // OOM if even the minimum (one chunk per wave) doesn't fit. Then
+  // call gpu_budget_compute against the resolved geometry to seed
   // gpu_bytes_committed — the grow paths read this back when checking
   // whether a new allocation would breach the cap.
   struct wave_pool_sizing sizing = { 0 };
   s = wave_pool_resolve_sizing(
-    resolved_max_gpu, runtime_chunk_cap, cfg->batch_size, &sizing);
+    resolver_budget, runtime_chunk_cap, cfg->batch_size, &sizing);
   if (s != DAMACY_OK)
     goto Fail;
   {
@@ -428,10 +443,13 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     if (s != DAMACY_OK)
       goto Fail;
     self->gpu_bytes_committed = budget.total;
-    log_info("damacy: resolved geometry from max_gpu_memory_bytes=%llu: "
+    log_info("damacy: resolved geometry from max_gpu_memory_bytes=%llu "
+             "(pool_reserve=%llu, resolver_budget=%llu): "
              "host_slab_per_wave=%llu dev_decompressed_per_wave=%llu "
              "initial_nvcomp_temp=%llu predicted_total=%llu",
              (unsigned long long)resolved_max_gpu,
+             (unsigned long long)pool_reserve,
+             (unsigned long long)resolver_budget,
              (unsigned long long)sizing.host_slab_per_wave,
              (unsigned long long)sizing.dev_decompressed_per_wave,
              (unsigned long long)budget.nvcomp_temp,
@@ -841,10 +859,16 @@ damacy_config_describe(const struct damacy_config* cfg)
   }
   const uint64_t resolved_max_gpu = resolve_max_gpu_memory(cfg);
   const uint64_t runtime_chunk_cap = resolve_max_chunk_uncompressed(cfg);
+  const uint64_t pool_reserve = cfg->batch_output_reserve_bytes;
+  const uint64_t resolver_budget =
+    pool_reserve < resolved_max_gpu ? resolved_max_gpu - pool_reserve : 0;
   log_info("damacy_config_describe: input max_gpu_memory_bytes=%llu "
-           "(resolved=%llu, max_chunk_uncompressed_bytes=%llu, batch_size=%u)",
+           "(resolved=%llu, batch_output_reserve=%llu, resolver_budget=%llu, "
+           "max_chunk_uncompressed_bytes=%llu, batch_size=%u)",
            (unsigned long long)cfg->max_gpu_memory_bytes,
            (unsigned long long)resolved_max_gpu,
+           (unsigned long long)pool_reserve,
+           (unsigned long long)resolver_budget,
            (unsigned long long)runtime_chunk_cap,
            (unsigned)cfg->batch_size);
   if (cfg->host_buffer_bytes || cfg->device_buffer_bytes)
@@ -855,7 +879,7 @@ damacy_config_describe(const struct damacy_config* cfg)
 
   struct wave_pool_sizing sizing = { 0 };
   enum damacy_status rs = wave_pool_resolve_sizing(
-    resolved_max_gpu, runtime_chunk_cap, cfg->batch_size, &sizing);
+    resolver_budget, runtime_chunk_cap, cfg->batch_size, &sizing);
   if (rs != DAMACY_OK) {
     log_info("damacy_config_describe: wave_pool_resolve_sizing failed (%s)",
              damacy_status_str(rs));
