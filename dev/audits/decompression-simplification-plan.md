@@ -163,7 +163,7 @@ sum), because decodes serialize on `stream_decode`.
 
 ---
 
-### Phase 4 — Runtime substream cap (observe-and-grow)
+### Phase 4 — Runtime substream cap (observe-and-grow) — **DONE**
 
 **Goal**: stop sizing nvcomp temp + SOA arrays for the worst-case
 `DAMACY_MAX_CHUNKS_PER_WAVE × DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK = 16 384`

@@ -78,9 +78,16 @@
 #define DAMACY_BLOSC_MAX_CHUNK_UNCOMPRESSED_BYTES (16ull << 20) // 16 MB
 
 // Worst-case substream count per wave for blosc1-zstd: 1 substream per
-// blosc-block.
+// blosc-block. Acts as the hard ceiling for the observe-and-grow runtime
+// cap on the shared zstd decoder + per-wave fanout SOA: a grow request
+// past this value fails the wave with DAMACY_OOM rather than reallocating.
 #define DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE                                    \
   (DAMACY_MAX_CHUNKS_PER_WAVE * DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK)
+// Initial substream-batch cap for the pool-shared zstd decoder + per-wave
+// fanout SOAs. Sized off a typical wave (hundreds of substreams) rather
+// than the hard ceiling above; grows on demand when a wave's actual
+// substream count exceeds the current cap.
+#define DAMACY_BLOSC_ZSTD_INITIAL_BATCH_CAP 1024u
 // Memcpy + (bit)unshuffle ops cap: every chunk could be MEMCPY/SHUFFLE'd.
 #define DAMACY_MAX_BLOSC_MEMCPY_OPS_PER_WAVE DAMACY_MAX_CHUNKS_PER_WAVE
 #define DAMACY_MAX_BLOSC_SHUFFLE_OPS_PER_WAVE DAMACY_MAX_CHUNKS_PER_WAVE

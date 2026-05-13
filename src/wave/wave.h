@@ -134,7 +134,17 @@ struct wave_pool
   // Pool-shared zstd decoder. Decodes serialize FIFO on stream_decode
   // (at most one wave's decode in-flight), so a single nvcomp temp +
   // status + actual-sizes allocation suffices for both waves.
+  //
+  // Substream-batch cap on this decoder + both waves' fanout SOAs is
+  // observe-and-grow: starts at DAMACY_BLOSC_ZSTD_INITIAL_BATCH_CAP and
+  // bumps to the next power of 2 when a wave's substream count exceeds
+  // the current cap, capped at DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE.
   struct decoder_zstd* zstd_decoder;
+
+  // Cached at wave_pool_init so wave_pool_grow_zstd_batch can replay
+  // the per-substream + per-batch upper bounds without re-resolving cfg.
+  uint64_t dev_per_wave;
+  uint64_t max_chunk_uncompressed_bytes;
 
   // Borrowed (owned by struct damacy / its members). Set in wave_pool_init
   // and never updated.
@@ -206,6 +216,11 @@ void wave_pool_destroy(struct wave_pool* wp, int cuda_skip);
 int fanout_alloc_pinned(struct blosc1_host_fanout* h,
                         struct nvcomp_fanout* d,
                         size_t n);
+
+// Free the 4 pinned-host + 4 device buffers a prior fanout_alloc_pinned
+// allocated, zero the SOA structs so they're safe to re-allocate into.
+// NULL-safe per pointer (matches wave_destroy's freeing pattern).
+void fanout_free_pinned(struct blosc1_host_fanout* h, struct nvcomp_fanout* d);
 
 // H2D the 4 SOA arrays of one fanout in lockstep onto `s`.
 enum damacy_status fanout_upload(CUstream s,
