@@ -13,8 +13,8 @@ test_create_destroy(void)
 {
   struct decoder_zstd* z = decoder_zstd_create(8, 64 * 1024, 8 * 64 * 1024);
   EXPECT(z);
-  decoder_zstd_destroy(z);
-  decoder_zstd_destroy(NULL);
+  decoder_zstd_destroy(z, 0);
+  decoder_zstd_destroy(NULL, 0);
 
   return 0;
 }

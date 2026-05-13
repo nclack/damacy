@@ -245,7 +245,7 @@ run_one(const struct fixture* fx, struct threadpool* pool, CUstream stream)
                                      (size_t*)(uintptr_t)d_zstd_ds,
                                      h_totals.n_zstd) == 0);
     EXPECT(cuStreamSynchronize(stream) == CUDA_SUCCESS);
-    decoder_zstd_destroy(z);
+    decoder_zstd_destroy(z, 0);
   }
 
   CUdeviceptr d_scratch = 0;

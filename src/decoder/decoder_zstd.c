@@ -25,18 +25,20 @@ struct decoder_zstd
 };
 
 void
-decoder_zstd_destroy(struct decoder_zstd* d)
+decoder_zstd_destroy(struct decoder_zstd* d, int cuda_skip)
 {
   if (!d)
     return;
-  void* dev_ptrs[] = {
-    (void*)d->d_uncompressed_actual_sizes,
-    (void*)d->d_statuses,
-    (void*)d->d_temp,
-  };
-  for (size_t i = 0; i < sizeof dev_ptrs / sizeof *dev_ptrs; ++i)
-    if (dev_ptrs[i])
-      cuMemFree(CUDPTR(dev_ptrs[i]));
+  if (!cuda_skip) {
+    void* dev_ptrs[] = {
+      (void*)d->d_uncompressed_actual_sizes,
+      (void*)d->d_statuses,
+      (void*)d->d_temp,
+    };
+    for (size_t i = 0; i < sizeof dev_ptrs / sizeof *dev_ptrs; ++i)
+      if (dev_ptrs[i])
+        cuMemFree(CUDPTR(dev_ptrs[i]));
+  }
   free(d);
 }
 
@@ -78,7 +80,7 @@ decoder_zstd_create(size_t max_batch_size,
   return d;
 
 Fail:
-  decoder_zstd_destroy(d);
+  decoder_zstd_destroy(d, 0);
   return NULL;
 }
 
