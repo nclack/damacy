@@ -30,7 +30,7 @@ enum wave_state
   WAVE_FREE = 0,
   WAVE_IO,
   WAVE_H2D,
-  WAVE_ASSEMBLE, // covers decompress + assemble (one stream, one event)
+  WAVE_ASSEMBLE, // covers decompress + assemble on stream_decode; polled on asm_end
 };
 
 struct damacy_wave

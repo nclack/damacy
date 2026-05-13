@@ -42,7 +42,7 @@ post-decode + assemble behind the previous wave's events.**
 | `max_bytes_per_element` | sizes LZ4 fanout | **removed** (was LZ4-only) |
 | `host_buffer_bytes` / `device_buffer_bytes` | required | **deprecated**; derived from `max_gpu_memory_bytes` |
 | `max_gpu_memory_bytes` | optional hard cap | **primary budget knob**, required |
-| Events per wave | 10 | 6 (drop `zstd_done`, `lz4_done`, `post_start`, …) |
+| Events per wave | 10 | 7 (drop `zstd_done`, `lz4_done`, `post_start`, …) |
 
 ## Phases
 

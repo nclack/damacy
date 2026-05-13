@@ -166,9 +166,9 @@ wave_init(struct damacy_wave* wave,
   CU(Error,
      cuMemAllocHost((void**)&wave->h_blosc1_totals,
                     sizeof(struct blosc1_totals)));
-  wave->h_assemble_chunks =
-    (struct assemble_chunk*)calloc(cap, sizeof(struct assemble_chunk));
-  CHECK(Error, wave->h_assemble_chunks);
+  CU(Error,
+     cuMemAllocHost((void**)&wave->h_assemble_chunks,
+                    (size_t)cap * sizeof(struct assemble_chunk)));
   wave->store_reads =
     (struct store_read*)calloc(cap, sizeof(struct store_read));
   CHECK(Error, wave->store_reads);
@@ -266,6 +266,7 @@ wave_destroy(struct damacy_wave* wave, int cuda_skip)
       wave->h_memcpy_ops,
       wave->h_unshuffle_ops,
       wave->h_bitunshuffle_ops,
+      wave->h_assemble_chunks,
     };
     for (size_t i = 0; i < countof(host_ptrs); ++i)
       if (host_ptrs[i])
@@ -295,7 +296,6 @@ wave_destroy(struct damacy_wave* wave, int cuda_skip)
       if (*events[i])
         cuEventDestroy_v2(*events[i]);
   }
-  free(wave->h_assemble_chunks);
   free(wave->store_reads);
   memset(wave, 0, sizeof(*wave));
 }
