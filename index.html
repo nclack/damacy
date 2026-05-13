@@ -519,7 +519,7 @@
 <p><strong>High-speed streamed assembly of tensors from zarr sources to GPU.</strong></p>
 <p>damacy reads sharded <a href="https://ngff.openmicroscopy.org/">NGFF</a> zarr stores
 straight onto the GPU: per-shard chunk indexing, parallel host I/O,
-in-flight GPU-side decompression (zstd, blosc1-{lz4,zstd}), and a typed
+in-flight GPU-side decompression (zstd, blosc1-zstd), and a typed
 assemble kernel that lands each batch as a DLPack-ready device tensor.</p>
 <p><a href="https://github.com/nclack/damacy/actions/workflows/build.yml"><img alt="build" src="https://github.com/nclack/damacy/actions/workflows/build.yml/badge.svg" /></a>
 <a href="https://github.com/nclack/damacy/actions/workflows/test.yml"><img alt="test" src="https://github.com/nclack/damacy/actions/workflows/test.yml/badge.svg" /></a>
