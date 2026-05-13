@@ -141,8 +141,9 @@ run_one(const struct fixture* fx, struct threadpool* pool, CUstream stream)
     .block_ends = block_ends_slot,
   };
 
-  // Worst-case substream count for one chunk: nblocks ≤ 16,
-  // nstreams_per_block ≤ 8.
+  // Worst-case substream count for one chunk: each block emits exactly
+  // one substream, so nblocks ≤ DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK (32).
+  // Leave 128 as a harmless over-allocation.
   const size_t kMaxSubs = 128;
   const void** zstd_comp_ptrs =
     (const void**)calloc(kMaxSubs, sizeof(*zstd_comp_ptrs));
@@ -417,6 +418,12 @@ test_bad_header(void)
   // err=8: unsupported codec_id
   build_blosc1_header(hdr, CODEC_BLOSC_ZSTD, 4096, 1024, 100, 4);
   EXPECT(expect_parse_err(99u, hdr, 100, 4096, 8, pool) == 0);
+
+  // err=8: CODEC_BLOSC_LZ4 must also route to err=8. The planner
+  // rejects LZ4 upstream, but pin the host loader's defense-in-depth
+  // behavior in case that early rejection is ever removed or bypassed.
+  build_blosc1_header(hdr, CODEC_BLOSC_ZSTD, 4096, 1024, 100, 4);
+  EXPECT(expect_parse_err(CODEC_BLOSC_LZ4, hdr, 100, 4096, 8, pool) == 0);
 
   // err=9: bstart out of range. Build a valid 16+4*nblocks header
   // followed by bstart entries that point past cbytes. nblocks=4 →

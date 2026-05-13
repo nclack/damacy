@@ -1,8 +1,8 @@
 // Tiny reduce kernel that counts non-zero entries in an int-sized status
 // array (typically nvcomp's per-batch d_statuses) and atomicAdds the count
 // into a uint32 device counter. Decoupled from any specific codec so the
-// shared-host orchestration path can fold both nvcomp Zstd and LZ4 status
-// arrays into one error tally.
+// shared-host orchestration path can fold an nvcomp status array
+// (currently used for zstd) into one error tally.
 #pragma once
 
 #include <cuda.h>
