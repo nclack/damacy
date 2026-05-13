@@ -38,6 +38,8 @@ blosc1_host_parse_err_str(uint8_t err)
       return "bstart out of range";
     case 10:
       return "header.nbytes > DAMACY_BLOSC_MAX_CHUNK_UNCOMPRESSED_BYTES";
+    case 11:
+      return "truncated block cbytes prefix";
     default:
       return "unknown";
   }
@@ -97,10 +99,13 @@ fill_block_ends(const uint32_t* bstarts,
 // Walks the per-block prefix chain for one CODEC_BLOSC_ZSTD chunk and
 // fills counts. Caller has validated err == 0 and !memcpyed and has
 // already populated bstarts[] / block_ends[]. blosc1-zstd has one
-// substream per block.
+// substream per block. Sets h->err = 11 if any block's 4-byte cbytes
+// prefix would read past block_ends[bi], or if the prefix value claims
+// more bytes than remain in the block. On err=11 counts are left zero
+// and emit_one skips the chunk via its h->err check.
 static void
 walk_count(const uint8_t* p,
-           const struct blosc1_chunk_hdr* h,
+           struct blosc1_chunk_hdr* h,
            const uint32_t* bstarts,
            const uint32_t* block_ends,
            struct blosc1_chunk_counts* c)
@@ -115,12 +120,16 @@ walk_count(const uint8_t* p,
   for (uint32_t bi = 0; bi < h->nblocks; ++bi) {
     const uint32_t end = block_ends[bi];
     uint32_t cur = bstarts[bi];
-    if (cur > end - 4u)
-      continue;
+    if (cur > end - 4u) {
+      h->err = 11;
+      return;
+    }
     const uint32_t cb = read_u32_le(p + cur);
     cur += 4u;
-    if (cb > end - cur)
-      continue;
+    if (cb > end - cur) {
+      h->err = 11;
+      return;
+    }
     if (cb == per_stream_dst)
       ++n_raw;
     else

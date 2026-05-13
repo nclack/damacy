@@ -468,11 +468,31 @@ test_bad_header(void)
   EXPECT(expect_parse_err(CODEC_BLOSC_ZSTD, hdr, 100, 0xffffffffu, 10, pool) ==
          0);
 
+  // err=11: truncated block cbytes prefix. Pass err=9 (bstarts in
+  // [payload_lo, cbytes)) but place two bstarts only 1 byte apart so
+  // the first block has end - bstart = 1 < 4 and walk_count's prefix
+  // read would underrun. nbytes=2048, blocksize=1024 → nblocks=2,
+  // payload_lo=24. bstarts={24,25}, cbytes=32. After sort,
+  // block_ends[0]=25, so for block 0: end - 4 = 21 < bs=24 ⇒ err=11.
+  uint8_t buf11[32];
+  memset(buf11, 0, sizeof buf11);
+  build_blosc1_header(buf11, CODEC_BLOSC_ZSTD, 2048, 1024, 32, 4);
+  const uint32_t bs11[2] = { 24u, 25u };
+  for (int i = 0; i < 2; ++i) {
+    buf11[16 + i * 4 + 0] = (uint8_t)(bs11[i] & 0xffu);
+    buf11[16 + i * 4 + 1] = (uint8_t)((bs11[i] >> 8) & 0xffu);
+    buf11[16 + i * 4 + 2] = (uint8_t)((bs11[i] >> 16) & 0xffu);
+    buf11[16 + i * 4 + 3] = (uint8_t)((bs11[i] >> 24) & 0xffu);
+  }
+  EXPECT(expect_parse_err(CODEC_BLOSC_ZSTD, buf11, 32, 2048, 11, pool) == 0);
+
   // Spot-check the stringifier surface too.
   EXPECT(strcmp(blosc1_host_parse_err_str(0), "ok") == 0);
   EXPECT(strcmp(blosc1_host_parse_err_str(10),
                 "header.nbytes > DAMACY_BLOSC_MAX_CHUNK_UNCOMPRESSED_BYTES") ==
          0);
+  EXPECT(strcmp(blosc1_host_parse_err_str(11),
+                "truncated block cbytes prefix") == 0);
   EXPECT(strcmp(blosc1_host_parse_err_str(99), "unknown") == 0);
 
   threadpool_free(pool);

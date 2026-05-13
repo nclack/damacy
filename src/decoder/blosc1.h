@@ -33,7 +33,7 @@ extern "C"
     uint8_t bitshuffle;
     uint8_t memcpyed;
     uint8_t compformat;
-    uint8_t err; // 0 == ok; 1..10 see decoder/blosc1_host.c
+    uint8_t err; // 0 == ok; 1..11 see decoder/blosc1_host.c
     uint32_t nbytes;
     uint32_t blocksize;
     uint32_t cbytes;

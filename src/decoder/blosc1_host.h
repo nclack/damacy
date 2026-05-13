@@ -66,7 +66,7 @@ extern "C"
   // out_totals->n_parse_errors).
   int blosc1_host_parse(const struct blosc1_host_parse_args* args);
 
-  // Short string for blosc1_chunk_hdr.err (1..10). Returns "ok" for 0
+  // Short string for blosc1_chunk_hdr.err (1..11). Returns "ok" for 0
   // and "unknown" for any out-of-range value. Lifetime is static.
   const char* blosc1_host_parse_err_str(uint8_t err);
 
