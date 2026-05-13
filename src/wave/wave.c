@@ -14,17 +14,19 @@
 #include "util/prelude.h"
 #include "util/strbuf.h"
 
+#include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
 // Wave-index helper for NVTX range labels — call sites use
 // wave_index_of(wp, wave) to compute "w0"/"w1" without touching
-// damacy_wave's storage.
-static inline int
+// damacy_wave's storage. Returns ptrdiff_t so the pointer subtraction
+// isn't narrowed; format with %td at call sites.
+static inline ptrdiff_t
 wave_index_of(const struct wave_pool* wp, const struct damacy_wave* wave)
 {
-  return (int)(wave - wp->waves);
+  return wave - wp->waves;
 }
 
 int
@@ -869,7 +871,7 @@ record_io_metric(const struct wave_pool* wp, const struct damacy_wave* wave)
 static enum damacy_status
 kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
 {
-  damacy_nvtx_range_pushf("kick_h2d/w%d", wave_index_of(wp, wave));
+  damacy_nvtx_range_pushf("kick_h2d/w%td", wave_index_of(wp, wave));
   enum damacy_status rs;
 
   CU(CudaFail, cuEventRecord(wave->ev.h2d_start, wp->stream_h2d));
@@ -977,6 +979,10 @@ kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
   goto Done;
 
 FanoutCudaFail:
+  // h2d_end intentionally not recorded: kick_h2d returns DAMACY_CUDA so
+  // wave_pool_advance bails before the wave reaches WAVE_ASSEMBLE,
+  // finalize_wave never runs for this wave, and drain_wave_metrics
+  // never reads h2d_end. Recording it here would be dead work.
   damacy_nvtx_range_pop(); // fanout_h2d
   goto CudaFail;
 BulkCudaFail:
@@ -1041,7 +1047,7 @@ kick_decode(struct wave_pool* wp,
   CUstream s = wp->stream_decode;
   uint32_t* d_err = &wave->d_blosc1_totals->n_codec_errors;
   enum damacy_status rs;
-  damacy_nvtx_range_pushf("kick_decode/w%d", wave_index_of(wp, wave));
+  damacy_nvtx_range_pushf("kick_decode/w%td", wave_index_of(wp, wave));
   CU(CudaFail, cuEventRecord(wave->ev.decomp_start, s));
   if (tot->n_zstd > 0) {
     if (decoder_zstd_batch_device(wp->zstd_decoder,
@@ -1100,7 +1106,7 @@ kick_assemble(struct wave_pool* wp, struct damacy_wave* wave)
   CUstream s = wp->stream_decode;
   struct damacy_batch_slot* slot = &wp->pool->slots[wave->batch_pool_slot];
   enum damacy_status rs;
-  damacy_nvtx_range_pushf("kick_assemble/w%d", wave_index_of(wp, wave));
+  damacy_nvtx_range_pushf("kick_assemble/w%td", wave_index_of(wp, wave));
 
   build_assemble_meta(wp, wave);
   CU(CudaFail,
@@ -1181,7 +1187,7 @@ drain_wave_metrics(const struct wave_pool* wp, struct damacy_wave* wave)
 static void
 finalize_wave(struct wave_pool* wp, struct damacy_wave* wave)
 {
-  damacy_nvtx_range_pushf("finalize_wave/w%d", wave_index_of(wp, wave));
+  damacy_nvtx_range_pushf("finalize_wave/w%td", wave_index_of(wp, wave));
   drain_wave_metrics(wp, wave);
   if (wave->h_blosc1_totals->n_codec_errors > 0 &&
       *wp->failed_status == DAMACY_OK) {

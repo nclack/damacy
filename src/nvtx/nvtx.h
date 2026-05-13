@@ -25,7 +25,6 @@ extern "C"
 
 #if DAMACY_NVTX_ENABLED
 
-  void damacy_nvtx_init(void);
   void damacy_nvtx_range_push(const char* name);
   // printf-style variant; bounded by an internal thread-local buffer
   // so call sites can encode wave index without owning a formatter.
@@ -40,10 +39,6 @@ extern "C"
 
 #else // DAMACY_NVTX_ENABLED == 0
 
-static inline void
-damacy_nvtx_init(void)
-{
-}
 static inline void
 damacy_nvtx_range_push(const char* name)
 {
@@ -74,15 +69,6 @@ damacy_nvtx_stream_name(CUstream s, const char* name)
 }
 
 #endif // DAMACY_NVTX_ENABLED
-
-// Scoped range: pushes on entry, pops on exit. Use:
-//   DAMACY_NVTX_RANGE("peel_wave") { ... }
-// The loop runs exactly once; the second iteration's increment pops
-// the range. Works under both ON and OFF flavors because the macro
-// resolves to the respective push/pop above (no-op when disabled).
-#define DAMACY_NVTX_RANGE(name)                                                \
-  for (int _nvtx_done = (damacy_nvtx_range_push(name), 0); !_nvtx_done;        \
-       _nvtx_done = 1, damacy_nvtx_range_pop())
 
 #ifdef __cplusplus
 }

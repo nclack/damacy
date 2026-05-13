@@ -14,25 +14,32 @@
 #include <nvtx3/nvToolsExt.h>
 #include <nvtx3/nvToolsExtCuda.h>
 
+#include "platform/platform.h"
+
+// Per-thread printf buffer for damacy_nvtx_range_pushf. Range names are
+// short labels like "kick_h2d/w0" or "finalize_wave/w1" (well under 32
+// chars); 128 is generous headroom. vsnprintf truncates silently on
+// overflow, which is acceptable for a profiling string — worst case is
+// a slightly less informative timeline entry.
 #define DAMACY_NVTX_FMT_BUF 128
 
-// Lazily-created so we don't drag the NVTX init into damacy_create's
-// hot path. nvtxDomainCreateA is thread-safe and idempotent enough at
-// this scale (worst case: one extra unused domain handle on a race).
+// Lazily-created via platform_call_once so concurrent first-callers
+// can't race on the domain handle (plain double-check on a non-atomic
+// static pointer is C11 UB and leaks one of the two domains).
+static platform_once s_domain_once = PLATFORM_ONCE_INIT;
 static nvtxDomainHandle_t s_domain = NULL;
+
+static void
+init_domain(void)
+{
+  s_domain = nvtxDomainCreateA("damacy");
+}
 
 static nvtxDomainHandle_t
 get_domain(void)
 {
-  if (!s_domain)
-    s_domain = nvtxDomainCreateA("damacy");
+  platform_call_once(&s_domain_once, init_domain);
   return s_domain;
-}
-
-void
-damacy_nvtx_init(void)
-{
-  (void)get_domain();
 }
 
 void

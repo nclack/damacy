@@ -14,7 +14,7 @@ add_src_lib(log SOURCES log/log.h log/log.c ${PROJECT_SOURCE_DIR}/src/damacy_log
 # Fuzz builds always OFF (no CUDA, and the timeline isn't interesting
 # in libFuzzer). The .c is always in the source list (gives the static
 # lib a linker language); its body is #if-gated on DAMACY_NVTX_ENABLED.
-add_cuda_lib(damacy_nvtx SOURCES nvtx/nvtx.h nvtx/nvtx.c LINKS CUDA::cuda_driver)
+add_cuda_lib(damacy_nvtx SOURCES nvtx/nvtx.h nvtx/nvtx.c LINKS CUDA::cuda_driver platform)
 if(NOT DAMACY_FUZZ AND DAMACY_NVTX_ENABLED)
     target_link_libraries(damacy_nvtx PUBLIC CUDA::nvtx3)
     target_compile_definitions(damacy_nvtx PUBLIC DAMACY_NVTX_ENABLED=1)
