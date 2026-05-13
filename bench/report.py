@@ -80,6 +80,7 @@ def _stage_table(r: Results) -> Table:
         "io": "yellow",
         "h2d": "magenta",
         "decompress": "green",
+        "decompress.parse": "green",
         "assemble": "green",
         "pop_wait_io": "red",
         "pop_wait_compute": "red",
@@ -125,6 +126,7 @@ def _counters_table(r: Results) -> Table:
         ("distinct_shards", f"{c.distinct_shards}"),
         ("zarr_meta hits/misses", f"{c.zarr_meta_hits:,} / {c.zarr_meta_misses:,}"),
         ("shard_idx hits/misses", f"{c.shard_idx_hits:,} / {c.shard_idx_misses:,}"),
+        ("gpu_bytes_committed", f"{c.gpu_bytes_committed / 1e6:,.1f} MB"),
     ]
     for k, v in rows:
         t.add_row(k, v)
@@ -180,8 +182,7 @@ def _scenario_panel(r: Results) -> Panel:
         f"[dim]pipeline[/dim] dst_dtype={sc.pipeline.dtype} "
         f"lookahead={sc.pipeline.lookahead_batches} "
         f"io_threads={sc.pipeline.n_io_threads} "
-        f"host_mb={sc.pipeline.host_buffer_mb} "
-        f"device_mb={sc.pipeline.device_buffer_mb}"
+        f"max_gpu_mb={sc.pipeline.max_gpu_memory_mb or 'default'}"
     )
     return Panel(body, title="scenario", border_style="cyan")
 
