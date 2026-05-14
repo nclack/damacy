@@ -371,6 +371,89 @@ def test_batch_dlpack_export_smoke(tiny_zarr):
             del cap
 
 
+def test_batch_dlpack_default_is_v0_capsule(tiny_zarr):
+    """Default __dlpack__() (no max_version) must emit a v0 capsule —
+    that's the only thing PyTorch 2.8 consumes (issue #33)."""
+    uri = tiny_zarr
+    with Pipeline(_base_config()) as d:
+        d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
+        with d.pop() as batch:
+            cap = batch.__dlpack__(stream=None)
+            # PyCapsule.__repr__ embeds the name, e.g.
+            #   '<capsule object "dltensor" at 0x...>'
+            assert 'dltensor"' in repr(cap)
+            assert "dltensor_versioned" not in repr(cap)
+            del cap
+
+
+def test_batch_dlpack_versioned_when_max_version_requests_it(tiny_zarr):
+    """max_version=(1, 0) opts the consumer into the v1.0 wire format."""
+    uri = tiny_zarr
+    with Pipeline(_base_config()) as d:
+        d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
+        with d.pop() as batch:
+            cap = batch.__dlpack__(stream=None, max_version=(1, 0))
+            assert "dltensor_versioned" in repr(cap)
+            del cap
+
+
+def test_batch_dlpack_max_version_zero_stays_v0(tiny_zarr):
+    """max_version=(0, X) is a legacy-only request → v0."""
+    uri = tiny_zarr
+    with Pipeline(_base_config()) as d:
+        d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
+        with d.pop() as batch:
+            cap = batch.__dlpack__(stream=None, max_version=(0, 9))
+            assert 'dltensor"' in repr(cap)
+            assert "dltensor_versioned" not in repr(cap)
+            del cap
+
+
+def test_batch_torch_from_dlpack(tiny_zarr):
+    """torch.from_dlpack(batch) must accept the default capsule — that's
+    the regression issue #33 exists to fix."""
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA-enabled torch required")
+
+    uri = tiny_zarr
+    with Pipeline(_base_config()) as d:
+        d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
+        with d.pop() as batch:
+            info = batch.info
+            t = torch.from_dlpack(batch)
+            assert t.device.type == "cuda"
+            assert tuple(t.shape) == tuple(info.shape)
+            assert t.dtype == torch.float32  # _base_config default
+            # The data should be readable. Copy off-device and check it
+            # isn't garbage / segfaulting.
+            host = t.detach().cpu()
+            assert host.numel() == t.numel()
+
+
+def test_batch_torch_from_dlpack_versioned(tiny_zarr):
+    """torch.utils.dlpack.from_dlpack should also accept the v1 capsule
+    when a caller explicitly asks for it. PyTorch 2.6+ understands both
+    names, so this exercises the v1 path end-to-end."""
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA-enabled torch required")
+    # Some PyTorch builds (<2.6) reject "dltensor_versioned" outright;
+    # treat that as a known limitation and skip rather than fail.
+    uri = tiny_zarr
+    with Pipeline(_base_config()) as d:
+        d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
+        with d.pop() as batch:
+            info = batch.info
+            cap = batch.__dlpack__(stream=None, max_version=(1, 0))
+            try:
+                t = torch.utils.dlpack.from_dlpack(cap)
+            except (RuntimeError, TypeError) as exc:
+                pytest.skip(f"torch doesn't accept v1 capsule: {exc}")
+            assert t.device.type == "cuda"
+            assert tuple(t.shape) == tuple(info.shape)
+
+
 # ---- log helpers -------------------------------------------------------
 
 

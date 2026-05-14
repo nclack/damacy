@@ -78,13 +78,20 @@ class Batch:
         dl_device: tuple[int, int] | None = ...,
         copy: bool | None = ...,
     ) -> Any:
-        """DLPack v1 capsule export. ``stream`` is honored per the
+        """DLPack capsule export. ``stream`` is honored per the
         protocol (consumer's stream waits on damacy's ``ready_stream``).
         ``copy=True`` raises :class:`BufferError` — the batch is on the
         device damacy assembled it on, no implicit copy is performed.
-        ``max_version`` and ``dl_device`` are accepted for protocol
-        compatibility but currently ignored; the producer always emits
-        the v1 layout on the assembling device."""
+
+        ``max_version`` selects the wire format:
+
+        - ``None`` (default) → v0 ``"dltensor"`` capsule. PyTorch 2.8
+          and other legacy consumers expect this.
+        - ``(1, 0)`` or higher → v1.0 ``"dltensor_versioned"`` capsule.
+          CuPy and array-API-spec consumers ask for this.
+
+        ``dl_device`` is accepted for protocol compatibility but ignored;
+        the producer always emits on the assembling device."""
 
     def __dlpack_device__(self) -> tuple[int, int]:
         """Returns (kDLCUDA=2, ordinal)."""
