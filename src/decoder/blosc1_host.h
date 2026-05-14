@@ -2,6 +2,7 @@
 // parse_and_count / scan_offsets / emit_fanout kernels.
 #pragma once
 
+#include "assemble/assemble.h"
 #include "decoder/blosc1.h"
 #include "decoder/decoder_memcpy.h"
 
@@ -57,8 +58,10 @@ extern "C"
     struct blosc1_host_scratch scratch;
     struct blosc1_host_fanout zstd;
     struct gpu_memcpy_op* memcpy_ops;
-    struct gpu_shuffle_op* unshuffle_ops;
-    struct gpu_shuffle_op* bitunshuffle_ops;
+    // Per-chunk shuffle mode is written here; the assemble kernel reads
+    // it. Caller pre-populates geometry fields; parse only touches the
+    // shuffle_{mode,typesize,blocksize} trio.
+    struct assemble_chunk* assemble_chunks;
     struct blosc1_totals* out_totals;
   };
 

@@ -3,8 +3,6 @@
 #include "batch_pool/batch_pool.h"
 #include "damacy_config.h"
 #include "damacy_stats.h"
-#include "decoder/bitshuffle.h"
-#include "decoder/shuffle.h"
 #include "decoder/status_reduce.h"
 #include "log/log.h"
 #include "nvtx/nvtx.h"
@@ -159,9 +157,18 @@ wave_decoder_caps(uint64_t zsubs,
     return;
   }
   const uint64_t runtime_chunk_cap = max_chunk_uncompressed_bytes;
-  const uint64_t cap_worst = zsubs * runtime_chunk_cap;
-  const uint64_t total_uncompressed =
-    dev_decompressed_bytes < cap_worst ? dev_decompressed_bytes : cap_worst;
+  // Tight upper bound on bytes nvcomp will emit per call: structural
+  // chunk-count cap × per-chunk cap. dev_decompressed_bytes is the arena
+  // limit, but with chunks-per-wave capped this is usually smaller and
+  // keeps nvcomp from over-allocating workspace for memory it won't use.
+  const uint64_t chunks_cap_bytes =
+    (uint64_t)DAMACY_MAX_CHUNKS_PER_WAVE * runtime_chunk_cap;
+  const uint64_t subs_cap_bytes = zsubs * runtime_chunk_cap;
+  uint64_t total_uncompressed = dev_decompressed_bytes;
+  if (chunks_cap_bytes < total_uncompressed)
+    total_uncompressed = chunks_cap_bytes;
+  if (subs_cap_bytes < total_uncompressed)
+    total_uncompressed = subs_cap_bytes;
   uint64_t zstd_per = runtime_chunk_cap;
   if (zstd_per > total_uncompressed)
     zstd_per = total_uncompressed;
@@ -182,14 +189,11 @@ wave_predict_bytes(uint64_t host_slab_bytes,
 
   out->dev_compressed = host_slab_bytes;
   out->dev_decompressed = dev_decompressed_bytes;
-  out->dev_unshuffle_scratch = dev_decompressed_bytes;
   out->blosc1_meta =
     cap * sizeof(struct assemble_chunk) + sizeof(struct blosc1_totals);
   out->fanout_soa = zsubs * (2 * sizeof(void*) + 2 * sizeof(size_t)) +
                     (uint64_t)DAMACY_MAX_BLOSC_MEMCPY_OPS_PER_WAVE *
-                      sizeof(struct gpu_memcpy_op) +
-                    2ull * (uint64_t)DAMACY_MAX_BLOSC_SHUFFLE_OPS_PER_WAVE *
-                      sizeof(struct gpu_shuffle_op);
+                      sizeof(struct gpu_memcpy_op);
   return DAMACY_OK;
 }
 
@@ -263,7 +267,6 @@ predict_pool_total(uint64_t host_slab_per_wave,
     per_wave.fanout_soa - fanout_slice_init + fanout_slice_max;
 
   uint64_t total = 2ull * (per_wave.dev_compressed + per_wave.dev_decompressed +
-                           per_wave.dev_unshuffle_scratch +
                            per_wave.blosc1_meta + fanout_soa_worst) +
                    nvcomp_temp_max +
                    2ull * (uint64_t)batch_size * sizeof(struct sample_plan);
@@ -300,27 +303,26 @@ wave_pool_resolve_sizing(uint64_t max_gpu_memory_bytes,
     return DAMACY_OOM;
   }
 
-  // dev_compressed + dev_decompressed + dev_unshuffle_scratch all
-  // scale 1:1 with per_wave; 2× for two waves. 6 = 2 × 3.
-  //   total_min + 6 * delta_per_wave <= cap
-  //   ⇒ delta_per_wave_max = (cap - total_min) / 6
-  // Round down to a 1 MB granularity so resolved values are readable
-  // in logs; the back-off loop below catches any overshoot from the
-  // approximation.
-  //
-  // CAREFUL: the 6 divisor only holds while this resolver assigns the
-  // same `per_wave` value to both out->host_slab_per_wave and
-  // out->dev_decompressed_per_wave below — that's what makes a single
-  // delta scale dev_compressed (= host_slab_per_wave),
-  // dev_decompressed, and dev_unshuffle_scratch in lockstep. If you
-  // ever split host vs dev sizing, also split the divisor accordingly.
-  // The assert after the assignment locks this in.
+  // dev_compressed + dev_decompressed scale 1:1 with per_wave; 2× for
+  // two waves. 4 = 2 × 2.
+  //   total_min + 4 * delta_per_wave <= cap
+  //   ⇒ delta_per_wave_max = (cap - total_min) / 4
+  // Round down to 1 MB so logs are readable; the back-off loop below
+  // catches any overshoot. The assert after the assignment locks the
+  // assumption that host_slab_per_wave == dev_decompressed_per_wave.
   const uint64_t headroom = max_gpu_memory_bytes - total_min;
-  const uint64_t delta_per_wave_cap = headroom / 6;
+  const uint64_t delta_per_wave_cap = headroom / 4;
   const uint64_t step = 1ull << 20; // 1 MB granularity
   uint64_t per_wave = min_per_wave + (delta_per_wave_cap / step) * step;
   if (per_wave < min_per_wave)
     per_wave = min_per_wave;
+  // Cap at the maximum useful size: chunks-per-wave is bounded at
+  // DAMACY_MAX_CHUNKS_PER_WAVE, so any per_wave beyond that × per-chunk
+  // cap is wasted memory + slows nvcomp through inflated workspace.
+  const uint64_t useful_max =
+    (uint64_t)DAMACY_MAX_CHUNKS_PER_WAVE * max_chunk_uncompressed_bytes;
+  if (per_wave > useful_max)
+    per_wave = useful_max;
 
   uint64_t predicted = 0;
   s = predict_pool_total(
@@ -361,19 +363,18 @@ wave_pool_resolve_sizing(uint64_t max_gpu_memory_bytes,
 
 int
 wave_init(struct damacy_wave* wave,
-          uint64_t host_slab_bytes,
+          uint64_t slot_cap_bytes,
           uint64_t dev_decompressed_bytes)
 {
   // Self-zero so wave_destroy on the failure path doesn't free
   // uninitialized pointers — caller may have passed stack memory.
   memset(wave, 0, sizeof(*wave));
   wave->state = WAVE_FREE;
-  wave->host_slab_cap = host_slab_bytes;
+  wave->bound_slot = -1;
   wave->dev_decompressed_cap = dev_decompressed_bytes;
 
-  CU(Error, cuMemAllocHost(&wave->host_slab, host_slab_bytes));
   CUdeviceptr dptr = 0;
-  CU(Error, cuMemAlloc(&dptr, host_slab_bytes));
+  CU(Error, cuMemAlloc(&dptr, slot_cap_bytes));
   wave->dev_compressed = (void*)(uintptr_t)dptr;
   CU(Error, cuMemAlloc(&dptr, dev_decompressed_bytes));
   wave->dev_decompressed = (void*)(uintptr_t)dptr;
@@ -407,9 +408,6 @@ wave_init(struct damacy_wave* wave,
   CU(Error,
      cuMemAllocHost((void**)&wave->h_assemble_chunks,
                     (size_t)cap * sizeof(struct assemble_chunk)));
-  wave->store_reads =
-    (struct store_read*)calloc(cap, sizeof(struct store_read));
-  CHECK(Error, wave->store_reads);
 
   CU(Error, cuMemAlloc(&dptr, (size_t)cap * sizeof(struct assemble_chunk)));
   wave->d_assemble_chunks = (struct assemble_chunk*)(uintptr_t)dptr;
@@ -429,35 +427,16 @@ wave_init(struct damacy_wave* wave,
                     DAMACY_MAX_BLOSC_MEMCPY_OPS_PER_WAVE *
                       sizeof(struct gpu_memcpy_op)));
   CU(Error,
-     cuMemAllocHost((void**)&wave->h_unshuffle_ops,
-                    DAMACY_MAX_BLOSC_SHUFFLE_OPS_PER_WAVE *
-                      sizeof(struct gpu_shuffle_op)));
-  CU(Error,
-     cuMemAllocHost((void**)&wave->h_bitunshuffle_ops,
-                    DAMACY_MAX_BLOSC_SHUFFLE_OPS_PER_WAVE *
-                      sizeof(struct gpu_shuffle_op)));
-  CU(Error,
      cuMemAlloc(&dptr,
                 DAMACY_MAX_BLOSC_MEMCPY_OPS_PER_WAVE *
                   sizeof(struct gpu_memcpy_op)));
   wave->d_memcpy_ops = (struct gpu_memcpy_op*)(uintptr_t)dptr;
-  CU(Error,
-     cuMemAlloc(&dptr,
-                DAMACY_MAX_BLOSC_SHUFFLE_OPS_PER_WAVE *
-                  sizeof(struct gpu_shuffle_op)));
-  wave->d_unshuffle_ops = (struct gpu_shuffle_op*)(uintptr_t)dptr;
-  CU(Error,
-     cuMemAlloc(&dptr,
-                DAMACY_MAX_BLOSC_SHUFFLE_OPS_PER_WAVE *
-                  sizeof(struct gpu_shuffle_op)));
-  wave->d_bitunshuffle_ops = (struct gpu_shuffle_op*)(uintptr_t)dptr;
-  CU(Error, cuMemAlloc(&dptr, dev_decompressed_bytes));
-  wave->dev_unshuffle_scratch = (void*)(uintptr_t)dptr;
 
   CU(Error, cuEventCreate(&wave->ev.h2d_start, CU_EVENT_DEFAULT));
   CU(Error, cuEventCreate(&wave->ev.bulk_h2d_end, CU_EVENT_DEFAULT));
   CU(Error, cuEventCreate(&wave->ev.h2d_end, CU_EVENT_DEFAULT));
   CU(Error, cuEventCreate(&wave->ev.decomp_start, CU_EVENT_DEFAULT));
+  CU(Error, cuEventCreate(&wave->ev.decode_done, CU_EVENT_DEFAULT));
   CU(Error, cuEventCreate(&wave->ev.decomp_end, CU_EVENT_DEFAULT));
   CU(Error, cuEventCreate(&wave->ev.asm_start, CU_EVENT_DEFAULT));
   CU(Error, cuEventCreate(&wave->ev.asm_end, CU_EVENT_DEFAULT));
@@ -477,12 +456,9 @@ wave_destroy(struct damacy_wave* wave, int cuda_skip)
     return;
   if (!cuda_skip) {
     void* const host_ptrs[] = {
-      wave->host_slab,          wave->h_chunks,
-      wave->scratch.hdrs,       wave->scratch.counts,
-      wave->scratch.offsets,    wave->scratch.bstarts,
-      wave->scratch.block_ends, wave->h_blosc1_totals,
-      wave->h_memcpy_ops,       wave->h_unshuffle_ops,
-      wave->h_bitunshuffle_ops, wave->h_assemble_chunks,
+      wave->h_chunks,        wave->scratch.hdrs,    wave->scratch.counts,
+      wave->scratch.offsets, wave->scratch.bstarts, wave->scratch.block_ends,
+      wave->h_blosc1_totals, wave->h_memcpy_ops,    wave->h_assemble_chunks,
     };
     for (size_t i = 0; i < countof(host_ptrs); ++i)
       if (host_ptrs[i])
@@ -490,24 +466,58 @@ wave_destroy(struct damacy_wave* wave, int cuda_skip)
     // Pinned fanout (host + device) — same NULL-safe per-pointer pattern.
     fanout_free_pinned(&wave->h_zstd_fan, &wave->zstd_fan);
     void* const dev_ptrs[] = {
-      wave->dev_compressed,     wave->dev_decompressed,
-      wave->d_assemble_chunks,  wave->d_blosc1_totals,
-      wave->d_memcpy_ops,       wave->d_unshuffle_ops,
-      wave->d_bitunshuffle_ops, wave->dev_unshuffle_scratch,
+      wave->dev_compressed,  wave->dev_decompressed, wave->d_assemble_chunks,
+      wave->d_blosc1_totals, wave->d_memcpy_ops,
     };
     for (size_t i = 0; i < countof(dev_ptrs); ++i)
       if (dev_ptrs[i])
         cuMemFree(CUDPTR(dev_ptrs[i]));
-    CUevent* const events[] = { &wave->ev.h2d_start,  &wave->ev.bulk_h2d_end,
-                                &wave->ev.h2d_end,    &wave->ev.decomp_start,
-                                &wave->ev.decomp_end, &wave->ev.asm_start,
-                                &wave->ev.asm_end };
+    CUevent* const events[] = { &wave->ev.h2d_start,   &wave->ev.bulk_h2d_end,
+                                &wave->ev.h2d_end,     &wave->ev.decomp_start,
+                                &wave->ev.decode_done, &wave->ev.decomp_end,
+                                &wave->ev.asm_start,   &wave->ev.asm_end };
     for (size_t i = 0; i < countof(events); ++i)
       if (*events[i])
         cuEventDestroy_v2(*events[i]);
   }
-  free(wave->store_reads);
   memset(wave, 0, sizeof(*wave));
+}
+
+// Allocate one host_slab_slot's pinned buffer + store_reads array.
+// Returns 0 on success, 1 on failure (after self-cleanup).
+static int
+slot_init(struct host_slab_slot* slot, uint64_t cap)
+{
+  memset(slot, 0, sizeof(*slot));
+  slot->cap = cap;
+  if (cuMemAllocHost(&slot->buf, cap) != CUDA_SUCCESS)
+    goto Error;
+  slot->store_reads = (struct store_read*)calloc(DAMACY_MAX_CHUNKS_PER_WAVE,
+                                                 sizeof(struct store_read));
+  if (!slot->store_reads)
+    goto Error;
+  return 0;
+Error:
+  if (slot->buf) {
+    cuMemFreeHost(slot->buf);
+    slot->buf = NULL;
+  }
+  free(slot->store_reads);
+  slot->store_reads = NULL;
+  return 1;
+}
+
+static void
+slot_destroy(struct host_slab_slot* slot, int cuda_skip)
+{
+  if (!slot)
+    return;
+  if (!cuda_skip && slot->buf)
+    cuMemFreeHost(slot->buf);
+  slot->buf = NULL;
+  free(slot->store_reads);
+  slot->store_reads = NULL;
+  slot->state = SLOT_FREE;
 }
 
 int
@@ -518,6 +528,7 @@ wave_pool_init(struct wave_pool* wp,
                struct damacy_stats* stats,
                enum damacy_status* failed_status,
                enum damacy_dtype dtype,
+               uint8_t host_buffer_waves,
                uint64_t host_slab_per_wave,
                uint64_t dev_decompressed_per_wave,
                uint64_t max_chunk_uncompressed_bytes,
@@ -533,13 +544,17 @@ wave_pool_init(struct wave_pool* wp,
   wp->dtype = dtype;
   wp->max_gpu_memory_bytes = max_gpu_memory_bytes;
   wp->gpu_bytes_committed = gpu_bytes_committed;
+  wp->n_slots = host_buffer_waves;
 
-  // Non-blocking so damacy doesn't force-serialize against the legacy
-  // default stream that some user code still lands on.
+  // NON_BLOCKING so we don't serialize against the legacy default stream.
   CU(Fail, cuStreamCreate(&wp->stream_h2d, CU_STREAM_NON_BLOCKING));
   CU(Fail, cuStreamCreate(&wp->stream_decode, CU_STREAM_NON_BLOCKING));
+  CU(Fail, cuStreamCreate(&wp->stream_post, CU_STREAM_NON_BLOCKING));
+  for (size_t i = 0; i < countof(wp->decode_done_ring); ++i)
+    CU(Fail, cuEventCreate(&wp->decode_done_ring[i], CU_EVENT_DEFAULT));
   damacy_nvtx_stream_name(wp->stream_h2d, "damacy:h2d");
   damacy_nvtx_stream_name(wp->stream_decode, "damacy:decode");
+  damacy_nvtx_stream_name(wp->stream_post, "damacy:post");
 
   const uint64_t host_per_wave = host_slab_per_wave;
   const uint64_t dev_per_wave = dev_decompressed_per_wave;
@@ -560,9 +575,14 @@ wave_pool_init(struct wave_pool* wp,
     (size_t)zsubs, (size_t)zstd_per, (size_t)total_uncompressed);
   CHECK(Fail, wp->zstd_decoder);
 
-  for (int w = 0; w < 2; ++w)
+  for (uint8_t s = 0; s < host_buffer_waves; ++s)
+    if (slot_init(&wp->slots[s], host_per_wave) != 0)
+      goto Fail;
+  for (int w = 0; w < DAMACY_N_WAVES; ++w) {
     if (wave_init(&wp->waves[w], host_per_wave, dev_per_wave) != 0)
       goto Fail;
+    wp->waves[w].bound_slot = -1;
+  }
   return 0;
 Fail:
   wave_pool_destroy(wp, 0);
@@ -574,7 +594,9 @@ wave_pool_destroy(struct wave_pool* wp, int cuda_skip)
 {
   if (!wp)
     return;
-  CUstream* const streams[] = { &wp->stream_decode, &wp->stream_h2d };
+  CUstream* const streams[] = { &wp->stream_post,
+                                &wp->stream_decode,
+                                &wp->stream_h2d };
   if (!cuda_skip) {
     // Sync streams (but don't destroy yet) so any pending GPU work
     // touching wave + shared-decoder buffers has retired before we
@@ -583,11 +605,18 @@ wave_pool_destroy(struct wave_pool* wp, int cuda_skip)
       if (*streams[i])
         cuStreamSynchronize(*streams[i]);
   }
-  for (int w = 0; w < 2; ++w)
+  for (int w = 0; w < DAMACY_N_WAVES; ++w)
     wave_destroy(&wp->waves[w], cuda_skip);
+  for (uint8_t s = 0; s < wp->n_slots; ++s)
+    slot_destroy(&wp->slots[s], cuda_skip);
   decoder_zstd_destroy(wp->zstd_decoder, cuda_skip);
   wp->zstd_decoder = NULL;
   if (!cuda_skip) {
+    for (size_t i = 0; i < countof(wp->decode_done_ring); ++i)
+      if (wp->decode_done_ring[i]) {
+        cuEventDestroy_v2(wp->decode_done_ring[i]);
+        wp->decode_done_ring[i] = NULL;
+      }
     for (size_t i = 0; i < countof(streams); ++i)
       if (*streams[i]) {
         cuStreamDestroy(*streams[i]);
@@ -631,10 +660,9 @@ wave_grow_fanout(struct wave_pool* wp, struct damacy_wave* wave, size_t need)
 
   const uint32_t cur = wave->fanout_cap;
 
-  // Phase 5: enforce the GPU budget on grow. delta is the net device
-  // bytes added; if committed + delta would breach the cap, reject
-  // before freeing the existing fanout so the wave stays usable on
-  // failure.
+  // Enforce the GPU budget on grow. delta is the net device bytes
+  // added; if committed + delta would breach the cap, reject before
+  // freeing the existing fanout so the wave stays usable on failure.
   const uint64_t delta_bytes =
     (uint64_t)(new_cap - (size_t)cur) * fanout_dev_bytes_per_sub();
   if (wp->max_gpu_memory_bytes > 0 && wp->gpu_bytes_committed) {
@@ -722,9 +750,9 @@ wave_pool_grow_decoder(struct wave_pool* wp, size_t need)
   if (new_cap > (size_t)DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE)
     new_cap = (size_t)DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE;
 
-  // Phase 5: enforce the GPU budget. Compute the byte delta from the
-  // current decoder scratch to the proposed one. If the change would
-  // push past the cap, return OOM before touching the device.
+  // Enforce the GPU budget. Compute the byte delta from the current
+  // decoder scratch to the proposed one. If the change would push
+  // past the cap, return OOM before touching the device.
   uint64_t old_bytes = 0, new_bytes = 0;
   enum damacy_status sp =
     predict_decoder_scratch_bytes((uint64_t)cur,
@@ -789,7 +817,7 @@ CudaFail:
 int
 find_free_wave(const struct wave_pool* wp)
 {
-  for (int w = 0; w < 2; ++w)
+  for (int w = 0; w < DAMACY_N_WAVES; ++w)
     if (wp->waves[w].state == WAVE_FREE)
       return w;
   return -1;
@@ -798,10 +826,61 @@ find_free_wave(const struct wave_pool* wp)
 int
 any_wave_in_flight(const struct wave_pool* wp)
 {
-  for (int w = 0; w < 2; ++w)
+  for (int w = 0; w < DAMACY_N_WAVES; ++w)
     if (wp->waves[w].state != WAVE_FREE)
       return 1;
   return 0;
+}
+
+int
+any_slot_in_flight(const struct wave_pool* wp)
+{
+  for (uint8_t s = 0; s < wp->n_slots; ++s)
+    if (wp->slots[s].state != SLOT_FREE)
+      return 1;
+  return 0;
+}
+
+int
+any_slot_free(const struct wave_pool* wp)
+{
+  for (uint8_t s = 0; s < wp->n_slots; ++s)
+    if (wp->slots[s].state == SLOT_FREE)
+      return 1;
+  return 0;
+}
+
+static int
+find_free_slot(const struct wave_pool* wp)
+{
+  for (uint8_t s = 0; s < wp->n_slots; ++s)
+    if (wp->slots[s].state == SLOT_FREE)
+      return s;
+  return -1;
+}
+
+static int
+find_ready_slot(const struct wave_pool* wp)
+{
+  for (uint8_t s = 0; s < wp->n_slots; ++s)
+    if (wp->slots[s].state == SLOT_READY)
+      return s;
+  return -1;
+}
+
+// Release a slot from SLOT_BUSY back to SLOT_FREE. Called when
+// bulk_h2d_end fires on stream_h2d (the host bytes have been consumed
+// by the GPU copy) or from the failure cleanup in advance/kick_h2d.
+static void
+slot_release(struct host_slab_slot* slot)
+{
+  slot->state = SLOT_FREE;
+  slot->used_bytes = 0;
+  slot->n_chunks = 0;
+  slot->io_bytes = 0;
+  slot->batch_pool_slot = 0;
+  slot->batch_chunk_offset = 0;
+  slot->io_event = (struct store_event){ 0 };
 }
 
 // --- peel / advance -------------------------------------------------------
@@ -918,8 +997,7 @@ kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
     .scratch = wave->scratch,
     .zstd = wave->h_zstd_fan,
     .memcpy_ops = wave->h_memcpy_ops,
-    .unshuffle_ops = wave->h_unshuffle_ops,
-    .bitunshuffle_ops = wave->h_bitunshuffle_ops,
+    .assemble_chunks = wave->h_assemble_chunks,
     .out_totals = wave->h_blosc1_totals,
   });
   wave->parse_ms = (float)((monotonic_ns() - parse_t0) / 1.0e6);
@@ -950,20 +1028,17 @@ kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
                          wave->h_memcpy_ops,
                          (size_t)tot->n_memcpy * sizeof(struct gpu_memcpy_op),
                          wp->stream_h2d));
-  if (tot->n_unshuffle > 0)
-    CU(FanoutCudaFail,
-       cuMemcpyHtoDAsync(CUDPTR(wave->d_unshuffle_ops),
-                         wave->h_unshuffle_ops,
-                         (size_t)tot->n_unshuffle *
-                           sizeof(struct gpu_shuffle_op),
-                         wp->stream_h2d));
-  if (tot->n_bitunshuffle > 0)
-    CU(FanoutCudaFail,
-       cuMemcpyHtoDAsync(CUDPTR(wave->d_bitunshuffle_ops),
-                         wave->h_bitunshuffle_ops,
-                         (size_t)tot->n_bitunshuffle *
-                           sizeof(struct gpu_shuffle_op),
-                         wp->stream_h2d));
+
+  // Assemble metadata: pinned host buffer was built in peel_wave; pushing
+  // the H2D here folds it into h2d_end's gating so stream_decode sees it
+  // ready before assemble_launch (which itself queues after the decode
+  // kernels). Overlaps with the bulk slab H2D + nvcomp decode on the
+  // device.
+  CU(FanoutCudaFail,
+     cuMemcpyHtoDAsync(CUDPTR(wave->d_assemble_chunks),
+                       wave->h_assemble_chunks,
+                       (size_t)wave->n_chunks * sizeof(struct assemble_chunk),
+                       wp->stream_h2d));
 
   // Zero so status_reduce's atomicAdds land in a clean n_codec_errors.
   CU(FanoutCudaFail,
@@ -1036,9 +1111,8 @@ build_assemble_meta(const struct wave_pool* wp, struct damacy_wave* wave)
   wave->assemble_max_blocks_per_chunk = max_bpc;
 }
 
-// Nvcomp zstd batch + post-decode (memcpy / (bit)unshuffle) on
-// stream_decode in FIFO order. decomp_start brackets the nvcomp launch;
-// decomp_end fires after the post-decode kernels complete.
+// Nvcomp + status_reduce on stream_decode. status_reduce stays here
+// (shared d_statuses across waves; stream_decode FIFO orders it).
 static enum damacy_status
 kick_decode(struct wave_pool* wp,
             struct damacy_wave* wave,
@@ -1048,6 +1122,13 @@ kick_decode(struct wave_pool* wp,
   uint32_t* d_err = &wave->d_blosc1_totals->n_codec_errors;
   enum damacy_status rs;
   damacy_nvtx_range_pushf("kick_decode/w%td", wave_index_of(wp, wave));
+  // Borrow the most-recently-anchored slot for our gap measurement, then
+  // claim the next slot for our own anchor (recorded after decode_done).
+  // First kick's prev points at a never-recorded slot — cuEventElapsedTime
+  // returns NOT_READY and drain skips.
+  size_t prev_idx = wp->decode_done_ring_idx;
+  size_t this_idx = (prev_idx + 1) % countof(wp->decode_done_ring);
+  wave->prev_decode_anchor = wp->decode_done_ring[prev_idx];
   CU(CudaFail, cuEventRecord(wave->ev.decomp_start, s));
   if (tot->n_zstd > 0) {
     if (decoder_zstd_batch_device(wp->zstd_decoder,
@@ -1062,30 +1143,9 @@ kick_decode(struct wave_pool* wp,
           s, decoder_zstd_d_statuses(wp->zstd_decoder), d_err, tot->n_zstd))
       goto DecodeFail;
   }
-  if (tot->n_memcpy > 0 &&
-      decoder_memcpy_launch(s, wave->d_memcpy_ops, tot->n_memcpy))
-    goto DecodeFail;
-  if (tot->n_unshuffle > 0 && gpu_unshuffle_launch(s,
-                                                   wave->d_unshuffle_ops,
-                                                   tot->n_unshuffle,
-                                                   wave->dev_decompressed,
-                                                   wave->dev_unshuffle_scratch))
-    goto DecodeFail;
-  if (tot->n_bitunshuffle > 0 &&
-      gpu_bitunshuffle_launch(s,
-                              wave->d_bitunshuffle_ops,
-                              tot->n_bitunshuffle,
-                              wave->dev_decompressed,
-                              wave->dev_unshuffle_scratch))
-    goto DecodeFail;
-  // Narrowed to the 4-byte n_codec_errors so the host parse's count
-  // fields in h_blosc1_totals stay intact for drain_wave_metrics.
-  CU(CudaFail,
-     cuMemcpyDtoHAsync(&wave->h_blosc1_totals->n_codec_errors,
-                       CUDPTR(&wave->d_blosc1_totals->n_codec_errors),
-                       sizeof(uint32_t),
-                       s));
-  CU(CudaFail, cuEventRecord(wave->ev.decomp_end, s));
+  CU(CudaFail, cuEventRecord(wave->ev.decode_done, s));
+  CU(CudaFail, cuEventRecord(wp->decode_done_ring[this_idx], s));
+  wp->decode_done_ring_idx = this_idx;
   rs = DAMACY_OK;
   goto Done;
 DecodeFail:
@@ -1100,20 +1160,35 @@ Done:
   return rs;
 }
 
+// Post-decode + 4B D2H + assemble on stream_post, gated on
+// ev.decode_done. Lets wave N+1's decode on stream_decode overlap
+// wave N's assemble.
 static enum damacy_status
-kick_assemble(struct wave_pool* wp, struct damacy_wave* wave)
+kick_assemble(struct wave_pool* wp,
+              struct damacy_wave* wave,
+              const struct blosc1_totals* tot)
 {
-  CUstream s = wp->stream_decode;
+  CUstream s = wp->stream_post;
   struct damacy_batch_slot* slot = &wp->pool->slots[wave->batch_pool_slot];
   enum damacy_status rs;
   damacy_nvtx_range_pushf("kick_assemble/w%td", wave_index_of(wp, wave));
 
-  build_assemble_meta(wp, wave);
+  CU(CudaFail, cuStreamWaitEvent(s, wave->ev.decode_done, 0));
+
+  if (tot->n_memcpy > 0 &&
+      decoder_memcpy_launch(s, wave->d_memcpy_ops, tot->n_memcpy))
+    goto DecodeFail;
+  // (Bit)unshuffle is now folded into assemble_kernel via per-chunk
+  // shuffle_mode in assemble_chunk.
+  // Narrowed to the 4-byte n_codec_errors so the host parse's count
+  // fields in h_blosc1_totals stay intact for drain_wave_metrics.
   CU(CudaFail,
-     cuMemcpyHtoDAsync(CUDPTR(wave->d_assemble_chunks),
-                       wave->h_assemble_chunks,
-                       (size_t)wave->n_chunks * sizeof(struct assemble_chunk),
+     cuMemcpyDtoHAsync(&wave->h_blosc1_totals->n_codec_errors,
+                       CUDPTR(&wave->d_blosc1_totals->n_codec_errors),
+                       sizeof(uint32_t),
                        s));
+  CU(CudaFail, cuEventRecord(wave->ev.decomp_end, s));
+
   CU(CudaFail, cuEventRecord(wave->ev.asm_start, s));
   if (assemble_launch(s,
                       wave->assemble_rank,
@@ -1129,6 +1204,10 @@ kick_assemble(struct wave_pool* wp, struct damacy_wave* wave)
   CU(CudaFail, cuEventRecord(wave->ev.asm_end, s));
   rs = DAMACY_OK;
   goto Done;
+DecodeFail:
+  *wp->failed_status = DAMACY_DECODE;
+  rs = DAMACY_DECODE;
+  goto Done;
 CudaFail:
   *wp->failed_status = DAMACY_CUDA;
   rs = DAMACY_CUDA;
@@ -1137,8 +1216,8 @@ Done:
   return rs;
 }
 
-// stream_decode gates on stream_h2d's h2d_end, then nvcomp decode +
-// post-decode + assemble all run in FIFO on stream_decode.
+// Wait on h2d_end, kick decode on stream_decode, kick post + assemble on
+// stream_post.
 static enum damacy_status
 kick_compute(struct wave_pool* wp, struct damacy_wave* wave)
 {
@@ -1148,7 +1227,7 @@ kick_compute(struct wave_pool* wp, struct damacy_wave* wave)
   enum damacy_status st = kick_decode(wp, wave, &tot);
   if (st != DAMACY_OK)
     return st;
-  st = kick_assemble(wp, wave);
+  st = kick_assemble(wp, wave, &tot);
   if (st != DAMACY_OK)
     return st;
 
@@ -1159,8 +1238,7 @@ CudaFail:
   return DAMACY_CUDA;
 }
 
-// All wave events have fired (asm_end signaled implies everything
-// earlier on the same stream did too). Pull elapsed times into stats.
+// All wave events have fired; pull elapsed times into stats.
 static void
 drain_wave_metrics(const struct wave_pool* wp, struct damacy_wave* wave)
 {
@@ -1171,10 +1249,17 @@ drain_wave_metrics(const struct wave_pool* wp, struct damacy_wave* wave)
   if (cuEventElapsedTime(&ms, wave->ev.h2d_start, wave->ev.bulk_h2d_end) ==
       CUDA_SUCCESS)
     metric_record(&st->h2d, ms, wave->io_bytes, wave->io_bytes);
-  if (cuEventElapsedTime(&ms, wave->ev.decomp_start, wave->ev.decomp_end) ==
+  if (cuEventElapsedTime(&ms, wave->ev.decomp_start, wave->ev.decode_done) ==
       CUDA_SUCCESS)
     metric_record(
-      &st->decompress, ms, wave->decomp_in_bytes, wave->decomp_out_bytes);
+      &st->decode, ms, wave->decomp_in_bytes, wave->decomp_out_bytes);
+  if (cuEventElapsedTime(&ms, wave->ev.decode_done, wave->ev.decomp_end) ==
+      CUDA_SUCCESS)
+    metric_record(&st->post_decode, ms, 0, 0);
+  if (wave->prev_decode_anchor &&
+      cuEventElapsedTime(
+        &ms, wave->prev_decode_anchor, wave->ev.decomp_start) == CUDA_SUCCESS)
+    metric_record(&st->decode_gap, ms, 0, 0);
   metric_record(&st->decompress_parse, wave->parse_ms, 0, 0);
   if (cuEventElapsedTime(&ms, wave->ev.asm_start, wave->ev.asm_end) ==
       CUDA_SUCCESS)
@@ -1207,28 +1292,36 @@ finalize_wave(struct wave_pool* wp, struct damacy_wave* wave)
   damacy_nvtx_range_pop();
 }
 
+// Pack chunks from `batch_slot`'s remaining work into a free
+// host_slab_slot. Submits IO and transitions the slot to SLOT_IO.
+// No-op if no slot is free or the batch has nothing left.
 enum damacy_status
-wave_pool_peel(struct wave_pool* wp, uint16_t wave_idx, uint16_t slot_idx)
+wave_pool_peel(struct wave_pool* wp, uint16_t batch_slot_idx)
 {
-  damacy_nvtx_range_pushf("peel_wave/w%u", (unsigned)wave_idx);
-  struct damacy_wave* wave = &wp->waves[wave_idx];
-  struct damacy_batch_slot* slot = &wp->pool->slots[slot_idx];
-  uint32_t base = slot->n_chunks_dispatched;
-  uint32_t remaining = slot->n_chunks - base;
-  if (remaining == 0) {
-    damacy_nvtx_range_pop();
+  struct damacy_batch_slot* batch = &wp->pool->slots[batch_slot_idx];
+  uint32_t base = batch->n_chunks_dispatched;
+  uint32_t remaining = batch->n_chunks - base;
+  if (remaining == 0)
     return DAMACY_OK;
-  }
+  int slot_idx = find_free_slot(wp);
+  if (slot_idx < 0)
+    return DAMACY_OK;
+  struct host_slab_slot* hs = &wp->slots[slot_idx];
+  damacy_nvtx_range_pushf("peel/slot%d", slot_idx);
 
   uint64_t host_cursor = 0;
   uint64_t dev_cursor = 0;
   uint32_t take = 0;
+  // Cap dev_cursor against any wave's dev_decompressed_cap — all waves
+  // share the same size by resolver construction. Read the first wave's
+  // cap as the runtime value.
+  const uint64_t dev_cap = wp->waves[0].dev_decompressed_cap;
   for (; take < remaining && take < DAMACY_MAX_CHUNKS_PER_WAVE; ++take) {
-    struct read_op* r = &slot->read_ops[base + take];
-    struct chunk_plan* c = &slot->chunk_plans[base + take];
-    if (host_cursor + r->nbytes > wave->host_slab_cap)
+    struct read_op* r = &batch->read_ops[base + take];
+    struct chunk_plan* c = &batch->chunk_plans[base + take];
+    if (host_cursor + r->nbytes > hs->cap)
       break;
-    if (dev_cursor + c->decompressed_nbytes > wave->dev_decompressed_cap)
+    if (dev_cursor + c->decompressed_nbytes > dev_cap)
       break;
     r->dst_buf_offset = host_cursor;
     c->dev_decompressed_offset = dev_cursor;
@@ -1237,71 +1330,141 @@ wave_pool_peel(struct wave_pool* wp, uint16_t wave_idx, uint16_t slot_idx)
   }
   if (take == 0) {
     // Single chunk doesn't fit. Per-wave caps too tight for this workload;
-    // surface it loudly rather than livelocking.
-    log_error("wave: chunk too large for wave slab "
-              "(host_slab_cap=%llu device_buf_cap=%llu)",
-              (unsigned long long)wave->host_slab_cap,
-              (unsigned long long)wave->dev_decompressed_cap);
+    // surface it loudly rather than livelocking. Slot stays FREE.
+    log_error("wave: chunk too large for slot "
+              "(slot_cap=%llu dev_cap=%llu)",
+              (unsigned long long)hs->cap,
+              (unsigned long long)dev_cap);
     *wp->failed_status = DAMACY_OOM;
     damacy_nvtx_range_pop();
     return DAMACY_OOM;
   }
 
   for (uint32_t i = 0; i < take; ++i) {
-    struct read_op* r = &slot->read_ops[base + i];
-    wave->store_reads[i] = (struct store_read){
+    struct read_op* r = &batch->read_ops[base + i];
+    hs->store_reads[i] = (struct store_read){
       .key = r->shard_path,
-      .dst = (uint8_t*)wave->host_slab + r->dst_buf_offset,
+      .dst = (uint8_t*)hs->buf + r->dst_buf_offset,
       .offset = r->file_offset,
       .len = r->nbytes,
     };
   }
-  wave->io_t_start_ns = monotonic_ns();
-  wave->io_event = store_read_submit(wp->store, wave->store_reads, take);
-  if (wave->io_event.seq == 0) {
+  hs->io_t_start_ns = monotonic_ns();
+  hs->io_event = store_read_submit(wp->store, hs->store_reads, take);
+  if (hs->io_event.seq == 0) {
     *wp->failed_status = DAMACY_IO;
     damacy_nvtx_range_pop();
     return DAMACY_IO;
   }
 
-  wave->batch_pool_slot = slot_idx;
-  wave->batch_chunk_offset = base;
-  wave->n_chunks = take;
-  wave->host_used_bytes = host_cursor;
-  wave->io_bytes = host_cursor;
-  wave->decomp_in_bytes = 0;
-  wave->decomp_out_bytes = 0;
-  wave->assemble_out_bytes = 0;
-  for (uint32_t i = 0; i < take; ++i) {
-    struct chunk_plan* c = &slot->chunk_plans[base + i];
-    wave->decomp_in_bytes += c->compressed_nbytes;
-    wave->decomp_out_bytes += c->decompressed_nbytes;
-  }
-  wave->state = WAVE_IO;
-  slot->n_chunks_dispatched += take;
+  hs->batch_pool_slot = batch_slot_idx;
+  hs->batch_chunk_offset = base;
+  hs->n_chunks = take;
+  hs->used_bytes = host_cursor;
+  hs->io_bytes = host_cursor;
+  hs->state = SLOT_IO;
+  batch->n_chunks_dispatched += take;
   wp->stats->waves_emitted++;
   wp->stats->chunks_dispatched += take;
   damacy_nvtx_range_pop();
   return DAMACY_OK;
 }
 
+// Bind a SLOT_READY slot to a WAVE_FREE wave: copies slot fields onto
+// the wave, builds the assemble metadata, kicks H2D. The slot
+// transitions SLOT_READY → SLOT_BUSY; the wave WAVE_FREE → WAVE_H2D.
+// On kick_h2d failure the slot is released back to SLOT_FREE so the
+// scheduler doesn't deadlock on a stuck-busy slot.
+static enum damacy_status
+bind_slot_to_wave(struct wave_pool* wp, struct damacy_wave* wave, int slot_idx)
+{
+  struct host_slab_slot* hs = &wp->slots[slot_idx];
+  damacy_nvtx_range_pushf(
+    "bind/w%td/slot%d", wave_index_of(wp, wave), slot_idx);
+  metric_record(&wp->stats->bind_wait,
+                (float)((monotonic_ns() - hs->io_t_end_ns) / 1.0e6),
+                0,
+                0);
+  wave->bound_slot = (int8_t)slot_idx;
+  wave->host_slab = hs->buf;
+  wave->batch_pool_slot = hs->batch_pool_slot;
+  wave->batch_chunk_offset = hs->batch_chunk_offset;
+  wave->n_chunks = hs->n_chunks;
+  wave->host_used_bytes = hs->used_bytes;
+  wave->io_bytes = hs->io_bytes;
+  wave->io_t_start_ns = hs->io_t_start_ns;
+  wave->io_t_end_ns = hs->io_t_end_ns;
+  wave->decomp_in_bytes = 0;
+  wave->decomp_out_bytes = 0;
+  wave->assemble_out_bytes = 0;
+
+  struct damacy_batch_slot* batch = &wp->pool->slots[hs->batch_pool_slot];
+  for (uint32_t i = 0; i < wave->n_chunks; ++i) {
+    struct chunk_plan* c = &batch->chunk_plans[wave->batch_chunk_offset + i];
+    wave->decomp_in_bytes += c->compressed_nbytes;
+    wave->decomp_out_bytes += c->decompressed_nbytes;
+  }
+
+  hs->state = SLOT_BUSY;
+  build_assemble_meta(wp, wave);
+  enum damacy_status s = kick_h2d(wp, wave);
+  if (s != DAMACY_OK) {
+    // kick_h2d failed before recording bulk_h2d_end (or after, but
+    // either way the slot is no longer in flight on the GPU since the
+    // wave never reaches WAVE_H2D's poll). Release the slot.
+    slot_release(hs);
+    wave->bound_slot = -1;
+    wave->host_slab = NULL;
+  }
+  damacy_nvtx_range_pop();
+  return s;
+}
+
 enum damacy_status
 wave_pool_advance(struct wave_pool* wp)
 {
-  for (int w = 0; w < 2; ++w) {
+  // Pass 1: SLOT_IO → SLOT_READY when IO completes.
+  for (uint8_t s = 0; s < wp->n_slots; ++s) {
+    struct host_slab_slot* hs = &wp->slots[s];
+    if (hs->state == SLOT_IO && store_event_query(wp->store, hs->io_event)) {
+      hs->io_t_end_ns = monotonic_ns();
+      hs->state = SLOT_READY;
+    }
+  }
+
+  // Pass 2: bind SLOT_READY to WAVE_FREE waves.
+  for (int w = 0; w < DAMACY_N_WAVES; ++w) {
+    struct damacy_wave* wave = &wp->waves[w];
+    if (wave->state != WAVE_FREE)
+      continue;
+    int rs = find_ready_slot(wp);
+    if (rs < 0)
+      break;
+    enum damacy_status s = bind_slot_to_wave(wp, wave, rs);
+    if (s != DAMACY_OK)
+      return s;
+  }
+
+  // Pass 3: drive wave state machine. Release slots on bulk_h2d_end
+  // (independent of h2d_end) so peel can refill them as early as
+  // possible.
+  for (int w = 0; w < DAMACY_N_WAVES; ++w) {
     struct damacy_wave* wave = &wp->waves[w];
     switch (wave->state) {
       case WAVE_FREE:
         break;
-      case WAVE_IO:
-        if (store_event_query(wp->store, wave->io_event)) {
-          wave->io_t_end_ns = monotonic_ns();
-          enum damacy_status s = kick_h2d(wp, wave);
-          if (s != DAMACY_OK)
-            return s;
-        }
-        break;
       case WAVE_H2D: {
+        if (wave->bound_slot >= 0) {
+          CUresult qb = cuEventQuery(wave->ev.bulk_h2d_end);
+          if (qb == CUDA_SUCCESS) {
+            slot_release(&wp->slots[wave->bound_slot]);
+            wave->bound_slot = -1;
+            wave->host_slab = NULL;
+          } else if (qb != CUDA_ERROR_NOT_READY) {
+            *wp->failed_status = DAMACY_CUDA;
+            return DAMACY_CUDA;
+          }
+        }
         CUresult qe = cuEventQuery(wave->ev.h2d_end);
         if (qe == CUDA_SUCCESS) {
           // Both kicks enqueue decode + status-reduce against the

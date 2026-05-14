@@ -1,11 +1,8 @@
-// damacy: streaming loader. Two batch slots and two wave slots in
-// flight; each damacy_pop advances the wave state machine, kicks work
-// into FREE wave slots, and either returns a READY batch or
-// poll-sleeps. Waves don't cross batch boundaries.
-//
-// Threading: planner / scheduler / CUDA launches all run on the user
-// thread inside damacy_push / damacy_pop / damacy_flush. Background
-// threads are the n_io_threads io_queue workers (one pread per job).
+// damacy: streaming loader. Two batch slots and two wave slots in flight.
+// A worker thread (src/scheduler) drives the pipeline; the user-thread
+// API (push/pop/release/flush) coordinates via scheduler_lock + the
+// scheduler's condition variable. Background I/O on the io_queue and
+// host parse on compute_pool round out the threading model.
 
 #include "damacy.h"
 
@@ -18,6 +15,7 @@
 #include "nvtx/nvtx.h"
 #include "planner/planner.h"
 #include "platform/platform.h"
+#include "scheduler/scheduler.h"
 #include "store/store.h"
 #include "threadpool/threadpool.h"
 #include "util/cuda_check.h"
@@ -47,10 +45,9 @@ struct damacy
   uint64_t next_batch_id;
   uint64_t page_alignment;
   int cuda_device;
-  // -1 = captured caller's ctx; else release at destroy.
-  int retained_primary_device;
-  // Pushed per-call by ctx_guard when retained.
-  CUcontext retained_primary;
+  int retained_primary_device; // -1 = caller's ctx; else release at destroy
+  CUcontext retained_primary;  // pushed per-call by ctx_guard when retained
+  CUcontext worker_ctx;        // pushed by the worker on its first tick
 
   // GPU memory budgeting. Lazy batch-output tensors are summed against
   // gpu_bytes_budget at batch_pool_allocate. 0 budget = no cap.
@@ -76,12 +73,18 @@ struct damacy
 
   struct damacy_batch handle;
   struct damacy_stats stats;
+
+  // Worker drives the pipeline; user-thread API coordinates via scheduler_lock.
+  // Created last in damacy_create, torn down first in destroy_inner.
+  struct scheduler* sched;
+  int worker_ctx_pushed; // worker pushes worker_ctx on first tick; no matching
+                         // pop.
 };
 
-// Poll interval inside damacy_pop's wait-loop. ~50 µs is short enough
-// that the boundary between wave stages doesn't add visible latency,
-// long enough that we don't burn a core spinning.
-#define DAMACY_POP_POLL_NS 50000
+// Scheduler tick. 10 µs reacts to GPU event completion fast enough
+// that wave-boundary gaps don't dominate; cuEventQuery is cheap so the
+// worker isn't burning a core.
+#define DAMACY_POP_POLL_NS 10000
 
 // --- ctx guard ------------------------------------------------------------
 
@@ -256,15 +259,14 @@ Cleanup:
   return status;
 }
 
-// Fills FREE wave slots; plans a fresh batch when no FILLING slot has work.
+// Drains lookahead-planned batches into free host_slab_slots, planning
+// a fresh batch when no FILLING batch has chunks left to peel. Stops
+// when there are no free slots, no batches with work, and no room to
+// plan more.
 static enum damacy_status
-kick_new_waves(struct damacy* self)
+kick_peel_into_free_slots(struct damacy* self)
 {
   for (;;) {
-    int w = find_free_wave(&self->wave_pool);
-    if (w < 0)
-      break;
-
     int target_slot = find_filling_slot_with_work(&self->batch_pool);
     if (target_slot < 0) {
       int free_slot = find_free_batch_slot(&self->batch_pool);
@@ -280,11 +282,40 @@ kick_new_waves(struct damacy* self)
     }
 
     enum damacy_status s =
-      wave_pool_peel(&self->wave_pool, (uint16_t)w, (uint16_t)target_slot);
+      wave_pool_peel(&self->wave_pool, (uint16_t)target_slot);
     if (s != DAMACY_OK)
       return s;
+    // peel is a no-op if no host_slab_slot is free; bail to let
+    // wave_pool_advance drain a slot before retrying.
+    if (!any_slot_free(&self->wave_pool))
+      break;
   }
   return DAMACY_OK;
+}
+
+// --- scheduler ------------------------------------------------------------
+
+// One scheduler tick, under scheduler_lock. Lazy ctx push on first call.
+// Always returns 1 to broadcast — wakeups are cheap and pop re-checks.
+static int
+damacy_scheduler_step(void* arg)
+{
+  struct damacy* self = (struct damacy*)arg;
+  if (!self->worker_ctx_pushed) {
+    if (self->worker_ctx)
+      cuCtxPushCurrent(self->worker_ctx);
+    self->worker_ctx_pushed = 1;
+  }
+  self->stats.worker_steps++;
+  if (self->failed_status != DAMACY_OK)
+    return 1;
+
+  enum damacy_status r = wave_pool_advance(&self->wave_pool);
+  if (r == DAMACY_OK && self->failed_status == DAMACY_OK)
+    r = kick_peel_into_free_slots(self);
+  if (r != DAMACY_OK && self->failed_status == DAMACY_OK)
+    self->failed_status = r;
+  return 1;
 }
 
 // --- public API: create / destroy ----------------------------------------
@@ -298,6 +329,10 @@ destroy_inner(struct damacy* self, int cuda_skip)
 {
   if (!self)
     return;
+
+  // Stop the worker first so its accesses retire before we free.
+  scheduler_destroy(self->sched);
+  self->sched = NULL;
 
   wave_pool_destroy(&self->wave_pool, cuda_skip);
 
@@ -372,6 +407,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     CU(Fail, cuDevicePrimaryCtxRetain(&primary, dev));
     self->retained_primary_device = cfg->device;
     self->retained_primary = primary;
+    self->worker_ctx = primary;
     self->cuda_device = cfg->device;
   } else {
     if (!caller_ctx) {
@@ -382,6 +418,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     CUdevice dev;
     CU(Fail, cuCtxGetDevice(&dev));
     self->cuda_device = (int)dev;
+    self->worker_ctx = caller_ctx;
   }
 
   s = ctx_guard_enter(self, &cg);
@@ -394,20 +431,11 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     goto Fail;
   }
 
-  // Phase 5: max_gpu_memory_bytes is the primary knob. Apply the legacy
-  // default (~1 GB) if the user left it at 0. host_buffer_bytes /
-  // device_buffer_bytes are deprecated; warn once if either is set,
-  // then ignore the value. Log the *resolved* cap so the migration case
-  // (deprecated fields set, max_gpu_memory_bytes left at 0) reports a
-  // useful number rather than "current: 0 bytes".
+  // max_gpu_memory_bytes is the primary knob. Apply the default
+  // (~1 GB) if the user left it at 0.
   const uint64_t resolved_max_gpu = resolve_max_gpu_memory(cfg);
   const uint64_t runtime_chunk_cap = resolve_max_chunk_uncompressed(cfg);
   self->gpu_bytes_budget = resolved_max_gpu;
-  if (cfg->host_buffer_bytes || cfg->device_buffer_bytes)
-    log_warn("damacy: host_buffer_bytes / device_buffer_bytes are deprecated "
-             "(Phase 5); ignored. Use max_gpu_memory_bytes to size the "
-             "pipeline (resolved: %llu bytes).",
-             (unsigned long long)resolved_max_gpu);
 
   // Subtract the batch-output reserve before sizing wave-resident
   // buffers; the resolver is greedy, so without this carve-out the
@@ -459,13 +487,12 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     if (self->gpu_bytes_committed > self->gpu_bytes_budget) {
       log_error(
         "damacy: post-resolve drift: total=%llu cap=%llu "
-        "(dev_compressed=%llu dev_decompressed=%llu unshuffle_scratch=%llu "
+        "(dev_compressed=%llu dev_decompressed=%llu "
         "blosc1_meta=%llu fanout_soa=%llu nvcomp_temp=%llu batch_meta=%llu)",
         (unsigned long long)budget.total,
         (unsigned long long)self->gpu_bytes_budget,
         (unsigned long long)budget.dev_compressed,
         (unsigned long long)budget.dev_decompressed,
-        (unsigned long long)budget.dev_unshuffle_scratch,
         (unsigned long long)budget.blosc1_meta,
         (unsigned long long)budget.fanout_soa,
         (unsigned long long)budget.nvcomp_temp,
@@ -513,6 +540,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
                        &self->stats,
                        &self->failed_status,
                        cfg->dtype,
+                       resolve_host_buffer_waves(cfg),
                        sizing.host_slab_per_wave,
                        sizing.dev_decompressed_per_wave,
                        runtime_chunk_cap,
@@ -531,6 +559,14 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   CHECK(Fail, self->batch_stage);
 
   self->handle.d = self;
+
+  // Spawn the worker last — everything it touches must already exist.
+  self->sched =
+    scheduler_create(damacy_scheduler_step, self, DAMACY_POP_POLL_NS);
+  if (!self->sched) {
+    s = DAMACY_OOM;
+    goto Fail;
+  }
 
   ctx_guard_exit(&cg);
   *out = self;
@@ -591,30 +627,33 @@ damacy_push(struct damacy* self, struct damacy_sample_slice samples)
     r.status = DAMACY_INVAL;
     return r;
   }
-  if (self->failed_status != DAMACY_OK) {
-    r.status = DAMACY_SHUTDOWN;
-    return r;
-  }
   if (samples.beg > samples.end) {
     r.status = DAMACY_INVAL;
     return r;
   }
-  // No ctx_guard: SPSC enqueue + sync zarr metadata I/O only; no CUDA
-  // driver calls reach this path (see issue #21).
+  // No ctx_guard: push touches no CUDA. The lock guards lookahead +
+  // meta/shape checks against the worker's plan_into_slot drain.
+  scheduler_lock(self->sched);
+  if (self->failed_status != DAMACY_OK) {
+    r.status = DAMACY_SHUTDOWN;
+    goto Done;
+  }
   for (const struct damacy_sample* s = samples.beg; s != samples.end; ++s) {
     if (self->lookahead.size == self->lookahead.cap) {
       r.unconsumed.beg = s;
       r.status = DAMACY_AGAIN;
-      return r;
+      goto Done;
     }
     enum damacy_status ps = push_one(self, s);
     if (ps != DAMACY_OK) {
       r.unconsumed.beg = s;
       r.status = ps;
-      return r;
+      goto Done;
     }
   }
   r.unconsumed.beg = samples.end;
+Done:
+  scheduler_unlock(self->sched);
   return r;
 }
 
@@ -626,29 +665,16 @@ damacy_pop(struct damacy* self, struct damacy_batch** out)
   CHECK_SILENT(InvalidArg, self);
   CHECK_SILENT(InvalidArg, out);
   *out = NULL;
-  if (self->failed_status != DAMACY_OK)
-    return self->failed_status;
 
-  struct ctx_guard cg = { 0 };
-  enum damacy_status r = ctx_guard_enter(self, &cg);
-  if (r != DAMACY_OK)
-    return r;
-
+  // No ctx_guard: pop only touches batch-slot state. CUDA stays on the worker.
   damacy_nvtx_range_push("damacy_pop");
+  enum damacy_status r;
+  scheduler_lock(self->sched);
   for (;;) {
-    r = wave_pool_advance(&self->wave_pool);
-    if (r != DAMACY_OK)
-      goto Done;
-    // finalize_wave can set failed_status (post-decode codec errors) even
-    // when wave_pool_advance returns OK; bail before handing out the batch.
     if (self->failed_status != DAMACY_OK) {
       r = self->failed_status;
       goto Done;
     }
-    r = kick_new_waves(self);
-    if (r != DAMACY_OK)
-      goto Done;
-
     int slot_idx = find_oldest_ready_slot(&self->batch_pool);
     if (slot_idx >= 0) {
       struct damacy_batch_slot* slot = &self->batch_pool.slots[slot_idx];
@@ -666,28 +692,15 @@ damacy_pop(struct damacy* self, struct damacy_batch** out)
       r = DAMACY_AGAIN;
       goto Done;
     }
-    // Attribute the poll to compute if any wave is past IO, else IO.
-    int waiting_compute = 0;
-    for (int w = 0; w < 2; ++w) {
-      enum wave_state ws = self->wave_pool.waves[w].state;
-      if (ws == WAVE_H2D || ws == WAVE_ASSEMBLE) {
-        waiting_compute = 1;
-        break;
-      }
-    }
-    uint64_t poll_t0 = monotonic_ns();
-    platform_sleep_ns(DAMACY_POP_POLL_NS);
-    float poll_ms = (float)((monotonic_ns() - poll_t0) / 1.0e6);
-    metric_record(waiting_compute ? &self->stats.pop_wait_compute
-                                  : &self->stats.pop_wait_io,
-                  poll_ms,
-                  0,
-                  0);
+    uint64_t wait_t0 = monotonic_ns();
+    scheduler_wait(self->sched);
+    metric_record(
+      &self->stats.pop_wait, (float)((monotonic_ns() - wait_t0) / 1.0e6), 0, 0);
   }
 
 Done:
+  scheduler_unlock(self->sched);
   damacy_nvtx_range_pop();
-  ctx_guard_exit(&cg);
   return r;
 
 InvalidArg:
@@ -708,15 +721,18 @@ damacy_release(struct damacy* self, struct damacy_batch* b)
     log_warn("damacy_release: slot_idx=%u out of range", (unsigned)s);
     return;
   }
+  scheduler_lock(self->sched);
   if (self->batch_pool.slots[s].state != BATCH_HELD) {
     log_warn("damacy_release: slot %u not HELD (state=%d); double release?",
              (unsigned)s,
              (int)self->batch_pool.slots[s].state);
+    scheduler_unlock(self->sched);
     return;
   }
   self->batch_pool.slots[s].state = BATCH_FREE;
   self->batch_pool.slots[s].n_chunks = 0;
   self->batch_pool.slots[s].n_chunks_dispatched = 0;
+  scheduler_unlock(self->sched);
 }
 
 // --- flush ----------------------------------------------------------------
@@ -726,27 +742,30 @@ damacy_flush(struct damacy* self)
 {
   if (!self)
     return DAMACY_INVAL;
-  if (self->failed_status != DAMACY_OK)
-    return self->failed_status;
 
+  // plan_into_slot below issues cuMemcpyHtoD on this thread; push the
+  // retained primary so the call lands in the right context.
   struct ctx_guard cg = { 0 };
   enum damacy_status r = ctx_guard_enter(self, &cg);
   if (r != DAMACY_OK)
     return r;
 
+  scheduler_lock(self->sched);
+  if (self->failed_status != DAMACY_OK) {
+    r = self->failed_status;
+    goto Done;
+  }
+
+  // Worker only plans at full batch_size; flush emits the truncated tail.
   if (self->lookahead.size > 0 && self->lookahead.size < self->cfg.batch_size) {
-    int free_slot = find_free_batch_slot(&self->batch_pool);
-    if (free_slot < 0) {
-      // Both slots busy: one drain pass, then return AGAIN if still full.
-      r = wave_pool_advance(&self->wave_pool);
-      if (r != DAMACY_OK)
-        goto Done;
-      free_slot = find_free_batch_slot(&self->batch_pool);
-      if (free_slot < 0) {
-        r = DAMACY_AGAIN;
-        goto Done;
-      }
+    while (find_free_batch_slot(&self->batch_pool) < 0 &&
+           self->failed_status == DAMACY_OK)
+      scheduler_wait(self->sched);
+    if (self->failed_status != DAMACY_OK) {
+      r = self->failed_status;
+      goto Done;
     }
+    int free_slot = find_free_batch_slot(&self->batch_pool);
     uint32_t n = self->lookahead.size;
     r = plan_into_slot(self, (uint16_t)free_slot, n);
     if (r != DAMACY_OK)
@@ -755,24 +774,18 @@ damacy_flush(struct damacy* self)
   }
 
   uint64_t flush_t0 = monotonic_ns();
-  while (any_wave_in_flight(&self->wave_pool) ||
-         find_oldest_filling_slot(&self->batch_pool) >= 0) {
-    r = wave_pool_advance(&self->wave_pool);
-    if (r != DAMACY_OK)
-      goto Done;
-    r = kick_new_waves(self);
-    if (r != DAMACY_OK)
-      goto Done;
-    if (any_wave_in_flight(&self->wave_pool))
-      platform_sleep_ns(DAMACY_POP_POLL_NS);
-  }
+  while ((any_wave_in_flight(&self->wave_pool) ||
+          find_oldest_filling_slot(&self->batch_pool) >= 0) &&
+         self->failed_status == DAMACY_OK)
+    scheduler_wait(self->sched);
   metric_record(&self->stats.flush_wait,
                 (float)((monotonic_ns() - flush_t0) / 1.0e6),
                 0,
                 0);
-  r = DAMACY_OK;
+  r = self->failed_status != DAMACY_OK ? self->failed_status : DAMACY_OK;
 
 Done:
+  scheduler_unlock(self->sched);
   ctx_guard_exit(&cg);
   return r;
 }
@@ -871,11 +884,6 @@ damacy_config_describe(const struct damacy_config* cfg)
            (unsigned long long)resolver_budget,
            (unsigned long long)runtime_chunk_cap,
            (unsigned)cfg->batch_size);
-  if (cfg->host_buffer_bytes || cfg->device_buffer_bytes)
-    log_info("damacy_config_describe: host_buffer_bytes=%llu / "
-             "device_buffer_bytes=%llu are deprecated and ignored",
-             (unsigned long long)cfg->host_buffer_bytes,
-             (unsigned long long)cfg->device_buffer_bytes);
 
   struct wave_pool_sizing sizing = { 0 };
   enum damacy_status rs = wave_pool_resolve_sizing(
@@ -898,11 +906,10 @@ damacy_config_describe(const struct damacy_config* cfg)
            (unsigned long long)sizing.host_slab_per_wave,
            (unsigned long long)sizing.dev_decompressed_per_wave);
   log_info("damacy_config_describe: dev_compressed=%llu dev_decompressed=%llu "
-           "unshuffle_scratch=%llu blosc1_meta=%llu fanout_soa=%llu "
+           "blosc1_meta=%llu fanout_soa=%llu "
            "nvcomp_temp=%llu batch_metadata=%llu",
            (unsigned long long)budget.dev_compressed,
            (unsigned long long)budget.dev_decompressed,
-           (unsigned long long)budget.dev_unshuffle_scratch,
            (unsigned long long)budget.blosc1_meta,
            (unsigned long long)budget.fanout_soa,
            (unsigned long long)budget.nvcomp_temp,

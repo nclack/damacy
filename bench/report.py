@@ -58,14 +58,22 @@ def _fmt_ms(ms: float) -> str:
 
 
 def _stage_table(r: Results) -> Table:
+    title = Text.assemble(
+        ("pipeline stages  ", "bold cyan"),
+        ("[", "dim"),
+        ("italic", "italic dim"),
+        ("=cpu ", "dim"),
+        ("bold", "bold dim"),
+        ("=gpu", "dim"),
+        ("]", "dim"),
+    )
     t = Table(
-        title="pipeline stages",
-        title_style="bold cyan",
+        title=title,
         show_lines=False,
         header_style="bold",
     )
     t.add_column("stage", style="cyan", no_wrap=True)
-    t.add_column("unit", style="dim")
+    t.add_column("unit", style="dim", no_wrap=True)
     t.add_column("GB/s_in", justify="right")
     t.add_column("ms_total", justify="right")
     t.add_column("ms_avg", justify="right")
@@ -79,20 +87,37 @@ def _stage_table(r: Results) -> Table:
         "plan": "white",
         "io": "yellow",
         "h2d": "magenta",
-        "decompress": "green",
+        "decode": "green",
+        "post_decode": "green",
+        "decode_gap": "red",
         "decompress.parse": "green",
         "assemble": "green",
-        "pop_wait_io": "red",
-        "pop_wait_compute": "red",
+        "pop_wait": "red",
         "flush_wait": "red",
+    }
+
+    # encode where each stage's time is spent in the unit column:
+    # italic = CPU wall time, bold = GPU event time, dim = wait/stall.
+    unit_style = {
+        "plan": "italic dim",
+        "io": "italic dim",
+        "decompress.parse": "italic dim",
+        "h2d": "bold dim",
+        "decode": "bold dim",
+        "post_decode": "bold dim",
+        "decode_gap": "dim",
+        "assemble": "bold dim",
+        "pop_wait": "dim",
+        "flush_wait": "dim",
     }
 
     for s in r.stages:
         secs = s.ms_total / 1e3
         c = color.get(s.name, "white")
+        u = unit_style.get(s.name, "dim")
         t.add_row(
             Text(s.name, style=c),
-            s.unit,
+            Text(s.unit, style=u),
             _fmt_gbps(s.input_bytes, secs),
             _fmt_ms(s.ms_total),
             _fmt_ms(s.ms_avg) if s.count else "-",

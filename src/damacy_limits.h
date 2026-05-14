@@ -39,9 +39,24 @@
 #define DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES (512ull << 10) // 512 KB
 
 // Default for damacy_config.max_gpu_memory_bytes when the user leaves
-// it at 0. ~1 GB matches the legacy "host_buffer_bytes = 1 GB" sizing
-// callers picked pre-Phase-5 and fits comfortably on consumer GPUs.
+// it at 0. ~1 GB fits comfortably on consumer GPUs.
 #define DAMACY_DEFAULT_MAX_GPU_MEMORY_BYTES (1ull << 30) // 1 GB
+
+// In-flight wave count. Fixed; sets the minimum host_buffer_waves and
+// the device-side decode concurrency depth.
+#define DAMACY_N_WAVES 2
+
+// Default depth of the pinned-host slab pool, in waves. = N_WAVES is
+// the minimum; bumping higher lets IO for upcoming waves prefill before
+// a wave struct frees, useful for slow / variable-latency IO backends.
+// On fast local NVMe the extra IO concurrency adds queueing overhead
+// that outweighs the prefill benefit, so the default stays at N_WAVES.
+#define DAMACY_DEFAULT_HOST_BUFFER_WAVES DAMACY_N_WAVES
+
+// Upper bound on cfg.host_buffer_waves. 8 covers any realistic IO
+// look-ahead need; each extra slot costs one dev_compressed_per_wave of
+// pinned host memory.
+#define DAMACY_MAX_HOST_BUFFER_WAVES 8
 
 // Wave cap. Decoupled from the per-batch cap below: nvcomp temp scratch
 // is sized as MAX_CHUNKS_PER_WAVE × runtime_chunk_cap (× 2 waves), so we
@@ -98,10 +113,10 @@ static_assert((uint64_t)DAMACY_MAX_CHUNKS_PER_WAVE *
                 DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE,
               "wave substream ceiling must cover peel cap");
 #else
-_Static_assert((uint64_t)DAMACY_MAX_CHUNKS_PER_WAVE *
-                   DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK <=
-                 DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE,
-               "wave substream ceiling must cover peel cap");
+_Static_assert(
+  (uint64_t)DAMACY_MAX_CHUNKS_PER_WAVE* DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK <=
+    DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE,
+  "wave substream ceiling must cover peel cap");
 #endif
 // Initial substream-batch cap for the pool-shared zstd decoder + per-wave
 // fanout SOAs. Sized off a typical wave (hundreds of substreams) rather

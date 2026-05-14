@@ -539,8 +539,6 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   static char* kws[] = { "batch_size",
                          "lookahead_batches",
                          "n_io_threads",
-                         "host_buffer_bytes",
-                         "device_buffer_bytes",
                          "n_zarrs_meta_cache",
                          "n_shards_meta_cache",
                          "dtype",
@@ -548,12 +546,11 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                          "max_gpu_memory_bytes",
                          "device",
                          "n_compute_threads",
+                         "host_buffer_waves",
                          NULL };
   unsigned int batch_size = 0;
   unsigned int lookahead = 2;
   unsigned int n_io = 4;
-  unsigned long long host_bytes = 0;
-  unsigned long long dev_bytes = 0;
   unsigned int n_zarrs_meta = 64;
   unsigned int n_shards_meta = 256;
   PyObject* dtype_obj = NULL;
@@ -561,22 +558,22 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   unsigned long long max_gpu_bytes = 0;
   int device = -1;
   unsigned int n_compute = 0;
+  unsigned int host_buffer_waves = 0;
   if (!PyArg_ParseTupleAndKeywords(args,
                                    kw,
-                                   "IIIKKIIOI|KiI",
+                                   "IIIIIOI|KiII",
                                    kws,
                                    &batch_size,
                                    &lookahead,
                                    &n_io,
-                                   &host_bytes,
-                                   &dev_bytes,
                                    &n_zarrs_meta,
                                    &n_shards_meta,
                                    &dtype_obj,
                                    &max_chunk_uncompressed,
                                    &max_gpu_bytes,
                                    &device,
-                                   &n_compute))
+                                   &n_compute,
+                                   &host_buffer_waves))
     return -1;
 
   enum damacy_dtype dt;
@@ -587,8 +584,6 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
     .batch_size = batch_size,
     .lookahead_batches = lookahead,
     .n_io_threads = n_io,
-    .host_buffer_bytes = (uint64_t)host_bytes,
-    .device_buffer_bytes = (uint64_t)dev_bytes,
     .n_zarrs_meta_cache = n_zarrs_meta,
     .n_shards_meta_cache = n_shards_meta,
     .dtype = dt,
@@ -596,6 +591,7 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
     .max_gpu_memory_bytes = (uint64_t)max_gpu_bytes,
     .device = device,
     .n_compute_threads = n_compute,
+    .host_buffer_waves = (uint8_t)host_buffer_waves,
   };
 
   struct damacy* d = NULL;
@@ -780,11 +776,13 @@ Pipeline_stats(PipelineObj* self, PyObject* Py_UNUSED(ignored))
     { "plan", &st.plan },
     { "io", &st.io },
     { "h2d", &st.h2d },
-    { "decompress", &st.decompress },
+    { "decode", &st.decode },
+    { "post_decode", &st.post_decode },
+    { "decode_gap", &st.decode_gap },
     { "decompress_parse", &st.decompress_parse },
     { "assemble", &st.assemble },
-    { "pop_wait_io", &st.pop_wait_io },
-    { "pop_wait_compute", &st.pop_wait_compute },
+    { "bind_wait", &st.bind_wait },
+    { "pop_wait", &st.pop_wait },
     { "flush_wait", &st.flush_wait },
   };
   for (size_t i = 0; i < sizeof metrics / sizeof metrics[0]; ++i)
@@ -803,13 +801,14 @@ Pipeline_stats(PipelineObj* self, PyObject* Py_UNUSED(ignored))
     { "batches_emitted", st.batches_emitted },
     { "batches_truncated", st.batches_truncated },
     { "waves_emitted", st.waves_emitted },
+    { "worker_steps", st.worker_steps },
     { "chunks_dispatched", st.chunks_dispatched },
     { "gpu_bytes_committed", st.gpu_bytes_committed },
   };
   for (size_t i = 0; i < sizeof counters / sizeof counters[0]; ++i)
-    if (dict_set_steal(
-          d, counters[i].name, PyLong_FromUnsignedLongLong(counters[i].val)) <
-        0)
+    if (dict_set_steal(d,
+                       counters[i].name,
+                       PyLong_FromUnsignedLongLong(counters[i].val)) < 0)
       goto Fail;
 
   return d;

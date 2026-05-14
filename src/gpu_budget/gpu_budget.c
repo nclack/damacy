@@ -30,14 +30,12 @@ gpu_budget_compute(const struct damacy_config* cfg,
 
   out->dev_compressed = 2ull * per_wave.dev_compressed;
   out->dev_decompressed = 2ull * per_wave.dev_decompressed;
-  out->dev_unshuffle_scratch = 2ull * per_wave.dev_unshuffle_scratch;
   out->blosc1_meta = 2ull * per_wave.blosc1_meta;
   out->fanout_soa = 2ull * per_wave.fanout_soa;
   out->nvcomp_temp = nvcomp_temp;
   out->batch_metadata =
     2ull * (uint64_t)cfg->batch_size * sizeof(struct sample_plan);
-  out->total = out->dev_compressed + out->dev_decompressed +
-               out->dev_unshuffle_scratch + out->blosc1_meta + out->fanout_soa +
-               out->nvcomp_temp + out->batch_metadata;
+  out->total = out->dev_compressed + out->dev_decompressed + out->blosc1_meta +
+               out->fanout_soa + out->nvcomp_temp + out->batch_metadata;
   return DAMACY_OK;
 }

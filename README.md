@@ -24,9 +24,8 @@ import torch
 cfg = damacy.Config(
     batch_size=8,
     # Resource caps are fixed at construction; nothing grows after.
-    host_buffer_bytes=1 << 30,    # pinned host staging pool
-    device_buffer_bytes=1 << 30,  # device decompress scratch
-    dtype="bf16",                 # source dtype is cast on assemble
+    max_gpu_memory_bytes=1 << 30,  # primary GPU budget
+    dtype="bf16",                  # source dtype is cast on assemble
     # One pipeline binds to one GPU. Omit `device=` to capture the
     # current CUDA context (handy single-GPU; PyTorch sets one up
     # implicitly). For multi-GPU pass `device=local_rank` — see

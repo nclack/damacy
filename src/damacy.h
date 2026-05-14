@@ -89,13 +89,6 @@ extern "C"
     // the calling thread; total parallelism is n_compute_threads + 1.
     uint32_t n_compute_threads;
 
-    // DEPRECATED (Phase 5): retained for source compatibility but
-    // ignored. Internal sizing is now derived from max_gpu_memory_bytes.
-    // A one-line warning is logged at damacy_create if either is set.
-    // Will be removed in a future release.
-    uint64_t host_buffer_bytes;
-    uint64_t device_buffer_bytes;
-
     // LRU caps (FDs are cached per-key by the fs store; not bounded here).
     uint32_t n_zarrs_meta_cache;
     uint32_t n_shards_meta_cache;
@@ -115,12 +108,12 @@ extern "C"
     // ceiling, 2 MB) are rejected at create time.
     uint32_t max_chunk_uncompressed_bytes;
 
-    // PRIMARY BUDGET KNOB (Phase 5). Hard cap on total GPU memory damacy
+    // Primary GPU memory budget. Hard cap on total GPU memory damacy
     // will allocate for wave-resident buffers, the shared decoder
     // scratch, per-wave fanout SOAs, and per-batch metadata. Internal
     // sizing (host slab, device decompress arena, nvcomp temp, …) is
-    // derived from this value. 0 selects the legacy default
-    // (DAMACY_DEFAULT_MAX_GPU_MEMORY_BYTES). damacy_create returns
+    // derived from this value. 0 selects
+    // DAMACY_DEFAULT_MAX_GPU_MEMORY_BYTES. damacy_create returns
     // DAMACY_OOM (with a log_error breakdown) if even the smallest
     // viable wave geometry would exceed this. damacy_push returns
     // DAMACY_OOM if the lazily-sized batch-output pool, computed from
@@ -135,6 +128,14 @@ extern "C"
     // Set to the expected pool size: 2 * batch_size * sample_volume *
     // dtype_bpe. 0 = no reservation.
     uint64_t batch_output_reserve_bytes;
+
+    // Pinned-host slab pool depth, in waves. Each slot holds one wave's
+    // compressed bytes; extra slots let IO for upcoming waves complete
+    // before the wave struct is free, shrinking the wave-boundary gap on
+    // stream_decode. Must be >= DAMACY_N_WAVES (2). 0 selects
+    // DAMACY_DEFAULT_HOST_BUFFER_WAVES (3). Each slot costs one
+    // dev_compressed_per_wave of pinned host memory.
+    uint8_t host_buffer_waves;
 
     // -1 captures current CUcontext; >= 0 retains the primary for that
     // device internally and rejects a current context on another device.
@@ -244,15 +245,23 @@ extern "C"
     struct damacy_metric plan;
     struct damacy_metric io;
     struct damacy_metric h2d;
-    struct damacy_metric decompress;
-    // Host wall-clock around the blosc1 chunk-header parse (overlaps
-    // the bulk H2D). nvcomp + post-decode kernels share stream_decode
-    // so they're no longer separately measurable; both fold into
-    // `decompress` above.
-    struct damacy_metric decompress_parse;
+    // decode: stream_decode work only (nvcomp + status_reduce).
+    // post_decode: stream_post work — post-decode kernels + 4B D2H +
+    // cross-stream wait on decode_done. A large post_decode avg means
+    // stream_post is bottlenecking; a small avg means it overlaps the
+    // next wave's decode cleanly.
+    struct damacy_metric decode;
+    struct damacy_metric post_decode;
+    // Stream_decode idle between consecutive waves' decode submissions.
+    // Sums to the wave-boundary gap visible in nsys.
+    struct damacy_metric decode_gap;
+    struct damacy_metric decompress_parse; // host wall around blosc1 parse
     struct damacy_metric assemble;
-    struct damacy_metric pop_wait_io;
-    struct damacy_metric pop_wait_compute;
+    // Time a host_slab_slot sat in SLOT_READY waiting for a WAVE_FREE
+    // wave to bind to. Non-zero average → more host_buffer_waves slots
+    // would let IO finish further ahead of decode without stalling.
+    struct damacy_metric bind_wait;
+    struct damacy_metric pop_wait; // user thread blocked on the scheduler cv
     struct damacy_metric flush_wait;
 
     uint64_t zarr_meta_hits, zarr_meta_misses;
@@ -261,6 +270,7 @@ extern "C"
     uint64_t batches_truncated;
     uint64_t waves_emitted;
     uint64_t chunks_dispatched;
+    uint64_t worker_steps; // scheduler ticks (proxy for worker CPU)
 
     // Total GPU bytes currently committed to wave-resident buffers and
     // batch-output pools, counted against max_gpu_memory_bytes. Grows from

@@ -253,14 +253,19 @@ emit_one(const struct blosc1_host_chunk* in,
          const uint32_t* block_ends_slot,
          struct blosc1_host_fanout zstd,
          struct gpu_memcpy_op* memcpy_ops,
-         struct gpu_shuffle_op* unshuffle_ops,
-         struct gpu_shuffle_op* bitunshuffle_ops)
+         struct assemble_chunk* chunk_meta)
 {
   if (h->err)
     return;
 
   uint8_t* d_decomp = (uint8_t*)in->d_decompressed;
   uint8_t* d_comp = (uint8_t*)in->d_compressed;
+
+  // Defaults: assemble reads bytes directly; flipped below if the
+  // chunk's blosc header declares a shuffle.
+  chunk_meta->shuffle_mode = ASSEMBLE_SHUFFLE_NONE;
+  chunk_meta->shuffle_typesize = 0;
+  chunk_meta->shuffle_blocksize = 0;
 
   if (in->codec_id == CODEC_NONE) {
     struct gpu_memcpy_op* slot = &memcpy_ops[o->memcpy_off];
@@ -323,21 +328,15 @@ emit_one(const struct blosc1_host_chunk* in,
   }
 
   if (h->shuffle) {
-    struct gpu_shuffle_op* slot = &unshuffle_ops[o->unshuffle_off];
-    slot->d_buf = d_decomp;
-    slot->blocksize = h->blocksize;
-    slot->typesize = h->typesize;
-    slot->nblocks_full = h->nblocks;
-    slot->tail_nbytes = 0;
+    chunk_meta->shuffle_mode = ASSEMBLE_SHUFFLE_BYTE;
+    chunk_meta->shuffle_typesize = h->typesize;
+    chunk_meta->shuffle_blocksize = h->blocksize;
+  } else if (h->bitshuffle) {
+    chunk_meta->shuffle_mode = ASSEMBLE_SHUFFLE_BIT;
+    chunk_meta->shuffle_typesize = h->typesize;
+    chunk_meta->shuffle_blocksize = h->blocksize;
   }
-  if (h->bitshuffle) {
-    struct gpu_shuffle_op* slot = &bitunshuffle_ops[o->bitunshuffle_off];
-    slot->d_buf = d_decomp;
-    slot->blocksize = h->blocksize;
-    slot->typesize = h->typesize;
-    slot->nblocks_full = h->nblocks;
-    slot->tail_nbytes = 0;
-  }
+  (void)o;
 }
 
 struct parse_ctx
@@ -350,8 +349,7 @@ struct parse_ctx
   uint32_t* block_ends; // cap * DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK
   struct blosc1_host_fanout zstd;
   struct gpu_memcpy_op* memcpy_ops;
-  struct gpu_shuffle_op* unshuffle_ops;
-  struct gpu_shuffle_op* bitunshuffle_ops;
+  struct assemble_chunk* assemble_chunks;
   _Atomic uint32_t n_parse_errors;
 };
 
@@ -387,8 +385,7 @@ phase_emit(size_t i, int tid, void* vctx)
            chunk_slot(ctx->block_ends, i),
            ctx->zstd,
            ctx->memcpy_ops,
-           ctx->unshuffle_ops,
-           ctx->bitunshuffle_ops);
+           &ctx->assemble_chunks[i]);
 }
 
 static void
@@ -441,8 +438,7 @@ blosc1_host_parse(const struct blosc1_host_parse_args* args)
   CHECK(Fail, args->zstd.decomp_ptrs);
   CHECK(Fail, args->zstd.decomp_buf_sizes);
   CHECK(Fail, args->memcpy_ops);
-  CHECK(Fail, args->unshuffle_ops);
-  CHECK(Fail, args->bitunshuffle_ops);
+  CHECK(Fail, args->assemble_chunks);
 
   struct parse_ctx ctx = {
     .chunks = args->chunks,
@@ -453,8 +449,7 @@ blosc1_host_parse(const struct blosc1_host_parse_args* args)
     .block_ends = args->scratch.block_ends,
     .zstd = args->zstd,
     .memcpy_ops = args->memcpy_ops,
-    .unshuffle_ops = args->unshuffle_ops,
-    .bitunshuffle_ops = args->bitunshuffle_ops,
+    .assemble_chunks = args->assemble_chunks,
   };
   atomic_store_explicit(&ctx.n_parse_errors, 0u, memory_order_relaxed);
 

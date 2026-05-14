@@ -41,10 +41,12 @@ stats_init(struct damacy_stats* s)
   metric_init(&s->plan, "plan");
   metric_init(&s->io, "io");
   metric_init(&s->h2d, "h2d");
-  metric_init(&s->decompress, "decompress");
+  metric_init(&s->decode, "decode");
+  metric_init(&s->post_decode, "post_decode");
+  metric_init(&s->decode_gap, "decode_gap");
   metric_init(&s->decompress_parse, "decompress.parse");
   metric_init(&s->assemble, "assemble");
-  metric_init(&s->pop_wait_io, "pop_wait_io");
-  metric_init(&s->pop_wait_compute, "pop_wait_compute");
+  metric_init(&s->bind_wait, "bind_wait");
+  metric_init(&s->pop_wait, "pop_wait");
   metric_init(&s->flush_wait, "flush_wait");
 }
