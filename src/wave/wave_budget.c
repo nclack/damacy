@@ -281,14 +281,6 @@ wave_pool_resolve_sizing(uint64_t max_gpu_memory_bytes,
   out->host_slab_per_wave = per_wave;
   out->dev_decompressed_per_wave = per_wave;
   out->worst_case_total_bytes = predicted;
-  if (out->host_slab_per_wave != out->dev_decompressed_per_wave) {
-    log_error("damacy: resolver invariant broken: host_slab_per_wave=%llu "
-              "!= dev_decompressed_per_wave=%llu (the 6=2*3 divisor "
-              "assumes a single per_wave scales both)",
-              (unsigned long long)out->host_slab_per_wave,
-              (unsigned long long)out->dev_decompressed_per_wave);
-    return DAMACY_INVAL;
-  }
   return DAMACY_OK;
 }
 
