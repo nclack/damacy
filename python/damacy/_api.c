@@ -781,6 +781,7 @@ Pipeline_stats(PipelineObj* self, PyObject* Py_UNUSED(ignored))
     { "decode_gap", &st.decode_gap },
     { "decompress_parse", &st.decompress_parse },
     { "assemble", &st.assemble },
+    { "bind_wait", &st.bind_wait },
     { "pop_wait", &st.pop_wait },
     { "flush_wait", &st.flush_wait },
   };

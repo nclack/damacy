@@ -484,6 +484,7 @@ class Stats:
     decode_gap: Metric
     decompress_parse: Metric
     assemble: Metric
+    bind_wait: Metric
     pop_wait: Metric
     flush_wait: Metric
     zarr_meta_hits: int
@@ -509,6 +510,7 @@ class Stats:
             decode_gap=m(st["decode_gap"]),
             decompress_parse=m(st["decompress_parse"]),
             assemble=m(st["assemble"]),
+            bind_wait=m(st["bind_wait"]),
             pop_wait=m(st["pop_wait"]),
             flush_wait=m(st["flush_wait"]),
             zarr_meta_hits=st["zarr_meta_hits"],

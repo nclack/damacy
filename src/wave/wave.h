@@ -64,7 +64,7 @@ struct host_slab_slot
   struct store_event io_event;
 
   uint64_t io_t_start_ns; // peel-submit wall-clock
-  uint64_t io_t_end_ns;
+  uint64_t io_t_end_ns;   // SLOT_IO → SLOT_READY transition
   uint64_t io_bytes;
 };
 

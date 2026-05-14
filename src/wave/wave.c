@@ -1381,6 +1381,10 @@ bind_slot_to_wave(struct wave_pool* wp, struct damacy_wave* wave, int slot_idx)
   struct host_slab_slot* hs = &wp->slots[slot_idx];
   damacy_nvtx_range_pushf(
     "bind/w%td/slot%d", wave_index_of(wp, wave), slot_idx);
+  metric_record(&wp->stats->bind_wait,
+                (float)((monotonic_ns() - hs->io_t_end_ns) / 1.0e6),
+                0,
+                0);
   wave->bound_slot = (int8_t)slot_idx;
   wave->host_slab = hs->buf;
   wave->batch_pool_slot = hs->batch_pool_slot;
