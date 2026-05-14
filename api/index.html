@@ -1326,7 +1326,19 @@ with damacy.Pipeline(cfg) as p:
 
                   <details class="mkdocstrings-source">
                     <summary>Source code in <code>python/damacy/__init__.py</code></summary>
-                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-700">700</a></span>
+                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-688">688</a></span>
+<span class="normal"><a href="#__codelineno-0-689">689</a></span>
+<span class="normal"><a href="#__codelineno-0-690">690</a></span>
+<span class="normal"><a href="#__codelineno-0-691">691</a></span>
+<span class="normal"><a href="#__codelineno-0-692">692</a></span>
+<span class="normal"><a href="#__codelineno-0-693">693</a></span>
+<span class="normal"><a href="#__codelineno-0-694">694</a></span>
+<span class="normal"><a href="#__codelineno-0-695">695</a></span>
+<span class="normal"><a href="#__codelineno-0-696">696</a></span>
+<span class="normal"><a href="#__codelineno-0-697">697</a></span>
+<span class="normal"><a href="#__codelineno-0-698">698</a></span>
+<span class="normal"><a href="#__codelineno-0-699">699</a></span>
+<span class="normal"><a href="#__codelineno-0-700">700</a></span>
 <span class="normal"><a href="#__codelineno-0-701">701</a></span>
 <span class="normal"><a href="#__codelineno-0-702">702</a></span>
 <span class="normal"><a href="#__codelineno-0-703">703</a></span>
@@ -1342,49 +1354,35 @@ with damacy.Pipeline(cfg) as p:
 <span class="normal"><a href="#__codelineno-0-713">713</a></span>
 <span class="normal"><a href="#__codelineno-0-714">714</a></span>
 <span class="normal"><a href="#__codelineno-0-715">715</a></span>
-<span class="normal"><a href="#__codelineno-0-716">716</a></span>
-<span class="normal"><a href="#__codelineno-0-717">717</a></span>
-<span class="normal"><a href="#__codelineno-0-718">718</a></span>
-<span class="normal"><a href="#__codelineno-0-719">719</a></span>
-<span class="normal"><a href="#__codelineno-0-720">720</a></span>
-<span class="normal"><a href="#__codelineno-0-721">721</a></span>
-<span class="normal"><a href="#__codelineno-0-722">722</a></span>
-<span class="normal"><a href="#__codelineno-0-723">723</a></span>
-<span class="normal"><a href="#__codelineno-0-724">724</a></span>
-<span class="normal"><a href="#__codelineno-0-725">725</a></span>
-<span class="normal"><a href="#__codelineno-0-726">726</a></span>
-<span class="normal"><a href="#__codelineno-0-727">727</a></span>
-<span class="normal"><a href="#__codelineno-0-728">728</a></span>
-<span class="normal"><a href="#__codelineno-0-729">729</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-700"><a id="__codelineno-0-700" name="__codelineno-0-700"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">config</span><span class="p">:</span> <span class="n">Config</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="__span-0-701"><a id="__codelineno-0-701" name="__codelineno-0-701"></a>    <span class="k">try</span><span class="p">:</span>
-</span><span id="__span-0-702"><a id="__codelineno-0-702" name="__codelineno-0-702"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_native</span> <span class="o">=</span> <span class="n">_native</span><span class="o">.</span><span class="n">Pipeline</span><span class="p">(</span>
-</span><span id="__span-0-703"><a id="__codelineno-0-703" name="__codelineno-0-703"></a>            <span class="n">batch_size</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">batch_size</span><span class="p">,</span>
-</span><span id="__span-0-704"><a id="__codelineno-0-704" name="__codelineno-0-704"></a>            <span class="n">lookahead_batches</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">lookahead_batches</span><span class="p">,</span>
-</span><span id="__span-0-705"><a id="__codelineno-0-705" name="__codelineno-0-705"></a>            <span class="n">n_io_threads</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">n_io_threads</span><span class="p">,</span>
-</span><span id="__span-0-706"><a id="__codelineno-0-706" name="__codelineno-0-706"></a>            <span class="n">n_compute_threads</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">n_compute_threads</span><span class="p">,</span>
-</span><span id="__span-0-707"><a id="__codelineno-0-707" name="__codelineno-0-707"></a>            <span class="n">host_buffer_bytes</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">host_buffer_bytes</span><span class="p">,</span>
-</span><span id="__span-0-708"><a id="__codelineno-0-708" name="__codelineno-0-708"></a>            <span class="n">device_buffer_bytes</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">device_buffer_bytes</span><span class="p">,</span>
-</span><span id="__span-0-709"><a id="__codelineno-0-709" name="__codelineno-0-709"></a>            <span class="n">n_zarrs_meta_cache</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">n_zarrs_meta_cache</span><span class="p">,</span>
-</span><span id="__span-0-710"><a id="__codelineno-0-710" name="__codelineno-0-710"></a>            <span class="n">n_shards_meta_cache</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">n_shards_meta_cache</span><span class="p">,</span>
-</span><span id="__span-0-711"><a id="__codelineno-0-711" name="__codelineno-0-711"></a>            <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">dtype</span><span class="p">),</span>  <span class="c1"># already coerced by Config.__init__</span>
-</span><span id="__span-0-712"><a id="__codelineno-0-712" name="__codelineno-0-712"></a>            <span class="n">max_chunk_uncompressed_bytes</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">max_chunk_uncompressed_bytes</span><span class="p">,</span>
-</span><span id="__span-0-713"><a id="__codelineno-0-713" name="__codelineno-0-713"></a>            <span class="n">max_gpu_memory_bytes</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">max_gpu_memory_bytes</span><span class="p">,</span>
-</span><span id="__span-0-714"><a id="__codelineno-0-714" name="__codelineno-0-714"></a>            <span class="n">device</span><span class="o">=-</span><span class="mi">1</span> <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">device</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="nb">int</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">device</span><span class="p">),</span>
-</span><span id="__span-0-715"><a id="__codelineno-0-715" name="__codelineno-0-715"></a>        <span class="p">)</span>
-</span><span id="__span-0-716"><a id="__codelineno-0-716" name="__codelineno-0-716"></a>    <span class="k">except</span> <span class="n">_native</span><span class="o">.</span><span class="n">DamacyError</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>
-</span><span id="__span-0-717"><a id="__codelineno-0-717" name="__codelineno-0-717"></a>        <span class="n">_reraise_typed</span><span class="p">(</span><span class="n">exc</span><span class="p">)</span>
-</span><span id="__span-0-718"><a id="__codelineno-0-718" name="__codelineno-0-718"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_closed</span> <span class="o">=</span> <span class="kc">False</span>
-</span><span id="__span-0-719"><a id="__codelineno-0-719" name="__codelineno-0-719"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_config</span> <span class="o">=</span> <span class="n">config</span>
-</span><span id="__span-0-720"><a id="__codelineno-0-720" name="__codelineno-0-720"></a>    <span class="c1"># User-side queue of pending sample iterators. push() appends</span>
-</span><span id="__span-0-721"><a id="__codelineno-0-721" name="__codelineno-0-721"></a>    <span class="c1"># here and best-effort drains; pop()/flush() top up before</span>
-</span><span id="__span-0-722"><a id="__codelineno-0-722" name="__codelineno-0-722"></a>    <span class="c1"># touching native. This makes push() consume-everything from</span>
-</span><span id="__span-0-723"><a id="__codelineno-0-723" name="__codelineno-0-723"></a>    <span class="c1"># the user&#39;s perspective and lets generators flow naturally.</span>
-</span><span id="__span-0-724"><a id="__codelineno-0-724" name="__codelineno-0-724"></a>    <span class="c1"># _pending_buf is the head iterator&#39;s already-pulled-but-not-yet-</span>
-</span><span id="__span-0-725"><a id="__codelineno-0-725" name="__codelineno-0-725"></a>    <span class="c1"># pushed samples; held flat to avoid wrapping `it` in successive</span>
-</span><span id="__span-0-726"><a id="__codelineno-0-726" name="__codelineno-0-726"></a>    <span class="c1"># itertools.chain() layers under sustained backpressure.</span>
-</span><span id="__span-0-727"><a id="__codelineno-0-727" name="__codelineno-0-727"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_pending</span><span class="p">:</span> <span class="n">deque</span><span class="p">[</span><span class="n">Iterator</span><span class="p">[</span><span class="n">Sample</span><span class="p">]]</span> <span class="o">=</span> <span class="n">deque</span><span class="p">()</span>
-</span><span id="__span-0-728"><a id="__codelineno-0-728" name="__codelineno-0-728"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_pending_buf</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
-</span><span id="__span-0-729"><a id="__codelineno-0-729" name="__codelineno-0-729"></a>    <span class="n">_warn_if_local_rank_disagrees</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">device</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">_native</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
+<span class="normal"><a href="#__codelineno-0-716">716</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-688"><a id="__codelineno-0-688" name="__codelineno-0-688"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">config</span><span class="p">:</span> <span class="n">Config</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-0-689"><a id="__codelineno-0-689" name="__codelineno-0-689"></a>    <span class="k">try</span><span class="p">:</span>
+</span><span id="__span-0-690"><a id="__codelineno-0-690" name="__codelineno-0-690"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_native</span> <span class="o">=</span> <span class="n">_native</span><span class="o">.</span><span class="n">Pipeline</span><span class="p">(</span>
+</span><span id="__span-0-691"><a id="__codelineno-0-691" name="__codelineno-0-691"></a>            <span class="n">batch_size</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">batch_size</span><span class="p">,</span>
+</span><span id="__span-0-692"><a id="__codelineno-0-692" name="__codelineno-0-692"></a>            <span class="n">lookahead_batches</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">lookahead_batches</span><span class="p">,</span>
+</span><span id="__span-0-693"><a id="__codelineno-0-693" name="__codelineno-0-693"></a>            <span class="n">n_io_threads</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">n_io_threads</span><span class="p">,</span>
+</span><span id="__span-0-694"><a id="__codelineno-0-694" name="__codelineno-0-694"></a>            <span class="n">n_compute_threads</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">n_compute_threads</span><span class="p">,</span>
+</span><span id="__span-0-695"><a id="__codelineno-0-695" name="__codelineno-0-695"></a>            <span class="n">n_zarrs_meta_cache</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">n_zarrs_meta_cache</span><span class="p">,</span>
+</span><span id="__span-0-696"><a id="__codelineno-0-696" name="__codelineno-0-696"></a>            <span class="n">n_shards_meta_cache</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">n_shards_meta_cache</span><span class="p">,</span>
+</span><span id="__span-0-697"><a id="__codelineno-0-697" name="__codelineno-0-697"></a>            <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">dtype</span><span class="p">),</span>  <span class="c1"># already coerced by Config.__init__</span>
+</span><span id="__span-0-698"><a id="__codelineno-0-698" name="__codelineno-0-698"></a>            <span class="n">max_chunk_uncompressed_bytes</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">max_chunk_uncompressed_bytes</span><span class="p">,</span>
+</span><span id="__span-0-699"><a id="__codelineno-0-699" name="__codelineno-0-699"></a>            <span class="n">max_gpu_memory_bytes</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">max_gpu_memory_bytes</span><span class="p">,</span>
+</span><span id="__span-0-700"><a id="__codelineno-0-700" name="__codelineno-0-700"></a>            <span class="n">host_buffer_waves</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">host_buffer_waves</span><span class="p">,</span>
+</span><span id="__span-0-701"><a id="__codelineno-0-701" name="__codelineno-0-701"></a>            <span class="n">device</span><span class="o">=-</span><span class="mi">1</span> <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">device</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="nb">int</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">device</span><span class="p">),</span>
+</span><span id="__span-0-702"><a id="__codelineno-0-702" name="__codelineno-0-702"></a>        <span class="p">)</span>
+</span><span id="__span-0-703"><a id="__codelineno-0-703" name="__codelineno-0-703"></a>    <span class="k">except</span> <span class="n">_native</span><span class="o">.</span><span class="n">DamacyError</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>
+</span><span id="__span-0-704"><a id="__codelineno-0-704" name="__codelineno-0-704"></a>        <span class="n">_reraise_typed</span><span class="p">(</span><span class="n">exc</span><span class="p">)</span>
+</span><span id="__span-0-705"><a id="__codelineno-0-705" name="__codelineno-0-705"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_closed</span> <span class="o">=</span> <span class="kc">False</span>
+</span><span id="__span-0-706"><a id="__codelineno-0-706" name="__codelineno-0-706"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_config</span> <span class="o">=</span> <span class="n">config</span>
+</span><span id="__span-0-707"><a id="__codelineno-0-707" name="__codelineno-0-707"></a>    <span class="c1"># User-side queue of pending sample iterators. push() appends</span>
+</span><span id="__span-0-708"><a id="__codelineno-0-708" name="__codelineno-0-708"></a>    <span class="c1"># here and best-effort drains; pop()/flush() top up before</span>
+</span><span id="__span-0-709"><a id="__codelineno-0-709" name="__codelineno-0-709"></a>    <span class="c1"># touching native. This makes push() consume-everything from</span>
+</span><span id="__span-0-710"><a id="__codelineno-0-710" name="__codelineno-0-710"></a>    <span class="c1"># the user&#39;s perspective and lets generators flow naturally.</span>
+</span><span id="__span-0-711"><a id="__codelineno-0-711" name="__codelineno-0-711"></a>    <span class="c1"># _pending_buf is the head iterator&#39;s already-pulled-but-not-yet-</span>
+</span><span id="__span-0-712"><a id="__codelineno-0-712" name="__codelineno-0-712"></a>    <span class="c1"># pushed samples; held flat to avoid wrapping `it` in successive</span>
+</span><span id="__span-0-713"><a id="__codelineno-0-713" name="__codelineno-0-713"></a>    <span class="c1"># itertools.chain() layers under sustained backpressure.</span>
+</span><span id="__span-0-714"><a id="__codelineno-0-714" name="__codelineno-0-714"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_pending</span><span class="p">:</span> <span class="n">deque</span><span class="p">[</span><span class="n">Iterator</span><span class="p">[</span><span class="n">Sample</span><span class="p">]]</span> <span class="o">=</span> <span class="n">deque</span><span class="p">()</span>
+</span><span id="__span-0-715"><a id="__codelineno-0-715" name="__codelineno-0-715"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_pending_buf</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="__span-0-716"><a id="__codelineno-0-716" name="__codelineno-0-716"></a>    <span class="n">_warn_if_local_rank_disagrees</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">device</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">_native</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
                   </details>
 
@@ -1498,17 +1496,17 @@ on the pipeline raise :class:<code>ShutdownError</code>.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>python/damacy/__init__.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-753">753</a></span>
-<span class="normal"><a href="#__codelineno-0-754">754</a></span>
-<span class="normal"><a href="#__codelineno-0-755">755</a></span>
-<span class="normal"><a href="#__codelineno-0-756">756</a></span>
-<span class="normal"><a href="#__codelineno-0-757">757</a></span>
-<span class="normal"><a href="#__codelineno-0-758">758</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-753"><a id="__codelineno-0-753" name="__codelineno-0-753"></a><span class="k">def</span><span class="w"> </span><span class="nf">close</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="__span-0-754"><a id="__codelineno-0-754" name="__codelineno-0-754"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Release the underlying handle. Idempotent. Subsequent calls</span>
-</span><span id="__span-0-755"><a id="__codelineno-0-755" name="__codelineno-0-755"></a><span class="sd">    on the pipeline raise :class:`ShutdownError`.&quot;&quot;&quot;</span>
-</span><span id="__span-0-756"><a id="__codelineno-0-756" name="__codelineno-0-756"></a>    <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">_closed</span><span class="p">:</span>
-</span><span id="__span-0-757"><a id="__codelineno-0-757" name="__codelineno-0-757"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_closed</span> <span class="o">=</span> <span class="kc">True</span>
-</span><span id="__span-0-758"><a id="__codelineno-0-758" name="__codelineno-0-758"></a>        <span class="k">del</span> <span class="bp">self</span><span class="o">.</span><span class="n">_native</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-740">740</a></span>
+<span class="normal"><a href="#__codelineno-0-741">741</a></span>
+<span class="normal"><a href="#__codelineno-0-742">742</a></span>
+<span class="normal"><a href="#__codelineno-0-743">743</a></span>
+<span class="normal"><a href="#__codelineno-0-744">744</a></span>
+<span class="normal"><a href="#__codelineno-0-745">745</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-740"><a id="__codelineno-0-740" name="__codelineno-0-740"></a><span class="k">def</span><span class="w"> </span><span class="nf">close</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-0-741"><a id="__codelineno-0-741" name="__codelineno-0-741"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Release the underlying handle. Idempotent. Subsequent calls</span>
+</span><span id="__span-0-742"><a id="__codelineno-0-742" name="__codelineno-0-742"></a><span class="sd">    on the pipeline raise :class:`ShutdownError`.&quot;&quot;&quot;</span>
+</span><span id="__span-0-743"><a id="__codelineno-0-743" name="__codelineno-0-743"></a>    <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">_closed</span><span class="p">:</span>
+</span><span id="__span-0-744"><a id="__codelineno-0-744" name="__codelineno-0-744"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_closed</span> <span class="o">=</span> <span class="kc">True</span>
+</span><span id="__span-0-745"><a id="__codelineno-0-745" name="__codelineno-0-745"></a>        <span class="k">del</span> <span class="bp">self</span><span class="o">.</span><span class="n">_native</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -1545,33 +1543,33 @@ unaffected.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>python/damacy/__init__.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-786">786</a></span>
-<span class="normal"><a href="#__codelineno-0-787">787</a></span>
-<span class="normal"><a href="#__codelineno-0-788">788</a></span>
-<span class="normal"><a href="#__codelineno-0-789">789</a></span>
-<span class="normal"><a href="#__codelineno-0-790">790</a></span>
-<span class="normal"><a href="#__codelineno-0-791">791</a></span>
-<span class="normal"><a href="#__codelineno-0-792">792</a></span>
-<span class="normal"><a href="#__codelineno-0-793">793</a></span>
-<span class="normal"><a href="#__codelineno-0-794">794</a></span>
-<span class="normal"><a href="#__codelineno-0-795">795</a></span>
-<span class="normal"><a href="#__codelineno-0-796">796</a></span>
-<span class="normal"><a href="#__codelineno-0-797">797</a></span>
-<span class="normal"><a href="#__codelineno-0-798">798</a></span>
-<span class="normal"><a href="#__codelineno-0-799">799</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-786"><a id="__codelineno-0-786" name="__codelineno-0-786"></a><span class="k">def</span><span class="w"> </span><span class="nf">push</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">samples</span><span class="p">:</span> <span class="n">Iterable</span><span class="p">[</span><span class="n">Sample</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="__span-0-787"><a id="__codelineno-0-787" name="__codelineno-0-787"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Queue samples for processing. Accepts any iterable (list,</span>
-</span><span id="__span-0-788"><a id="__codelineno-0-788" name="__codelineno-0-788"></a><span class="sd">    generator, infinite generator, …); large or unbounded sources</span>
-</span><span id="__span-0-789"><a id="__codelineno-0-789" name="__codelineno-0-789"></a><span class="sd">    are pulled lazily as :meth:`pop` frees space.</span>
-</span><span id="__span-0-790"><a id="__codelineno-0-790" name="__codelineno-0-790"></a>
-</span><span id="__span-0-791"><a id="__codelineno-0-791" name="__codelineno-0-791"></a><span class="sd">    Fatal errors from the C-side validator (``NotFound``,</span>
-</span><span id="__span-0-792"><a id="__codelineno-0-792" name="__codelineno-0-792"></a><span class="sd">    ``DtypeMismatch``, ``RankMismatch``, …) raise the matching</span>
-</span><span id="__span-0-793"><a id="__codelineno-0-793" name="__codelineno-0-793"></a><span class="sd">    :class:`DamacyError` subclass; the offending iterator is</span>
-</span><span id="__span-0-794"><a id="__codelineno-0-794" name="__codelineno-0-794"></a><span class="sd">    discarded but samples accepted by earlier ``push`` calls are</span>
-</span><span id="__span-0-795"><a id="__codelineno-0-795" name="__codelineno-0-795"></a><span class="sd">    unaffected.</span>
-</span><span id="__span-0-796"><a id="__codelineno-0-796" name="__codelineno-0-796"></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="__span-0-797"><a id="__codelineno-0-797" name="__codelineno-0-797"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_check_open</span><span class="p">()</span>
-</span><span id="__span-0-798"><a id="__codelineno-0-798" name="__codelineno-0-798"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_pending</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="nb">iter</span><span class="p">(</span><span class="n">samples</span><span class="p">))</span>
-</span><span id="__span-0-799"><a id="__codelineno-0-799" name="__codelineno-0-799"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_drain_pending</span><span class="p">()</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-773">773</a></span>
+<span class="normal"><a href="#__codelineno-0-774">774</a></span>
+<span class="normal"><a href="#__codelineno-0-775">775</a></span>
+<span class="normal"><a href="#__codelineno-0-776">776</a></span>
+<span class="normal"><a href="#__codelineno-0-777">777</a></span>
+<span class="normal"><a href="#__codelineno-0-778">778</a></span>
+<span class="normal"><a href="#__codelineno-0-779">779</a></span>
+<span class="normal"><a href="#__codelineno-0-780">780</a></span>
+<span class="normal"><a href="#__codelineno-0-781">781</a></span>
+<span class="normal"><a href="#__codelineno-0-782">782</a></span>
+<span class="normal"><a href="#__codelineno-0-783">783</a></span>
+<span class="normal"><a href="#__codelineno-0-784">784</a></span>
+<span class="normal"><a href="#__codelineno-0-785">785</a></span>
+<span class="normal"><a href="#__codelineno-0-786">786</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-773"><a id="__codelineno-0-773" name="__codelineno-0-773"></a><span class="k">def</span><span class="w"> </span><span class="nf">push</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">samples</span><span class="p">:</span> <span class="n">Iterable</span><span class="p">[</span><span class="n">Sample</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-0-774"><a id="__codelineno-0-774" name="__codelineno-0-774"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Queue samples for processing. Accepts any iterable (list,</span>
+</span><span id="__span-0-775"><a id="__codelineno-0-775" name="__codelineno-0-775"></a><span class="sd">    generator, infinite generator, …); large or unbounded sources</span>
+</span><span id="__span-0-776"><a id="__codelineno-0-776" name="__codelineno-0-776"></a><span class="sd">    are pulled lazily as :meth:`pop` frees space.</span>
+</span><span id="__span-0-777"><a id="__codelineno-0-777" name="__codelineno-0-777"></a>
+</span><span id="__span-0-778"><a id="__codelineno-0-778" name="__codelineno-0-778"></a><span class="sd">    Fatal errors from the C-side validator (``NotFound``,</span>
+</span><span id="__span-0-779"><a id="__codelineno-0-779" name="__codelineno-0-779"></a><span class="sd">    ``DtypeMismatch``, ``RankMismatch``, …) raise the matching</span>
+</span><span id="__span-0-780"><a id="__codelineno-0-780" name="__codelineno-0-780"></a><span class="sd">    :class:`DamacyError` subclass; the offending iterator is</span>
+</span><span id="__span-0-781"><a id="__codelineno-0-781" name="__codelineno-0-781"></a><span class="sd">    discarded but samples accepted by earlier ``push`` calls are</span>
+</span><span id="__span-0-782"><a id="__codelineno-0-782" name="__codelineno-0-782"></a><span class="sd">    unaffected.</span>
+</span><span id="__span-0-783"><a id="__codelineno-0-783" name="__codelineno-0-783"></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="__span-0-784"><a id="__codelineno-0-784" name="__codelineno-0-784"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_check_open</span><span class="p">()</span>
+</span><span id="__span-0-785"><a id="__codelineno-0-785" name="__codelineno-0-785"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_pending</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="nb">iter</span><span class="p">(</span><span class="n">samples</span><span class="p">))</span>
+</span><span id="__span-0-786"><a id="__codelineno-0-786" name="__codelineno-0-786"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_drain_pending</span><span class="p">()</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -1598,27 +1596,27 @@ DLPack consumer) — preferably inside a <code>with</code> block.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>python/damacy/__init__.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-841">841</a></span>
-<span class="normal"><a href="#__codelineno-0-842">842</a></span>
-<span class="normal"><a href="#__codelineno-0-843">843</a></span>
-<span class="normal"><a href="#__codelineno-0-844">844</a></span>
-<span class="normal"><a href="#__codelineno-0-845">845</a></span>
-<span class="normal"><a href="#__codelineno-0-846">846</a></span>
-<span class="normal"><a href="#__codelineno-0-847">847</a></span>
-<span class="normal"><a href="#__codelineno-0-848">848</a></span>
-<span class="normal"><a href="#__codelineno-0-849">849</a></span>
-<span class="normal"><a href="#__codelineno-0-850">850</a></span>
-<span class="normal"><a href="#__codelineno-0-851">851</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-841"><a id="__codelineno-0-841" name="__codelineno-0-841"></a><span class="k">def</span><span class="w"> </span><span class="nf">pop</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Batch</span><span class="p">:</span>
-</span><span id="__span-0-842"><a id="__codelineno-0-842" name="__codelineno-0-842"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Block until the next batch is on-device-ready. Returns a</span>
-</span><span id="__span-0-843"><a id="__codelineno-0-843" name="__codelineno-0-843"></a><span class="sd">    :class:`Batch` you can hand to ``torch.from_dlpack`` (or any</span>
-</span><span id="__span-0-844"><a id="__codelineno-0-844" name="__codelineno-0-844"></a><span class="sd">    DLPack consumer) — preferably inside a ``with`` block.&quot;&quot;&quot;</span>
-</span><span id="__span-0-845"><a id="__codelineno-0-845" name="__codelineno-0-845"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_check_open</span><span class="p">()</span>
-</span><span id="__span-0-846"><a id="__codelineno-0-846" name="__codelineno-0-846"></a>    <span class="c1"># Top up native from the pending queue so the planner has work.</span>
-</span><span id="__span-0-847"><a id="__codelineno-0-847" name="__codelineno-0-847"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_drain_pending</span><span class="p">()</span>
-</span><span id="__span-0-848"><a id="__codelineno-0-848" name="__codelineno-0-848"></a>    <span class="k">try</span><span class="p">:</span>
-</span><span id="__span-0-849"><a id="__codelineno-0-849" name="__codelineno-0-849"></a>        <span class="k">return</span> <span class="n">Batch</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_native</span><span class="o">.</span><span class="n">pop</span><span class="p">())</span>
-</span><span id="__span-0-850"><a id="__codelineno-0-850" name="__codelineno-0-850"></a>    <span class="k">except</span> <span class="n">_native</span><span class="o">.</span><span class="n">DamacyError</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>
-</span><span id="__span-0-851"><a id="__codelineno-0-851" name="__codelineno-0-851"></a>        <span class="n">_reraise_typed</span><span class="p">(</span><span class="n">exc</span><span class="p">)</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-828">828</a></span>
+<span class="normal"><a href="#__codelineno-0-829">829</a></span>
+<span class="normal"><a href="#__codelineno-0-830">830</a></span>
+<span class="normal"><a href="#__codelineno-0-831">831</a></span>
+<span class="normal"><a href="#__codelineno-0-832">832</a></span>
+<span class="normal"><a href="#__codelineno-0-833">833</a></span>
+<span class="normal"><a href="#__codelineno-0-834">834</a></span>
+<span class="normal"><a href="#__codelineno-0-835">835</a></span>
+<span class="normal"><a href="#__codelineno-0-836">836</a></span>
+<span class="normal"><a href="#__codelineno-0-837">837</a></span>
+<span class="normal"><a href="#__codelineno-0-838">838</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-828"><a id="__codelineno-0-828" name="__codelineno-0-828"></a><span class="k">def</span><span class="w"> </span><span class="nf">pop</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Batch</span><span class="p">:</span>
+</span><span id="__span-0-829"><a id="__codelineno-0-829" name="__codelineno-0-829"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Block until the next batch is on-device-ready. Returns a</span>
+</span><span id="__span-0-830"><a id="__codelineno-0-830" name="__codelineno-0-830"></a><span class="sd">    :class:`Batch` you can hand to ``torch.from_dlpack`` (or any</span>
+</span><span id="__span-0-831"><a id="__codelineno-0-831" name="__codelineno-0-831"></a><span class="sd">    DLPack consumer) — preferably inside a ``with`` block.&quot;&quot;&quot;</span>
+</span><span id="__span-0-832"><a id="__codelineno-0-832" name="__codelineno-0-832"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_check_open</span><span class="p">()</span>
+</span><span id="__span-0-833"><a id="__codelineno-0-833" name="__codelineno-0-833"></a>    <span class="c1"># Top up native from the pending queue so the planner has work.</span>
+</span><span id="__span-0-834"><a id="__codelineno-0-834" name="__codelineno-0-834"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_drain_pending</span><span class="p">()</span>
+</span><span id="__span-0-835"><a id="__codelineno-0-835" name="__codelineno-0-835"></a>    <span class="k">try</span><span class="p">:</span>
+</span><span id="__span-0-836"><a id="__codelineno-0-836" name="__codelineno-0-836"></a>        <span class="k">return</span> <span class="n">Batch</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_native</span><span class="o">.</span><span class="n">pop</span><span class="p">())</span>
+</span><span id="__span-0-837"><a id="__codelineno-0-837" name="__codelineno-0-837"></a>    <span class="k">except</span> <span class="n">_native</span><span class="o">.</span><span class="n">DamacyError</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>
+</span><span id="__span-0-838"><a id="__codelineno-0-838" name="__codelineno-0-838"></a>        <span class="n">_reraise_typed</span><span class="p">(</span><span class="n">exc</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -1647,29 +1645,29 @@ emit as a batch.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>python/damacy/__init__.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-853">853</a></span>
-<span class="normal"><a href="#__codelineno-0-854">854</a></span>
-<span class="normal"><a href="#__codelineno-0-855">855</a></span>
-<span class="normal"><a href="#__codelineno-0-856">856</a></span>
-<span class="normal"><a href="#__codelineno-0-857">857</a></span>
-<span class="normal"><a href="#__codelineno-0-858">858</a></span>
-<span class="normal"><a href="#__codelineno-0-859">859</a></span>
-<span class="normal"><a href="#__codelineno-0-860">860</a></span>
-<span class="normal"><a href="#__codelineno-0-861">861</a></span>
-<span class="normal"><a href="#__codelineno-0-862">862</a></span>
-<span class="normal"><a href="#__codelineno-0-863">863</a></span>
-<span class="normal"><a href="#__codelineno-0-864">864</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-853"><a id="__codelineno-0-853" name="__codelineno-0-853"></a><span class="k">def</span><span class="w"> </span><span class="nf">flush</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="__span-0-854"><a id="__codelineno-0-854" name="__codelineno-0-854"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Drain pending samples into the pipeline (best-effort) and</span>
-</span><span id="__span-0-855"><a id="__codelineno-0-855" name="__codelineno-0-855"></a><span class="sd">    ready any partial last batch for pop. Idempotent. Pending</span>
-</span><span id="__span-0-856"><a id="__codelineno-0-856" name="__codelineno-0-856"></a><span class="sd">    samples that don&#39;t fit before flush are dropped — pop until</span>
-</span><span id="__span-0-857"><a id="__codelineno-0-857" name="__codelineno-0-857"></a><span class="sd">    :attr:`pending` reads False if you want every queued sample to</span>
-</span><span id="__span-0-858"><a id="__codelineno-0-858" name="__codelineno-0-858"></a><span class="sd">    emit as a batch.&quot;&quot;&quot;</span>
-</span><span id="__span-0-859"><a id="__codelineno-0-859" name="__codelineno-0-859"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_check_open</span><span class="p">()</span>
-</span><span id="__span-0-860"><a id="__codelineno-0-860" name="__codelineno-0-860"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_drain_pending</span><span class="p">()</span>
-</span><span id="__span-0-861"><a id="__codelineno-0-861" name="__codelineno-0-861"></a>    <span class="k">try</span><span class="p">:</span>
-</span><span id="__span-0-862"><a id="__codelineno-0-862" name="__codelineno-0-862"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_native</span><span class="o">.</span><span class="n">flush</span><span class="p">()</span>
-</span><span id="__span-0-863"><a id="__codelineno-0-863" name="__codelineno-0-863"></a>    <span class="k">except</span> <span class="n">_native</span><span class="o">.</span><span class="n">DamacyError</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>
-</span><span id="__span-0-864"><a id="__codelineno-0-864" name="__codelineno-0-864"></a>        <span class="n">_reraise_typed</span><span class="p">(</span><span class="n">exc</span><span class="p">)</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-840">840</a></span>
+<span class="normal"><a href="#__codelineno-0-841">841</a></span>
+<span class="normal"><a href="#__codelineno-0-842">842</a></span>
+<span class="normal"><a href="#__codelineno-0-843">843</a></span>
+<span class="normal"><a href="#__codelineno-0-844">844</a></span>
+<span class="normal"><a href="#__codelineno-0-845">845</a></span>
+<span class="normal"><a href="#__codelineno-0-846">846</a></span>
+<span class="normal"><a href="#__codelineno-0-847">847</a></span>
+<span class="normal"><a href="#__codelineno-0-848">848</a></span>
+<span class="normal"><a href="#__codelineno-0-849">849</a></span>
+<span class="normal"><a href="#__codelineno-0-850">850</a></span>
+<span class="normal"><a href="#__codelineno-0-851">851</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-840"><a id="__codelineno-0-840" name="__codelineno-0-840"></a><span class="k">def</span><span class="w"> </span><span class="nf">flush</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-0-841"><a id="__codelineno-0-841" name="__codelineno-0-841"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Drain pending samples into the pipeline (best-effort) and</span>
+</span><span id="__span-0-842"><a id="__codelineno-0-842" name="__codelineno-0-842"></a><span class="sd">    ready any partial last batch for pop. Idempotent. Pending</span>
+</span><span id="__span-0-843"><a id="__codelineno-0-843" name="__codelineno-0-843"></a><span class="sd">    samples that don&#39;t fit before flush are dropped — pop until</span>
+</span><span id="__span-0-844"><a id="__codelineno-0-844" name="__codelineno-0-844"></a><span class="sd">    :attr:`pending` reads False if you want every queued sample to</span>
+</span><span id="__span-0-845"><a id="__codelineno-0-845" name="__codelineno-0-845"></a><span class="sd">    emit as a batch.&quot;&quot;&quot;</span>
+</span><span id="__span-0-846"><a id="__codelineno-0-846" name="__codelineno-0-846"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_check_open</span><span class="p">()</span>
+</span><span id="__span-0-847"><a id="__codelineno-0-847" name="__codelineno-0-847"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_drain_pending</span><span class="p">()</span>
+</span><span id="__span-0-848"><a id="__codelineno-0-848" name="__codelineno-0-848"></a>    <span class="k">try</span><span class="p">:</span>
+</span><span id="__span-0-849"><a id="__codelineno-0-849" name="__codelineno-0-849"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_native</span><span class="o">.</span><span class="n">flush</span><span class="p">()</span>
+</span><span id="__span-0-850"><a id="__codelineno-0-850" name="__codelineno-0-850"></a>    <span class="k">except</span> <span class="n">_native</span><span class="o">.</span><span class="n">DamacyError</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>
+</span><span id="__span-0-851"><a id="__codelineno-0-851" name="__codelineno-0-851"></a>        <span class="n">_reraise_typed</span><span class="p">(</span><span class="n">exc</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -1701,31 +1699,31 @@ blocks until that batch is on-device-ready.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>python/damacy/__init__.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-872">872</a></span>
-<span class="normal"><a href="#__codelineno-0-873">873</a></span>
-<span class="normal"><a href="#__codelineno-0-874">874</a></span>
-<span class="normal"><a href="#__codelineno-0-875">875</a></span>
-<span class="normal"><a href="#__codelineno-0-876">876</a></span>
-<span class="normal"><a href="#__codelineno-0-877">877</a></span>
-<span class="normal"><a href="#__codelineno-0-878">878</a></span>
-<span class="normal"><a href="#__codelineno-0-879">879</a></span>
-<span class="normal"><a href="#__codelineno-0-880">880</a></span>
-<span class="normal"><a href="#__codelineno-0-881">881</a></span>
-<span class="normal"><a href="#__codelineno-0-882">882</a></span>
-<span class="normal"><a href="#__codelineno-0-883">883</a></span>
-<span class="normal"><a href="#__codelineno-0-884">884</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-872"><a id="__codelineno-0-872" name="__codelineno-0-872"></a><span class="k">def</span><span class="w"> </span><span class="nf">batches</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">n</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Iterator</span><span class="p">[</span><span class="n">Batch</span><span class="p">]:</span>
-</span><span id="__span-0-873"><a id="__codelineno-0-873" name="__codelineno-0-873"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Pop *n* batches as an iterator. Each call to :meth:`pop`</span>
-</span><span id="__span-0-874"><a id="__codelineno-0-874" name="__codelineno-0-874"></a><span class="sd">    blocks until that batch is on-device-ready.</span>
-</span><span id="__span-0-875"><a id="__codelineno-0-875" name="__codelineno-0-875"></a>
-</span><span id="__span-0-876"><a id="__codelineno-0-876" name="__codelineno-0-876"></a><span class="sd">    Pair with a ``with`` block so the slot is released::</span>
-</span><span id="__span-0-877"><a id="__codelineno-0-877" name="__codelineno-0-877"></a>
-</span><span id="__span-0-878"><a id="__codelineno-0-878" name="__codelineno-0-878"></a><span class="sd">        for batch in d.batches(8):</span>
-</span><span id="__span-0-879"><a id="__codelineno-0-879" name="__codelineno-0-879"></a><span class="sd">            with batch as t:</span>
-</span><span id="__span-0-880"><a id="__codelineno-0-880" name="__codelineno-0-880"></a><span class="sd">                x = torch.from_dlpack(t)</span>
-</span><span id="__span-0-881"><a id="__codelineno-0-881" name="__codelineno-0-881"></a><span class="sd">                ...</span>
-</span><span id="__span-0-882"><a id="__codelineno-0-882" name="__codelineno-0-882"></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="__span-0-883"><a id="__codelineno-0-883" name="__codelineno-0-883"></a>    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n</span><span class="p">):</span>
-</span><span id="__span-0-884"><a id="__codelineno-0-884" name="__codelineno-0-884"></a>        <span class="k">yield</span> <span class="bp">self</span><span class="o">.</span><span class="n">pop</span><span class="p">()</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-859">859</a></span>
+<span class="normal"><a href="#__codelineno-0-860">860</a></span>
+<span class="normal"><a href="#__codelineno-0-861">861</a></span>
+<span class="normal"><a href="#__codelineno-0-862">862</a></span>
+<span class="normal"><a href="#__codelineno-0-863">863</a></span>
+<span class="normal"><a href="#__codelineno-0-864">864</a></span>
+<span class="normal"><a href="#__codelineno-0-865">865</a></span>
+<span class="normal"><a href="#__codelineno-0-866">866</a></span>
+<span class="normal"><a href="#__codelineno-0-867">867</a></span>
+<span class="normal"><a href="#__codelineno-0-868">868</a></span>
+<span class="normal"><a href="#__codelineno-0-869">869</a></span>
+<span class="normal"><a href="#__codelineno-0-870">870</a></span>
+<span class="normal"><a href="#__codelineno-0-871">871</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-859"><a id="__codelineno-0-859" name="__codelineno-0-859"></a><span class="k">def</span><span class="w"> </span><span class="nf">batches</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">n</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Iterator</span><span class="p">[</span><span class="n">Batch</span><span class="p">]:</span>
+</span><span id="__span-0-860"><a id="__codelineno-0-860" name="__codelineno-0-860"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Pop *n* batches as an iterator. Each call to :meth:`pop`</span>
+</span><span id="__span-0-861"><a id="__codelineno-0-861" name="__codelineno-0-861"></a><span class="sd">    blocks until that batch is on-device-ready.</span>
+</span><span id="__span-0-862"><a id="__codelineno-0-862" name="__codelineno-0-862"></a>
+</span><span id="__span-0-863"><a id="__codelineno-0-863" name="__codelineno-0-863"></a><span class="sd">    Pair with a ``with`` block so the slot is released::</span>
+</span><span id="__span-0-864"><a id="__codelineno-0-864" name="__codelineno-0-864"></a>
+</span><span id="__span-0-865"><a id="__codelineno-0-865" name="__codelineno-0-865"></a><span class="sd">        for batch in d.batches(8):</span>
+</span><span id="__span-0-866"><a id="__codelineno-0-866" name="__codelineno-0-866"></a><span class="sd">            with batch as t:</span>
+</span><span id="__span-0-867"><a id="__codelineno-0-867" name="__codelineno-0-867"></a><span class="sd">                x = torch.from_dlpack(t)</span>
+</span><span id="__span-0-868"><a id="__codelineno-0-868" name="__codelineno-0-868"></a><span class="sd">                ...</span>
+</span><span id="__span-0-869"><a id="__codelineno-0-869" name="__codelineno-0-869"></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="__span-0-870"><a id="__codelineno-0-870" name="__codelineno-0-870"></a>    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n</span><span class="p">):</span>
+</span><span id="__span-0-871"><a id="__codelineno-0-871" name="__codelineno-0-871"></a>        <span class="k">yield</span> <span class="bp">self</span><span class="o">.</span><span class="n">pop</span><span class="p">()</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -1757,17 +1755,16 @@ blocks until that batch is on-device-ready.</p>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="o">*</span><span class="p">,</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n">batch_size</span><span class="p">:</span> <span class="n"><span title="int">int</span></span><span class="p">,</span>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">max_gpu_memory_bytes</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">host_buffer_bytes</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">device_buffer_bytes</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="n">dtype</span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" title="            Dtype (damacy.Dtype)" href="#damacy.Dtype">Dtype</a></span> <span class="o">|</span> <span class="n"><span title="str">str</span></span> <span class="o">|</span> <span class="n"><span title="int">int</span></span> <span class="o">=</span> <span class="n"><span title="damacy.Dtype.F32">F32</span></span><span class="p">,</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="n">lookahead_batches</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">=</span> <span class="mi">2</span><span class="p">,</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    <span class="n">n_io_threads</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">=</span> <span class="mi">4</span><span class="p">,</span>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    <span class="n">n_compute_threads</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    <span class="n">n_zarrs_meta_cache</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">=</span> <span class="mi">64</span><span class="p">,</span>
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    <span class="n">n_shards_meta_cache</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">=</span> <span class="mi">256</span><span class="p">,</span>
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    <span class="n">max_chunk_uncompressed_bytes</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    <span class="n">device</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="p">)</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">dtype</span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" title="            Dtype (damacy.Dtype)" href="#damacy.Dtype">Dtype</a></span> <span class="o">|</span> <span class="n"><span title="str">str</span></span> <span class="o">|</span> <span class="n"><span title="int">int</span></span> <span class="o">=</span> <span class="n"><span title="damacy.Dtype.F32">F32</span></span><span class="p">,</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">lookahead_batches</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">=</span> <span class="mi">2</span><span class="p">,</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="n">n_io_threads</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">=</span> <span class="mi">4</span><span class="p">,</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="n">n_compute_threads</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    <span class="n">n_zarrs_meta_cache</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">=</span> <span class="mi">64</span><span class="p">,</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    <span class="n">n_shards_meta_cache</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">=</span> <span class="mi">256</span><span class="p">,</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    <span class="n">max_chunk_uncompressed_bytes</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    <span class="n">host_buffer_waves</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    <span class="n">device</span><span class="p">:</span> <span class="n"><span title="int">int</span></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="p">)</span>
 </span></code></pre></div>
 
     <div class="doc doc-contents first">
@@ -1832,41 +1829,14 @@ ValueError: batch_size must be &gt;= 1 (got 0)</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>Primary GPU budget knob (Phase 5). Hard
-cap on GPU memory allocated for wave-resident buffers,
-decoder scratch, per-wave fanout SOAs, and batch-output
-pools. 0 selects the legacy default (~1 GB). Internal
-sizing (host slab, dev decompress arena, nvcomp temp) is
-derived from this value; the create-time resolver also
-reserves the worst-case observe-and-grow footprint so
-grows inside a successfully-created instance never trip
-the cap.</p>
-              </div>
-            </td>
-          </tr>
-          <tr class="doc-section-item">
-            <td><code><span title="damacy.Config.host_buffer_bytes">host_buffer_bytes</span></code></td>
-            <td>
-                  <code><span title="int">int</span></code>
-            </td>
-            <td>
-              <div class="doc-md-description">
-                <p>DEPRECATED (Phase 5). Setting this is
-allowed for source compatibility but the value is ignored;
-a one-line warning is logged. Use <code>max_gpu_memory_bytes</code>
-to size the pipeline. Will be removed in a future release.</p>
-              </div>
-            </td>
-          </tr>
-          <tr class="doc-section-item">
-            <td><code><span title="damacy.Config.device_buffer_bytes">device_buffer_bytes</span></code></td>
-            <td>
-                  <code><span title="int">int</span></code>
-            </td>
-            <td>
-              <div class="doc-md-description">
-                <p>DEPRECATED (Phase 5). Same treatment as
-<code>host_buffer_bytes</code>.</p>
+                <p>Primary GPU budget knob. Hard cap on
+GPU memory allocated for wave-resident buffers, decoder
+scratch, per-wave fanout SOAs, and batch-output pools. 0
+selects the default (~1 GB). Internal sizing (host slab,
+dev decompress arena, nvcomp temp) is derived from this
+value; the create-time resolver also reserves the
+worst-case observe-and-grow footprint so grows inside a
+successfully-created instance never trip the cap.</p>
               </div>
             </td>
           </tr>
@@ -1979,7 +1949,15 @@ context internally — recommended under torchrun / MPI.</p>
 
                   <details class="mkdocstrings-source">
                     <summary>Source code in <code>python/damacy/__init__.py</code></summary>
-                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-387">387</a></span>
+                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-379">379</a></span>
+<span class="normal"><a href="#__codelineno-0-380">380</a></span>
+<span class="normal"><a href="#__codelineno-0-381">381</a></span>
+<span class="normal"><a href="#__codelineno-0-382">382</a></span>
+<span class="normal"><a href="#__codelineno-0-383">383</a></span>
+<span class="normal"><a href="#__codelineno-0-384">384</a></span>
+<span class="normal"><a href="#__codelineno-0-385">385</a></span>
+<span class="normal"><a href="#__codelineno-0-386">386</a></span>
+<span class="normal"><a href="#__codelineno-0-387">387</a></span>
 <span class="normal"><a href="#__codelineno-0-388">388</a></span>
 <span class="normal"><a href="#__codelineno-0-389">389</a></span>
 <span class="normal"><a href="#__codelineno-0-390">390</a></span>
@@ -2019,83 +1997,55 @@ context internally — recommended under torchrun / MPI.</p>
 <span class="normal"><a href="#__codelineno-0-424">424</a></span>
 <span class="normal"><a href="#__codelineno-0-425">425</a></span>
 <span class="normal"><a href="#__codelineno-0-426">426</a></span>
-<span class="normal"><a href="#__codelineno-0-427">427</a></span>
-<span class="normal"><a href="#__codelineno-0-428">428</a></span>
-<span class="normal"><a href="#__codelineno-0-429">429</a></span>
-<span class="normal"><a href="#__codelineno-0-430">430</a></span>
-<span class="normal"><a href="#__codelineno-0-431">431</a></span>
-<span class="normal"><a href="#__codelineno-0-432">432</a></span>
-<span class="normal"><a href="#__codelineno-0-433">433</a></span>
-<span class="normal"><a href="#__codelineno-0-434">434</a></span>
-<span class="normal"><a href="#__codelineno-0-435">435</a></span>
-<span class="normal"><a href="#__codelineno-0-436">436</a></span>
-<span class="normal"><a href="#__codelineno-0-437">437</a></span>
-<span class="normal"><a href="#__codelineno-0-438">438</a></span>
-<span class="normal"><a href="#__codelineno-0-439">439</a></span>
-<span class="normal"><a href="#__codelineno-0-440">440</a></span>
-<span class="normal"><a href="#__codelineno-0-441">441</a></span>
-<span class="normal"><a href="#__codelineno-0-442">442</a></span>
-<span class="normal"><a href="#__codelineno-0-443">443</a></span>
-<span class="normal"><a href="#__codelineno-0-444">444</a></span>
-<span class="normal"><a href="#__codelineno-0-445">445</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-387"><a id="__codelineno-0-387" name="__codelineno-0-387"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
-</span><span id="__span-0-388"><a id="__codelineno-0-388" name="__codelineno-0-388"></a>    <span class="bp">self</span><span class="p">,</span>
-</span><span id="__span-0-389"><a id="__codelineno-0-389" name="__codelineno-0-389"></a>    <span class="o">*</span><span class="p">,</span>
-</span><span id="__span-0-390"><a id="__codelineno-0-390" name="__codelineno-0-390"></a>    <span class="n">batch_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="__span-0-391"><a id="__codelineno-0-391" name="__codelineno-0-391"></a>    <span class="n">max_gpu_memory_bytes</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
-</span><span id="__span-0-392"><a id="__codelineno-0-392" name="__codelineno-0-392"></a>    <span class="n">host_buffer_bytes</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
-</span><span id="__span-0-393"><a id="__codelineno-0-393" name="__codelineno-0-393"></a>    <span class="n">device_buffer_bytes</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
-</span><span id="__span-0-394"><a id="__codelineno-0-394" name="__codelineno-0-394"></a>    <span class="n">dtype</span><span class="p">:</span> <span class="n">Dtype</span> <span class="o">|</span> <span class="nb">str</span> <span class="o">|</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Dtype</span><span class="o">.</span><span class="n">F32</span><span class="p">,</span>
-</span><span id="__span-0-395"><a id="__codelineno-0-395" name="__codelineno-0-395"></a>    <span class="n">lookahead_batches</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2</span><span class="p">,</span>
-</span><span id="__span-0-396"><a id="__codelineno-0-396" name="__codelineno-0-396"></a>    <span class="n">n_io_threads</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">4</span><span class="p">,</span>
-</span><span id="__span-0-397"><a id="__codelineno-0-397" name="__codelineno-0-397"></a>    <span class="n">n_compute_threads</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
-</span><span id="__span-0-398"><a id="__codelineno-0-398" name="__codelineno-0-398"></a>    <span class="n">n_zarrs_meta_cache</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">64</span><span class="p">,</span>
-</span><span id="__span-0-399"><a id="__codelineno-0-399" name="__codelineno-0-399"></a>    <span class="n">n_shards_meta_cache</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">256</span><span class="p">,</span>
-</span><span id="__span-0-400"><a id="__codelineno-0-400" name="__codelineno-0-400"></a>    <span class="n">max_chunk_uncompressed_bytes</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
-</span><span id="__span-0-401"><a id="__codelineno-0-401" name="__codelineno-0-401"></a>    <span class="n">device</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="__span-0-402"><a id="__codelineno-0-402" name="__codelineno-0-402"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="__span-0-403"><a id="__codelineno-0-403" name="__codelineno-0-403"></a>    <span class="c1"># Custom __init__ rather than __post_init__ so the constructor</span>
-</span><span id="__span-0-404"><a id="__codelineno-0-404" name="__codelineno-0-404"></a>    <span class="c1"># signature accepts the polymorphic dtype input while reads of</span>
-</span><span id="__span-0-405"><a id="__codelineno-0-405" name="__codelineno-0-405"></a>    <span class="c1"># `cfg.dtype` always type as Dtype. dataclass(init=False) keeps</span>
-</span><span id="__span-0-406"><a id="__codelineno-0-406" name="__codelineno-0-406"></a>    <span class="c1"># the auto-generated __eq__ / __hash__ / __repr__.</span>
-</span><span id="__span-0-407"><a id="__codelineno-0-407" name="__codelineno-0-407"></a>    <span class="k">if</span> <span class="n">batch_size</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
-</span><span id="__span-0-408"><a id="__codelineno-0-408" name="__codelineno-0-408"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;batch_size must be &gt;= 1 (got </span><span class="si">{</span><span class="n">batch_size</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span>
-</span><span id="__span-0-409"><a id="__codelineno-0-409" name="__codelineno-0-409"></a>    <span class="k">if</span> <span class="n">lookahead_batches</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">:</span>
-</span><span id="__span-0-410"><a id="__codelineno-0-410" name="__codelineno-0-410"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-</span><span id="__span-0-411"><a id="__codelineno-0-411" name="__codelineno-0-411"></a>            <span class="sa">f</span><span class="s2">&quot;lookahead_batches must be &gt;= 2 (got </span><span class="si">{</span><span class="n">lookahead_batches</span><span class="si">}</span><span class="s2">)&quot;</span>
-</span><span id="__span-0-412"><a id="__codelineno-0-412" name="__codelineno-0-412"></a>        <span class="p">)</span>
-</span><span id="__span-0-413"><a id="__codelineno-0-413" name="__codelineno-0-413"></a>    <span class="k">if</span> <span class="n">n_io_threads</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
-</span><span id="__span-0-414"><a id="__codelineno-0-414" name="__codelineno-0-414"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;n_io_threads must be &gt;= 1 (got </span><span class="si">{</span><span class="n">n_io_threads</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span>
-</span><span id="__span-0-415"><a id="__codelineno-0-415" name="__codelineno-0-415"></a>    <span class="k">if</span> <span class="n">n_compute_threads</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
-</span><span id="__span-0-416"><a id="__codelineno-0-416" name="__codelineno-0-416"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-</span><span id="__span-0-417"><a id="__codelineno-0-417" name="__codelineno-0-417"></a>            <span class="sa">f</span><span class="s2">&quot;n_compute_threads must be &gt;= 0 (got </span><span class="si">{</span><span class="n">n_compute_threads</span><span class="si">}</span><span class="s2">)&quot;</span>
-</span><span id="__span-0-418"><a id="__codelineno-0-418" name="__codelineno-0-418"></a>        <span class="p">)</span>
-</span><span id="__span-0-419"><a id="__codelineno-0-419" name="__codelineno-0-419"></a>    <span class="k">if</span> <span class="n">host_buffer_bytes</span> <span class="o">&lt;</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">device_buffer_bytes</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
-</span><span id="__span-0-420"><a id="__codelineno-0-420" name="__codelineno-0-420"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;host/device_buffer_bytes must be &gt;= 0&quot;</span><span class="p">)</span>
-</span><span id="__span-0-421"><a id="__codelineno-0-421" name="__codelineno-0-421"></a>    <span class="k">if</span> <span class="n">max_chunk_uncompressed_bytes</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
-</span><span id="__span-0-422"><a id="__codelineno-0-422" name="__codelineno-0-422"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;max_chunk_uncompressed_bytes must be &gt;= 0&quot;</span><span class="p">)</span>
-</span><span id="__span-0-423"><a id="__codelineno-0-423" name="__codelineno-0-423"></a>    <span class="k">if</span> <span class="n">max_gpu_memory_bytes</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
-</span><span id="__span-0-424"><a id="__codelineno-0-424" name="__codelineno-0-424"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;max_gpu_memory_bytes must be &gt;= 0&quot;</span><span class="p">)</span>
-</span><span id="__span-0-425"><a id="__codelineno-0-425" name="__codelineno-0-425"></a>    <span class="k">if</span> <span class="n">host_buffer_bytes</span> <span class="ow">or</span> <span class="n">device_buffer_bytes</span><span class="p">:</span>
-</span><span id="__span-0-426"><a id="__codelineno-0-426" name="__codelineno-0-426"></a>        <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span>
-</span><span id="__span-0-427"><a id="__codelineno-0-427" name="__codelineno-0-427"></a>            <span class="s2">&quot;Config.host_buffer_bytes / device_buffer_bytes are &quot;</span>
-</span><span id="__span-0-428"><a id="__codelineno-0-428" name="__codelineno-0-428"></a>            <span class="s2">&quot;deprecated (Phase 5); values are ignored. Use &quot;</span>
-</span><span id="__span-0-429"><a id="__codelineno-0-429" name="__codelineno-0-429"></a>            <span class="s2">&quot;max_gpu_memory_bytes to size the pipeline.&quot;</span><span class="p">,</span>
-</span><span id="__span-0-430"><a id="__codelineno-0-430" name="__codelineno-0-430"></a>            <span class="ne">DeprecationWarning</span><span class="p">,</span>
-</span><span id="__span-0-431"><a id="__codelineno-0-431" name="__codelineno-0-431"></a>            <span class="n">stacklevel</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
-</span><span id="__span-0-432"><a id="__codelineno-0-432" name="__codelineno-0-432"></a>        <span class="p">)</span>
-</span><span id="__span-0-433"><a id="__codelineno-0-433" name="__codelineno-0-433"></a>    <span class="n">set_</span> <span class="o">=</span> <span class="nb">object</span><span class="o">.</span><span class="fm">__setattr__</span>  <span class="c1"># frozen=True forbids `self.x = ...`</span>
-</span><span id="__span-0-434"><a id="__codelineno-0-434" name="__codelineno-0-434"></a>    <span class="n">set_</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;batch_size&quot;</span><span class="p">,</span> <span class="n">batch_size</span><span class="p">)</span>
-</span><span id="__span-0-435"><a id="__codelineno-0-435" name="__codelineno-0-435"></a>    <span class="n">set_</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;host_buffer_bytes&quot;</span><span class="p">,</span> <span class="n">host_buffer_bytes</span><span class="p">)</span>
-</span><span id="__span-0-436"><a id="__codelineno-0-436" name="__codelineno-0-436"></a>    <span class="n">set_</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;device_buffer_bytes&quot;</span><span class="p">,</span> <span class="n">device_buffer_bytes</span><span class="p">)</span>
-</span><span id="__span-0-437"><a id="__codelineno-0-437" name="__codelineno-0-437"></a>    <span class="n">set_</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;dtype&quot;</span><span class="p">,</span> <span class="n">Dtype</span><span class="o">.</span><span class="n">coerce</span><span class="p">(</span><span class="n">dtype</span><span class="p">))</span>
-</span><span id="__span-0-438"><a id="__codelineno-0-438" name="__codelineno-0-438"></a>    <span class="n">set_</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;lookahead_batches&quot;</span><span class="p">,</span> <span class="n">lookahead_batches</span><span class="p">)</span>
-</span><span id="__span-0-439"><a id="__codelineno-0-439" name="__codelineno-0-439"></a>    <span class="n">set_</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;n_io_threads&quot;</span><span class="p">,</span> <span class="n">n_io_threads</span><span class="p">)</span>
-</span><span id="__span-0-440"><a id="__codelineno-0-440" name="__codelineno-0-440"></a>    <span class="n">set_</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;n_compute_threads&quot;</span><span class="p">,</span> <span class="n">n_compute_threads</span><span class="p">)</span>
-</span><span id="__span-0-441"><a id="__codelineno-0-441" name="__codelineno-0-441"></a>    <span class="n">set_</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;n_zarrs_meta_cache&quot;</span><span class="p">,</span> <span class="n">n_zarrs_meta_cache</span><span class="p">)</span>
-</span><span id="__span-0-442"><a id="__codelineno-0-442" name="__codelineno-0-442"></a>    <span class="n">set_</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;n_shards_meta_cache&quot;</span><span class="p">,</span> <span class="n">n_shards_meta_cache</span><span class="p">)</span>
-</span><span id="__span-0-443"><a id="__codelineno-0-443" name="__codelineno-0-443"></a>    <span class="n">set_</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;max_chunk_uncompressed_bytes&quot;</span><span class="p">,</span> <span class="n">max_chunk_uncompressed_bytes</span><span class="p">)</span>
-</span><span id="__span-0-444"><a id="__codelineno-0-444" name="__codelineno-0-444"></a>    <span class="n">set_</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;max_gpu_memory_bytes&quot;</span><span class="p">,</span> <span class="n">max_gpu_memory_bytes</span><span class="p">)</span>
-</span><span id="__span-0-445"><a id="__codelineno-0-445" name="__codelineno-0-445"></a>    <span class="n">set_</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;device&quot;</span><span class="p">,</span> <span class="n">device</span><span class="p">)</span>
+<span class="normal"><a href="#__codelineno-0-427">427</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-379"><a id="__codelineno-0-379" name="__codelineno-0-379"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+</span><span id="__span-0-380"><a id="__codelineno-0-380" name="__codelineno-0-380"></a>    <span class="bp">self</span><span class="p">,</span>
+</span><span id="__span-0-381"><a id="__codelineno-0-381" name="__codelineno-0-381"></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="__span-0-382"><a id="__codelineno-0-382" name="__codelineno-0-382"></a>    <span class="n">batch_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="__span-0-383"><a id="__codelineno-0-383" name="__codelineno-0-383"></a>    <span class="n">max_gpu_memory_bytes</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
+</span><span id="__span-0-384"><a id="__codelineno-0-384" name="__codelineno-0-384"></a>    <span class="n">dtype</span><span class="p">:</span> <span class="n">Dtype</span> <span class="o">|</span> <span class="nb">str</span> <span class="o">|</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Dtype</span><span class="o">.</span><span class="n">F32</span><span class="p">,</span>
+</span><span id="__span-0-385"><a id="__codelineno-0-385" name="__codelineno-0-385"></a>    <span class="n">lookahead_batches</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2</span><span class="p">,</span>
+</span><span id="__span-0-386"><a id="__codelineno-0-386" name="__codelineno-0-386"></a>    <span class="n">n_io_threads</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">4</span><span class="p">,</span>
+</span><span id="__span-0-387"><a id="__codelineno-0-387" name="__codelineno-0-387"></a>    <span class="n">n_compute_threads</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
+</span><span id="__span-0-388"><a id="__codelineno-0-388" name="__codelineno-0-388"></a>    <span class="n">n_zarrs_meta_cache</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">64</span><span class="p">,</span>
+</span><span id="__span-0-389"><a id="__codelineno-0-389" name="__codelineno-0-389"></a>    <span class="n">n_shards_meta_cache</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">256</span><span class="p">,</span>
+</span><span id="__span-0-390"><a id="__codelineno-0-390" name="__codelineno-0-390"></a>    <span class="n">max_chunk_uncompressed_bytes</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
+</span><span id="__span-0-391"><a id="__codelineno-0-391" name="__codelineno-0-391"></a>    <span class="n">host_buffer_waves</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
+</span><span id="__span-0-392"><a id="__codelineno-0-392" name="__codelineno-0-392"></a>    <span class="n">device</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-0-393"><a id="__codelineno-0-393" name="__codelineno-0-393"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-0-394"><a id="__codelineno-0-394" name="__codelineno-0-394"></a>    <span class="c1"># Custom __init__ rather than __post_init__ so the constructor</span>
+</span><span id="__span-0-395"><a id="__codelineno-0-395" name="__codelineno-0-395"></a>    <span class="c1"># signature accepts the polymorphic dtype input while reads of</span>
+</span><span id="__span-0-396"><a id="__codelineno-0-396" name="__codelineno-0-396"></a>    <span class="c1"># `cfg.dtype` always type as Dtype. dataclass(init=False) keeps</span>
+</span><span id="__span-0-397"><a id="__codelineno-0-397" name="__codelineno-0-397"></a>    <span class="c1"># the auto-generated __eq__ / __hash__ / __repr__.</span>
+</span><span id="__span-0-398"><a id="__codelineno-0-398" name="__codelineno-0-398"></a>    <span class="k">if</span> <span class="n">batch_size</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+</span><span id="__span-0-399"><a id="__codelineno-0-399" name="__codelineno-0-399"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;batch_size must be &gt;= 1 (got </span><span class="si">{</span><span class="n">batch_size</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span>
+</span><span id="__span-0-400"><a id="__codelineno-0-400" name="__codelineno-0-400"></a>    <span class="k">if</span> <span class="n">lookahead_batches</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">:</span>
+</span><span id="__span-0-401"><a id="__codelineno-0-401" name="__codelineno-0-401"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+</span><span id="__span-0-402"><a id="__codelineno-0-402" name="__codelineno-0-402"></a>            <span class="sa">f</span><span class="s2">&quot;lookahead_batches must be &gt;= 2 (got </span><span class="si">{</span><span class="n">lookahead_batches</span><span class="si">}</span><span class="s2">)&quot;</span>
+</span><span id="__span-0-403"><a id="__codelineno-0-403" name="__codelineno-0-403"></a>        <span class="p">)</span>
+</span><span id="__span-0-404"><a id="__codelineno-0-404" name="__codelineno-0-404"></a>    <span class="k">if</span> <span class="n">n_io_threads</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+</span><span id="__span-0-405"><a id="__codelineno-0-405" name="__codelineno-0-405"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;n_io_threads must be &gt;= 1 (got </span><span class="si">{</span><span class="n">n_io_threads</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span>
+</span><span id="__span-0-406"><a id="__codelineno-0-406" name="__codelineno-0-406"></a>    <span class="k">if</span> <span class="n">n_compute_threads</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+</span><span id="__span-0-407"><a id="__codelineno-0-407" name="__codelineno-0-407"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+</span><span id="__span-0-408"><a id="__codelineno-0-408" name="__codelineno-0-408"></a>            <span class="sa">f</span><span class="s2">&quot;n_compute_threads must be &gt;= 0 (got </span><span class="si">{</span><span class="n">n_compute_threads</span><span class="si">}</span><span class="s2">)&quot;</span>
+</span><span id="__span-0-409"><a id="__codelineno-0-409" name="__codelineno-0-409"></a>        <span class="p">)</span>
+</span><span id="__span-0-410"><a id="__codelineno-0-410" name="__codelineno-0-410"></a>    <span class="k">if</span> <span class="n">max_chunk_uncompressed_bytes</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+</span><span id="__span-0-411"><a id="__codelineno-0-411" name="__codelineno-0-411"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;max_chunk_uncompressed_bytes must be &gt;= 0&quot;</span><span class="p">)</span>
+</span><span id="__span-0-412"><a id="__codelineno-0-412" name="__codelineno-0-412"></a>    <span class="k">if</span> <span class="n">max_gpu_memory_bytes</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+</span><span id="__span-0-413"><a id="__codelineno-0-413" name="__codelineno-0-413"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;max_gpu_memory_bytes must be &gt;= 0&quot;</span><span class="p">)</span>
+</span><span id="__span-0-414"><a id="__codelineno-0-414" name="__codelineno-0-414"></a>    <span class="k">if</span> <span class="n">host_buffer_waves</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+</span><span id="__span-0-415"><a id="__codelineno-0-415" name="__codelineno-0-415"></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;host_buffer_waves must be &gt;= 0&quot;</span><span class="p">)</span>
+</span><span id="__span-0-416"><a id="__codelineno-0-416" name="__codelineno-0-416"></a>    <span class="n">set_</span> <span class="o">=</span> <span class="nb">object</span><span class="o">.</span><span class="fm">__setattr__</span>  <span class="c1"># frozen=True forbids `self.x = ...`</span>
+</span><span id="__span-0-417"><a id="__codelineno-0-417" name="__codelineno-0-417"></a>    <span class="n">set_</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;batch_size&quot;</span><span class="p">,</span> <span class="n">batch_size</span><span class="p">)</span>
+</span><span id="__span-0-418"><a id="__codelineno-0-418" name="__codelineno-0-418"></a>    <span class="n">set_</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;dtype&quot;</span><span class="p">,</span> <span class="n">Dtype</span><span class="o">.</span><span class="n">coerce</span><span class="p">(</span><span class="n">dtype</span><span class="p">))</span>
+</span><span id="__span-0-419"><a id="__codelineno-0-419" name="__codelineno-0-419"></a>    <span class="n">set_</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;lookahead_batches&quot;</span><span class="p">,</span> <span class="n">lookahead_batches</span><span class="p">)</span>
+</span><span id="__span-0-420"><a id="__codelineno-0-420" name="__codelineno-0-420"></a>    <span class="n">set_</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;n_io_threads&quot;</span><span class="p">,</span> <span class="n">n_io_threads</span><span class="p">)</span>
+</span><span id="__span-0-421"><a id="__codelineno-0-421" name="__codelineno-0-421"></a>    <span class="n">set_</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;n_compute_threads&quot;</span><span class="p">,</span> <span class="n">n_compute_threads</span><span class="p">)</span>
+</span><span id="__span-0-422"><a id="__codelineno-0-422" name="__codelineno-0-422"></a>    <span class="n">set_</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;n_zarrs_meta_cache&quot;</span><span class="p">,</span> <span class="n">n_zarrs_meta_cache</span><span class="p">)</span>
+</span><span id="__span-0-423"><a id="__codelineno-0-423" name="__codelineno-0-423"></a>    <span class="n">set_</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;n_shards_meta_cache&quot;</span><span class="p">,</span> <span class="n">n_shards_meta_cache</span><span class="p">)</span>
+</span><span id="__span-0-424"><a id="__codelineno-0-424" name="__codelineno-0-424"></a>    <span class="n">set_</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;max_chunk_uncompressed_bytes&quot;</span><span class="p">,</span> <span class="n">max_chunk_uncompressed_bytes</span><span class="p">)</span>
+</span><span id="__span-0-425"><a id="__codelineno-0-425" name="__codelineno-0-425"></a>    <span class="n">set_</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;max_gpu_memory_bytes&quot;</span><span class="p">,</span> <span class="n">max_gpu_memory_bytes</span><span class="p">)</span>
+</span><span id="__span-0-426"><a id="__codelineno-0-426" name="__codelineno-0-426"></a>    <span class="n">set_</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;host_buffer_waves&quot;</span><span class="p">,</span> <span class="n">host_buffer_waves</span><span class="p">)</span>
+</span><span id="__span-0-427"><a id="__codelineno-0-427" name="__codelineno-0-427"></a>    <span class="n">set_</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;device&quot;</span><span class="p">,</span> <span class="n">device</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
                   </details>
 
@@ -2293,9 +2243,9 @@ Batch object while a tensor still views it is safe.</p>
 
                   <details class="mkdocstrings-source">
                     <summary>Source code in <code>python/damacy/__init__.py</code></summary>
-                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-583">583</a></span>
-<span class="normal"><a href="#__codelineno-0-584">584</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-583"><a id="__codelineno-0-583" name="__codelineno-0-583"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">native_batch</span><span class="p">:</span> <span class="n">_native</span><span class="o">.</span><span class="n">Batch</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="__span-0-584"><a id="__codelineno-0-584" name="__codelineno-0-584"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_native</span> <span class="o">=</span> <span class="n">native_batch</span>
+                    <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-571">571</a></span>
+<span class="normal"><a href="#__codelineno-0-572">572</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-571"><a id="__codelineno-0-571" name="__codelineno-0-571"></a><span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">native_batch</span><span class="p">:</span> <span class="n">_native</span><span class="o">.</span><span class="n">Batch</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-0-572"><a id="__codelineno-0-572" name="__codelineno-0-572"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_native</span> <span class="o">=</span> <span class="n">native_batch</span>
 </span></code></pre></div></td></tr></table></div>
                   </details>
 
@@ -2330,11 +2280,11 @@ Batch object while a tensor still views it is safe.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>python/damacy/__init__.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-590">590</a></span>
-<span class="normal"><a href="#__codelineno-0-591">591</a></span>
-<span class="normal"><a href="#__codelineno-0-592">592</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-590"><a id="__codelineno-0-590" name="__codelineno-0-590"></a><span class="k">def</span><span class="w"> </span><span class="nf">release</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="__span-0-591"><a id="__codelineno-0-591" name="__codelineno-0-591"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Return the slot to the pool. Idempotent.&quot;&quot;&quot;</span>
-</span><span id="__span-0-592"><a id="__codelineno-0-592" name="__codelineno-0-592"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_native</span><span class="o">.</span><span class="n">release</span><span class="p">()</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-578">578</a></span>
+<span class="normal"><a href="#__codelineno-0-579">579</a></span>
+<span class="normal"><a href="#__codelineno-0-580">580</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-578"><a id="__codelineno-0-578" name="__codelineno-0-578"></a><span class="k">def</span><span class="w"> </span><span class="nf">release</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-0-579"><a id="__codelineno-0-579" name="__codelineno-0-579"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Return the slot to the pool. Idempotent.&quot;&quot;&quot;</span>
+</span><span id="__span-0-580"><a id="__codelineno-0-580" name="__codelineno-0-580"></a>    <span class="bp">self</span><span class="o">.</span><span class="n">_native</span><span class="o">.</span><span class="n">release</span><span class="p">()</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -2498,52 +2448,65 @@ best single observation (large sentinel when no samples yet).</p>
   
       dataclass
    (damacy.Metric)" href="#damacy.Metric">Metric</a></span><span class="p">,</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">decompress</span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" title="            Metric
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">decode</span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" title="            Metric
 
 
   
       dataclass
    (damacy.Metric)" href="#damacy.Metric">Metric</a></span><span class="p">,</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">decompress_parse</span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" title="            Metric
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">post_decode</span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" title="            Metric
 
 
   
       dataclass
    (damacy.Metric)" href="#damacy.Metric">Metric</a></span><span class="p">,</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="n">assemble</span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" title="            Metric
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="n">decode_gap</span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" title="            Metric
 
 
   
       dataclass
    (damacy.Metric)" href="#damacy.Metric">Metric</a></span><span class="p">,</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="n">pop_wait_io</span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" title="            Metric
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="n">decompress_parse</span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" title="            Metric
 
 
   
       dataclass
    (damacy.Metric)" href="#damacy.Metric">Metric</a></span><span class="p">,</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    <span class="n">pop_wait_compute</span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" title="            Metric
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    <span class="n">assemble</span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" title="            Metric
 
 
   
       dataclass
    (damacy.Metric)" href="#damacy.Metric">Metric</a></span><span class="p">,</span>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    <span class="n">flush_wait</span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" title="            Metric
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    <span class="n">bind_wait</span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" title="            Metric
 
 
   
       dataclass
    (damacy.Metric)" href="#damacy.Metric">Metric</a></span><span class="p">,</span>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    <span class="n">zarr_meta_hits</span><span class="p">:</span> <span class="n"><span title="int">int</span></span><span class="p">,</span>
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    <span class="n">zarr_meta_misses</span><span class="p">:</span> <span class="n"><span title="int">int</span></span><span class="p">,</span>
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    <span class="n">shard_idx_hits</span><span class="p">:</span> <span class="n"><span title="int">int</span></span><span class="p">,</span>
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    <span class="n">shard_idx_misses</span><span class="p">:</span> <span class="n"><span title="int">int</span></span><span class="p">,</span>
-</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>    <span class="n">batches_emitted</span><span class="p">:</span> <span class="n"><span title="int">int</span></span><span class="p">,</span>
-</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>    <span class="n">batches_truncated</span><span class="p">:</span> <span class="n"><span title="int">int</span></span><span class="p">,</span>
-</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>    <span class="n">waves_emitted</span><span class="p">:</span> <span class="n"><span title="int">int</span></span><span class="p">,</span>
-</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>    <span class="n">chunks_dispatched</span><span class="p">:</span> <span class="n"><span title="int">int</span></span><span class="p">,</span>
-</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>    <span class="n">gpu_bytes_committed</span><span class="p">:</span> <span class="n"><span title="int">int</span></span><span class="p">,</span>
-</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="p">)</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    <span class="n">pop_wait</span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" title="            Metric
+
+
+  
+      dataclass
+   (damacy.Metric)" href="#damacy.Metric">Metric</a></span><span class="p">,</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    <span class="n">flush_wait</span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" title="            Metric
+
+
+  
+      dataclass
+   (damacy.Metric)" href="#damacy.Metric">Metric</a></span><span class="p">,</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    <span class="n">zarr_meta_hits</span><span class="p">:</span> <span class="n"><span title="int">int</span></span><span class="p">,</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    <span class="n">zarr_meta_misses</span><span class="p">:</span> <span class="n"><span title="int">int</span></span><span class="p">,</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>    <span class="n">shard_idx_hits</span><span class="p">:</span> <span class="n"><span title="int">int</span></span><span class="p">,</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>    <span class="n">shard_idx_misses</span><span class="p">:</span> <span class="n"><span title="int">int</span></span><span class="p">,</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>    <span class="n">batches_emitted</span><span class="p">:</span> <span class="n"><span title="int">int</span></span><span class="p">,</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>    <span class="n">batches_truncated</span><span class="p">:</span> <span class="n"><span title="int">int</span></span><span class="p">,</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>    <span class="n">waves_emitted</span><span class="p">:</span> <span class="n"><span title="int">int</span></span><span class="p">,</span>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>    <span class="n">chunks_dispatched</span><span class="p">:</span> <span class="n"><span title="int">int</span></span><span class="p">,</span>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>    <span class="n">worker_steps</span><span class="p">:</span> <span class="n"><span title="int">int</span></span><span class="p">,</span>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>    <span class="n">gpu_bytes_committed</span><span class="p">:</span> <span class="n"><span title="int">int</span></span><span class="p">,</span>
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="p">)</span>
 </span></code></pre></div>
 
     <div class="doc doc-contents first">
@@ -3324,13 +3287,13 @@ The Python sink (<code>logging.getLogger("damacy")</code>) is independent.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>python/damacy/__init__.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-544">544</a></span>
-<span class="normal"><a href="#__codelineno-0-545">545</a></span>
-<span class="normal"><a href="#__codelineno-0-546">546</a></span>
-<span class="normal"><a href="#__codelineno-0-547">547</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-544"><a id="__codelineno-0-544" name="__codelineno-0-544"></a><span class="k">def</span><span class="w"> </span><span class="nf">set_log_level</span><span class="p">(</span><span class="n">level</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="__span-0-545"><a id="__codelineno-0-545" name="__codelineno-0-545"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Set the threshold for the C-side stderr sink (TRACE=0..FATAL=5).</span>
-</span><span id="__span-0-546"><a id="__codelineno-0-546" name="__codelineno-0-546"></a><span class="sd">    The Python sink (``logging.getLogger(&quot;damacy&quot;)``) is independent.&quot;&quot;&quot;</span>
-</span><span id="__span-0-547"><a id="__codelineno-0-547" name="__codelineno-0-547"></a>    <span class="n">_native</span><span class="o">.</span><span class="n">set_log_level</span><span class="p">(</span><span class="n">level</span><span class="p">)</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-532">532</a></span>
+<span class="normal"><a href="#__codelineno-0-533">533</a></span>
+<span class="normal"><a href="#__codelineno-0-534">534</a></span>
+<span class="normal"><a href="#__codelineno-0-535">535</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-532"><a id="__codelineno-0-532" name="__codelineno-0-532"></a><span class="k">def</span><span class="w"> </span><span class="nf">set_log_level</span><span class="p">(</span><span class="n">level</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-0-533"><a id="__codelineno-0-533" name="__codelineno-0-533"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Set the threshold for the C-side stderr sink (TRACE=0..FATAL=5).</span>
+</span><span id="__span-0-534"><a id="__codelineno-0-534" name="__codelineno-0-534"></a><span class="sd">    The Python sink (``logging.getLogger(&quot;damacy&quot;)``) is independent.&quot;&quot;&quot;</span>
+</span><span id="__span-0-535"><a id="__codelineno-0-535" name="__codelineno-0-535"></a>    <span class="n">_native</span><span class="o">.</span><span class="n">set_log_level</span><span class="p">(</span><span class="n">level</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
@@ -3356,13 +3319,13 @@ firing regardless.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>python/damacy/__init__.py</code></summary>
-              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-550">550</a></span>
-<span class="normal"><a href="#__codelineno-0-551">551</a></span>
-<span class="normal"><a href="#__codelineno-0-552">552</a></span>
-<span class="normal"><a href="#__codelineno-0-553">553</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-550"><a id="__codelineno-0-550" name="__codelineno-0-550"></a><span class="k">def</span><span class="w"> </span><span class="nf">set_log_quiet</span><span class="p">(</span><span class="n">quiet</span><span class="p">:</span> <span class="nb">bool</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="__span-0-551"><a id="__codelineno-0-551" name="__codelineno-0-551"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Toggle the C-side stderr sink. The Python ``logging`` sink keeps</span>
-</span><span id="__span-0-552"><a id="__codelineno-0-552" name="__codelineno-0-552"></a><span class="sd">    firing regardless.&quot;&quot;&quot;</span>
-</span><span id="__span-0-553"><a id="__codelineno-0-553" name="__codelineno-0-553"></a>    <span class="n">_native</span><span class="o">.</span><span class="n">set_log_quiet</span><span class="p">(</span><span class="n">quiet</span><span class="p">)</span>
+              <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-538">538</a></span>
+<span class="normal"><a href="#__codelineno-0-539">539</a></span>
+<span class="normal"><a href="#__codelineno-0-540">540</a></span>
+<span class="normal"><a href="#__codelineno-0-541">541</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-538"><a id="__codelineno-0-538" name="__codelineno-0-538"></a><span class="k">def</span><span class="w"> </span><span class="nf">set_log_quiet</span><span class="p">(</span><span class="n">quiet</span><span class="p">:</span> <span class="nb">bool</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-0-539"><a id="__codelineno-0-539" name="__codelineno-0-539"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Toggle the C-side stderr sink. The Python ``logging`` sink keeps</span>
+</span><span id="__span-0-540"><a id="__codelineno-0-540" name="__codelineno-0-540"></a><span class="sd">    firing regardless.&quot;&quot;&quot;</span>
+</span><span id="__span-0-541"><a id="__codelineno-0-541" name="__codelineno-0-541"></a>    <span class="n">_native</span><span class="o">.</span><span class="n">set_log_quiet</span><span class="p">(</span><span class="n">quiet</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
             </details>
     </div>
