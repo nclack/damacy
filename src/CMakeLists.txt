@@ -44,6 +44,13 @@ add_src_lib(threadpool SOURCES threadpool/threadpool.c threadpool/threadpool.h
     LINKS platform log
 )
 
+# Single-worker scheduler: drives a caller-supplied step on a platform
+# thread; pairs with a shared mutex + cv so external callers (damacy_pop
+# etc.) can lock / wait / broadcast in lockstep with the worker.
+add_src_lib(scheduler SOURCES scheduler/scheduler.h scheduler/scheduler.c
+    LINKS platform log
+)
+
 add_src_lib(io_queue SOURCES io_queue/io_queue.h LINKS platform_io log)
 add_platform_sources(io_queue io_queue/io_queue)
 
