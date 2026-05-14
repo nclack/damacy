@@ -579,81 +579,16 @@ test_missing_shard_fills_nonzero(void)
   return 0;
 }
 
-// Deferred release with a user event: damacy stream-waits on `ev`
-// before reusing the slot's buffer, so the host returns without
-// having to synchronize the consumer's side stream. The smoke check
-// here is: pop a batch, kick an async D2H on a side stream, record
-// an event on that stream, release with the event, pop another
-// batch (which forces the slot to be reused), then sync the side
-// stream and verify the captured bytes match the FIRST batch's
-// content — not the second's.
-static int
-test_release_event_smoke(void)
-{
-  char root[64];
-  EXPECT(mkdtemp_root(root, sizeof root) == 0);
-  char pa[256], pb[256];
-  snprintf(pa, sizeof pa, "%s/a", root);
-  snprintf(pb, sizeof pb, "%s/b", root);
-  // Single inner chunk; the post-assemble layout is row-major so we can
-  // compare against expected_f32_from_u16_2d directly.
-  int64_t shape[2] = { 4, 8 }, inner[2] = { 4, 8 }, shard[2] = { 4, 8 };
-  EXPECT(fixture_write_zarr(pa, shape, inner, shard, 2, "uint16", 0) == 0);
-  EXPECT(fixture_write_zarr(pb, shape, inner, shard, 2, "uint16", 5000) == 0);
-
-  struct damacy_config cfg = mk_cfg(root, 1);
-  struct damacy* d = NULL;
-  EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
-
-  // Push two samples — one from each zarr.
-  struct damacy_sample s_a = mk_sample(pa, 0, 4, 0, 8);
-  struct damacy_sample s_b = mk_sample(pb, 0, 4, 0, 8);
-  struct damacy_sample s_arr[2] = { s_a, s_b };
-  struct damacy_sample_slice slice = { .beg = s_arr, .end = s_arr + 2 };
-  EXPECT(damacy_push(d, slice).status == DAMACY_OK);
-
-  cudaStream_t side = NULL;
-  EXPECT(cudaStreamCreate(&side) == cudaSuccess);
-  float* host_buf = NULL;
-  EXPECT(cudaMallocHost((void**)&host_buf, 4 * 8 * sizeof(float)) ==
-         cudaSuccess);
-
-  // Pop batch 0 (zarr A) and kick an async D2H on the side stream.
-  struct damacy_batch* b = NULL;
-  EXPECT(damacy_pop(d, &b) == DAMACY_OK);
-  struct damacy_batch_info info;
-  damacy_batch_info(b, &info);
-  EXPECT(cudaMemcpyAsync(host_buf,
-                         info.device_ptr,
-                         4 * 8 * sizeof(float),
-                         cudaMemcpyDeviceToHost,
-                         side) == cudaSuccess);
-  cudaEvent_t ev = NULL;
-  EXPECT(cudaEventCreateWithFlags(&ev, cudaEventDisableTiming) == cudaSuccess);
-  EXPECT(cudaEventRecord(ev, side) == cudaSuccess);
-  EXPECT(damacy_release_event(d, b, ev) == DAMACY_OK);
-  EXPECT(cudaEventDestroy(ev) == cudaSuccess);
-
-  // Pop batch 1 — damacy may reuse the same slot. With the
-  // deferred-release wait, kick_assemble on stream_post is gated on
-  // our event; without it, batch 1 would race the side-stream D2H.
-  EXPECT(damacy_pop(d, &b) == DAMACY_OK);
-  damacy_release(d, b);
-
-  // Wait for the side stream's D2H to retire, then verify content
-  // matches zarr A.
-  EXPECT(cudaStreamSynchronize(side) == cudaSuccess);
-  for (int y = 0; y < 4; ++y)
-    for (int x = 0; x < 8; ++x)
-      EXPECT(host_buf[y * 8 + x] == expected_f32_from_u16_2d(y, x, 8, 0));
-
-  cudaFreeHost(host_buf);
-  cudaStreamDestroy(side);
-  damacy_destroy(d);
-  fixture_rm_tree(root);
-  return 0;
-}
-
+// NOTE: We previously had a content-comparing "smoke" test that popped a
+// batch, did a side-stream D2H, released with an event, popped again, and
+// checked the captured bytes belonged to the first batch. It passed even
+// with cuStreamWaitEvent commented out — the D2H retired before any reuse
+// could overwrite the slot, so it never exercised the race. Engineering a
+// truly deterministic test that *fails* without the wait turned out to be
+// non-trivial here (cudaLaunchHostFunc-based delays still left subsequent
+// damacy_pop blocked for the sleep duration regardless of the wait, for
+// reasons not chased down). Tracking that as a follow-up; meanwhile this
+// file keeps only the deterministic API-contract test (NULL fallback).
 // damacy_release_event(d, b, NULL) should behave exactly like
 // damacy_release: slot returns to the pool, next pop works.
 static int
@@ -701,7 +636,6 @@ main(void)
   RUN(test_lookahead_backpressure);
   RUN(test_missing_shard_fills);
   RUN(test_missing_shard_fills_nonzero);
-  RUN(test_release_event_smoke);
   RUN(test_release_event_null_falls_back);
   log_info("all tests passed");
   return 0;
