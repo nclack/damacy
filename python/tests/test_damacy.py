@@ -9,9 +9,11 @@ CUDA suite.
 
 from __future__ import annotations
 
+import ctypes
 import dataclasses
 import shutil
 import subprocess
+import sys
 import warnings
 
 import damacy
@@ -34,6 +36,81 @@ from damacy import (
 # All tests in this file exercise the C extension end-to-end and need
 # a primary CUDA context. Skip cleanly on CPU-only runners.
 pytestmark = pytest.mark.usefixtures("cuda_ctx")
+
+
+# ---- DLPack capsule layout (ctypes mirror of dmlc/dlpack) ----------------
+#
+# Lets the DLPack tests below inspect the actual capsule contents without
+# depending on torch. Layouts match python/damacy/_api.c.
+
+_kDLCUDA = 2
+_kDLFloat = 2  # DLDataTypeCode.kDLFloat
+
+
+class _DLDevice(ctypes.Structure):
+    _fields_ = [
+        ("device_type", ctypes.c_int32),
+        ("device_id", ctypes.c_int32),
+    ]
+
+
+class _DLDataType(ctypes.Structure):
+    _fields_ = [
+        ("code", ctypes.c_uint8),
+        ("bits", ctypes.c_uint8),
+        ("lanes", ctypes.c_uint16),
+    ]
+
+
+class _DLTensor(ctypes.Structure):
+    _fields_ = [
+        ("data", ctypes.c_void_p),
+        ("device", _DLDevice),
+        ("ndim", ctypes.c_int32),
+        ("dtype", _DLDataType),
+        ("shape", ctypes.POINTER(ctypes.c_int64)),
+        ("strides", ctypes.POINTER(ctypes.c_int64)),
+        ("byte_offset", ctypes.c_uint64),
+    ]
+
+
+class _DLManagedTensor(ctypes.Structure):
+    _fields_ = [
+        ("dl_tensor", _DLTensor),
+        ("manager_ctx", ctypes.c_void_p),
+        ("deleter", ctypes.c_void_p),
+    ]
+
+
+class _DLPackVersion(ctypes.Structure):
+    _fields_ = [
+        ("major", ctypes.c_uint32),
+        ("minor", ctypes.c_uint32),
+    ]
+
+
+class _DLManagedTensorVersioned(ctypes.Structure):
+    _fields_ = [
+        ("version", _DLPackVersion),
+        ("manager_ctx", ctypes.c_void_p),
+        ("deleter", ctypes.c_void_p),
+        ("flags", ctypes.c_uint64),
+        ("dl_tensor", _DLTensor),
+    ]
+
+
+_PyCapsule_GetPointer = ctypes.pythonapi.PyCapsule_GetPointer
+_PyCapsule_GetPointer.restype = ctypes.c_void_p
+_PyCapsule_GetPointer.argtypes = [ctypes.py_object, ctypes.c_char_p]
+
+
+def _capsule_as(cap, name: bytes, struct_t):
+    """Read a capsule's payload pointer (without consuming it) and cast it
+    to ``struct_t``. The capsule is unchanged — the consumer would rename
+    it to ``used_<name>`` to mark consumption; we don't."""
+    raw = _PyCapsule_GetPointer(cap, name)
+    assert raw, "capsule had no pointer"
+    return ctypes.cast(raw, ctypes.POINTER(struct_t)).contents
 
 
 def _base_config(dtype: str | int | damacy.Dtype = "f32") -> Config:
@@ -452,6 +529,157 @@ def test_batch_torch_from_dlpack_versioned(tiny_zarr):
                 pytest.skip(f"torch doesn't accept v1 capsule: {exc}")
             assert t.device.type == "cuda"
             assert tuple(t.shape) == tuple(info.shape)
+
+
+def test_batch_dlpack_v0_capsule_fields(tiny_zarr):
+    """Parse the v0 DLManagedTensor and verify every field matches what
+    `batch.info` reports: data ptr, device, ndim, dtype, shape, no
+    strides (contiguous), zero byte_offset."""
+    uri = tiny_zarr
+    with Pipeline(_base_config()) as d:
+        d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
+        with d.pop() as batch:
+            info = batch.info
+            cap = batch.__dlpack__(stream=None)
+            mt = _capsule_as(cap, b"dltensor", _DLManagedTensor)
+            t = mt.dl_tensor
+            assert t.data == info.device_ptr
+            assert t.device.device_type == _kDLCUDA
+            assert t.ndim == len(info.shape)
+            assert t.dtype.code == _kDLFloat  # f32 from _base_config
+            assert t.dtype.bits == 32
+            assert t.dtype.lanes == 1
+            assert [t.shape[i] for i in range(t.ndim)] == list(info.shape)
+            # damacy emits contiguous tensors, so strides is NULL.
+            assert not t.strides
+            assert t.byte_offset == 0
+            # The deleter is wired (non-NULL); manager_ctx points at
+            # damacy's payload struct, also non-NULL.
+            assert mt.deleter
+            assert mt.manager_ctx
+            del cap
+
+
+def test_batch_dlpack_v1_capsule_fields(tiny_zarr):
+    """Same field-level check on the versioned capsule. Version=(1,0),
+    flags=0, dl_tensor mirrors v0."""
+    uri = tiny_zarr
+    with Pipeline(_base_config()) as d:
+        d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
+        with d.pop() as batch:
+            info = batch.info
+            cap = batch.__dlpack__(stream=None, max_version=(1, 0))
+            mt = _capsule_as(cap, b"dltensor_versioned", _DLManagedTensorVersioned)
+            assert mt.version.major == 1
+            assert mt.version.minor == 0
+            assert mt.flags == 0
+            t = mt.dl_tensor
+            assert t.data == info.device_ptr
+            assert t.device.device_type == _kDLCUDA
+            assert t.ndim == len(info.shape)
+            assert [t.shape[i] for i in range(t.ndim)] == list(info.shape)
+            assert mt.deleter
+            assert mt.manager_ctx
+            del cap
+
+
+def test_batch_dlpack_copy_true_rejected(tiny_zarr):
+    """Per DLPack protocol, copy=True asks the producer to materialize
+    a fresh buffer. damacy doesn't support that — it must raise
+    BufferError so the consumer falls back."""
+    uri = tiny_zarr
+    with Pipeline(_base_config()) as d:
+        d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
+        with d.pop() as batch:
+            with pytest.raises(BufferError, match="copy=True not supported"):
+                batch.__dlpack__(stream=None, copy=True)
+            # copy=False and copy=None remain fine.
+            cap1 = batch.__dlpack__(stream=None, copy=False)
+            cap2 = batch.__dlpack__(stream=None, copy=None)
+            del cap1, cap2
+
+
+def test_batch_dlpack_invalid_max_version(tiny_zarr):
+    """max_version must be either None or a 2-element non-negative
+    sequence. Anything else raises TypeError/ValueError cleanly."""
+    uri = tiny_zarr
+    with Pipeline(_base_config()) as d:
+        d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
+        with d.pop() as batch:
+            # wrong arity
+            with pytest.raises(TypeError, match="2-element"):
+                batch.__dlpack__(stream=None, max_version=(1,))  # type: ignore[arg-type]
+            with pytest.raises(TypeError, match="2-element"):
+                batch.__dlpack__(stream=None, max_version=(1, 0, 0))  # type: ignore[arg-type]
+            # negative components
+            with pytest.raises(ValueError, match=">= 0"):
+                batch.__dlpack__(stream=None, max_version=(-1, 0))
+            # non-integer entries
+            with pytest.raises(TypeError):
+                batch.__dlpack__(stream=None, max_version=("1", "0"))  # type: ignore[arg-type]
+
+
+def test_batch_dlpack_after_release_raises(tiny_zarr):
+    """Both __dlpack__ and __dlpack_device__ must fail with RuntimeError
+    once the Batch has been released — no use-after-free into damacy."""
+    uri = tiny_zarr
+    with Pipeline(_base_config()) as d:
+        d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
+        batch = d.pop()
+        batch.release()
+        with pytest.raises(RuntimeError, match="released"):
+            batch.__dlpack__(stream=None)
+        with pytest.raises(RuntimeError, match="released"):
+            batch.__dlpack_device__()
+
+
+def test_batch_dlpack_capsule_holds_batch_alive(tiny_zarr):
+    """The capsule's Py_INCREF lands on the C-side BatchObj
+    (``batch._native``), not on the Python-level wrapper — the wrapper
+    just delegates. Dropping the capsule must run the deleter and
+    decrement that native reference back to its baseline."""
+    uri = tiny_zarr
+    with Pipeline(_base_config()) as d:
+        d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
+        batch = d.pop()
+        try:
+            native = batch._native
+            rc_before = sys.getrefcount(native)
+            cap = batch.__dlpack__(stream=None)
+            rc_held = sys.getrefcount(native)
+            assert rc_held > rc_before, "capsule should incref the native batch"
+            del cap
+            rc_after = sys.getrefcount(native)
+            assert rc_after == rc_before, "capsule deleter should decref it"
+        finally:
+            batch.release()
+
+
+def test_batch_dlpack_stream_kwargs_accepted(tiny_zarr):
+    """The DLPack protocol stream sentinel values must all be accepted:
+    None (producer sync), -1 (no sync), 0/1/2 (legacy / default streams),
+    arbitrary int (consumer stream handle). The last one is best-effort
+    — we just verify the call doesn't raise."""
+    uri = tiny_zarr
+    with Pipeline(_base_config()) as d:
+        d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
+        with d.pop() as batch:
+            for s in (None, -1, 0, 1, 2):
+                cap = batch.__dlpack__(stream=s)
+                assert cap is not None
+                del cap
+
+
+def test_batch_dlpack_device_returns_pipeline_device(tiny_zarr):
+    """__dlpack_device__ must report (kDLCUDA, device_ord) where
+    device_ord matches the Pipeline's bound device."""
+    uri = tiny_zarr
+    with Pipeline(_base_config()) as d:
+        d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
+        with d.pop() as batch:
+            dev_type, dev_id = batch.__dlpack_device__()
+            assert dev_type == _kDLCUDA
+            assert dev_id == d.device
 
 
 # ---- log helpers -------------------------------------------------------
