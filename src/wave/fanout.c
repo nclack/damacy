@@ -132,8 +132,10 @@ fanout_grow(struct blosc1_host_fanout* h,
     new_cap = (size_t)DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE;
 
   const uint32_t cur = *cap;
-  const uint64_t delta_bytes =
-    (uint64_t)(new_cap - (size_t)cur) * fanout_dev_bytes_per_sub();
+  const uint64_t per_sub = fanout_dev_bytes_per_sub();
+  const uint64_t old_bytes = (uint64_t)cur * per_sub;
+  const uint64_t new_bytes = (uint64_t)new_cap * per_sub;
+  const uint64_t delta_bytes = new_bytes - old_bytes;
   // Reject before freeing the existing fanout so the wave stays usable
   // if the grow would breach the budget.
   enum damacy_status bs =
@@ -144,7 +146,9 @@ fanout_grow(struct blosc1_host_fanout* h,
   fanout_free_pinned(h, d);
   *cap = 0;
   if (fanout_alloc_pinned(h, d, new_cap) != 0) {
-    gpu_budget_release(budget, delta_bytes);
+    // The pre-grow allocation is gone too; release the full new_bytes
+    // so committed reflects an empty fanout (matches *cap == 0).
+    gpu_budget_release(budget, new_bytes);
     return DAMACY_CUDA;
   }
   *cap = (uint32_t)new_cap;
