@@ -155,6 +155,11 @@ zarr_shard_cache_get(struct zarr_shard_cache* self,
     return DAMACY_OOM;
   }
 
+  // Missing or zero-length file → NOTFOUND. Upstream routes that to the
+  // array's fill_value (zarr v3 spec: absent chunks read as fill).
+  // Zero-byte non-sharded files aren't standard but are unambiguous; for
+  // sharded arrays a zero-byte file is corrupt (no index could fit) and
+  // upstream's fill substitution is wrong-but-safe — flag in followup.
   uint64_t file_n_bytes = 0;
   if (store_stat(self->store, strbuf_cstr(&key), &file_n_bytes) ||
       file_n_bytes == 0) {

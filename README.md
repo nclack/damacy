@@ -83,6 +83,27 @@ with damacy.Pipeline(cfg) as p:
             ...                        # train step
 ```
 
+## Zarr support
+
+Damacy reads zarr v3 (sharded and non-sharded). What's recognized today:
+
+| | supported | notes |
+|---|---|---|
+| Array versions | v3 | v2 stores are not read |
+| Layout (sharded) | `sharding_indexed` | with `index_location` either `"start"` or `"end"` (default) |
+| Layout (non-sharded) | yes | each chunk is a separate file at `c/<i>/<j>/...` |
+| Inner / chunk codec | `bytes` (passthrough), `zstd`, `blosc` (cname=`zstd`) | `blosc` with `cname=lz4`/`lz4hc` is recognized at parse time and rejected at planning |
+| Sharding index codec | `bytes` + `crc32c` | the shard index itself; the data codec is separate |
+| Missing chunks | yes — read as `fill_value` | per zarr v3 spec; sharded "empty" entries (`offset==nbytes==2^64−1`) and missing chunk files both route here |
+
+Not yet handled — arrays declaring any of these will fail to parse:
+
+- Non-trivial transposes (`transpose` codec)
+- Compression codecs other than the list above (`gzip`, `lz4` raw, `crc32c` as a data codec, future v3 codecs)
+- Complex / fixed-bytes / variable-length dtypes
+
+If you have data that uses one of the unsupported codecs and you'd like it added, please open an issue with a sample `zarr.json`.
+
 ## Documentation
 
 Full API reference and guides: **<https://nclack.github.io/damacy/>**

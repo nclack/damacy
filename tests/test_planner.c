@@ -822,11 +822,16 @@ test_sharded_index_start(void)
   EXPECT(out.n_chunk_plans == 4);
   EXPECT(out.n_read_ops == 4);
 
-  // Chunk (0,0) is at file offset 256 → page-aligned to 0, nbytes 4096.
-  EXPECT(reads[0].file_offset == 0);
-  EXPECT(reads[0].nbytes == PAGE);
-  EXPECT(chunks[0].offset_in_read == 256);
-  EXPECT(chunks[0].compressed_nbytes == 32);
+  // All 4 chunks live inside the first PAGE, so each read_op page-aligns
+  // to the same {file_offset=0, nbytes=PAGE}. The interesting per-chunk
+  // values are offset_in_read (= absolute file offset, since page is 0)
+  // and compressed_nbytes.
+  for (uint32_t i = 0; i < 4; ++i) {
+    EXPECT(reads[i].file_offset == 0);
+    EXPECT(reads[i].nbytes == PAGE);
+    EXPECT(chunks[i].offset_in_read == offsets[i]);
+    EXPECT(chunks[i].compressed_nbytes == nbytes[i]);
+  }
 
   fixture_destroy(&f);
   return 0;
