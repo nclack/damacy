@@ -89,13 +89,6 @@ extern "C"
     // the calling thread; total parallelism is n_compute_threads + 1.
     uint32_t n_compute_threads;
 
-    // DEPRECATED (Phase 5): retained for source compatibility but
-    // ignored. Internal sizing is now derived from max_gpu_memory_bytes.
-    // A one-line warning is logged at damacy_create if either is set.
-    // Will be removed in a future release.
-    uint64_t host_buffer_bytes;
-    uint64_t device_buffer_bytes;
-
     // LRU caps (FDs are cached per-key by the fs store; not bounded here).
     uint32_t n_zarrs_meta_cache;
     uint32_t n_shards_meta_cache;
@@ -115,12 +108,12 @@ extern "C"
     // ceiling, 2 MB) are rejected at create time.
     uint32_t max_chunk_uncompressed_bytes;
 
-    // PRIMARY BUDGET KNOB (Phase 5). Hard cap on total GPU memory damacy
+    // Primary GPU memory budget. Hard cap on total GPU memory damacy
     // will allocate for wave-resident buffers, the shared decoder
     // scratch, per-wave fanout SOAs, and per-batch metadata. Internal
     // sizing (host slab, device decompress arena, nvcomp temp, …) is
-    // derived from this value. 0 selects the legacy default
-    // (DAMACY_DEFAULT_MAX_GPU_MEMORY_BYTES). damacy_create returns
+    // derived from this value. 0 selects
+    // DAMACY_DEFAULT_MAX_GPU_MEMORY_BYTES. damacy_create returns
     // DAMACY_OOM (with a log_error breakdown) if even the smallest
     // viable wave geometry would exceed this. damacy_push returns
     // DAMACY_OOM if the lazily-sized batch-output pool, computed from

@@ -21,8 +21,7 @@ import torch
 
 cfg = damacy.Config(
     batch_size=8,
-    host_buffer_bytes=1 << 30,
-    device_buffer_bytes=1 << 30,
+    max_gpu_memory_bytes=1 << 30,
     dtype="bf16",
 )
 samples = [

@@ -158,10 +158,10 @@ struct wave_pool
   uint64_t dev_per_wave;
   uint64_t max_chunk_uncompressed_bytes;
 
-  // Phase 5 budget enforcement. max_gpu_memory_bytes is the resolved
-  // ceiling (legacy default applied) and is non-zero. gpu_bytes_committed
-  // is a pointer back into struct damacy so wave_pool and damacy share
-  // one accounting variable. Grow paths read both: a grow that pushes
+  // Budget enforcement. max_gpu_memory_bytes is the resolved ceiling
+  // (default applied) and is non-zero. gpu_bytes_committed is a
+  // pointer back into struct damacy so wave_pool and damacy share one
+  // accounting variable. Grow paths read both: a grow that pushes
   // committed past the ceiling returns DAMACY_OOM and skips the alloc.
   uint64_t max_gpu_memory_bytes;
   uint64_t* gpu_bytes_committed;
@@ -202,7 +202,7 @@ wave_pool_shared_predict_bytes(uint64_t dev_decompressed_bytes,
                                uint64_t max_chunk_uncompressed_bytes,
                                uint64_t* out_nvcomp_temp);
 
-// Phase 5 wave geometry resolver. Picks the per-wave host slab and
+// Wave geometry resolver. Picks the per-wave host slab and
 // dev_decompressed extents that fit inside `max_gpu_memory_bytes` once
 // every other component (2× wave, 1× nvcomp scratch, fanout SOAs,
 // blosc1 meta, batch_metadata) is accounted for. The resolver insists
@@ -242,8 +242,8 @@ wave_destroy(struct damacy_wave* wave, int cuda_skip);
 // Create both streams + initialize both waves and wire borrowed
 // pointers. host_slab_per_wave / dev_decompressed_per_wave come from
 // wave_pool_resolve_sizing. max_gpu_memory_bytes + gpu_bytes_committed
-// drive Phase 5 grow-time budget enforcement; gpu_bytes_committed must
-// point at a uint64_t the caller owns. Returns 0 on success, 1 on
+// drive grow-time budget enforcement; gpu_bytes_committed must point
+// at a uint64_t the caller owns. Returns 0 on success, 1 on
 // failure (after self-cleanup so the caller can free the enclosing
 // struct).
 int

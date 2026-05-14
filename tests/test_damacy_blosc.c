@@ -12,17 +12,17 @@
 //   test_wave_grows_substream_cap       — single wave with >32 chunks forces
 //                                         per-wave fanout + decoder-scratch
 //                                         grow past the 1024 initial floor
-//   test_grow_inside_tight_budget       — Phase 5: tight budget + grow load;
+//   test_grow_inside_tight_budget       — tight budget + grow load;
 //                                         resolver's worst-case reservation
 //                                         keeps the grow inside the cap
 //   test_grow_decoder_rejected_at_inflated_committed
-//                                       — Phase 5: inflate gpu_bytes_committed
-//                                         so batch_pool + fanout grow fit but
+//                                       — inflate gpu_bytes_committed so
+//                                         batch_pool + fanout grow fit but
 //                                         the decoder grow's ~7 MB delta
 //                                         exceeds the cap; pop returns
 //                                         DAMACY_OOM via the grow path
 //   test_batch_pool_rejected_at_inflated_committed
-//                                       — Phase 5: inflate fully to the cap,
+//                                       — inflate fully to the cap;
 //                                         batch-output pool allocation fails
 //                                         before the grow paths run
 
@@ -418,7 +418,7 @@ test_wave_grows_substream_cap(void)
 extern uint64_t
 damacy_set_gpu_bytes_committed_for_test(struct damacy* d, uint64_t v);
 
-// Phase 5: the resolver pre-reserves the worst-case grow footprint at
+// The resolver pre-reserves the worst-case grow footprint at
 // damacy_create, so the observe-and-grow paths never trip the budget
 // when run inside a successfully-created instance. Replays the
 // substream-grow workload at a tight budget (resolved per-wave near
@@ -465,7 +465,7 @@ test_grow_inside_tight_budget(void)
   return 0;
 }
 
-// Phase 5: exercise the grow-time DAMACY_OOM path in wave_pool_grow_decoder.
+// Exercise the grow-time DAMACY_OOM path in wave_pool_grow_decoder.
 // The resolver normally reserves enough headroom that grows always
 // succeed; we forcibly inflate gpu_bytes_committed via a test-only hook
 // so the decoder grow's delta (~7 MB at the cap-jump from 1024 to 2048
@@ -526,7 +526,7 @@ test_grow_decoder_rejected_at_inflated_committed(void)
   return 0;
 }
 
-// Phase 5: exercise the batch-output pool's OOM branch with the
+// Exercise the batch-output pool's OOM branch with the
 // gpu_bytes_committed counter inflated to the cap. Belt-and-suspenders
 // alongside test_grow_decoder_rejected_at_inflated_committed: that
 // test only covers the decoder grow; this one shows that the same

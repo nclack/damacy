@@ -1,5 +1,5 @@
 // Runtime-cap tests: damacy_config.max_chunk_uncompressed_bytes and
-// max_gpu_memory_bytes (issue #7, Phase 5).
+// max_gpu_memory_bytes.
 //
 // Test cases:
 //   test_create_default_caps        — 0/0 config matches pre-existing
@@ -13,12 +13,9 @@
 //                                     low; create returns DAMACY_OOM
 //   test_chunk_cap_shrinks_nvcomp   — smaller runtime cap → smaller nvcomp
 //                                     temp scratch (queried directly)
-//   test_deprecated_buffer_fields    — Phase 5: setting host_buffer_bytes /
-//                                     device_buffer_bytes still works
-//                                     (one warning logged, values ignored)
-//   test_config_describe            — Phase 5: damacy_config_describe runs
-//                                     and logs without touching CUDA state
-//   test_resolver_minimum_one_chunk  — Phase 5: budget barely fitting a
+//   test_config_describe            — damacy_config_describe runs and
+//                                     logs without touching CUDA state
+//   test_resolver_minimum_one_chunk — budget barely fitting a
 //                                     single-chunk wave produces a valid
 //                                     instance and surfaces tight geometry
 
@@ -193,42 +190,6 @@ test_chunk_cap_shrinks_nvcomp(void)
   return 0;
 }
 
-// Phase 5: host_buffer_bytes / device_buffer_bytes are deprecated. The
-// config is still accepted (we keep them as advisory for source-compat)
-// but the values are ignored — internal sizing comes from
-// max_gpu_memory_bytes. A WARN is logged at create.
-static int
-test_deprecated_buffer_fields(void)
-{
-  char root[64];
-  EXPECT(mkdtemp_root(root, sizeof root) == 0);
-  char p[256];
-  snprintf(p, sizeof p, "%s/foo", root);
-  int64_t shape[2] = { 8, 16 }, inner[2] = { 4, 8 }, shard[2] = { 8, 16 };
-  EXPECT(fixture_write_zarr_codec(
-           p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
-
-  struct damacy_config cfg = mk_cfg(root, 1);
-  // Deprecated fields set — should be ignored, with a single WARN.
-  cfg.host_buffer_bytes = 12345;
-  cfg.device_buffer_bytes = 67890;
-  cfg.max_gpu_memory_bytes = 0; // use legacy default
-
-  struct damacy* d = NULL;
-  EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
-
-  struct damacy_sample s = mk_sample(p, 0, 8, 0, 16);
-  struct damacy_sample_slice slice = { .beg = &s, .end = &s + 1 };
-  EXPECT(damacy_push(d, slice).status == DAMACY_OK);
-  struct damacy_batch* b = NULL;
-  EXPECT(damacy_pop(d, &b) == DAMACY_OK);
-  damacy_release(d, b);
-
-  damacy_destroy(d);
-  fixture_rm_tree(root);
-  return 0;
-}
-
 // damacy_config_describe should run safely on a sane config without
 // constructing a damacy instance. It does call into nvcomp via
 // decoder_zstd_query_temp_bytes, so a live CUDA context is required —
@@ -251,9 +212,9 @@ test_config_describe(void)
   return 0;
 }
 
-// Phase 5: resolver picks per-wave near the minimum when the budget
-// barely fits. Reports gpu_bytes_committed back through stats so users
-// can observe the resolved size.
+// Resolver picks per-wave near the minimum when the budget barely
+// fits. Reports gpu_bytes_committed back through stats so users can
+// observe the resolved size.
 static int
 test_resolver_minimum_one_chunk(void)
 {
@@ -294,7 +255,6 @@ main(void)
   RUN(test_chunk_cap_too_high);
   RUN(test_gpu_budget_too_small);
   RUN(test_chunk_cap_shrinks_nvcomp);
-  RUN(test_deprecated_buffer_fields);
   RUN(test_config_describe);
   RUN(test_resolver_minimum_one_chunk);
   log_info("all tests passed");

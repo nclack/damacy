@@ -428,20 +428,11 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     goto Fail;
   }
 
-  // Phase 5: max_gpu_memory_bytes is the primary knob. Apply the legacy
-  // default (~1 GB) if the user left it at 0. host_buffer_bytes /
-  // device_buffer_bytes are deprecated; warn once if either is set,
-  // then ignore the value. Log the *resolved* cap so the migration case
-  // (deprecated fields set, max_gpu_memory_bytes left at 0) reports a
-  // useful number rather than "current: 0 bytes".
+  // max_gpu_memory_bytes is the primary knob. Apply the default
+  // (~1 GB) if the user left it at 0.
   const uint64_t resolved_max_gpu = resolve_max_gpu_memory(cfg);
   const uint64_t runtime_chunk_cap = resolve_max_chunk_uncompressed(cfg);
   self->gpu_bytes_budget = resolved_max_gpu;
-  if (cfg->host_buffer_bytes || cfg->device_buffer_bytes)
-    log_warn("damacy: host_buffer_bytes / device_buffer_bytes are deprecated "
-             "(Phase 5); ignored. Use max_gpu_memory_bytes to size the "
-             "pipeline (resolved: %llu bytes).",
-             (unsigned long long)resolved_max_gpu);
 
   // Subtract the batch-output reserve before sizing wave-resident
   // buffers; the resolver is greedy, so without this carve-out the
@@ -889,11 +880,6 @@ damacy_config_describe(const struct damacy_config* cfg)
            (unsigned long long)resolver_budget,
            (unsigned long long)runtime_chunk_cap,
            (unsigned)cfg->batch_size);
-  if (cfg->host_buffer_bytes || cfg->device_buffer_bytes)
-    log_info("damacy_config_describe: host_buffer_bytes=%llu / "
-             "device_buffer_bytes=%llu are deprecated and ignored",
-             (unsigned long long)cfg->host_buffer_bytes,
-             (unsigned long long)cfg->device_buffer_bytes);
 
   struct wave_pool_sizing sizing = { 0 };
   enum damacy_status rs = wave_pool_resolve_sizing(

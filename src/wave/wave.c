@@ -620,10 +620,9 @@ wave_grow_fanout(struct wave_pool* wp, struct damacy_wave* wave, size_t need)
 
   const uint32_t cur = wave->fanout_cap;
 
-  // Phase 5: enforce the GPU budget on grow. delta is the net device
-  // bytes added; if committed + delta would breach the cap, reject
-  // before freeing the existing fanout so the wave stays usable on
-  // failure.
+  // Enforce the GPU budget on grow. delta is the net device bytes
+  // added; if committed + delta would breach the cap, reject before
+  // freeing the existing fanout so the wave stays usable on failure.
   const uint64_t delta_bytes =
     (uint64_t)(new_cap - (size_t)cur) * fanout_dev_bytes_per_sub();
   if (wp->max_gpu_memory_bytes > 0 && wp->gpu_bytes_committed) {
@@ -711,9 +710,9 @@ wave_pool_grow_decoder(struct wave_pool* wp, size_t need)
   if (new_cap > (size_t)DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE)
     new_cap = (size_t)DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE;
 
-  // Phase 5: enforce the GPU budget. Compute the byte delta from the
-  // current decoder scratch to the proposed one. If the change would
-  // push past the cap, return OOM before touching the device.
+  // Enforce the GPU budget. Compute the byte delta from the current
+  // decoder scratch to the proposed one. If the change would push
+  // past the cap, return OOM before touching the device.
   uint64_t old_bytes = 0, new_bytes = 0;
   enum damacy_status sp =
     predict_decoder_scratch_bytes((uint64_t)cur,

@@ -539,8 +539,6 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   static char* kws[] = { "batch_size",
                          "lookahead_batches",
                          "n_io_threads",
-                         "host_buffer_bytes",
-                         "device_buffer_bytes",
                          "n_zarrs_meta_cache",
                          "n_shards_meta_cache",
                          "dtype",
@@ -552,8 +550,6 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   unsigned int batch_size = 0;
   unsigned int lookahead = 2;
   unsigned int n_io = 4;
-  unsigned long long host_bytes = 0;
-  unsigned long long dev_bytes = 0;
   unsigned int n_zarrs_meta = 64;
   unsigned int n_shards_meta = 256;
   PyObject* dtype_obj = NULL;
@@ -563,13 +559,11 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   unsigned int n_compute = 0;
   if (!PyArg_ParseTupleAndKeywords(args,
                                    kw,
-                                   "IIIKKIIOI|KiI",
+                                   "IIIIIOI|KiI",
                                    kws,
                                    &batch_size,
                                    &lookahead,
                                    &n_io,
-                                   &host_bytes,
-                                   &dev_bytes,
                                    &n_zarrs_meta,
                                    &n_shards_meta,
                                    &dtype_obj,
@@ -587,8 +581,6 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
     .batch_size = batch_size,
     .lookahead_batches = lookahead,
     .n_io_threads = n_io,
-    .host_buffer_bytes = (uint64_t)host_bytes,
-    .device_buffer_bytes = (uint64_t)dev_bytes,
     .n_zarrs_meta_cache = n_zarrs_meta,
     .n_shards_meta_cache = n_shards_meta,
     .dtype = dt,
