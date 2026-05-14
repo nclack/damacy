@@ -29,6 +29,28 @@ option(
     OFF
 )
 
+# DAMACY_NUMA — NUMA-aware pinned-host allocation + io_queue/scheduler
+# thread affinity. Requires libnuma (numactl-libs) at build and run
+# time. Linux-only; defaults ON on Linux non-fuzz builds and OFF
+# elsewhere. find_path/find_library probe the system; if either is
+# missing we silently flip the option off and the numa/ module compiles
+# its no-op flavor.
+option(DAMACY_NUMA "Enable NUMA-aware placement + thread affinity" ON)
+set(DAMACY_NUMA_AVAILABLE 0)
+if(DAMACY_NUMA AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT DAMACY_FUZZ)
+    find_path(NUMA_INCLUDE_DIR NAMES numa.h)
+    find_library(NUMA_LIBRARY NAMES numa)
+    if(NUMA_INCLUDE_DIR AND NUMA_LIBRARY)
+        set(DAMACY_NUMA_AVAILABLE 1)
+        message(STATUS "DAMACY_NUMA: enabled (${NUMA_LIBRARY})")
+    else()
+        message(
+            STATUS
+            "DAMACY_NUMA: requested but libnuma not found — using no-op stubs"
+        )
+    endif()
+endif()
+
 # DAMACY_NVTX_ENABLED — Phase 6 timeline observability. ON wires the
 # nvtx/ wrappers to NVTX v3 (CUDA::nvtx3, header-only) so Nsight Systems
 # sees per-wave ranges and named streams. OFF compiles call sites to

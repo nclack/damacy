@@ -12,6 +12,7 @@
 #include "gpu_budget/gpu_budget.h"
 #include "log/log.h"
 #include "lookahead/lookahead.h"
+#include "numa/numa.h"
 #include "nvtx/nvtx.h"
 #include "planner/planner.h"
 #include "platform/platform.h"
@@ -49,6 +50,11 @@ struct damacy
   int retained_primary_device; // -1 = caller's ctx; else release at destroy
   CUcontext retained_primary;  // pushed per-call by ctx_guard when retained
   CUcontext worker_ctx;        // pushed by the worker on its first tick
+
+  // Resolved NUMA placement plan; node<0 means "no pinning". Filled by
+  // numa_init at create-time and shared with the store's io_queue and
+  // the scheduler so worker threads can pin themselves on entry.
+  struct numa_resolved numa;
 
   // GPU memory budgeting. Single source of truth for committed/max
   // across wave_pool, batch_pool, and the observe-and-grow paths.
@@ -420,6 +426,23 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   if (s != DAMACY_OK)
     goto Fail;
 
+  // Resolve the GPU's host-NUMA node now that we know the CUdevice. The
+  // resolved plan is consumed by the wave_pool_init scope below and by
+  // the store / scheduler worker threads at startup.
+  {
+    CUdevice cu_dev;
+    if (cuCtxGetDevice(&cu_dev) == CUDA_SUCCESS) {
+      numa_init((enum numa_strategy)cfg->numa_strategy,
+                cfg->numa_node,
+                cu_dev,
+                &self->numa);
+    } else {
+      // Should never happen — ctx_guard_enter just pushed our ctx, or
+      // the caller's ctx is live. Be safe; treat as disabled.
+      self->numa.node = -1;
+    }
+  }
+
   self->compute_pool = threadpool_new((int)cfg->n_compute_threads);
   if (!self->compute_pool) {
     s = DAMACY_OOM;
@@ -507,6 +530,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   struct store_fs_config sc = {
     .root = "",
     .nthreads = (int)cfg->n_io_threads,
+    .affinity = &self->numa,
   };
   self->store = store_fs_create(&sc);
   CHECK(Fail, self->store);
@@ -531,18 +555,26 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
           batch_slot_init(&self->batch_pool.slots[b], cfg->batch_size) == 0);
 
   s = DAMACY_OOM;
-  CHECK(Fail,
-        wave_pool_init(&self->wave_pool,
-                       &self->batch_pool,
-                       self->store,
-                       self->compute_pool,
-                       &self->stats,
-                       cfg->dtype,
-                       resolve_host_buffer_waves(cfg),
-                       sizing.host_slab_per_wave,
-                       sizing.dev_decompressed_per_wave,
-                       runtime_chunk_cap,
-                       self->budget) == 0);
+  // Pin the calling thread to the GPU's NUMA node for the duration of
+  // wave_pool_init so first-touch of pinned-host slabs + per-wave
+  // scratch lands on the right node. Restored immediately after.
+  {
+    uint8_t saved_aff[128];
+    numa_scope_enter(&self->numa, saved_aff);
+    int wp_rc = wave_pool_init(&self->wave_pool,
+                               &self->batch_pool,
+                               self->store,
+                               self->compute_pool,
+                               &self->stats,
+                               cfg->dtype,
+                               resolve_host_buffer_waves(cfg),
+                               sizing.host_slab_per_wave,
+                               sizing.dev_decompressed_per_wave,
+                               runtime_chunk_cap,
+                               self->budget);
+    numa_scope_exit(saved_aff);
+    CHECK(Fail, wp_rc == 0);
+  }
 
   CHECK(Fail,
         lookahead_init(&self->lookahead,
@@ -558,8 +590,8 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   self->handle.d = self;
 
   // Spawn the worker last — everything it touches must already exist.
-  self->sched =
-    scheduler_create(damacy_scheduler_step, self, DAMACY_POP_POLL_NS);
+  self->sched = scheduler_create(
+    damacy_scheduler_step, self, DAMACY_POP_POLL_NS, &self->numa);
   if (!self->sched) {
     s = DAMACY_OOM;
     goto Fail;

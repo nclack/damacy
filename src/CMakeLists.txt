@@ -32,6 +32,17 @@ add_src_lib(crc32c SOURCES util/crc32c.c util/crc32c.h LINKS platform)
 add_src_lib(hash   SOURCES util/hash.c   util/hash.h)
 add_src_lib(lru    SOURCES util/lru.c    util/lru.h LINKS log)
 
+# NUMA-aware pinned-host placement + thread affinity. The .c carries
+# both flavors gated on DAMACY_NUMA_ENABLED; the libnuma flavor links
+# the shared lib found in the top-level CMakeLists. CUDA::cuda_driver
+# for cuDeviceGetAttribute(HOST_NUMA_ID) and the BDF fallback.
+add_cuda_lib(numa SOURCES numa/numa.h numa/numa.c LINKS log CUDA::cuda_driver)
+if(DAMACY_NUMA_AVAILABLE)
+    target_include_directories(numa PRIVATE ${NUMA_INCLUDE_DIR})
+    target_link_libraries(numa PUBLIC ${NUMA_LIBRARY})
+    target_compile_definitions(numa PUBLIC DAMACY_NUMA_ENABLED=1)
+endif()
+
 # Platform abstraction (posix-only for now; chucky-style platform-split lives here)
 add_src_lib(platform    SOURCES platform/platform.h    LINKS Threads::Threads)
 add_platform_sources(platform platform/platform)
@@ -48,10 +59,10 @@ add_src_lib(threadpool SOURCES threadpool/threadpool.c threadpool/threadpool.h
 # thread; pairs with a shared mutex + cv so external callers (damacy_pop
 # etc.) can lock / wait / broadcast in lockstep with the worker.
 add_src_lib(scheduler SOURCES scheduler/scheduler.h scheduler/scheduler.c
-    LINKS platform log
+    LINKS platform log numa
 )
 
-add_src_lib(io_queue SOURCES io_queue/io_queue.h LINKS platform_io log)
+add_src_lib(io_queue SOURCES io_queue/io_queue.h LINKS platform_io log numa)
 add_platform_sources(io_queue io_queue/io_queue)
 
 # Internal stats helpers (cumulative damacy_metric record / reset, plus a

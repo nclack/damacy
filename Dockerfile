@@ -41,6 +41,7 @@ RUN apt-get update \
         ninja-build \
         python3 \
         python3-dev \
+        libnuma-dev \
  && rm -rf /var/lib/apt/lists/*
 
 # ----- uv (static binary) + venv ---------------------------------------------

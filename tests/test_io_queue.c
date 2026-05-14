@@ -88,11 +88,11 @@ static int
 test_invalid_args(void)
 {
   EXPECT(io_queue_post(NULL, inc_run, NULL, NULL) != 0);
-  EXPECT(io_queue_create(0) == NULL);
-  EXPECT(io_queue_create(-1) == NULL);
-  EXPECT(io_queue_create((int)DAMACY_MAX_IO_THREADS + 1) == NULL);
+  EXPECT(io_queue_create(0, NULL) == NULL);
+  EXPECT(io_queue_create(-1, NULL) == NULL);
+  EXPECT(io_queue_create((int)DAMACY_MAX_IO_THREADS + 1, NULL) == NULL);
 
-  struct io_queue* q = io_queue_create(1);
+  struct io_queue* q = io_queue_create(1, NULL);
   EXPECT(q);
   EXPECT(io_queue_post(q, NULL, NULL, NULL) != 0);
   io_queue_destroy(q);
@@ -102,7 +102,7 @@ test_invalid_args(void)
 static int
 test_basic_async(void)
 {
-  struct io_queue* q = io_queue_create(2);
+  struct io_queue* q = io_queue_create(2, NULL);
   EXPECT(q);
 
   atomic_int runs = 0, frees = 0;
@@ -124,7 +124,7 @@ static int
 test_record_before_post(void)
 {
   // Empty queue: record returns seq=0, immediately retired.
-  struct io_queue* q = io_queue_create(1);
+  struct io_queue* q = io_queue_create(1, NULL);
   EXPECT(q);
   struct io_event ev = io_queue_record(q);
   io_event_wait(q, ev);
@@ -144,7 +144,7 @@ test_out_of_order_completion(void)
   {
     W = 4
   };
-  struct io_queue* q = io_queue_create(W);
+  struct io_queue* q = io_queue_create(W, NULL);
   EXPECT(q);
 
   struct gate gates[W];
@@ -189,7 +189,7 @@ static int
 test_ring_grow(void)
 {
   // Park the only worker, post > initial cap to force a grow.
-  struct io_queue* q = io_queue_create(1);
+  struct io_queue* q = io_queue_create(1, NULL);
   EXPECT(q);
 
   struct gate g;
