@@ -545,31 +545,37 @@ drain_wave_metrics(const struct wave_pool* wp, struct damacy_wave* wave)
       &st->assemble, ms, wave->decomp_out_bytes, wave->assemble_out_bytes);
 }
 
-// Returns DAMACY_DECODE if nvcomp surfaced non-success status on any
-// substream — the caller propagates so damacy_pop's failed_status
-// check bails before handing out the batch. DAMACY_OK otherwise.
-static enum damacy_status
+// Drain metrics, return what the caller needs to advance batch state:
+// which batch slot retired how many chunks, plus the wave's own error
+// status (nvcomp codec errors surface as DAMACY_DECODE). The wave is
+// reset to WAVE_FREE before return; the caller applies the batch-state
+// transition via batch_slot_consume_chunks.
+struct wave_outcome
+{
+  enum damacy_status status;
+  uint16_t batch_pool_slot;
+  uint32_t n_chunks_consumed;
+};
+
+static struct wave_outcome
 finalize_wave(struct wave_pool* wp, struct damacy_wave* wave)
 {
   damacy_nvtx_range_pushf("finalize_wave/w%td", wave_index_of(wp, wave));
   drain_wave_metrics(wp, wave);
-  enum damacy_status rs = DAMACY_OK;
+  struct wave_outcome out = {
+    .status = DAMACY_OK,
+    .batch_pool_slot = wave->batch_pool_slot,
+    .n_chunks_consumed = wave->n_chunks,
+  };
   if (wave->h_blosc1_totals->n_codec_errors > 0) {
     log_error("nvcomp: %u substream(s) reported non-success status",
               wave->h_blosc1_totals->n_codec_errors);
-    rs = DAMACY_DECODE;
-  }
-  struct damacy_batch_slot* slot = &wp->pool->slots[wave->batch_pool_slot];
-  slot->chunks_remaining -= (int32_t)wave->n_chunks;
-  if (slot->chunks_remaining <= 0) {
-    slot->chunks_remaining = 0;
-    if (slot->state == BATCH_FILLING)
-      slot->state = BATCH_READY;
+    out.status = DAMACY_DECODE;
   }
   wave->state = WAVE_FREE;
   wave->n_chunks = 0;
   damacy_nvtx_range_pop();
-  return rs;
+  return out;
 }
 
 // Pack chunks from `batch_slot`'s remaining work into a free
@@ -760,9 +766,11 @@ wave_pool_advance(struct wave_pool* wp)
       case WAVE_ASSEMBLE: {
         CUresult qe = cuEventQuery(wave->ev.asm_end);
         if (qe == CUDA_SUCCESS) {
-          enum damacy_status fs = finalize_wave(wp, wave);
-          if (fs != DAMACY_OK)
-            return fs;
+          struct wave_outcome o = finalize_wave(wp, wave);
+          batch_slot_consume_chunks(&wp->pool->slots[o.batch_pool_slot],
+                                    o.n_chunks_consumed);
+          if (o.status != DAMACY_OK)
+            return o.status;
         } else if (qe != CUDA_ERROR_NOT_READY) {
           return DAMACY_CUDA;
         }

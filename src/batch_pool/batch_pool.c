@@ -195,3 +195,16 @@ any_batch_in_flight(const struct damacy_batch_pool* pool)
   }
   return 0;
 }
+
+void
+batch_slot_consume_chunks(struct damacy_batch_slot* slot, uint32_t n_consumed)
+{
+  if (!slot)
+    return;
+  slot->chunks_remaining -= (int32_t)n_consumed;
+  if (slot->chunks_remaining <= 0) {
+    slot->chunks_remaining = 0;
+    if (slot->state == BATCH_FILLING)
+      slot->state = BATCH_READY;
+  }
+}
