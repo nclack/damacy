@@ -570,6 +570,9 @@ run_fill_scenario(enum dtype src_dtype,
     (struct assemble_chunk*)calloc(n_chunks, sizeof(struct assemble_chunk));
   EXPECT(h_chunks);
   uint32_t fill_u32 = expected_src_u32(0, 0, fill_xor);
+  // fill_value lives on the sample_plan now (array-level zarr property),
+  // not on each chunk. Written once for the whole sample.
+  write_src_value(sp.fill_value, fill_u32, src_dtype);
   for (uint32_t cidx = 0; cidx < n_chunks; ++cidx) {
     uint32_t chunk_d[MAX_RANK] = { 0 };
     uint32_t rem = cidx;
@@ -581,10 +584,8 @@ run_fill_scenario(enum dtype src_dtype,
     h_chunks[cidx].sample_idx_in_batch = 0;
     for (int d = 0; d < rank; ++d)
       h_chunks[cidx].chunk_d[d] = chunk_d[d];
-    if (cidx == fill_chunk_idx) {
+    if (cidx == fill_chunk_idx)
       h_chunks[cidx].is_fill = 1;
-      write_src_value(h_chunks[cidx].fill_value, fill_u32, src_dtype);
-    }
   }
 
   CUdeviceptr d_arena = 0, d_output = 0, d_sp = 0, d_chunks = 0;
@@ -757,6 +758,9 @@ test_rank3_all_fill(void)
     sp.dims[d].src_stride = src_strides[d];
   }
 
+  // fill_value lives on the sample_plan now (array-level zarr property),
+  // not on each chunk. Written once for the whole sample.
+  write_src_value(sp.fill_value, fill_u32, src_dtype);
   struct assemble_chunk* h_chunks =
     (struct assemble_chunk*)calloc(n_chunks, sizeof(struct assemble_chunk));
   EXPECT(h_chunks);
@@ -770,7 +774,6 @@ test_rank3_all_fill(void)
     for (int d = 0; d < rank; ++d)
       h_chunks[cidx].chunk_d[d] = chunk_d[d];
     h_chunks[cidx].is_fill = 1;
-    write_src_value(h_chunks[cidx].fill_value, fill_u32, src_dtype);
   }
 
   CUdeviceptr d_arena = 0, d_output = 0, d_sp = 0, d_chunks = 0;

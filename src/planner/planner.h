@@ -62,6 +62,9 @@ extern "C"
                                   // runtime)
     uint32_t chunk_offset;        // first chunk in chunk_plans
     uint32_t chunk_count;         // ∏ dims[d].chunk_grid_extent
+    // Array-level fill_value (zarr v3 metadata). Chunks tagged is_fill
+    // broadcast these bytes; bytes are interpreted under src_dtype.
+    uint8_t fill_value[DAMACY_MAX_DTYPE_BYTES];
   };
 
   // Per-chunk plan. Carries IO/decompress fields plus assemble-side
@@ -70,9 +73,10 @@ extern "C"
   //
   // is_fill marks chunks that are absent from the store (sparse zarr v3):
   // read_op_idx / offset_in_read / compressed_nbytes are unused, the
-  // codec stage is skipped, and assemble broadcasts fill_value across
-  // the chunk's region instead of reading the arena. decompressed_nbytes
-  // is still set so wave accounting tracks the conceptual chunk size.
+  // codec stage is skipped, and assemble broadcasts the sample's
+  // fill_value across the chunk's region instead of reading the arena.
+  // decompressed_nbytes is still set so wave accounting tracks the
+  // conceptual chunk size.
   struct chunk_plan
   {
     uint32_t read_op_idx;
@@ -83,8 +87,7 @@ extern "C"
     uint16_t batch_pool_slot;
     uint16_t sample_idx_in_batch; // index into planner_output.sample_plans
     uint8_t codec_id;
-    uint8_t is_fill; // 1 = absent chunk, fill from fill_value
-    uint8_t fill_value[DAMACY_MAX_DTYPE_BYTES];
+    uint8_t is_fill; // 1 = absent chunk; fill_value lives on the sample
     uint32_t chunk_d[DAMACY_MAX_RANK]; // grid position within sample (0..N)
   };
 

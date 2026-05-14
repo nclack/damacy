@@ -191,7 +191,6 @@ emit_fill_chunk(const struct emit_ctx* ctx,
     .codec_id = (uint8_t)CODEC_FILL,
     .is_fill = 1,
   };
-  memcpy(cp->fill_value, meta->fill_value, sizeof cp->fill_value);
   for (uint8_t d = 0; d < meta->rank; ++d)
     cp->chunk_d[d] = (uint32_t)(chunk_coord[d] - ctx->chunk_lo[d]);
   out->n_chunk_plans++;
@@ -346,6 +345,7 @@ planner_plan(struct planner* self,
       .chunk_offset = out->n_chunk_plans,
       .chunk_count = 0, // filled after the chunk emit loop
     };
+    memcpy(sp->fill_value, meta->fill_value, sizeof sp->fill_value);
     int64_t src_strides[DAMACY_MAX_RANK];
     row_major_strides(meta->inner_chunk_shape, meta->rank, src_strides);
     uint32_t chunk_count = 1;

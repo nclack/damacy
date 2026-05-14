@@ -426,9 +426,11 @@ test_empty_chunk_becomes_fill(void)
   EXPECT(chunks[3].is_fill == 0);
   EXPECT(chunks[2].codec_id == CODEC_FILL);
   EXPECT(chunks[2].compressed_nbytes == 0);
-  // fill_value parsed from "fill_value":0 in the JSON → all zero bytes.
-  for (size_t k = 0; k < sizeof chunks[2].fill_value; ++k)
-    EXPECT(chunks[2].fill_value[k] == 0);
+  // fill_value parsed from "fill_value":0 in the JSON → all zero bytes,
+  // on the sample plan now (array-level property).
+  EXPECT(out.n_sample_plans == 1);
+  for (size_t k = 0; k < sizeof samples[0].fill_value; ++k)
+    EXPECT(samples[0].fill_value[k] == 0);
 
   fixture_destroy(&f);
   return 0;
@@ -462,10 +464,12 @@ test_fill_value_int16_neg1(void)
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_chunk_plans == 4);
-  // chunk index 1 = (0,1) is empty → fill.
+  // chunk index 1 = (0,1) is empty → fill. fill_value bytes live on the
+  // sample plan (LE-packed for i16).
   EXPECT(chunks[1].is_fill == 1);
-  EXPECT(chunks[1].fill_value[0] == 0xFF);
-  EXPECT(chunks[1].fill_value[1] == 0xFF);
+  EXPECT(out.n_sample_plans == 1);
+  EXPECT(samples[0].fill_value[0] == 0xFF);
+  EXPECT(samples[0].fill_value[1] == 0xFF);
   fixture_destroy(&f);
   return 0;
 }
@@ -496,8 +500,9 @@ test_fill_value_f32_nan(void)
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(chunks[1].is_fill == 1);
+  EXPECT(out.n_sample_plans == 1);
   float fill_f;
-  memcpy(&fill_f, chunks[1].fill_value, sizeof fill_f);
+  memcpy(&fill_f, samples[0].fill_value, sizeof fill_f);
   EXPECT(fill_f != fill_f); // NaN is the unique value that compares unequal
   fixture_destroy(&f);
   return 0;

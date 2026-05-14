@@ -230,10 +230,10 @@ assemble_body(int rank,
 
   dst_t* dst = (dst_t*)(output_base + dst_off_elems * (int64_t)sizeof(dst_t));
 
-  // Fill-mode chunks: read the broadcast value from the per-chunk
-  // fill_value buffer instead of the arena.
+  // Fill-mode chunks: read the broadcast value from the sample's
+  // fill_value (an array-level zarr property) instead of the arena.
   if (c.is_fill) {
-    float v = load_src_as_float(c.fill_value, s.src_dtype);
+    float v = load_src_as_float(s.fill_value, s.src_dtype);
     *dst = cast_to_dst<dst_t>(v);
     return;
   }

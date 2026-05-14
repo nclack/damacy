@@ -36,17 +36,17 @@ extern "C"
 
   // Per-chunk record materialized at wave dispatch time. shuffle fields
   // are filled by blosc1_host_parse (NONE for non-blosc codecs).
-  // is_fill=1 marks an absent source chunk: the kernel writes fill_value
-  // across the chunk's region and src_base_byte_off / shuffle_* are ignored.
+  // is_fill=1 marks an absent source chunk: the kernel broadcasts the
+  // sample's fill_value across the chunk's region; src_base_byte_off and
+  // shuffle_* are ignored.
   struct assemble_chunk
   {
-    uint64_t src_base_byte_off;   // arena byte offset of chunk start
-    uint32_t shuffle_blocksize;   // blosc block size (bytes); 0 if NONE
-    uint16_t sample_idx_in_batch; // index into d_samples[]
-    uint8_t shuffle_mode;         // enum assemble_shuffle_mode
-    uint8_t shuffle_typesize;     // 1, 2, 4, 8; 0 if NONE
-    uint8_t is_fill;              // 1 = broadcast fill_value
-    uint8_t fill_value[DAMACY_MAX_DTYPE_BYTES];
+    uint64_t src_base_byte_off;        // arena byte offset of chunk start
+    uint32_t shuffle_blocksize;        // blosc block size (bytes); 0 if NONE
+    uint16_t sample_idx_in_batch;      // index into d_samples[]
+    uint8_t shuffle_mode;              // enum assemble_shuffle_mode
+    uint8_t shuffle_typesize;          // 1, 2, 4, 8; 0 if NONE
+    uint8_t is_fill;                   // 1 = broadcast sample.fill_value
     uint32_t chunk_d[DAMACY_MAX_RANK]; // chunk grid position within sample
   };
 

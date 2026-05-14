@@ -415,7 +415,6 @@ build_assemble_meta(const struct wave_pool* wp, struct damacy_wave* wave)
     a->src_base_byte_off = (uint64_t)c->dev_decompressed_offset;
     a->sample_idx_in_batch = c->sample_idx_in_batch;
     a->is_fill = c->is_fill;
-    memcpy(a->fill_value, c->fill_value, sizeof a->fill_value);
     for (uint8_t d = 0; d < spatial_rank; ++d)
       a->chunk_d[d] = c->chunk_d[d];
 
