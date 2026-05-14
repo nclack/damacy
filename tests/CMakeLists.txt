@@ -36,6 +36,8 @@ add_damacy_test(test_scheduler scheduler platform log)
 # requires `uv` on PATH at test time (provided by flake.nix devShell).
 if(NOT DAMACY_FUZZ)
     add_damacy_test(test_damacy damacy test_fixture)
+    target_sources(test_damacy PRIVATE spin_kernel.cu)
+    target_link_libraries(test_damacy PRIVATE CUDA::cudart_static)
     add_damacy_test(test_damacy_blosc damacy test_fixture)
     add_damacy_test(test_damacy_caps damacy decoder test_fixture CUDA::cuda_driver)
     add_damacy_test(test_damacy_ctx damacy test_fixture CUDA::cuda_driver)

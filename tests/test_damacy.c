@@ -22,6 +22,7 @@
 #include "cuda_init.h"
 #include "damacy.h"
 #include "fixture.h"
+#include "spin_kernel.h"
 
 #include <cuda_runtime.h>
 #include <stdio.h>
@@ -29,6 +30,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 
 // Expected u16 value at a given (y, x) within a shape-(rows, cols)
@@ -589,6 +591,75 @@ test_missing_shard_fills_nonzero(void)
 // damacy_pop blocked for the sleep duration regardless of the wait, for
 // reasons not chased down). Tracking that as a follow-up; meanwhile this
 // file keeps only the deterministic API-contract test (NULL fallback).
+// Engineered race for damacy_release_event.
+//
+// The side stream runs a GPU-side spin (clock64 loop) and records an
+// event after it. release(event) installs cuStreamWaitEvent on damacy's
+// stream_post; the third pop's assemble can't run until that event fires.
+//
+// To keep the spin from blocking stream_post via hardware-queue
+// contention on consumer GPUs (Blackwell schedules a long-running kernel
+// ahead of newcomers regardless of stream), we put the side stream at
+// the LOW priority slot and damacy's streams stay at default — the GPU
+// then time-slices in favor of stream_post and the spin can't starve it.
+static int
+test_release_event_blocks_assemble(void)
+{
+  char root[64];
+  EXPECT(mkdtemp_root(root, sizeof root) == 0);
+  char p[256];
+  snprintf(p, sizeof p, "%s/z", root);
+  int64_t shape[2] = { 4, 8 }, inner[2] = { 4, 8 }, shard[2] = { 4, 8 };
+  EXPECT(fixture_write_zarr(p, shape, inner, shard, 2, "uint16", 0) == 0);
+
+  struct damacy_config cfg = mk_cfg(root, 1);
+  cfg.lookahead_batches = 3; // pool has 2 slots; 3 pops forces reuse.
+  struct damacy* d = NULL;
+  EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
+
+  struct damacy_sample s = mk_sample(p, 0, 4, 0, 8);
+  struct damacy_sample s_arr[3] = { s, s, s };
+  struct damacy_sample_slice slice = { .beg = s_arr, .end = s_arr + 3 };
+  EXPECT(damacy_push(d, slice).status == DAMACY_OK);
+
+  int prio_lo = 0, prio_hi = 0;
+  EXPECT(cudaDeviceGetStreamPriorityRange(&prio_lo, &prio_hi) == cudaSuccess);
+  cudaStream_t side = NULL;
+  EXPECT(cudaStreamCreateWithPriority(&side, cudaStreamNonBlocking, prio_lo) ==
+         cudaSuccess);
+
+  struct damacy_batch* b = NULL;
+  EXPECT(damacy_pop(d, &b) == DAMACY_OK);
+
+  // ~100 ms of spin at SM-clock rates (1–2 GHz on modern parts).
+  const int64_t cycles = 200LL * 1000 * 1000;
+  EXPECT(test_spin_launch(side, cycles) == cudaSuccess);
+  cudaEvent_t ev = NULL;
+  EXPECT(cudaEventCreateWithFlags(&ev, cudaEventDisableTiming) == cudaSuccess);
+  EXPECT(cudaEventRecord(ev, side) == cudaSuccess);
+
+  struct timespec t0, t1;
+  clock_gettime(CLOCK_MONOTONIC, &t0);
+  EXPECT(damacy_release_event(d, b, ev) == DAMACY_OK);
+  EXPECT(cudaEventDestroy(ev) == cudaSuccess);
+
+  EXPECT(damacy_pop(d, &b) == DAMACY_OK);
+  damacy_release(d, b);
+  EXPECT(damacy_pop(d, &b) == DAMACY_OK); // blocks until ev fires
+  damacy_release(d, b);
+  clock_gettime(CLOCK_MONOTONIC, &t1);
+  double elapsed_ms = (double)(t1.tv_sec - t0.tv_sec) * 1000.0 +
+                      (double)(t1.tv_nsec - t0.tv_nsec) / 1e6;
+  log_info("release+3-pop window: %.1f ms (expect >= 50)", elapsed_ms);
+  EXPECT(elapsed_ms >= 50.0);
+
+  EXPECT(cudaStreamSynchronize(side) == cudaSuccess);
+  cudaStreamDestroy(side);
+  damacy_destroy(d);
+  fixture_rm_tree(root);
+  return 0;
+}
+
 // damacy_release_event(d, b, NULL) should behave exactly like
 // damacy_release: slot returns to the pool, next pop works.
 static int
@@ -636,6 +707,7 @@ main(void)
   RUN(test_lookahead_backpressure);
   RUN(test_missing_shard_fills);
   RUN(test_missing_shard_fills_nonzero);
+  RUN(test_release_event_blocks_assemble);
   RUN(test_release_event_null_falls_back);
   log_info("all tests passed");
   return 0;
