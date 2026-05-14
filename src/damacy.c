@@ -259,15 +259,14 @@ Cleanup:
   return status;
 }
 
-// Fills FREE wave slots; plans a fresh batch when no FILLING slot has work.
+// Drains lookahead-planned batches into free host_slab_slots, planning
+// a fresh batch when no FILLING batch has chunks left to peel. Stops
+// when there are no free slots, no batches with work, and no room to
+// plan more.
 static enum damacy_status
-kick_new_waves(struct damacy* self)
+kick_peel_into_free_slots(struct damacy* self)
 {
   for (;;) {
-    int w = find_free_wave(&self->wave_pool);
-    if (w < 0)
-      break;
-
     int target_slot = find_filling_slot_with_work(&self->batch_pool);
     if (target_slot < 0) {
       int free_slot = find_free_batch_slot(&self->batch_pool);
@@ -283,9 +282,13 @@ kick_new_waves(struct damacy* self)
     }
 
     enum damacy_status s =
-      wave_pool_peel(&self->wave_pool, (uint16_t)w, (uint16_t)target_slot);
+      wave_pool_peel(&self->wave_pool, (uint16_t)target_slot);
     if (s != DAMACY_OK)
       return s;
+    // peel is a no-op if no host_slab_slot is free; bail to let
+    // wave_pool_advance drain a slot before retrying.
+    if (!any_slot_free(&self->wave_pool))
+      break;
   }
   return DAMACY_OK;
 }
@@ -309,7 +312,7 @@ damacy_scheduler_step(void* arg)
 
   enum damacy_status r = wave_pool_advance(&self->wave_pool);
   if (r == DAMACY_OK && self->failed_status == DAMACY_OK)
-    r = kick_new_waves(self);
+    r = kick_peel_into_free_slots(self);
   if (r != DAMACY_OK && self->failed_status == DAMACY_OK)
     self->failed_status = r;
   return 1;
@@ -537,6 +540,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
                        &self->stats,
                        &self->failed_status,
                        cfg->dtype,
+                       resolve_host_buffer_waves(cfg),
                        sizing.host_slab_per_wave,
                        sizing.dev_decompressed_per_wave,
                        runtime_chunk_cap,

@@ -373,6 +373,7 @@ class Config:
     n_shards_meta_cache: int
     max_chunk_uncompressed_bytes: int
     max_gpu_memory_bytes: int
+    host_buffer_waves: int
     device: int | None
 
     def __init__(
@@ -387,6 +388,7 @@ class Config:
         n_zarrs_meta_cache: int = 64,
         n_shards_meta_cache: int = 256,
         max_chunk_uncompressed_bytes: int = 0,
+        host_buffer_waves: int = 0,
         device: int | None = None,
     ) -> None:
         # Custom __init__ rather than __post_init__ so the constructor
@@ -409,6 +411,8 @@ class Config:
             raise ValueError("max_chunk_uncompressed_bytes must be >= 0")
         if max_gpu_memory_bytes < 0:
             raise ValueError("max_gpu_memory_bytes must be >= 0")
+        if host_buffer_waves < 0:
+            raise ValueError("host_buffer_waves must be >= 0")
         set_ = object.__setattr__  # frozen=True forbids `self.x = ...`
         set_(self, "batch_size", batch_size)
         set_(self, "dtype", Dtype.coerce(dtype))
@@ -419,6 +423,7 @@ class Config:
         set_(self, "n_shards_meta_cache", n_shards_meta_cache)
         set_(self, "max_chunk_uncompressed_bytes", max_chunk_uncompressed_bytes)
         set_(self, "max_gpu_memory_bytes", max_gpu_memory_bytes)
+        set_(self, "host_buffer_waves", host_buffer_waves)
         set_(self, "device", device)
 
 
@@ -474,11 +479,12 @@ class Stats:
     plan: Metric
     io: Metric
     h2d: Metric
-    decompress: Metric
+    decode: Metric
+    post_decode: Metric
+    decode_gap: Metric
     decompress_parse: Metric
     assemble: Metric
-    pop_wait_io: Metric
-    pop_wait_compute: Metric
+    pop_wait: Metric
     flush_wait: Metric
     zarr_meta_hits: int
     zarr_meta_misses: int
@@ -488,6 +494,7 @@ class Stats:
     batches_truncated: int
     waves_emitted: int
     chunks_dispatched: int
+    worker_steps: int
     gpu_bytes_committed: int
 
     @classmethod
@@ -497,11 +504,12 @@ class Stats:
             plan=m(st["plan"]),
             io=m(st["io"]),
             h2d=m(st["h2d"]),
-            decompress=m(st["decompress"]),
+            decode=m(st["decode"]),
+            post_decode=m(st["post_decode"]),
+            decode_gap=m(st["decode_gap"]),
             decompress_parse=m(st["decompress_parse"]),
             assemble=m(st["assemble"]),
-            pop_wait_io=m(st["pop_wait_io"]),
-            pop_wait_compute=m(st["pop_wait_compute"]),
+            pop_wait=m(st["pop_wait"]),
             flush_wait=m(st["flush_wait"]),
             zarr_meta_hits=st["zarr_meta_hits"],
             zarr_meta_misses=st["zarr_meta_misses"],
@@ -511,6 +519,7 @@ class Stats:
             batches_truncated=st["batches_truncated"],
             waves_emitted=st["waves_emitted"],
             chunks_dispatched=st["chunks_dispatched"],
+            worker_steps=st["worker_steps"],
             gpu_bytes_committed=st["gpu_bytes_committed"],
         )
 
@@ -686,6 +695,7 @@ class Pipeline:
                 dtype=int(config.dtype),  # already coerced by Config.__init__
                 max_chunk_uncompressed_bytes=config.max_chunk_uncompressed_bytes,
                 max_gpu_memory_bytes=config.max_gpu_memory_bytes,
+                host_buffer_waves=config.host_buffer_waves,
                 device=-1 if config.device is None else int(config.device),
             )
         except _native.DamacyError as exc:

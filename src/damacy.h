@@ -129,6 +129,14 @@ extern "C"
     // dtype_bpe. 0 = no reservation.
     uint64_t batch_output_reserve_bytes;
 
+    // Pinned-host slab pool depth, in waves. Each slot holds one wave's
+    // compressed bytes; extra slots let IO for upcoming waves complete
+    // before the wave struct is free, shrinking the wave-boundary gap on
+    // stream_decode. Must be >= DAMACY_N_WAVES (2). 0 selects
+    // DAMACY_DEFAULT_HOST_BUFFER_WAVES (3). Each slot costs one
+    // dev_compressed_per_wave of pinned host memory.
+    uint8_t host_buffer_waves;
+
     // -1 captures current CUcontext; >= 0 retains the primary for that
     // device internally and rejects a current context on another device.
     int device;

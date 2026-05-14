@@ -116,6 +116,7 @@ struct scenario
   uint32_t max_chunk_uncompressed_bytes; // 0 → library default
   uint32_t n_zarrs_meta_cache;
   uint32_t n_shards_meta_cache;
+  uint8_t host_buffer_waves; // 0 → library default
 
   // raw JSON src for echo (kept alive by main)
   struct cslice src;
@@ -349,6 +350,11 @@ parse_scenario(struct cslice src, struct scenario* sc)
     sc->n_zarrs_meta_cache = (uint32_t)v;
     read_uint_opt(src, p_sm, countof(p_sm), &v, 16384);
     sc->n_shards_meta_cache = (uint32_t)v;
+    static const struct json_query p_hw[] = { { QUERY_KEY, .key = "pipeline" },
+                                              { QUERY_KEY,
+                                                .key = "host_buffer_waves" } };
+    read_uint_opt(src, p_hw, countof(p_hw), &v, 0);
+    sc->host_buffer_waves = (uint8_t)v;
   }
 
   // sanity: all axes can fit a sample
@@ -714,6 +720,7 @@ main(int argc, char** argv)
     .n_io_threads = sc.n_io_threads,
     .max_gpu_memory_bytes = sc.max_gpu_memory_bytes,
     .max_chunk_uncompressed_bytes = sc.max_chunk_uncompressed_bytes,
+    .host_buffer_waves = sc.host_buffer_waves,
     .batch_output_reserve_bytes = pool_reserve,
     .n_zarrs_meta_cache = sc.n_zarrs_meta_cache,
     .n_shards_meta_cache = sc.n_shards_meta_cache,

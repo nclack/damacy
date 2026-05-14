@@ -46,6 +46,10 @@ validate_config(const struct damacy_config* cfg)
   CHECK_SILENT(Invalid, cfg->n_io_threads > 0);
   CHECK_SILENT(Invalid, cfg->n_io_threads <= DAMACY_MAX_IO_THREADS);
   CHECK_SILENT(Invalid, cfg->n_compute_threads <= DAMACY_MAX_COMPUTE_THREADS);
+  CHECK_SILENT(Invalid,
+               cfg->host_buffer_waves == 0 ||
+                 (cfg->host_buffer_waves >= DAMACY_N_WAVES &&
+                  cfg->host_buffer_waves <= DAMACY_MAX_HOST_BUFFER_WAVES));
   CHECK_SILENT(Invalid, cfg->n_zarrs_meta_cache > 0);
   CHECK_SILENT(Invalid, cfg->n_shards_meta_cache > 0);
   CHECK_SILENT(Invalid, damacy_dtype_bpe(cfg->dtype) > 0);
@@ -74,5 +78,18 @@ resolve_max_gpu_memory(const struct damacy_config* cfg)
   uint64_t v = cfg->max_gpu_memory_bytes;
   if (v == 0)
     v = DAMACY_DEFAULT_MAX_GPU_MEMORY_BYTES;
+  return v;
+}
+
+uint8_t
+resolve_host_buffer_waves(const struct damacy_config* cfg)
+{
+  uint8_t v = cfg->host_buffer_waves;
+  if (v == 0)
+    v = DAMACY_DEFAULT_HOST_BUFFER_WAVES;
+  if (v < DAMACY_N_WAVES)
+    v = DAMACY_N_WAVES;
+  if (v > DAMACY_MAX_HOST_BUFFER_WAVES)
+    v = DAMACY_MAX_HOST_BUFFER_WAVES;
   return v;
 }
