@@ -101,10 +101,136 @@ test_shard_cache(void)
   return 0;
 }
 
+// index_location: "start". The index sits at offset 0 with absolute
+// offsets pointing into the body that follows.
+static int
+test_shard_cache_index_start(void)
+{
+  char tmpl[] = "/tmp/damacy_shard_cache_start_XXXXXX";
+  char* root = mkdtemp(tmpl);
+  EXPECT(root);
+
+  // 4 inner chunks per shard; index sits at offset 0.
+  // index_size = 4*16 + 4 = 68. Pad data offsets clear of the header.
+  const uint64_t offsets[4] = { 128, 256, 384, 512 };
+  const uint64_t nbytes[4] = { 64, 64, 64, 64 };
+
+  char path[512];
+  snprintf(path, sizeof path, "%s/foo", root);
+  EXPECT(mkdir(path, 0755) == 0);
+  snprintf(path, sizeof path, "%s/foo/c", root);
+  EXPECT(mkdir(path, 0755) == 0);
+  snprintf(path, sizeof path, "%s/foo/c/0", root);
+  EXPECT(mkdir(path, 0755) == 0);
+  snprintf(path, sizeof path, "%s/foo/c/0/0", root);
+  EXPECT(fixture_write_synthetic_shard_start(
+           path, /*payload=*/2048, offsets, nbytes, 4) == 0);
+
+  struct store_fs_config sc = { .root = root, .nthreads = 1 };
+  struct store* store = store_fs_create(&sc);
+  EXPECT(store);
+
+  struct zarr_metadata meta = {
+    .rank = 2,
+    .shape = { 4, 4 },
+    .inner_chunk_shape = { 2, 2 },
+    .shard_shape = { 4, 4 },
+    .sharded = 1,
+    .index_location_end = 0,
+  };
+
+  struct zarr_shard_cache* c = zarr_shard_cache_create(store, 4);
+  EXPECT(c);
+
+  const uint64_t coord00[2] = { 0, 0 };
+  const struct zarr_shard_entry* entries = NULL;
+  uint64_t n = 0;
+  EXPECT(zarr_shard_cache_get(c, "foo", &meta, coord00, &entries, &n) ==
+         DAMACY_OK);
+  EXPECT(n == 4);
+  EXPECT(entries[0].offset == 128 && entries[0].nbytes == 64);
+  EXPECT(entries[3].offset == 512 && entries[3].nbytes == 64);
+
+  zarr_shard_cache_destroy(c);
+  store_destroy(store);
+  fixture_rm_tree(root);
+  return 0;
+}
+
+// Non-sharded array: each "shard" is a 1-entry synthetic index built
+// from the file's size, no on-disk footer.
+static int
+test_shard_cache_unsharded(void)
+{
+  char tmpl[] = "/tmp/damacy_shard_cache_unsharded_XXXXXX";
+  char* root = mkdtemp(tmpl);
+  EXPECT(root);
+
+  // Layout: c/0/0 and c/1/2 (just two distinct chunk files).
+  char path[512];
+  snprintf(path, sizeof path, "%s/foo", root);
+  EXPECT(mkdir(path, 0755) == 0);
+  snprintf(path, sizeof path, "%s/foo/c", root);
+  EXPECT(mkdir(path, 0755) == 0);
+  snprintf(path, sizeof path, "%s/foo/c/0", root);
+  EXPECT(mkdir(path, 0755) == 0);
+  snprintf(path, sizeof path, "%s/foo/c/1", root);
+  EXPECT(mkdir(path, 0755) == 0);
+  snprintf(path, sizeof path, "%s/foo/c/0/0", root);
+  EXPECT(fixture_write_zero_file(path, 123) == 0);
+  snprintf(path, sizeof path, "%s/foo/c/1/2", root);
+  EXPECT(fixture_write_zero_file(path, 456) == 0);
+
+  struct store_fs_config sc = { .root = root, .nthreads = 1 };
+  struct store* store = store_fs_create(&sc);
+  EXPECT(store);
+
+  // Non-sharded: inner == shard. n_inner_per_shard = 1.
+  struct zarr_metadata meta = {
+    .rank = 2,
+    .shape = { 4, 8 },
+    .inner_chunk_shape = { 2, 4 },
+    .shard_shape = { 2, 4 },
+    .sharded = 0,
+    .index_location_end = 1,
+  };
+
+  struct zarr_shard_cache* c = zarr_shard_cache_create(store, 4);
+  EXPECT(c);
+
+  const uint64_t coord00[2] = { 0, 0 };
+  const struct zarr_shard_entry* entries = NULL;
+  uint64_t n = 0;
+  EXPECT(zarr_shard_cache_get(c, "foo", &meta, coord00, &entries, &n) ==
+         DAMACY_OK);
+  EXPECT(n == 1);
+  EXPECT(entries[0].offset == 0);
+  EXPECT(entries[0].nbytes == 123);
+
+  const uint64_t coord12[2] = { 1, 2 };
+  EXPECT(zarr_shard_cache_get(c, "foo", &meta, coord12, &entries, &n) ==
+         DAMACY_OK);
+  EXPECT(n == 1);
+  EXPECT(entries[0].offset == 0);
+  EXPECT(entries[0].nbytes == 456);
+
+  // Missing chunk file → NOTFOUND.
+  const uint64_t coordbad[2] = { 9, 9 };
+  EXPECT(zarr_shard_cache_get(c, "foo", &meta, coordbad, &entries, &n) ==
+         DAMACY_NOTFOUND);
+
+  zarr_shard_cache_destroy(c);
+  store_destroy(store);
+  fixture_rm_tree(root);
+  return 0;
+}
+
 int
 main(void)
 {
   RUN(test_shard_cache);
+  RUN(test_shard_cache_index_start);
+  RUN(test_shard_cache_unsharded);
   log_info("all tests passed");
   return 0;
 }

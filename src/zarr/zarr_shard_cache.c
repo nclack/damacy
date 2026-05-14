@@ -162,45 +162,56 @@ zarr_shard_cache_get(struct zarr_shard_cache* self,
     return DAMACY_NOTFOUND;
   }
 
-  size_t footer_n_bytes = zarr_shard_index_size((size_t)n_inner_per_shard);
-  if (file_n_bytes < (uint64_t)footer_n_bytes) {
-    strbuf_free(&key);
-    return DAMACY_DECODE;
-  }
-  uint64_t footer_offset =
-    meta->index_location_end ? (file_n_bytes - (uint64_t)footer_n_bytes) : 0;
-
-  void* footer_buf = malloc(footer_n_bytes);
-  if (!footer_buf) {
-    strbuf_free(&key);
-    return DAMACY_OOM;
-  }
-  struct store_read read_request = {
-    .key = strbuf_cstr(&key),
-    .dst = footer_buf,
-    .offset = footer_offset,
-    .len = footer_n_bytes,
-  };
-  int rc = store_read_many(self->store, &read_request, 1);
-  strbuf_free(&key);
-  if (rc) {
-    free(footer_buf);
-    return DAMACY_IO;
-  }
-
   struct zarr_shard_entry* entries = (struct zarr_shard_entry*)calloc(
     (size_t)n_inner_per_shard, sizeof(struct zarr_shard_entry));
   if (!entries) {
-    free(footer_buf);
+    strbuf_free(&key);
     return DAMACY_OOM;
   }
-  if (zarr_shard_index_parse(
-        footer_buf, footer_n_bytes, (size_t)n_inner_per_shard, entries)) {
+
+  if (!meta->sharded) {
+    // Non-sharded: the file IS the single inner chunk. Synthesize a
+    // 1-entry index pointing at the whole file.
+    entries[0].offset = 0;
+    entries[0].nbytes = file_n_bytes;
+    strbuf_free(&key);
+  } else {
+    size_t footer_n_bytes = zarr_shard_index_size((size_t)n_inner_per_shard);
+    if (file_n_bytes < (uint64_t)footer_n_bytes) {
+      strbuf_free(&key);
+      free(entries);
+      return DAMACY_DECODE;
+    }
+    uint64_t footer_offset =
+      meta->index_location_end ? (file_n_bytes - (uint64_t)footer_n_bytes) : 0;
+
+    void* footer_buf = malloc(footer_n_bytes);
+    if (!footer_buf) {
+      strbuf_free(&key);
+      free(entries);
+      return DAMACY_OOM;
+    }
+    struct store_read read_request = {
+      .key = strbuf_cstr(&key),
+      .dst = footer_buf,
+      .offset = footer_offset,
+      .len = footer_n_bytes,
+    };
+    int rc = store_read_many(self->store, &read_request, 1);
+    strbuf_free(&key);
+    if (rc) {
+      free(footer_buf);
+      free(entries);
+      return DAMACY_IO;
+    }
+    if (zarr_shard_index_parse(
+          footer_buf, footer_n_bytes, (size_t)n_inner_per_shard, entries)) {
+      free(footer_buf);
+      free(entries);
+      return DAMACY_DECODE;
+    }
     free(footer_buf);
-    free(entries);
-    return DAMACY_DECODE;
   }
-  free(footer_buf);
 
   struct shard_entry* entry = (struct shard_entry*)calloc(1, sizeof(*entry));
   if (!entry) {

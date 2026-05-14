@@ -33,6 +33,20 @@ extern "C"
                                     const uint64_t* nbytes,
                                     size_t n_entries);
 
+  // Same as fixture_write_synthetic_shard but with the index block at
+  // the start of the file (index_location: "start"). Layout:
+  // [(offset,nbytes)*n_entries | CRC32C | payload]. Offsets in the
+  // index are absolute file offsets.
+  int fixture_write_synthetic_shard_start(const char* path,
+                                          size_t payload_n_bytes,
+                                          const uint64_t* offsets,
+                                          const uint64_t* nbytes,
+                                          size_t n_entries);
+
+  // Write `n_bytes` of zeroed payload to `path`. Used by the
+  // non-sharded planner test to stand in for a per-chunk file.
+  int fixture_write_zero_file(const char* path, size_t n_bytes);
+
   // Shell out to tests/write_zarr.py (uv-script) to produce a real
   // sharded zstd zarr-v3 array at `path`. Content is a deterministic
   // row-major linearization plus `fill_offset`, masked to the dtype's
