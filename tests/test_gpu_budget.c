@@ -1,5 +1,5 @@
 // Unit tests for src/gpu_budget/. Verifies that:
-//   - gpu_budget_compute returns OK on a sane config
+//   - gpu_budget_predict returns OK on a sane config
 //   - .total equals the sum of its parts (no field drift)
 //   - .total scales with the resolved per-wave geometry
 //   - smaller max_chunk_uncompressed_bytes shrinks .nvcomp_temp
@@ -10,7 +10,7 @@
 #include "cuda_init.h"
 #include "damacy.h"
 #include "expect.h"
-#include "gpu_budget/gpu_budget.h"
+#include "wave/wave_budget.h"
 
 #include <stdio.h>
 
@@ -35,10 +35,10 @@ static int
 test_total_is_sum_of_parts(void)
 {
   struct damacy_config cfg = mk_cfg(0);
-  struct gpu_budget b = { 0 };
+  struct gpu_budget_breakdown b = { 0 };
   const uint64_t host = 2ull << 20;
   const uint64_t dev = 2ull << 20;
-  EXPECT(gpu_budget_compute(&cfg, host, dev, &b) == DAMACY_OK);
+  EXPECT(gpu_budget_predict(&cfg, host, dev, &b) == DAMACY_OK);
   uint64_t expect = b.dev_compressed + b.dev_decompressed + b.blosc1_meta +
                     b.fanout_soa + b.nvcomp_temp + b.batch_metadata;
   EXPECT(b.total == expect);
@@ -53,9 +53,9 @@ static int
 test_scales_with_buffers(void)
 {
   struct damacy_config cfg = mk_cfg(0);
-  struct gpu_budget small = { 0 }, big = { 0 };
-  EXPECT(gpu_budget_compute(&cfg, 1ull << 20, 1ull << 20, &small) == DAMACY_OK);
-  EXPECT(gpu_budget_compute(&cfg, 2ull << 20, 2ull << 20, &big) == DAMACY_OK);
+  struct gpu_budget_breakdown small = { 0 }, big = { 0 };
+  EXPECT(gpu_budget_predict(&cfg, 1ull << 20, 1ull << 20, &small) == DAMACY_OK);
+  EXPECT(gpu_budget_predict(&cfg, 2ull << 20, 2ull << 20, &big) == DAMACY_OK);
   EXPECT(big.dev_compressed == 2 * small.dev_compressed);
   EXPECT(big.dev_decompressed == 2 * small.dev_decompressed);
   // batch_metadata is independent of buffer sizes; identical across cfgs.
@@ -74,11 +74,11 @@ test_chunk_cap_shrinks_nvcomp_temp(void)
   // substream cap actually moves nvcomp's scratch.
   struct damacy_config small_cap = mk_cfg(64ull << 10);
   struct damacy_config big_cap = mk_cfg(1ull << 20);
-  struct gpu_budget small = { 0 }, big = { 0 };
+  struct gpu_budget_breakdown small = { 0 }, big = { 0 };
   const uint64_t host = 2ull << 20;
   const uint64_t dev = 256ull << 20;
-  EXPECT(gpu_budget_compute(&small_cap, host, dev, &small) == DAMACY_OK);
-  EXPECT(gpu_budget_compute(&big_cap, host, dev, &big) == DAMACY_OK);
+  EXPECT(gpu_budget_predict(&small_cap, host, dev, &small) == DAMACY_OK);
+  EXPECT(gpu_budget_predict(&big_cap, host, dev, &big) == DAMACY_OK);
   EXPECT(small.nvcomp_temp < big.nvcomp_temp);
   EXPECT(small.dev_compressed == big.dev_compressed);
   EXPECT(small.fanout_soa == big.fanout_soa);

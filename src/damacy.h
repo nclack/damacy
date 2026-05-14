@@ -160,9 +160,9 @@ extern "C"
   // "why does damacy use N MB" without standing the instance up.
   //
   // Requires a live CUDA context on the calling thread: the resolver
-  // and gpu_budget_compute call into nvcomp's decoder_zstd_query_temp_bytes
+  // and gpu_budget_predict call into nvcomp's decoder_zstd_query_temp_bytes
   // to size scratch. With no current context the function still
-  // returns, but logs a "gpu_budget_compute failed" /
+  // returns, but logs a "gpu_budget_predict failed" /
   // "wave_pool_resolve_sizing failed" line and stops short of the
   // per-component breakdown. NULL cfg is safe (logs and returns).
   void damacy_config_describe(const struct damacy_config* cfg);

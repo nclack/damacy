@@ -57,9 +57,12 @@ struct damacy_batch_pool
 };
 
 // Returns 0 on success, non-zero on alloc failure.
-int batch_slot_init(struct damacy_batch_slot* slot, uint32_t batch_size_cap);
-void batch_slot_destroy(struct damacy_batch_slot* slot, int cuda_skip);
-void batch_pool_destroy(struct damacy_batch_pool* pool, int cuda_skip);
+int
+batch_slot_init(struct damacy_batch_slot* slot, uint32_t batch_size_cap);
+void
+batch_slot_destroy(struct damacy_batch_slot* slot, int cuda_skip);
+void
+batch_pool_destroy(struct damacy_batch_pool* pool, int cuda_skip);
 
 // Establishes shape/strides/n_bytes from the first sample's AABB. No
 // GPU touch. Idempotent on the same input — sets pool->layout_set on
@@ -74,16 +77,30 @@ batch_pool_compute_layout(struct damacy_batch_pool* pool,
 // Allocates dev_ptr for both slots (size pool->n_bytes each). Requires
 // pool->layout_set. Idempotent — sets pool->allocated on first success.
 // Caller bumps gpu_bytes_committed by 2 × pool->n_bytes on success.
-enum damacy_status batch_pool_alloc_dev(struct damacy_batch_pool* pool);
+enum damacy_status
+batch_pool_alloc_dev(struct damacy_batch_pool* pool);
 
-int sample_shape_matches_pool(const struct damacy_batch_pool* pool,
-                              const struct damacy_aabb* aabb);
+int
+sample_shape_matches_pool(const struct damacy_batch_pool* pool,
+                          const struct damacy_aabb* aabb);
 
 // All return -1 / 0 if the predicate is unmet. find_oldest_*
 // scans by lowest batch_id. find_filling_slot_with_work additionally
 // requires n_chunks_dispatched < n_chunks (used by the wave scheduler).
-int find_free_batch_slot(const struct damacy_batch_pool* pool);
-int find_oldest_ready_slot(const struct damacy_batch_pool* pool);
-int find_oldest_filling_slot(const struct damacy_batch_pool* pool);
-int find_filling_slot_with_work(const struct damacy_batch_pool* pool);
-int any_batch_in_flight(const struct damacy_batch_pool* pool);
+int
+find_free_batch_slot(const struct damacy_batch_pool* pool);
+int
+find_oldest_ready_slot(const struct damacy_batch_pool* pool);
+int
+find_oldest_filling_slot(const struct damacy_batch_pool* pool);
+int
+find_filling_slot_with_work(const struct damacy_batch_pool* pool);
+int
+any_batch_in_flight(const struct damacy_batch_pool* pool);
+
+// Subtract `n_consumed` chunks from the slot's outstanding work. If
+// the slot was FILLING and the count reaches 0, transitions it to
+// READY. Called by the orchestrator when a wave's chunks have
+// retired. No-op on non-FILLING/READY slots.
+void
+batch_slot_consume_chunks(struct damacy_batch_slot* slot, uint32_t n_consumed);
