@@ -155,6 +155,7 @@ struct damacy_wave
 
 struct damacy_batch_pool;
 struct damacy_stats;
+struct gpu_budget;
 struct store;
 struct threadpool;
 
@@ -198,13 +199,10 @@ struct wave_pool
   uint64_t dev_per_wave;
   uint64_t max_chunk_uncompressed_bytes;
 
-  // Budget enforcement. max_gpu_memory_bytes is the resolved ceiling
-  // (default applied) and is non-zero. gpu_bytes_committed is a
-  // pointer back into struct damacy so wave_pool and damacy share one
-  // accounting variable. Grow paths read both: a grow that pushes
-  // committed past the ceiling returns DAMACY_OOM and skips the alloc.
-  uint64_t max_gpu_memory_bytes;
-  uint64_t* gpu_bytes_committed;
+  // Borrowed budget tracker (owned by struct damacy). Grow paths route
+  // through gpu_budget_try_commit so committed/max accounting stays in
+  // one place across the orchestrator.
+  struct gpu_budget* budget;
 
   // Borrowed (owned by struct damacy / its members). Set in wave_pool_init
   // and never updated.
@@ -257,7 +255,7 @@ struct wave_pool_sizing
   uint64_t dev_decompressed_per_wave; // dev_decompressed + unshuffle scratch
   // Worst-case post-grow pool footprint at this geometry: assumes both
   // per-wave fanout SOAs and the shared decoder scratch have grown all
-  // the way to DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE. gpu_budget_compute
+  // the way to DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE. gpu_budget_predict
   // (which uses the initial floor) returns the smaller initial number;
   // the delta is the headroom reserved for observe-and-grow. Always
   // <= max_gpu_memory_bytes by resolver construction.
@@ -285,9 +283,9 @@ wave_destroy(struct damacy_wave* wave, int cuda_skip);
 // host_buffer_waves pinned-host slabs of slot_cap_bytes each.
 // host_slab_per_wave / dev_decompressed_per_wave come from
 // wave_pool_resolve_sizing. host_buffer_waves >= DAMACY_N_WAVES;
-// max_gpu_memory_bytes + gpu_bytes_committed drive grow-time budget
-// enforcement; gpu_bytes_committed must point at a uint64_t the caller
-// owns. Returns 0 on success, 1 on failure (after self-cleanup).
+// `budget` is the orchestrator's gpu_budget tracker — grow paths route
+// through gpu_budget_try_commit on it. Returns 0 on success, 1 on
+// failure (after self-cleanup).
 int
 wave_pool_init(struct wave_pool* wp,
                struct damacy_batch_pool* pool,
@@ -300,8 +298,7 @@ wave_pool_init(struct wave_pool* wp,
                uint64_t host_slab_per_wave,
                uint64_t dev_decompressed_per_wave,
                uint64_t max_chunk_uncompressed_bytes,
-               uint64_t max_gpu_memory_bytes,
-               uint64_t* gpu_bytes_committed);
+               struct gpu_budget* budget);
 
 // Sync + destroy streams, free per-wave + per-slot pinned host, then
 // wave_destroy each wave. cuda_skip=1 leaks GPU + pinned-host resources

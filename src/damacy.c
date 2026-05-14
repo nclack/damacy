@@ -49,10 +49,9 @@ struct damacy
   CUcontext retained_primary;  // pushed per-call by ctx_guard when retained
   CUcontext worker_ctx;        // pushed by the worker on its first tick
 
-  // GPU memory budgeting. Lazy batch-output tensors are summed against
-  // gpu_bytes_budget at batch_pool_allocate. 0 budget = no cap.
-  uint64_t gpu_bytes_committed;
-  uint64_t gpu_bytes_budget;
+  // GPU memory budgeting. Single source of truth for committed/max
+  // across wave_pool, batch_pool, and the observe-and-grow paths.
+  struct gpu_budget* budget;
 
   struct store* store;
   struct zarr_meta_cache* meta_cache;
@@ -129,23 +128,16 @@ batch_pool_allocate(struct damacy* self, const struct damacy_aabb* sample_aabb)
   if (s != DAMACY_OK)
     return s;
 
-  if (self->gpu_bytes_budget > 0) {
-    uint64_t need = 2ull * pool->n_bytes;
-    if (self->gpu_bytes_committed + need > self->gpu_bytes_budget) {
-      log_error("damacy: batch-output pool would exceed GPU budget "
-                "(committed=%llu add=%llu cap=%llu n_bytes=%llu)",
-                (unsigned long long)self->gpu_bytes_committed,
-                (unsigned long long)need,
-                (unsigned long long)self->gpu_bytes_budget,
-                (unsigned long long)pool->n_bytes);
-      return DAMACY_OOM;
-    }
-  }
-
-  s = batch_pool_alloc_dev(pool);
+  const uint64_t need = 2ull * pool->n_bytes;
+  s = gpu_budget_try_commit(self->budget, need, "batch-output pool");
   if (s != DAMACY_OK)
     return s;
-  self->gpu_bytes_committed += 2ull * pool->n_bytes;
+
+  s = batch_pool_alloc_dev(pool);
+  if (s != DAMACY_OK) {
+    gpu_budget_release(self->budget, need);
+    return s;
+  }
   return DAMACY_OK;
 }
 
@@ -354,6 +346,8 @@ destroy_inner(struct damacy* self, int cuda_skip)
   self->meta_cache = NULL;
   store_destroy(self->store);
   self->store = NULL;
+  gpu_budget_destroy(self->budget);
+  self->budget = NULL;
 }
 
 enum damacy_status
@@ -435,7 +429,11 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   // (~1 GB) if the user left it at 0.
   const uint64_t resolved_max_gpu = resolve_max_gpu_memory(cfg);
   const uint64_t runtime_chunk_cap = resolve_max_chunk_uncompressed(cfg);
-  self->gpu_bytes_budget = resolved_max_gpu;
+  self->budget = gpu_budget_new(resolved_max_gpu);
+  if (!self->budget) {
+    s = DAMACY_OOM;
+    goto Fail;
+  }
 
   // Subtract the batch-output reserve before sizing wave-resident
   // buffers; the resolver is greedy, so without this carve-out the
@@ -454,23 +452,23 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
 
   // Resolve per-wave geometry from the resolver budget; rejects with
   // OOM if even the minimum (one chunk per wave) doesn't fit. Then
-  // call gpu_budget_compute against the resolved geometry to seed
-  // gpu_bytes_committed — the grow paths read this back when checking
-  // whether a new allocation would breach the cap.
+  // call gpu_budget_predict against the resolved geometry to seed the
+  // budget's committed counter — the grow paths read it back when
+  // checking whether a new allocation would breach the cap.
   struct wave_pool_sizing sizing = { 0 };
   s = wave_pool_resolve_sizing(
     resolver_budget, runtime_chunk_cap, cfg->batch_size, &sizing);
   if (s != DAMACY_OK)
     goto Fail;
   {
-    struct gpu_budget budget = { 0 };
-    s = gpu_budget_compute(cfg,
+    struct gpu_budget_breakdown predicted = { 0 };
+    s = gpu_budget_predict(cfg,
                            sizing.host_slab_per_wave,
                            sizing.dev_decompressed_per_wave,
-                           &budget);
+                           &predicted);
     if (s != DAMACY_OK)
       goto Fail;
-    self->gpu_bytes_committed = budget.total;
+    gpu_budget_commit(self->budget, predicted.total);
     log_info("damacy: resolved geometry from max_gpu_memory_bytes=%llu "
              "(pool_reserve=%llu, resolver_budget=%llu): "
              "host_slab_per_wave=%llu dev_decompressed_per_wave=%llu "
@@ -480,23 +478,23 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
              (unsigned long long)resolver_budget,
              (unsigned long long)sizing.host_slab_per_wave,
              (unsigned long long)sizing.dev_decompressed_per_wave,
-             (unsigned long long)budget.nvcomp_temp,
-             (unsigned long long)budget.total);
+             (unsigned long long)predicted.nvcomp_temp,
+             (unsigned long long)predicted.total);
     // Resolver guarantees this fits; assert defensively in case the
     // accounting drifts. A breach here is a bug, not user input.
-    if (self->gpu_bytes_committed > self->gpu_bytes_budget) {
+    if (gpu_budget_committed(self->budget) > gpu_budget_max(self->budget)) {
       log_error(
         "damacy: post-resolve drift: total=%llu cap=%llu "
         "(dev_compressed=%llu dev_decompressed=%llu "
         "blosc1_meta=%llu fanout_soa=%llu nvcomp_temp=%llu batch_meta=%llu)",
-        (unsigned long long)budget.total,
-        (unsigned long long)self->gpu_bytes_budget,
-        (unsigned long long)budget.dev_compressed,
-        (unsigned long long)budget.dev_decompressed,
-        (unsigned long long)budget.blosc1_meta,
-        (unsigned long long)budget.fanout_soa,
-        (unsigned long long)budget.nvcomp_temp,
-        (unsigned long long)budget.batch_metadata);
+        (unsigned long long)predicted.total,
+        (unsigned long long)gpu_budget_max(self->budget),
+        (unsigned long long)predicted.dev_compressed,
+        (unsigned long long)predicted.dev_decompressed,
+        (unsigned long long)predicted.blosc1_meta,
+        (unsigned long long)predicted.fanout_soa,
+        (unsigned long long)predicted.nvcomp_temp,
+        (unsigned long long)predicted.batch_metadata);
       s = DAMACY_OOM;
       goto Fail;
     }
@@ -544,8 +542,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
                        sizing.host_slab_per_wave,
                        sizing.dev_decompressed_per_wave,
                        runtime_chunk_cap,
-                       resolved_max_gpu,
-                       &self->gpu_bytes_committed) == 0);
+                       self->budget) == 0);
 
   CHECK(Fail,
         lookahead_init(&self->lookahead,
@@ -837,7 +834,7 @@ damacy_stats_get(const struct damacy* self, struct damacy_stats* out)
     out->shard_idx_hits = ss.counters.hits;
     out->shard_idx_misses = ss.counters.misses;
   }
-  out->gpu_bytes_committed = self->gpu_bytes_committed;
+  out->gpu_bytes_committed = gpu_budget_committed(self->budget);
 }
 
 void
@@ -858,9 +855,7 @@ damacy_set_gpu_bytes_committed_for_test(struct damacy* self, uint64_t v)
 {
   if (!self)
     return 0;
-  const uint64_t prev = self->gpu_bytes_committed;
-  self->gpu_bytes_committed = v;
-  return prev;
+  return gpu_budget_set_committed_for_test(self->budget, v);
 }
 
 void
@@ -893,12 +888,12 @@ damacy_config_describe(const struct damacy_config* cfg)
              damacy_status_str(rs));
     return;
   }
-  struct gpu_budget budget = { 0 };
-  if (gpu_budget_compute(cfg,
+  struct gpu_budget_breakdown predicted = { 0 };
+  if (gpu_budget_predict(cfg,
                          sizing.host_slab_per_wave,
                          sizing.dev_decompressed_per_wave,
-                         &budget) != DAMACY_OK) {
-    log_info("damacy_config_describe: gpu_budget_compute failed");
+                         &predicted) != DAMACY_OK) {
+    log_info("damacy_config_describe: gpu_budget_predict failed");
     return;
   }
   log_info("damacy_config_describe: host_slab_per_wave=%llu "
@@ -908,17 +903,17 @@ damacy_config_describe(const struct damacy_config* cfg)
   log_info("damacy_config_describe: dev_compressed=%llu dev_decompressed=%llu "
            "blosc1_meta=%llu fanout_soa=%llu "
            "nvcomp_temp=%llu batch_metadata=%llu",
-           (unsigned long long)budget.dev_compressed,
-           (unsigned long long)budget.dev_decompressed,
-           (unsigned long long)budget.blosc1_meta,
-           (unsigned long long)budget.fanout_soa,
-           (unsigned long long)budget.nvcomp_temp,
-           (unsigned long long)budget.batch_metadata);
-  // budget.total is the *initial* allocation (initial fanout / decoder
+           (unsigned long long)predicted.dev_compressed,
+           (unsigned long long)predicted.dev_decompressed,
+           (unsigned long long)predicted.blosc1_meta,
+           (unsigned long long)predicted.fanout_soa,
+           (unsigned long long)predicted.nvcomp_temp,
+           (unsigned long long)predicted.batch_metadata);
+  // predicted.total is the *initial* allocation (initial fanout / decoder
   // floors); sizing.worst_case_total_bytes is the post-grow worst case
   // the resolver pre-reserved against the cap. Their difference is the
   // grow-time headroom; the cap minus the worst case is unused slack.
-  const uint64_t initial_alloc = budget.total;
+  const uint64_t initial_alloc = predicted.total;
   const uint64_t worst_case = sizing.worst_case_total_bytes;
   const uint64_t reserved_for_grow =
     worst_case > initial_alloc ? worst_case - initial_alloc : 0;

@@ -4,6 +4,7 @@
 #include "damacy_config.h"
 #include "damacy_stats.h"
 #include "decoder/status_reduce.h"
+#include "gpu_budget/gpu_budget.h"
 #include "log/log.h"
 #include "nvtx/nvtx.h"
 #include "planner/planner.h"
@@ -532,8 +533,7 @@ wave_pool_init(struct wave_pool* wp,
                uint64_t host_slab_per_wave,
                uint64_t dev_decompressed_per_wave,
                uint64_t max_chunk_uncompressed_bytes,
-               uint64_t max_gpu_memory_bytes,
-               uint64_t* gpu_bytes_committed)
+               struct gpu_budget* budget)
 {
   memset(wp, 0, sizeof(*wp));
   wp->pool = pool;
@@ -542,8 +542,7 @@ wave_pool_init(struct wave_pool* wp,
   wp->stats = stats;
   wp->failed_status = failed_status;
   wp->dtype = dtype;
-  wp->max_gpu_memory_bytes = max_gpu_memory_bytes;
-  wp->gpu_bytes_committed = gpu_bytes_committed;
+  wp->budget = budget;
   wp->n_slots = host_buffer_waves;
 
   // NON_BLOCKING so we don't serialize against the legacy default stream.
@@ -660,32 +659,22 @@ wave_grow_fanout(struct wave_pool* wp, struct damacy_wave* wave, size_t need)
 
   const uint32_t cur = wave->fanout_cap;
 
-  // Enforce the GPU budget on grow. delta is the net device bytes
-  // added; if committed + delta would breach the cap, reject before
-  // freeing the existing fanout so the wave stays usable on failure.
+  // Reject before freeing the existing fanout so the wave stays usable
+  // if the grow would breach the budget.
   const uint64_t delta_bytes =
     (uint64_t)(new_cap - (size_t)cur) * fanout_dev_bytes_per_sub();
-  if (wp->max_gpu_memory_bytes > 0 && wp->gpu_bytes_committed) {
-    const uint64_t committed = *wp->gpu_bytes_committed;
-    if (committed + delta_bytes > wp->max_gpu_memory_bytes) {
-      log_error("wave fanout grow would exceed GPU budget: "
-                "committed=%llu delta=%llu cap=%llu need=%zu new_cap=%zu",
-                (unsigned long long)committed,
-                (unsigned long long)delta_bytes,
-                (unsigned long long)wp->max_gpu_memory_bytes,
-                need,
-                new_cap);
-      return DAMACY_OOM;
-    }
-  }
+  enum damacy_status bs =
+    gpu_budget_try_commit(wp->budget, delta_bytes, "wave fanout grow");
+  if (bs != DAMACY_OK)
+    return bs;
 
   fanout_free_pinned(&wave->h_zstd_fan, &wave->zstd_fan);
   wave->fanout_cap = 0;
-  if (fanout_alloc_pinned(&wave->h_zstd_fan, &wave->zstd_fan, new_cap) != 0)
+  if (fanout_alloc_pinned(&wave->h_zstd_fan, &wave->zstd_fan, new_cap) != 0) {
+    gpu_budget_release(wp->budget, delta_bytes);
     return DAMACY_CUDA;
+  }
   wave->fanout_cap = (uint32_t)new_cap;
-  if (wp->gpu_bytes_committed)
-    *wp->gpu_bytes_committed += delta_bytes;
   log_info("wave fanout: grew %u -> %zu (need=%zu, +%llu bytes)",
            (unsigned)cur,
            new_cap,
@@ -769,19 +758,10 @@ wave_pool_grow_decoder(struct wave_pool* wp, size_t need)
     return sp;
   const uint64_t delta_bytes =
     new_bytes > old_bytes ? new_bytes - old_bytes : 0;
-  if (wp->max_gpu_memory_bytes > 0 && wp->gpu_bytes_committed) {
-    const uint64_t committed = *wp->gpu_bytes_committed;
-    if (committed + delta_bytes > wp->max_gpu_memory_bytes) {
-      log_error("zstd decoder grow would exceed GPU budget: "
-                "committed=%llu delta=%llu cap=%llu need=%zu new_cap=%zu",
-                (unsigned long long)committed,
-                (unsigned long long)delta_bytes,
-                (unsigned long long)wp->max_gpu_memory_bytes,
-                need,
-                new_cap);
-      return DAMACY_OOM;
-    }
-  }
+  enum damacy_status bs =
+    gpu_budget_try_commit(wp->budget, delta_bytes, "zstd decoder grow");
+  if (bs != DAMACY_OK)
+    return bs;
 
   // Any prior decode launched against the shared scratch must retire
   // before we free it. FIFO on stream_decode means this also drains
@@ -800,8 +780,6 @@ wave_pool_grow_decoder(struct wave_pool* wp, size_t need)
                         (size_t)total_uncompressed) != 0)
     goto CudaFail;
 
-  if (wp->gpu_bytes_committed)
-    *wp->gpu_bytes_committed += delta_bytes;
   log_info("zstd decoder: grew %zu -> %zu (need=%zu, +%llu bytes)",
            cur,
            new_cap,
@@ -810,6 +788,10 @@ wave_pool_grow_decoder(struct wave_pool* wp, size_t need)
   return DAMACY_OK;
 
 CudaFail:
+  // grow tried + failed: roll back the commit so committed reflects
+  // the un-grown state. decoder_zstd_grow leaves the decoder zombie;
+  // subsequent kick_h2d calls short-circuit on cur_max_batch==0.
+  gpu_budget_release(wp->budget, delta_bytes);
   *wp->failed_status = DAMACY_CUDA;
   return DAMACY_CUDA;
 }
