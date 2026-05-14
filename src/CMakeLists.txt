@@ -110,14 +110,22 @@ add_cuda_lib(wave_budget SOURCES wave/wave_budget.h wave/wave_budget.c
           CUDA::cuda_driver
 )
 
-# In-flight wave: per-wave host slab + device decompress arena, blosc1
-# parse scratch, nvcomp fanout SOA, per-stage CUevents, decoders. Also
-# owns the wave_pool aggregate (4 streams + both waves + borrowed
-# pointers into the orchestrator); damacy.c keeps one inline and drives
-# it through wave_pool_advance / wave_pool_peel.
+# Per-wave struct + alloc/destroy. Owns its dev_compressed,
+# dev_decompressed, blosc1 parse scratch, nvcomp fanout SOA, and the 8
+# per-stage CUevents. No streams, no scheduler — that lives in
+# wave_pool.
 add_cuda_lib(wave SOURCES wave/wave.h wave/wave.c
-    LINKS decoder assemble store planner blosc1_host batch_pool fanout
-          host_slab wave_budget gpu_budget damacy_stats damacy_config
+    LINKS decoder assemble blosc1_host fanout log CUDA::cuda_driver
+)
+
+# wave_pool: the conductor the scheduler drives. Owns both waves + the
+# host_slab pool + 3 streams + the shared zstd decoder + decode anchor
+# ring, and is the home of the per-stage submitters (kick_h2d /
+# kick_decode / kick_assemble), wave_pool_peel, and the wave_pool_advance
+# state machine.
+add_cuda_lib(wave_pool SOURCES wave/wave_pool.h wave/wave_pool.c
+    LINKS wave host_slab fanout wave_budget gpu_budget batch_pool decoder
+          assemble planner blosc1_host store damacy_stats damacy_config
           damacy_nvtx strbuf log CUDA::cuda_driver
 )
 
@@ -183,6 +191,6 @@ add_cuda_lib(assemble SOURCES assemble/assemble.h assemble/assemble.cu
 add_cuda_lib(damacy SOURCES damacy.h damacy.c damacy_status.c
     LINKS platform planner zarr_meta_cache zarr_shard_cache zarr store
           decoder blosc1_host assemble dtype log lookahead gpu_budget
-          batch_pool wave wave_budget damacy_stats damacy_config damacy_nvtx
-          strbuf threadpool scheduler CUDA::cuda_driver
+          batch_pool wave_pool wave_budget damacy_stats damacy_config
+          damacy_nvtx strbuf threadpool scheduler CUDA::cuda_driver
 )
