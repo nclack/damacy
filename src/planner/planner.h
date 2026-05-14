@@ -8,8 +8,9 @@
 // scheduler; the planner zeroes them.
 #pragma once
 
-#include "damacy.h"        // damacy_status, damacy_sample, damacy_aabb
-#include "damacy_limits.h" // DAMACY_MAX_RANK
+#include "damacy.h"             // damacy_status, damacy_sample, damacy_aabb
+#include "damacy_limits.h"      // DAMACY_MAX_RANK
+#include "zarr/zarr_metadata.h" // DAMACY_MAX_DTYPE_BYTES
 
 #include <stddef.h>
 #include <stdint.h>
@@ -66,6 +67,12 @@ extern "C"
   // Per-chunk plan. Carries IO/decompress fields plus assemble-side
   // chunk_d (grid position within sample, 0..N[d]) and sample_idx so
   // the kernel can look up the sample_plan.
+  //
+  // is_fill marks chunks that are absent from the store (sparse zarr v3):
+  // read_op_idx / offset_in_read / compressed_nbytes are unused, the
+  // codec stage is skipped, and assemble broadcasts fill_value across
+  // the chunk's region instead of reading the arena. decompressed_nbytes
+  // is still set so wave accounting tracks the conceptual chunk size.
   struct chunk_plan
   {
     uint32_t read_op_idx;
@@ -76,6 +83,8 @@ extern "C"
     uint16_t batch_pool_slot;
     uint16_t sample_idx_in_batch; // index into planner_output.sample_plans
     uint8_t codec_id;
+    uint8_t is_fill; // 1 = absent chunk, fill from fill_value
+    uint8_t fill_value[DAMACY_MAX_DTYPE_BYTES];
     uint32_t chunk_d[DAMACY_MAX_RANK]; // grid position within sample (0..N)
   };
 
@@ -126,9 +135,10 @@ extern "C"
   // units (one batch typically spans multiple waves). The planner is
   // batch-shaped; waves are a downstream concern.
   //
-  // Empty chunks inside a sample's AABB cause planner_plan to fail with
-  // DAMACY_DECODE — the assemble kernel assumes a dense chunk grid per
-  // sample. Sparse-zarr support is a separate effort.
+  // Empty inner chunks (offset == nbytes == 0xFFFF…) and shards that
+  // don't exist in the store are emitted as fill-mode chunk_plans
+  // carrying the array's fill_value; downstream skips IO/decompress and
+  // assemble broadcasts the fill bytes over the chunk's region.
   //
   // shard_path strings are copied into each emitted read_op (inline
   // storage, capped at DAMACY_MAX_PATH); the planner no longer

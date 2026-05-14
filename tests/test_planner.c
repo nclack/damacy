@@ -43,6 +43,47 @@ static const char* MINIMAL_ZARR_JSON =
   "\"index_location\":\"end\"}}]"
   "}";
 
+// Same geometry but fill_value=-1 with int16 dtype, no zstd inner codec
+// (raw bytes) — keeps the fill_value bytes path simple for inspection.
+static const char* INT16_FILL_NEG1_ZARR_JSON =
+  "{"
+  "\"zarr_format\":3,"
+  "\"node_type\":\"array\","
+  "\"shape\":[4,8],"
+  "\"data_type\":\"int16\","
+  "\"chunk_grid\":{\"name\":\"regular\",\"configuration\":{"
+  "\"chunk_shape\":[4,8]}},"
+  "\"chunk_key_encoding\":{\"name\":\"default\",\"configuration\":{"
+  "\"separator\":\"/\"}},"
+  "\"fill_value\":-1,"
+  "\"codecs\":[{\"name\":\"sharding_indexed\",\"configuration\":{"
+  "\"chunk_shape\":[2,4],"
+  "\"codecs\":[{\"name\":\"bytes\",\"configuration\":{\"endian\":\"little\"}}],"
+  "\"index_codecs\":[{\"name\":\"bytes\",\"configuration\":{"
+  "\"endian\":\"little\"}},{\"name\":\"crc32c\"}],"
+  "\"index_location\":\"end\"}}]"
+  "}";
+
+// float32 fill_value="NaN" (string-form per zarr v3).
+static const char* F32_FILL_NAN_ZARR_JSON =
+  "{"
+  "\"zarr_format\":3,"
+  "\"node_type\":\"array\","
+  "\"shape\":[4,8],"
+  "\"data_type\":\"float32\","
+  "\"chunk_grid\":{\"name\":\"regular\",\"configuration\":{"
+  "\"chunk_shape\":[4,8]}},"
+  "\"chunk_key_encoding\":{\"name\":\"default\",\"configuration\":{"
+  "\"separator\":\"/\"}},"
+  "\"fill_value\":\"NaN\","
+  "\"codecs\":[{\"name\":\"sharding_indexed\",\"configuration\":{"
+  "\"chunk_shape\":[2,4],"
+  "\"codecs\":[{\"name\":\"bytes\",\"configuration\":{\"endian\":\"little\"}}],"
+  "\"index_codecs\":[{\"name\":\"bytes\",\"configuration\":{"
+  "\"endian\":\"little\"}},{\"name\":\"crc32c\"}],"
+  "\"index_location\":\"end\"}}]"
+  "}";
+
 // Same as MINIMAL_ZARR_JSON but inner codec list contains only "bytes"
 // (no compressor) — the path that yields CODEC_NONE.
 static const char* NONE_ZARR_JSON =
@@ -349,9 +390,10 @@ test_two_samples_indices(void)
   return 0;
 }
 
-// Empty chunks inside a sample's AABB now fail (sparse zarrs unsupported).
+// Empty inner chunks inside a sample's AABB are emitted as fill-mode
+// chunk plans referencing the array's fill_value.
 static int
-test_empty_chunks_fail(void)
+test_empty_chunk_becomes_fill(void)
 {
   // Mark chunk (1,0) as empty (linear index 2).
   const uint64_t offsets[4] = { 0, 100, ZARR_SHARD_EMPTY_OFFSET, 300 };
@@ -375,10 +417,148 @@ test_empty_chunks_fail(void)
     .sample_plans = samples,
     .sample_plans_cap = 4,
   };
-  EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) ==
-         DAMACY_DECODE);
+  EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
+  EXPECT(out.n_chunk_plans == 4);
+  // Row-major (0,0), (0,1), (1,0)*, (1,1) — the third is fill.
+  EXPECT(chunks[0].is_fill == 0);
+  EXPECT(chunks[1].is_fill == 0);
+  EXPECT(chunks[2].is_fill == 1);
+  EXPECT(chunks[3].is_fill == 0);
+  EXPECT(chunks[2].codec_id == CODEC_FILL);
+  EXPECT(chunks[2].compressed_nbytes == 0);
+  // fill_value parsed from "fill_value":0 in the JSON → all zero bytes.
+  for (size_t k = 0; k < sizeof chunks[2].fill_value; ++k)
+    EXPECT(chunks[2].fill_value[k] == 0);
 
   fixture_destroy(&f);
+  return 0;
+}
+
+// int16 fill_value=-1 → little-endian bytes 0xFF 0xFF on the chunk plan
+// when the corresponding inner chunk is empty.
+static int
+test_fill_value_int16_neg1(void)
+{
+  const uint64_t offsets[4] = { 0, ZARR_SHARD_EMPTY_OFFSET, 200, 300 };
+  const uint64_t nbytes[4] = { 32, ZARR_SHARD_EMPTY_NBYTES, 32, 32 };
+  struct fixture f = { 0 };
+  if (fixture_init_with_json(&f, INT16_FILL_NEG1_ZARR_JSON, offsets, nbytes))
+    return 1;
+
+  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  int64_t dst_strides[3];
+  mk_dst_strides_2d(1, 4, 8, dst_strides);
+
+  struct read_op reads[8] = { 0 };
+  struct chunk_plan chunks[8] = { 0 };
+  struct sample_plan samples[4] = { 0 };
+  struct planner_output out = {
+    .read_ops = reads,
+    .read_ops_cap = 8,
+    .chunk_plans = chunks,
+    .chunk_plans_cap = 8,
+    .sample_plans = samples,
+    .sample_plans_cap = 4,
+  };
+  EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
+  EXPECT(out.n_chunk_plans == 4);
+  // chunk index 1 = (0,1) is empty → fill.
+  EXPECT(chunks[1].is_fill == 1);
+  EXPECT(chunks[1].fill_value[0] == 0xFF);
+  EXPECT(chunks[1].fill_value[1] == 0xFF);
+  fixture_destroy(&f);
+  return 0;
+}
+
+// float32 fill_value="NaN" parses into a NaN bit pattern.
+static int
+test_fill_value_f32_nan(void)
+{
+  const uint64_t offsets[4] = { 0, ZARR_SHARD_EMPTY_OFFSET, 200, 300 };
+  const uint64_t nbytes[4] = { 32, ZARR_SHARD_EMPTY_NBYTES, 32, 32 };
+  struct fixture f = { 0 };
+  if (fixture_init_with_json(&f, F32_FILL_NAN_ZARR_JSON, offsets, nbytes))
+    return 1;
+
+  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  int64_t dst_strides[3];
+  mk_dst_strides_2d(1, 4, 8, dst_strides);
+  struct read_op reads[8] = { 0 };
+  struct chunk_plan chunks[8] = { 0 };
+  struct sample_plan samples[4] = { 0 };
+  struct planner_output out = {
+    .read_ops = reads,
+    .read_ops_cap = 8,
+    .chunk_plans = chunks,
+    .chunk_plans_cap = 8,
+    .sample_plans = samples,
+    .sample_plans_cap = 4,
+  };
+  EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
+  EXPECT(chunks[1].is_fill == 1);
+  float fill_f;
+  memcpy(&fill_f, chunks[1].fill_value, sizeof fill_f);
+  EXPECT(fill_f != fill_f); // NaN is the unique value that compares unequal
+  fixture_destroy(&f);
+  return 0;
+}
+
+// Sparse shard file (zarr_shard_cache_get → DAMACY_NOTFOUND) makes the
+// whole shard's chunks fill-mode.
+static int
+test_missing_shard_becomes_fill(void)
+{
+  // Same JSON, but no shard file at all under foo/c/0/0.
+  char root[] = "/tmp/damacy_planner_XXXXXX";
+  EXPECT(mkdtemp(root));
+  char p[256];
+  snprintf(p, sizeof p, "%s/foo", root);
+  EXPECT(mkdir(p, 0755) == 0);
+  snprintf(p, sizeof p, "%s/foo/zarr.json", root);
+  EXPECT(fixture_write_file(p, MINIMAL_ZARR_JSON) == 0);
+  // Intentionally do NOT create foo/c/0/0.
+
+  struct store_fs_config sc = { .root = root, .nthreads = 1 };
+  struct store* store = store_fs_create(&sc);
+  EXPECT(store);
+  struct zarr_meta_cache* meta = zarr_meta_cache_create(store, 4);
+  EXPECT(meta);
+  struct zarr_shard_cache* shards = zarr_shard_cache_create(store, 4);
+  EXPECT(shards);
+  struct planner_config pcfg = {
+    .meta_cache = meta,
+    .shard_cache = shards,
+    .page_alignment = PAGE,
+  };
+  struct planner* planner = NULL;
+  EXPECT(planner_create(&pcfg, &planner) == DAMACY_OK);
+
+  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  int64_t dst_strides[3];
+  mk_dst_strides_2d(1, 4, 8, dst_strides);
+  struct read_op reads[8] = { 0 };
+  struct chunk_plan chunks[8] = { 0 };
+  struct sample_plan samples[4] = { 0 };
+  struct planner_output out = {
+    .read_ops = reads,
+    .read_ops_cap = 8,
+    .chunk_plans = chunks,
+    .chunk_plans_cap = 8,
+    .sample_plans = samples,
+    .sample_plans_cap = 4,
+  };
+  EXPECT(planner_plan(planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
+  EXPECT(out.n_chunk_plans == 4);
+  for (uint32_t i = 0; i < 4; ++i) {
+    EXPECT(chunks[i].is_fill == 1);
+    EXPECT(chunks[i].codec_id == CODEC_FILL);
+  }
+
+  planner_destroy(planner);
+  zarr_shard_cache_destroy(shards);
+  zarr_meta_cache_destroy(meta);
+  store_destroy(store);
+  fixture_rm_tree(root);
   return 0;
 }
 
@@ -843,7 +1023,10 @@ main(void)
   RUN(test_single_chunk_aligned);
   RUN(test_multi_chunk_partial);
   RUN(test_two_samples_indices);
-  RUN(test_empty_chunks_fail);
+  RUN(test_empty_chunk_becomes_fill);
+  RUN(test_missing_shard_becomes_fill);
+  RUN(test_fill_value_int16_neg1);
+  RUN(test_fill_value_f32_nan);
   RUN(test_page_alignment);
   RUN(test_codec_id_blosc_lz4_rejected);
   RUN(test_codec_id_blosc_lz4hc_rejected);

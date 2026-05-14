@@ -228,9 +228,18 @@ assemble_body(int rank,
   if (rem != 0 || !in_bounds)
     return;
 
+  dst_t* dst = (dst_t*)(output_base + dst_off_elems * (int64_t)sizeof(dst_t));
+
+  // Fill-mode chunks: read the broadcast value from the per-chunk
+  // fill_value buffer instead of the arena.
+  if (c.is_fill) {
+    float v = load_src_as_float(c.fill_value, s.src_dtype);
+    *dst = cast_to_dst<dst_t>(v);
+    return;
+  }
+
   const uint32_t sbpe = src_bpe(s.src_dtype);
   const uint8_t* chunk_base = arena_base + c.src_base_byte_off;
-  dst_t* dst = (dst_t*)(output_base + dst_off_elems * (int64_t)sizeof(dst_t));
 
   // Each block handles one chunk, so the shuffle switch is uniform
   // across the block — no warp divergence.

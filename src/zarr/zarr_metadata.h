@@ -12,12 +12,20 @@ enum compression_codec
   CODEC_ZSTD = 1,
   CODEC_BLOSC_LZ4 = 2,
   CODEC_BLOSC_ZSTD = 3,
+  // Sentinel for absent chunks emitted as fill_value by the planner.
+  // Never appears in zarr.json — the planner sets it on fill chunk_plans
+  // so the blosc1 host parse skips them (no substreams, no memcpy ops).
+  CODEC_FILL = 4,
 };
 
 struct codec_config
 {
   enum compression_codec id;
 };
+
+// Max element size in bytes for any currently-supported dtype (u64/i64/f64).
+// Sized fill_value buffers below and the chunk_plan fill slot.
+#define DAMACY_MAX_DTYPE_BYTES 8
 
 struct zarr_metadata
 {
@@ -29,6 +37,9 @@ struct zarr_metadata
   int sharded;
   struct codec_config inner_codec;
   int index_location_end; // 1 = footer, 0 = header
+  // Per-element fill bytes (size == dtype_bpe(dtype)). Defaults to all-zero
+  // if the JSON has no fill_value; absent fill_value is logged as a warning.
+  uint8_t fill_value[DAMACY_MAX_DTYPE_BYTES];
 };
 
 // Parse src into out. Returns 0 on success.

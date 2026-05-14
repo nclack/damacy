@@ -414,6 +414,8 @@ build_assemble_meta(const struct wave_pool* wp, struct damacy_wave* wave)
     struct assemble_chunk* a = &wave->h_assemble_chunks[i];
     a->src_base_byte_off = (uint64_t)c->dev_decompressed_offset;
     a->sample_idx_in_batch = c->sample_idx_in_batch;
+    a->is_fill = c->is_fill;
+    memcpy(a->fill_value, c->fill_value, sizeof a->fill_value);
     for (uint8_t d = 0; d < spatial_rank; ++d)
       a->chunk_d[d] = c->chunk_d[d];
 
@@ -673,9 +675,14 @@ wave_pool_peel(struct wave_pool* wp, uint16_t batch_slot_idx)
     return DAMACY_OOM;
   }
 
+  // Only emit store_read entries for chunks that actually touch the
+  // store (skip fill chunks, which carry nbytes == 0 and no shard path).
+  uint32_t n_reads = 0;
   for (uint32_t i = 0; i < take; ++i) {
     struct read_op* r = &batch->read_ops[base + i];
-    hs->store_reads[i] = (struct store_read){
+    if (r->nbytes == 0)
+      continue;
+    hs->store_reads[n_reads++] = (struct store_read){
       .key = r->shard_path,
       .dst = (uint8_t*)hs->buf + r->dst_buf_offset,
       .offset = r->file_offset,
@@ -683,10 +690,16 @@ wave_pool_peel(struct wave_pool* wp, uint16_t batch_slot_idx)
     };
   }
   hs->io_t_start_ns = monotonic_ns();
-  hs->io_event = store_read_submit(wp->store, hs->store_reads, take);
-  if (hs->io_event.seq == 0) {
-    damacy_nvtx_range_pop();
-    return DAMACY_IO;
+  if (n_reads > 0) {
+    hs->io_event = store_read_submit(wp->store, hs->store_reads, n_reads);
+    if (hs->io_event.seq == 0) {
+      damacy_nvtx_range_pop();
+      return DAMACY_IO;
+    }
+  } else {
+    // All chunks in this wave are fill — no IO needed. Use a zero-seq
+    // sentinel so the SLOT_IO poll resolves immediately.
+    hs->io_event = (struct store_event){ .seq = 0 };
   }
 
   hs->batch_pool_slot = batch_slot_idx;

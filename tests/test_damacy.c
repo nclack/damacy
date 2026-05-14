@@ -480,6 +480,42 @@ test_lookahead_backpressure(void)
   return 0;
 }
 
+// Missing-shard end-to-end: write a normal zarr, delete its shard
+// file, and verify the popped batch is full of fill_value (zero in this
+// case because write_zarr.py writes fill_value=0 by default).
+static int
+test_missing_shard_fills(void)
+{
+  char root[64];
+  EXPECT(mkdtemp_root(root, sizeof root) == 0);
+  char p[256];
+  snprintf(p, sizeof p, "%s/foo", root);
+  int64_t shape[2] = { 4, 8 }, inner[2] = { 2, 4 }, shard[2] = { 4, 8 };
+  EXPECT(fixture_write_zarr(p, shape, inner, shard, 2, "uint16", 0) == 0);
+
+  // Delete the shard file so reads return zero bytes; planner emits fill.
+  char shard_path[512];
+  snprintf(shard_path, sizeof shard_path, "%s/foo/c/0/0", root);
+  EXPECT(unlink(shard_path) == 0);
+
+  struct damacy_config cfg = mk_cfg(root, 1);
+  struct damacy* d = NULL;
+  EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
+
+  float out[4 * 8] = { 0 };
+  size_t got = 0;
+  if (run_one(d, mk_sample(p, 0, 4, 0, 8), out, 4 * 8, &got))
+    return 1;
+  EXPECT(got == 4 * 8);
+  // fill_value=0 → every voxel is 0.0f.
+  for (int i = 0; i < 4 * 8; ++i)
+    EXPECT(out[i] == 0.0f);
+
+  damacy_destroy(d);
+  fixture_rm_tree(root);
+  return 0;
+}
+
 int
 main(void)
 {
@@ -491,6 +527,7 @@ main(void)
   RUN(test_heterogeneous_dtype);
   RUN(test_pipelined);
   RUN(test_lookahead_backpressure);
+  RUN(test_missing_shard_fills);
   log_info("all tests passed");
   return 0;
 }

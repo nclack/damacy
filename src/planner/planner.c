@@ -138,6 +138,9 @@ planner_destroy(struct planner* self)
 // Per-sample/per-shard invariants for a run of emit_chunk calls. The
 // per-sample fields stay constant while iterating chunks; per-shard
 // fields are refreshed when the iterator crosses into a new shard.
+//
+// shard_missing == 1 short-circuits the per-shard entry lookup and emits
+// fill chunks for every chunk inside the shard (shard file absent).
 struct emit_ctx
 {
   // per-sample
@@ -154,11 +157,50 @@ struct emit_ctx
   const struct zarr_shard_entry* shard_entries;
   uint64_t n_shard_entries;
   const char* interned_path;
+  int shard_missing;
 };
 
+// Append a fill-mode chunk_plan + matching dummy read_op so the
+// batch-level read_ops / chunk_plans arrays stay 1:1 with the
+// chunk_plan stream that downstream peel walks in lockstep.
+static enum damacy_status
+emit_fill_chunk(const struct emit_ctx* ctx,
+                const uint64_t* chunk_coord,
+                struct planner_output* out)
+{
+  if (out->n_read_ops >= out->read_ops_cap ||
+      out->n_chunk_plans >= out->chunk_plans_cap)
+    return DAMACY_OOM;
+  const struct zarr_metadata* meta = ctx->meta;
+
+  uint32_t read_op_idx = out->n_read_ops;
+  struct read_op* r = &out->read_ops[read_op_idx];
+  *r = (struct read_op){ 0 };
+  // Empty key is fine: peel skips IO submission for nbytes == 0 chunks.
+  r->shard_path[0] = '\0';
+  out->n_read_ops++;
+
+  struct chunk_plan* cp = &out->chunk_plans[out->n_chunk_plans];
+  *cp = (struct chunk_plan){
+    .read_op_idx = read_op_idx,
+    .offset_in_read = 0,
+    .compressed_nbytes = 0,
+    .decompressed_nbytes = ctx->decompressed_n_bytes,
+    .batch_pool_slot = ctx->batch_pool_slot,
+    .sample_idx_in_batch = (uint16_t)ctx->sample_idx_in_batch,
+    .codec_id = (uint8_t)CODEC_FILL,
+    .is_fill = 1,
+  };
+  memcpy(cp->fill_value, meta->fill_value, sizeof cp->fill_value);
+  for (uint8_t d = 0; d < meta->rank; ++d)
+    cp->chunk_d[d] = (uint32_t)(chunk_coord[d] - ctx->chunk_lo[d]);
+  out->n_chunk_plans++;
+  return DAMACY_OK;
+}
+
 // Process one chunk: build read_op + chunk_plan, append to output.
-// Returns DAMACY_OOM if the output buffers are full; DAMACY_DECODE if
-// the chunk is empty (we assert dense coverage within a sample's AABB).
+// Empty shard entries and missing shard files emit a fill-mode chunk_plan
+// referencing the array's fill_value rather than failing.
 static enum damacy_status
 emit_chunk(const struct emit_ctx* ctx,
            const uint64_t* chunk_coord,
@@ -166,6 +208,11 @@ emit_chunk(const struct emit_ctx* ctx,
            struct planner_output* out)
 {
   const struct zarr_metadata* meta = ctx->meta;
+
+  // Shard file absent: every chunk in the shard is fill.
+  if (ctx->shard_missing)
+    return emit_fill_chunk(ctx, chunk_coord, out);
+
   uint64_t entry_idx =
     row_major_linear(local_inner, ctx->inner_per_shard_dim, meta->rank);
   if (entry_idx >= ctx->n_shard_entries)
@@ -173,12 +220,8 @@ emit_chunk(const struct emit_ctx* ctx,
 
   const struct zarr_shard_entry* entry = &ctx->shard_entries[entry_idx];
   if (entry->offset == ZARR_SHARD_EMPTY_OFFSET ||
-      entry->nbytes == ZARR_SHARD_EMPTY_NBYTES) {
-    log_error("planner: empty chunk inside sample AABB; sparse zarrs are "
-              "unsupported (sample_idx=%u)",
-              ctx->sample_idx_in_batch);
-    return DAMACY_DECODE;
-  }
+      entry->nbytes == ZARR_SHARD_EMPTY_NBYTES)
+    return emit_fill_chunk(ctx, chunk_coord, out);
 
   if (entry->nbytes > DAMACY_MAX_CHUNK_BYTES)
     return DAMACY_DECODE;
@@ -368,14 +411,23 @@ planner_plan(struct planner* self,
                                shard_coord,
                                &ctx.shard_entries,
                                &ctx.n_shard_entries);
-        if (shard_status != DAMACY_OK)
+        if (shard_status == DAMACY_NOTFOUND) {
+          // Shard file absent: emit fill chunks for the whole shard.
+          ctx.shard_missing = 1;
+          ctx.shard_entries = NULL;
+          ctx.n_shard_entries = 0;
+          ctx.interned_path = NULL;
+        } else if (shard_status != DAMACY_OK) {
           return shard_status;
-        if (zarr_shard_path_build(
-              &self->path_sb, sample->uri, shard_coord, meta->rank))
-          return DAMACY_OOM;
-        // emit_chunk copies path bytes into each read_op; path_sb is
-        // overwritten next iteration but each read_op carries its own.
-        ctx.interned_path = strbuf_cstr(&self->path_sb);
+        } else {
+          ctx.shard_missing = 0;
+          if (zarr_shard_path_build(
+                &self->path_sb, sample->uri, shard_coord, meta->rank))
+            return DAMACY_OOM;
+          // emit_chunk copies path bytes into each read_op; path_sb is
+          // overwritten next iteration but each read_op carries its own.
+          ctx.interned_path = strbuf_cstr(&self->path_sb);
+        }
         for (uint8_t d = 0; d < meta->rank; ++d)
           cached_shard_coord[d] = shard_coord[d];
         have_cached_shard = 1;
