@@ -8,6 +8,8 @@ build-*
 typos.toml
 bench/data/
 bench/runs/
+dev/profiles/*.nsys-rep
+dev/profiles/*.sqlite
 __pycache__
 *.so
 *.egg-info
@@ -17,5 +19,5 @@ uv.lock
 site
 .coverage
 result
-
+dev/profiles
 .pre-commit-config.yaml

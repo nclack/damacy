@@ -965,6 +965,17 @@ kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
                            sizeof(struct gpu_shuffle_op),
                          wp->stream_h2d));
 
+  // Assemble metadata: pinned host buffer was built in peel_wave; pushing
+  // the H2D here folds it into h2d_end's gating so stream_decode sees it
+  // ready before assemble_launch (which itself queues after the decode
+  // kernels). Overlaps with the bulk slab H2D + nvcomp decode on the
+  // device.
+  CU(FanoutCudaFail,
+     cuMemcpyHtoDAsync(CUDPTR(wave->d_assemble_chunks),
+                       wave->h_assemble_chunks,
+                       (size_t)wave->n_chunks * sizeof(struct assemble_chunk),
+                       wp->stream_h2d));
+
   // Zero so status_reduce's atomicAdds land in a clean n_codec_errors.
   CU(FanoutCudaFail,
      cuMemsetD8Async(CUDPTR(wave->d_blosc1_totals),
@@ -1108,12 +1119,10 @@ kick_assemble(struct wave_pool* wp, struct damacy_wave* wave)
   enum damacy_status rs;
   damacy_nvtx_range_pushf("kick_assemble/w%td", wave_index_of(wp, wave));
 
-  build_assemble_meta(wp, wave);
-  CU(CudaFail,
-     cuMemcpyHtoDAsync(CUDPTR(wave->d_assemble_chunks),
-                       wave->h_assemble_chunks,
-                       (size_t)wave->n_chunks * sizeof(struct assemble_chunk),
-                       s));
+  // d_assemble_chunks H2D and the host build_assemble_meta both moved
+  // to kick_h2d / peel_wave so they overlap with the slab H2D + decode
+  // kernels instead of stalling stream_decode between kick_decode's
+  // tail D2H and assemble_launch.
   CU(CudaFail, cuEventRecord(wave->ev.asm_start, s));
   if (assemble_launch(s,
                       wave->assemble_rank,
@@ -1281,6 +1290,14 @@ wave_pool_peel(struct wave_pool* wp, uint16_t wave_idx, uint16_t slot_idx)
   slot->n_chunks_dispatched += take;
   wp->stats->waves_emitted++;
   wp->stats->chunks_dispatched += take;
+
+  // Pre-build assemble metadata into pinned host memory so kick_h2d can
+  // queue the H2D alongside the slab/fanout uploads. The kernel inputs
+  // it reads (chunk_plans[*].dev_decompressed_offset, sample_idx,
+  // chunk_d) are all set above; sample_plans were materialized by the
+  // planner before peel.
+  build_assemble_meta(wp, wave);
+
   damacy_nvtx_range_pop();
   return DAMACY_OK;
 }
