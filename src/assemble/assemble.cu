@@ -108,6 +108,68 @@ load_src_as_float(const uint8_t* src, uint8_t src_dtype)
   }
 }
 
+// Gather element `elem_idx` from a blosc byte-shuffled chunk. Within
+// one blosc block of `blocksize` bytes (= N elements of `typesize`
+// bytes), the shuffled layout puts byte b of element e at
+// `b*N + e`. Reassemble the T bytes locally, then go through the
+// existing dtype dispatch.
+__device__ __forceinline__ float
+load_src_as_float_unshuffled(const uint8_t* chunk_base,
+                             int64_t elem_idx,
+                             uint8_t typesize,
+                             uint32_t blocksize,
+                             uint8_t src_dtype)
+{
+  const uint64_t elem_byte = (uint64_t)elem_idx * (uint64_t)typesize;
+  const uint64_t block_idx = elem_byte / (uint64_t)blocksize;
+  const uint32_t intra_byte = (uint32_t)(elem_byte - block_idx * blocksize);
+  const uint32_t elems_per_block = blocksize / typesize;
+  const uint32_t within = intra_byte / typesize;
+  const uint8_t* block = chunk_base + (size_t)block_idx * blocksize;
+  uint8_t tmp[8];
+#pragma unroll
+  for (uint32_t t = 0; t < 8; ++t)
+    if (t < typesize)
+      tmp[t] = block[t * elems_per_block + within];
+  return load_src_as_float(tmp, src_dtype);
+}
+
+// Gather element `elem_idx` from a blosc bit-shuffled chunk. Each
+// block holds T*8 bit-planes of N bits packed LSB-first into N/8
+// bytes. Output byte bb of element e gets its bit bp from plane bb*8+bp
+// at byte (e>>3), bit (e&7).
+__device__ __forceinline__ float
+load_src_as_float_bitunshuffled(const uint8_t* chunk_base,
+                                int64_t elem_idx,
+                                uint8_t typesize,
+                                uint32_t blocksize,
+                                uint8_t src_dtype)
+{
+  const uint32_t elems_per_block = blocksize / typesize;
+  const uint32_t bytes_per_plane = elems_per_block >> 3;
+  const uint64_t block_idx = (uint64_t)elem_idx / elems_per_block;
+  const uint32_t e =
+    (uint32_t)((uint64_t)elem_idx - block_idx * (uint64_t)elems_per_block);
+  const uint32_t e_byte = e >> 3;
+  const uint32_t e_bit = e & 7u;
+  const uint8_t* block = chunk_base + (size_t)block_idx * blocksize;
+  uint8_t tmp[8];
+#pragma unroll
+  for (uint32_t bb = 0; bb < 8; ++bb) {
+    if (bb >= typesize)
+      break;
+    uint8_t out = 0;
+#pragma unroll
+    for (uint32_t bp = 0; bp < 8; ++bp) {
+      const uint8_t plane =
+        block[(size_t)(bb * 8u + bp) * bytes_per_plane + e_byte];
+      out = (uint8_t)(out | (((plane >> e_bit) & 1u) << bp));
+    }
+    tmp[bb] = out;
+  }
+  return load_src_as_float(tmp, src_dtype);
+}
+
 // Bytes per source element for stride math. Mirrors dtype_bpe but as a
 // device-side constexpr-friendly helper. Only the supported casts appear.
 __device__ __forceinline__ uint32_t
@@ -167,10 +229,34 @@ assemble_body(int rank,
     return;
 
   const uint32_t sbpe = src_bpe(s.src_dtype);
-  const uint8_t* src =
-    arena_base + c.src_base_byte_off + src_off_elems * (int64_t)sbpe;
+  const uint8_t* chunk_base = arena_base + c.src_base_byte_off;
   dst_t* dst = (dst_t*)(output_base + dst_off_elems * (int64_t)sizeof(dst_t));
-  *dst = cast_to_dst<dst_t>(load_src_as_float(src, s.src_dtype));
+
+  // Each block handles one chunk, so the shuffle switch is uniform
+  // across the block — no warp divergence.
+  float v;
+  switch ((enum assemble_shuffle_mode)c.shuffle_mode) {
+    case ASSEMBLE_SHUFFLE_BYTE:
+      v = load_src_as_float_unshuffled(chunk_base,
+                                       src_off_elems,
+                                       c.shuffle_typesize,
+                                       c.shuffle_blocksize,
+                                       s.src_dtype);
+      break;
+    case ASSEMBLE_SHUFFLE_BIT:
+      v = load_src_as_float_bitunshuffled(chunk_base,
+                                          src_off_elems,
+                                          c.shuffle_typesize,
+                                          c.shuffle_blocksize,
+                                          s.src_dtype);
+      break;
+    case ASSEMBLE_SHUFFLE_NONE:
+    default:
+      v = load_src_as_float(chunk_base + src_off_elems * (int64_t)sbpe,
+                            s.src_dtype);
+      break;
+  }
+  *dst = cast_to_dst<dst_t>(v);
 }
 
 // Single kernel template covering both the templated-rank fast path

@@ -3,8 +3,6 @@
 #include "batch_pool/batch_pool.h"
 #include "damacy_config.h"
 #include "damacy_stats.h"
-#include "decoder/bitshuffle.h"
-#include "decoder/shuffle.h"
 #include "decoder/status_reduce.h"
 #include "log/log.h"
 #include "nvtx/nvtx.h"
@@ -159,9 +157,18 @@ wave_decoder_caps(uint64_t zsubs,
     return;
   }
   const uint64_t runtime_chunk_cap = max_chunk_uncompressed_bytes;
-  const uint64_t cap_worst = zsubs * runtime_chunk_cap;
-  const uint64_t total_uncompressed =
-    dev_decompressed_bytes < cap_worst ? dev_decompressed_bytes : cap_worst;
+  // Tight upper bound on bytes nvcomp will emit per call: structural
+  // chunk-count cap × per-chunk cap. dev_decompressed_bytes is the arena
+  // limit, but with chunks-per-wave capped this is usually smaller and
+  // keeps nvcomp from over-allocating workspace for memory it won't use.
+  const uint64_t chunks_cap_bytes =
+    (uint64_t)DAMACY_MAX_CHUNKS_PER_WAVE * runtime_chunk_cap;
+  const uint64_t subs_cap_bytes = zsubs * runtime_chunk_cap;
+  uint64_t total_uncompressed = dev_decompressed_bytes;
+  if (chunks_cap_bytes < total_uncompressed)
+    total_uncompressed = chunks_cap_bytes;
+  if (subs_cap_bytes < total_uncompressed)
+    total_uncompressed = subs_cap_bytes;
   uint64_t zstd_per = runtime_chunk_cap;
   if (zstd_per > total_uncompressed)
     zstd_per = total_uncompressed;
@@ -182,14 +189,11 @@ wave_predict_bytes(uint64_t host_slab_bytes,
 
   out->dev_compressed = host_slab_bytes;
   out->dev_decompressed = dev_decompressed_bytes;
-  out->dev_unshuffle_scratch = dev_decompressed_bytes;
   out->blosc1_meta =
     cap * sizeof(struct assemble_chunk) + sizeof(struct blosc1_totals);
   out->fanout_soa = zsubs * (2 * sizeof(void*) + 2 * sizeof(size_t)) +
                     (uint64_t)DAMACY_MAX_BLOSC_MEMCPY_OPS_PER_WAVE *
-                      sizeof(struct gpu_memcpy_op) +
-                    2ull * (uint64_t)DAMACY_MAX_BLOSC_SHUFFLE_OPS_PER_WAVE *
-                      sizeof(struct gpu_shuffle_op);
+                      sizeof(struct gpu_memcpy_op);
   return DAMACY_OK;
 }
 
@@ -263,7 +267,6 @@ predict_pool_total(uint64_t host_slab_per_wave,
     per_wave.fanout_soa - fanout_slice_init + fanout_slice_max;
 
   uint64_t total = 2ull * (per_wave.dev_compressed + per_wave.dev_decompressed +
-                           per_wave.dev_unshuffle_scratch +
                            per_wave.blosc1_meta + fanout_soa_worst) +
                    nvcomp_temp_max +
                    2ull * (uint64_t)batch_size * sizeof(struct sample_plan);
@@ -300,27 +303,26 @@ wave_pool_resolve_sizing(uint64_t max_gpu_memory_bytes,
     return DAMACY_OOM;
   }
 
-  // dev_compressed + dev_decompressed + dev_unshuffle_scratch all
-  // scale 1:1 with per_wave; 2× for two waves. 6 = 2 × 3.
-  //   total_min + 6 * delta_per_wave <= cap
-  //   ⇒ delta_per_wave_max = (cap - total_min) / 6
-  // Round down to a 1 MB granularity so resolved values are readable
-  // in logs; the back-off loop below catches any overshoot from the
-  // approximation.
-  //
-  // CAREFUL: the 6 divisor only holds while this resolver assigns the
-  // same `per_wave` value to both out->host_slab_per_wave and
-  // out->dev_decompressed_per_wave below — that's what makes a single
-  // delta scale dev_compressed (= host_slab_per_wave),
-  // dev_decompressed, and dev_unshuffle_scratch in lockstep. If you
-  // ever split host vs dev sizing, also split the divisor accordingly.
-  // The assert after the assignment locks this in.
+  // dev_compressed + dev_decompressed scale 1:1 with per_wave; 2× for
+  // two waves. 4 = 2 × 2.
+  //   total_min + 4 * delta_per_wave <= cap
+  //   ⇒ delta_per_wave_max = (cap - total_min) / 4
+  // Round down to 1 MB so logs are readable; the back-off loop below
+  // catches any overshoot. The assert after the assignment locks the
+  // assumption that host_slab_per_wave == dev_decompressed_per_wave.
   const uint64_t headroom = max_gpu_memory_bytes - total_min;
-  const uint64_t delta_per_wave_cap = headroom / 6;
+  const uint64_t delta_per_wave_cap = headroom / 4;
   const uint64_t step = 1ull << 20; // 1 MB granularity
   uint64_t per_wave = min_per_wave + (delta_per_wave_cap / step) * step;
   if (per_wave < min_per_wave)
     per_wave = min_per_wave;
+  // Cap at the maximum useful size: chunks-per-wave is bounded at
+  // DAMACY_MAX_CHUNKS_PER_WAVE, so any per_wave beyond that × per-chunk
+  // cap is wasted memory + slows nvcomp through inflated workspace.
+  const uint64_t useful_max =
+    (uint64_t)DAMACY_MAX_CHUNKS_PER_WAVE * max_chunk_uncompressed_bytes;
+  if (per_wave > useful_max)
+    per_wave = useful_max;
 
   uint64_t predicted = 0;
   s = predict_pool_total(
@@ -429,30 +431,10 @@ wave_init(struct damacy_wave* wave,
                     DAMACY_MAX_BLOSC_MEMCPY_OPS_PER_WAVE *
                       sizeof(struct gpu_memcpy_op)));
   CU(Error,
-     cuMemAllocHost((void**)&wave->h_unshuffle_ops,
-                    DAMACY_MAX_BLOSC_SHUFFLE_OPS_PER_WAVE *
-                      sizeof(struct gpu_shuffle_op)));
-  CU(Error,
-     cuMemAllocHost((void**)&wave->h_bitunshuffle_ops,
-                    DAMACY_MAX_BLOSC_SHUFFLE_OPS_PER_WAVE *
-                      sizeof(struct gpu_shuffle_op)));
-  CU(Error,
      cuMemAlloc(&dptr,
                 DAMACY_MAX_BLOSC_MEMCPY_OPS_PER_WAVE *
                   sizeof(struct gpu_memcpy_op)));
   wave->d_memcpy_ops = (struct gpu_memcpy_op*)(uintptr_t)dptr;
-  CU(Error,
-     cuMemAlloc(&dptr,
-                DAMACY_MAX_BLOSC_SHUFFLE_OPS_PER_WAVE *
-                  sizeof(struct gpu_shuffle_op)));
-  wave->d_unshuffle_ops = (struct gpu_shuffle_op*)(uintptr_t)dptr;
-  CU(Error,
-     cuMemAlloc(&dptr,
-                DAMACY_MAX_BLOSC_SHUFFLE_OPS_PER_WAVE *
-                  sizeof(struct gpu_shuffle_op)));
-  wave->d_bitunshuffle_ops = (struct gpu_shuffle_op*)(uintptr_t)dptr;
-  CU(Error, cuMemAlloc(&dptr, dev_decompressed_bytes));
-  wave->dev_unshuffle_scratch = (void*)(uintptr_t)dptr;
 
   CU(Error, cuEventCreate(&wave->ev.h2d_start, CU_EVENT_DEFAULT));
   CU(Error, cuEventCreate(&wave->ev.bulk_h2d_end, CU_EVENT_DEFAULT));
@@ -478,12 +460,10 @@ wave_destroy(struct damacy_wave* wave, int cuda_skip)
     return;
   if (!cuda_skip) {
     void* const host_ptrs[] = {
-      wave->host_slab,          wave->h_chunks,
-      wave->scratch.hdrs,       wave->scratch.counts,
-      wave->scratch.offsets,    wave->scratch.bstarts,
-      wave->scratch.block_ends, wave->h_blosc1_totals,
-      wave->h_memcpy_ops,       wave->h_unshuffle_ops,
-      wave->h_bitunshuffle_ops, wave->h_assemble_chunks,
+      wave->host_slab,          wave->h_chunks,        wave->scratch.hdrs,
+      wave->scratch.counts,     wave->scratch.offsets, wave->scratch.bstarts,
+      wave->scratch.block_ends, wave->h_blosc1_totals, wave->h_memcpy_ops,
+      wave->h_assemble_chunks,
     };
     for (size_t i = 0; i < countof(host_ptrs); ++i)
       if (host_ptrs[i])
@@ -491,10 +471,8 @@ wave_destroy(struct damacy_wave* wave, int cuda_skip)
     // Pinned fanout (host + device) — same NULL-safe per-pointer pattern.
     fanout_free_pinned(&wave->h_zstd_fan, &wave->zstd_fan);
     void* const dev_ptrs[] = {
-      wave->dev_compressed,     wave->dev_decompressed,
-      wave->d_assemble_chunks,  wave->d_blosc1_totals,
-      wave->d_memcpy_ops,       wave->d_unshuffle_ops,
-      wave->d_bitunshuffle_ops, wave->dev_unshuffle_scratch,
+      wave->dev_compressed,  wave->dev_decompressed, wave->d_assemble_chunks,
+      wave->d_blosc1_totals, wave->d_memcpy_ops,
     };
     for (size_t i = 0; i < countof(dev_ptrs); ++i)
       if (dev_ptrs[i])
@@ -929,8 +907,7 @@ kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
     .scratch = wave->scratch,
     .zstd = wave->h_zstd_fan,
     .memcpy_ops = wave->h_memcpy_ops,
-    .unshuffle_ops = wave->h_unshuffle_ops,
-    .bitunshuffle_ops = wave->h_bitunshuffle_ops,
+    .assemble_chunks = wave->h_assemble_chunks,
     .out_totals = wave->h_blosc1_totals,
   });
   wave->parse_ms = (float)((monotonic_ns() - parse_t0) / 1.0e6);
@@ -960,20 +937,6 @@ kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
        cuMemcpyHtoDAsync(CUDPTR(wave->d_memcpy_ops),
                          wave->h_memcpy_ops,
                          (size_t)tot->n_memcpy * sizeof(struct gpu_memcpy_op),
-                         wp->stream_h2d));
-  if (tot->n_unshuffle > 0)
-    CU(FanoutCudaFail,
-       cuMemcpyHtoDAsync(CUDPTR(wave->d_unshuffle_ops),
-                         wave->h_unshuffle_ops,
-                         (size_t)tot->n_unshuffle *
-                           sizeof(struct gpu_shuffle_op),
-                         wp->stream_h2d));
-  if (tot->n_bitunshuffle > 0)
-    CU(FanoutCudaFail,
-       cuMemcpyHtoDAsync(CUDPTR(wave->d_bitunshuffle_ops),
-                         wave->h_bitunshuffle_ops,
-                         (size_t)tot->n_bitunshuffle *
-                           sizeof(struct gpu_shuffle_op),
                          wp->stream_h2d));
 
   // Assemble metadata: pinned host buffer was built in peel_wave; pushing
@@ -1125,19 +1088,8 @@ kick_assemble(struct wave_pool* wp,
   if (tot->n_memcpy > 0 &&
       decoder_memcpy_launch(s, wave->d_memcpy_ops, tot->n_memcpy))
     goto DecodeFail;
-  if (tot->n_unshuffle > 0 && gpu_unshuffle_launch(s,
-                                                   wave->d_unshuffle_ops,
-                                                   tot->n_unshuffle,
-                                                   wave->dev_decompressed,
-                                                   wave->dev_unshuffle_scratch))
-    goto DecodeFail;
-  if (tot->n_bitunshuffle > 0 &&
-      gpu_bitunshuffle_launch(s,
-                              wave->d_bitunshuffle_ops,
-                              tot->n_bitunshuffle,
-                              wave->dev_decompressed,
-                              wave->dev_unshuffle_scratch))
-    goto DecodeFail;
+  // (Bit)unshuffle is now folded into assemble_kernel via per-chunk
+  // shuffle_mode in assemble_chunk.
   // Narrowed to the 4-byte n_codec_errors so the host parse's count
   // fields in h_blosc1_totals stay intact for drain_wave_metrics.
   CU(CudaFail,

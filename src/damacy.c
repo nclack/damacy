@@ -493,13 +493,12 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     if (self->gpu_bytes_committed > self->gpu_bytes_budget) {
       log_error(
         "damacy: post-resolve drift: total=%llu cap=%llu "
-        "(dev_compressed=%llu dev_decompressed=%llu unshuffle_scratch=%llu "
+        "(dev_compressed=%llu dev_decompressed=%llu "
         "blosc1_meta=%llu fanout_soa=%llu nvcomp_temp=%llu batch_meta=%llu)",
         (unsigned long long)budget.total,
         (unsigned long long)self->gpu_bytes_budget,
         (unsigned long long)budget.dev_compressed,
         (unsigned long long)budget.dev_decompressed,
-        (unsigned long long)budget.dev_unshuffle_scratch,
         (unsigned long long)budget.blosc1_meta,
         (unsigned long long)budget.fanout_soa,
         (unsigned long long)budget.nvcomp_temp,
@@ -917,11 +916,10 @@ damacy_config_describe(const struct damacy_config* cfg)
            (unsigned long long)sizing.host_slab_per_wave,
            (unsigned long long)sizing.dev_decompressed_per_wave);
   log_info("damacy_config_describe: dev_compressed=%llu dev_decompressed=%llu "
-           "unshuffle_scratch=%llu blosc1_meta=%llu fanout_soa=%llu "
+           "blosc1_meta=%llu fanout_soa=%llu "
            "nvcomp_temp=%llu batch_metadata=%llu",
            (unsigned long long)budget.dev_compressed,
            (unsigned long long)budget.dev_decompressed,
-           (unsigned long long)budget.dev_unshuffle_scratch,
            (unsigned long long)budget.blosc1_meta,
            (unsigned long long)budget.fanout_soa,
            (unsigned long long)budget.nvcomp_temp,

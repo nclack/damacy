@@ -58,8 +58,6 @@ struct damacy_wave
   struct blosc1_host_scratch scratch;
   struct blosc1_host_fanout h_zstd_fan;
   struct gpu_memcpy_op* h_memcpy_ops;
-  struct gpu_shuffle_op* h_unshuffle_ops;
-  struct gpu_shuffle_op* h_bitunshuffle_ops;
   struct blosc1_totals* h_blosc1_totals;
 
   // status_reduce atomicAdds into n_codec_errors; finalize_wave reads.
@@ -75,13 +73,8 @@ struct damacy_wave
   uint32_t fanout_cap;
 
   struct gpu_memcpy_op* d_memcpy_ops;
-  struct gpu_shuffle_op* d_unshuffle_ops;
-  struct gpu_shuffle_op* d_bitunshuffle_ops;
 
   float parse_ms; // host wall-clock around blosc1_host_parse
-  // Same extent as dev_decompressed; (bit)unshuffle staging so the
-  // per-block transpose isn't bounded by the 64 KB shared-memory cap.
-  void* dev_unshuffle_scratch;
 
   // Assemble per-wave-chunk metadata (host + device). One record per
   // chunk: arena offset + (sample_idx, chunk_d). Per-sample constants
@@ -189,11 +182,10 @@ struct wave_pool
 // wave_pool_shared_predict_bytes (counted once, not 2×).
 struct wave_alloc_summary
 {
-  uint64_t dev_compressed;        // dev_compressed alloc (mirrors host slab)
-  uint64_t dev_decompressed;      // dev_decompressed arena
-  uint64_t dev_unshuffle_scratch; // matches dev_decompressed extent
-  uint64_t blosc1_meta;           // d_assemble_chunks + d_blosc1_totals
-  uint64_t fanout_soa;            // device fanouts + memcpy/shuffle op SOAs
+  uint64_t dev_compressed;   // dev_compressed alloc (mirrors host slab)
+  uint64_t dev_decompressed; // dev_decompressed arena
+  uint64_t blosc1_meta;      // d_assemble_chunks + d_blosc1_totals
+  uint64_t fanout_soa;       // device fanouts + memcpy op SOA
 };
 
 enum damacy_status

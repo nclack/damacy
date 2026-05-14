@@ -39,15 +39,13 @@ test_total_is_sum_of_parts(void)
   const uint64_t host = 2ull << 20;
   const uint64_t dev = 2ull << 20;
   EXPECT(gpu_budget_compute(&cfg, host, dev, &b) == DAMACY_OK);
-  uint64_t expect = b.dev_compressed + b.dev_decompressed +
-                    b.dev_unshuffle_scratch + b.blosc1_meta + b.fanout_soa +
-                    b.nvcomp_temp + b.batch_metadata;
+  uint64_t expect = b.dev_compressed + b.dev_decompressed + b.blosc1_meta +
+                    b.fanout_soa + b.nvcomp_temp + b.batch_metadata;
   EXPECT(b.total == expect);
-  // dev_compressed mirrors 2× host_slab_per_wave; dev_decompressed and
-  // unshuffle_scratch mirror 2× dev_decompressed_per_wave.
+  // dev_compressed mirrors 2× host_slab_per_wave; dev_decompressed
+  // mirrors 2× dev_decompressed_per_wave.
   EXPECT(b.dev_compressed == 2 * host);
   EXPECT(b.dev_decompressed == 2 * dev);
-  EXPECT(b.dev_unshuffle_scratch == 2 * dev);
   return 0;
 }
 
@@ -60,7 +58,6 @@ test_scales_with_buffers(void)
   EXPECT(gpu_budget_compute(&cfg, 2ull << 20, 2ull << 20, &big) == DAMACY_OK);
   EXPECT(big.dev_compressed == 2 * small.dev_compressed);
   EXPECT(big.dev_decompressed == 2 * small.dev_decompressed);
-  EXPECT(big.dev_unshuffle_scratch == 2 * small.dev_unshuffle_scratch);
   // batch_metadata is independent of buffer sizes; identical across cfgs.
   EXPECT(big.batch_metadata == small.batch_metadata);
   return 0;
