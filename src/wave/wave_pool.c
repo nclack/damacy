@@ -32,7 +32,6 @@ wave_pool_init(struct wave_pool* wp,
                struct store* store,
                struct threadpool* compute_pool,
                struct damacy_stats* stats,
-               enum damacy_status* failed_status,
                enum damacy_dtype dtype,
                uint8_t host_buffer_waves,
                uint64_t host_slab_per_wave,
@@ -45,7 +44,6 @@ wave_pool_init(struct wave_pool* wp,
   wp->store = store;
   wp->compute_pool = compute_pool;
   wp->stats = stats;
-  wp->failed_status = failed_status;
   wp->dtype = dtype;
   wp->budget = budget;
   wp->n_slots = host_buffer_waves;
@@ -130,7 +128,6 @@ wave_pool_destroy(struct wave_pool* wp, int cuda_skip)
   wp->store = NULL;
   wp->compute_pool = NULL;
   wp->stats = NULL;
-  wp->failed_status = NULL;
 }
 
 int
@@ -272,7 +269,6 @@ kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
   if (gs != DAMACY_OK) {
     record_io_metric(wp, wave);
     cuEventRecord(wave->ev.h2d_end, wp->stream_h2d);
-    *wp->failed_status = gs;
     rs = gs;
     goto Done;
   }
@@ -297,7 +293,6 @@ kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
     record_io_metric(wp, wave);
     log_blosc1_parse_errors(wp, wave);
     cuEventRecord(wave->ev.h2d_end, wp->stream_h2d);
-    *wp->failed_status = DAMACY_DECODE;
     rs = DAMACY_DECODE;
     goto Done;
   }
@@ -352,7 +347,6 @@ FanoutCudaFail:
 BulkCudaFail:
   damacy_nvtx_range_pop(); // bulk_h2d
 CudaFail:
-  *wp->failed_status = DAMACY_CUDA;
   rs = DAMACY_CUDA;
 Done:
   damacy_nvtx_range_pop(); // kick_h2d
@@ -438,11 +432,9 @@ kick_decode(struct wave_pool* wp,
   rs = DAMACY_OK;
   goto Done;
 DecodeFail:
-  *wp->failed_status = DAMACY_DECODE;
   rs = DAMACY_DECODE;
   goto Done;
 CudaFail:
-  *wp->failed_status = DAMACY_CUDA;
   rs = DAMACY_CUDA;
 Done:
   damacy_nvtx_range_pop();
@@ -494,11 +486,9 @@ kick_assemble(struct wave_pool* wp,
   rs = DAMACY_OK;
   goto Done;
 DecodeFail:
-  *wp->failed_status = DAMACY_DECODE;
   rs = DAMACY_DECODE;
   goto Done;
 CudaFail:
-  *wp->failed_status = DAMACY_CUDA;
   rs = DAMACY_CUDA;
 Done:
   damacy_nvtx_range_pop();
@@ -523,7 +513,6 @@ kick_compute(struct wave_pool* wp, struct damacy_wave* wave)
   wave->state = WAVE_ASSEMBLE;
   return DAMACY_OK;
 CudaFail:
-  *wp->failed_status = DAMACY_CUDA;
   return DAMACY_CUDA;
 }
 
@@ -556,18 +545,19 @@ drain_wave_metrics(const struct wave_pool* wp, struct damacy_wave* wave)
       &st->assemble, ms, wave->decomp_out_bytes, wave->assemble_out_bytes);
 }
 
-// Surfaces nvcomp errors before the slot transitions so damacy_pop's
-// failed_status check can bail before handing out the batch.
-static void
+// Returns DAMACY_DECODE if nvcomp surfaced non-success status on any
+// substream — the caller propagates so damacy_pop's failed_status
+// check bails before handing out the batch. DAMACY_OK otherwise.
+static enum damacy_status
 finalize_wave(struct wave_pool* wp, struct damacy_wave* wave)
 {
   damacy_nvtx_range_pushf("finalize_wave/w%td", wave_index_of(wp, wave));
   drain_wave_metrics(wp, wave);
-  if (wave->h_blosc1_totals->n_codec_errors > 0 &&
-      *wp->failed_status == DAMACY_OK) {
+  enum damacy_status rs = DAMACY_OK;
+  if (wave->h_blosc1_totals->n_codec_errors > 0) {
     log_error("nvcomp: %u substream(s) reported non-success status",
               wave->h_blosc1_totals->n_codec_errors);
-    *wp->failed_status = DAMACY_DECODE;
+    rs = DAMACY_DECODE;
   }
   struct damacy_batch_slot* slot = &wp->pool->slots[wave->batch_pool_slot];
   slot->chunks_remaining -= (int32_t)wave->n_chunks;
@@ -579,6 +569,7 @@ finalize_wave(struct wave_pool* wp, struct damacy_wave* wave)
   wave->state = WAVE_FREE;
   wave->n_chunks = 0;
   damacy_nvtx_range_pop();
+  return rs;
 }
 
 // Pack chunks from `batch_slot`'s remaining work into a free
@@ -624,7 +615,6 @@ wave_pool_peel(struct wave_pool* wp, uint16_t batch_slot_idx)
               "(slot_cap=%llu dev_cap=%llu)",
               (unsigned long long)hs->cap,
               (unsigned long long)dev_cap);
-    *wp->failed_status = DAMACY_OOM;
     damacy_nvtx_range_pop();
     return DAMACY_OOM;
   }
@@ -641,7 +631,6 @@ wave_pool_peel(struct wave_pool* wp, uint16_t batch_slot_idx)
   hs->io_t_start_ns = monotonic_ns();
   hs->io_event = store_read_submit(wp->store, hs->store_reads, take);
   if (hs->io_event.seq == 0) {
-    *wp->failed_status = DAMACY_IO;
     damacy_nvtx_range_pop();
     return DAMACY_IO;
   }
@@ -750,7 +739,6 @@ wave_pool_advance(struct wave_pool* wp)
             wave->bound_slot = -1;
             wave->host_slab = NULL;
           } else if (qb != CUDA_ERROR_NOT_READY) {
-            *wp->failed_status = DAMACY_CUDA;
             return DAMACY_CUDA;
           }
         }
@@ -766,16 +754,16 @@ wave_pool_advance(struct wave_pool* wp)
           if (s != DAMACY_OK)
             return s;
         } else if (qe != CUDA_ERROR_NOT_READY) {
-          *wp->failed_status = DAMACY_CUDA;
           return DAMACY_CUDA;
         }
       } break;
       case WAVE_ASSEMBLE: {
         CUresult qe = cuEventQuery(wave->ev.asm_end);
         if (qe == CUDA_SUCCESS) {
-          finalize_wave(wp, wave);
+          enum damacy_status fs = finalize_wave(wp, wave);
+          if (fs != DAMACY_OK)
+            return fs;
         } else if (qe != CUDA_ERROR_NOT_READY) {
-          *wp->failed_status = DAMACY_CUDA;
           return DAMACY_CUDA;
         }
       } break;

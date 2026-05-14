@@ -74,7 +74,6 @@ struct wave_pool
   struct store* store;
   struct threadpool* compute_pool;
   struct damacy_stats* stats;
-  enum damacy_status* failed_status;
   enum damacy_dtype dtype;
 };
 
@@ -91,7 +90,6 @@ wave_pool_init(struct wave_pool* wp,
                struct store* store,
                struct threadpool* compute_pool,
                struct damacy_stats* stats,
-               enum damacy_status* failed_status,
                enum damacy_dtype dtype,
                uint8_t host_buffer_waves,
                uint64_t host_slab_per_wave,
@@ -127,7 +125,8 @@ any_slot_free(const struct wave_pool* wp);
 //   3. WAVE_H2D: poll bulk_h2d_end → release slot; poll h2d_end → kick
 //      decode + assemble, advance to WAVE_ASSEMBLE.
 //   4. WAVE_ASSEMBLE: poll asm_end → finalize.
-// Sets *wp->failed_status on driver errors.
+// Returns the first non-OK status encountered; the caller (scheduler
+// tick in damacy.c) latches it onto self->failed_status.
 enum damacy_status
 wave_pool_advance(struct wave_pool* wp);
 

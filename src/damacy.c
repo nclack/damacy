@@ -537,7 +537,6 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
                        self->store,
                        self->compute_pool,
                        &self->stats,
-                       &self->failed_status,
                        cfg->dtype,
                        resolve_host_buffer_waves(cfg),
                        sizing.host_slab_per_wave,
