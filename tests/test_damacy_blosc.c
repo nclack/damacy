@@ -230,11 +230,11 @@ test_three_codecs_mixed_batch(void)
   damacy_release(d, b);
 
   // Sub-stage metrics: blosc1 GPU pipeline must have stamped the parse
-  // and combined decode events. zstd is the only inner codec supported.
+  // and the stream_decode timings. zstd is the only inner codec supported.
   struct damacy_stats st;
   damacy_stats_get(d, &st);
   EXPECT(st.decompress_parse.count > 0);
-  EXPECT(st.decompress.count > 0);
+  EXPECT(st.decode.count > 0);
 
   damacy_destroy(d);
   fixture_rm_tree(root);

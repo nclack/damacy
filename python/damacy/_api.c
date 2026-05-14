@@ -780,11 +780,12 @@ Pipeline_stats(PipelineObj* self, PyObject* Py_UNUSED(ignored))
     { "plan", &st.plan },
     { "io", &st.io },
     { "h2d", &st.h2d },
-    { "decompress", &st.decompress },
+    { "decode", &st.decode },
+    { "post_decode", &st.post_decode },
+    { "decode_gap", &st.decode_gap },
     { "decompress_parse", &st.decompress_parse },
     { "assemble", &st.assemble },
-    { "pop_wait_io", &st.pop_wait_io },
-    { "pop_wait_compute", &st.pop_wait_compute },
+    { "pop_wait", &st.pop_wait },
     { "flush_wait", &st.flush_wait },
   };
   for (size_t i = 0; i < sizeof metrics / sizeof metrics[0]; ++i)
@@ -803,13 +804,14 @@ Pipeline_stats(PipelineObj* self, PyObject* Py_UNUSED(ignored))
     { "batches_emitted", st.batches_emitted },
     { "batches_truncated", st.batches_truncated },
     { "waves_emitted", st.waves_emitted },
+    { "worker_steps", st.worker_steps },
     { "chunks_dispatched", st.chunks_dispatched },
     { "gpu_bytes_committed", st.gpu_bytes_committed },
   };
   for (size_t i = 0; i < sizeof counters / sizeof counters[0]; ++i)
-    if (dict_set_steal(
-          d, counters[i].name, PyLong_FromUnsignedLongLong(counters[i].val)) <
-        0)
+    if (dict_set_steal(d,
+                       counters[i].name,
+                       PyLong_FromUnsignedLongLong(counters[i].val)) < 0)
       goto Fail;
 
   return d;

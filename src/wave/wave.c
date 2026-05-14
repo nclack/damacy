@@ -458,6 +458,7 @@ wave_init(struct damacy_wave* wave,
   CU(Error, cuEventCreate(&wave->ev.bulk_h2d_end, CU_EVENT_DEFAULT));
   CU(Error, cuEventCreate(&wave->ev.h2d_end, CU_EVENT_DEFAULT));
   CU(Error, cuEventCreate(&wave->ev.decomp_start, CU_EVENT_DEFAULT));
+  CU(Error, cuEventCreate(&wave->ev.decode_done, CU_EVENT_DEFAULT));
   CU(Error, cuEventCreate(&wave->ev.decomp_end, CU_EVENT_DEFAULT));
   CU(Error, cuEventCreate(&wave->ev.asm_start, CU_EVENT_DEFAULT));
   CU(Error, cuEventCreate(&wave->ev.asm_end, CU_EVENT_DEFAULT));
@@ -498,10 +499,10 @@ wave_destroy(struct damacy_wave* wave, int cuda_skip)
     for (size_t i = 0; i < countof(dev_ptrs); ++i)
       if (dev_ptrs[i])
         cuMemFree(CUDPTR(dev_ptrs[i]));
-    CUevent* const events[] = { &wave->ev.h2d_start,  &wave->ev.bulk_h2d_end,
-                                &wave->ev.h2d_end,    &wave->ev.decomp_start,
-                                &wave->ev.decomp_end, &wave->ev.asm_start,
-                                &wave->ev.asm_end };
+    CUevent* const events[] = { &wave->ev.h2d_start,   &wave->ev.bulk_h2d_end,
+                                &wave->ev.h2d_end,     &wave->ev.decomp_start,
+                                &wave->ev.decode_done, &wave->ev.decomp_end,
+                                &wave->ev.asm_start,   &wave->ev.asm_end };
     for (size_t i = 0; i < countof(events); ++i)
       if (*events[i])
         cuEventDestroy_v2(*events[i]);
@@ -534,12 +535,15 @@ wave_pool_init(struct wave_pool* wp,
   wp->max_gpu_memory_bytes = max_gpu_memory_bytes;
   wp->gpu_bytes_committed = gpu_bytes_committed;
 
-  // Non-blocking so damacy doesn't force-serialize against the legacy
-  // default stream that some user code still lands on.
+  // NON_BLOCKING so we don't serialize against the legacy default stream.
   CU(Fail, cuStreamCreate(&wp->stream_h2d, CU_STREAM_NON_BLOCKING));
   CU(Fail, cuStreamCreate(&wp->stream_decode, CU_STREAM_NON_BLOCKING));
+  CU(Fail, cuStreamCreate(&wp->stream_post, CU_STREAM_NON_BLOCKING));
+  for (size_t i = 0; i < countof(wp->decode_done_ring); ++i)
+    CU(Fail, cuEventCreate(&wp->decode_done_ring[i], CU_EVENT_DEFAULT));
   damacy_nvtx_stream_name(wp->stream_h2d, "damacy:h2d");
   damacy_nvtx_stream_name(wp->stream_decode, "damacy:decode");
+  damacy_nvtx_stream_name(wp->stream_post, "damacy:post");
 
   const uint64_t host_per_wave = host_slab_per_wave;
   const uint64_t dev_per_wave = dev_decompressed_per_wave;
@@ -574,7 +578,9 @@ wave_pool_destroy(struct wave_pool* wp, int cuda_skip)
 {
   if (!wp)
     return;
-  CUstream* const streams[] = { &wp->stream_decode, &wp->stream_h2d };
+  CUstream* const streams[] = { &wp->stream_post,
+                                &wp->stream_decode,
+                                &wp->stream_h2d };
   if (!cuda_skip) {
     // Sync streams (but don't destroy yet) so any pending GPU work
     // touching wave + shared-decoder buffers has retired before we
@@ -588,6 +594,11 @@ wave_pool_destroy(struct wave_pool* wp, int cuda_skip)
   decoder_zstd_destroy(wp->zstd_decoder, cuda_skip);
   wp->zstd_decoder = NULL;
   if (!cuda_skip) {
+    for (size_t i = 0; i < countof(wp->decode_done_ring); ++i)
+      if (wp->decode_done_ring[i]) {
+        cuEventDestroy_v2(wp->decode_done_ring[i]);
+        wp->decode_done_ring[i] = NULL;
+      }
     for (size_t i = 0; i < countof(streams); ++i)
       if (*streams[i]) {
         cuStreamDestroy(*streams[i]);
@@ -1047,9 +1058,8 @@ build_assemble_meta(const struct wave_pool* wp, struct damacy_wave* wave)
   wave->assemble_max_blocks_per_chunk = max_bpc;
 }
 
-// Nvcomp zstd batch + post-decode (memcpy / (bit)unshuffle) on
-// stream_decode in FIFO order. decomp_start brackets the nvcomp launch;
-// decomp_end fires after the post-decode kernels complete.
+// Nvcomp + status_reduce on stream_decode. status_reduce stays here
+// (shared d_statuses across waves; stream_decode FIFO orders it).
 static enum damacy_status
 kick_decode(struct wave_pool* wp,
             struct damacy_wave* wave,
@@ -1059,6 +1069,13 @@ kick_decode(struct wave_pool* wp,
   uint32_t* d_err = &wave->d_blosc1_totals->n_codec_errors;
   enum damacy_status rs;
   damacy_nvtx_range_pushf("kick_decode/w%td", wave_index_of(wp, wave));
+  // Borrow the most-recently-anchored slot for our gap measurement, then
+  // claim the next slot for our own anchor (recorded after decode_done).
+  // First kick's prev points at a never-recorded slot — cuEventElapsedTime
+  // returns NOT_READY and drain skips.
+  size_t prev_idx = wp->decode_done_ring_idx;
+  size_t this_idx = (prev_idx + 1) % countof(wp->decode_done_ring);
+  wave->prev_decode_anchor = wp->decode_done_ring[prev_idx];
   CU(CudaFail, cuEventRecord(wave->ev.decomp_start, s));
   if (tot->n_zstd > 0) {
     if (decoder_zstd_batch_device(wp->zstd_decoder,
@@ -1073,6 +1090,38 @@ kick_decode(struct wave_pool* wp,
           s, decoder_zstd_d_statuses(wp->zstd_decoder), d_err, tot->n_zstd))
       goto DecodeFail;
   }
+  CU(CudaFail, cuEventRecord(wave->ev.decode_done, s));
+  CU(CudaFail, cuEventRecord(wp->decode_done_ring[this_idx], s));
+  wp->decode_done_ring_idx = this_idx;
+  rs = DAMACY_OK;
+  goto Done;
+DecodeFail:
+  *wp->failed_status = DAMACY_DECODE;
+  rs = DAMACY_DECODE;
+  goto Done;
+CudaFail:
+  *wp->failed_status = DAMACY_CUDA;
+  rs = DAMACY_CUDA;
+Done:
+  damacy_nvtx_range_pop();
+  return rs;
+}
+
+// Post-decode + 4B D2H + assemble on stream_post, gated on
+// ev.decode_done. Lets wave N+1's decode on stream_decode overlap
+// wave N's assemble.
+static enum damacy_status
+kick_assemble(struct wave_pool* wp,
+              struct damacy_wave* wave,
+              const struct blosc1_totals* tot)
+{
+  CUstream s = wp->stream_post;
+  struct damacy_batch_slot* slot = &wp->pool->slots[wave->batch_pool_slot];
+  enum damacy_status rs;
+  damacy_nvtx_range_pushf("kick_assemble/w%td", wave_index_of(wp, wave));
+
+  CU(CudaFail, cuStreamWaitEvent(s, wave->ev.decode_done, 0));
+
   if (tot->n_memcpy > 0 &&
       decoder_memcpy_launch(s, wave->d_memcpy_ops, tot->n_memcpy))
     goto DecodeFail;
@@ -1097,32 +1146,7 @@ kick_decode(struct wave_pool* wp,
                        sizeof(uint32_t),
                        s));
   CU(CudaFail, cuEventRecord(wave->ev.decomp_end, s));
-  rs = DAMACY_OK;
-  goto Done;
-DecodeFail:
-  *wp->failed_status = DAMACY_DECODE;
-  rs = DAMACY_DECODE;
-  goto Done;
-CudaFail:
-  *wp->failed_status = DAMACY_CUDA;
-  rs = DAMACY_CUDA;
-Done:
-  damacy_nvtx_range_pop();
-  return rs;
-}
 
-static enum damacy_status
-kick_assemble(struct wave_pool* wp, struct damacy_wave* wave)
-{
-  CUstream s = wp->stream_decode;
-  struct damacy_batch_slot* slot = &wp->pool->slots[wave->batch_pool_slot];
-  enum damacy_status rs;
-  damacy_nvtx_range_pushf("kick_assemble/w%td", wave_index_of(wp, wave));
-
-  // d_assemble_chunks H2D and the host build_assemble_meta both moved
-  // to kick_h2d / peel_wave so they overlap with the slab H2D + decode
-  // kernels instead of stalling stream_decode between kick_decode's
-  // tail D2H and assemble_launch.
   CU(CudaFail, cuEventRecord(wave->ev.asm_start, s));
   if (assemble_launch(s,
                       wave->assemble_rank,
@@ -1138,6 +1162,10 @@ kick_assemble(struct wave_pool* wp, struct damacy_wave* wave)
   CU(CudaFail, cuEventRecord(wave->ev.asm_end, s));
   rs = DAMACY_OK;
   goto Done;
+DecodeFail:
+  *wp->failed_status = DAMACY_DECODE;
+  rs = DAMACY_DECODE;
+  goto Done;
 CudaFail:
   *wp->failed_status = DAMACY_CUDA;
   rs = DAMACY_CUDA;
@@ -1146,8 +1174,8 @@ Done:
   return rs;
 }
 
-// stream_decode gates on stream_h2d's h2d_end, then nvcomp decode +
-// post-decode + assemble all run in FIFO on stream_decode.
+// Wait on h2d_end, kick decode on stream_decode, kick post + assemble on
+// stream_post.
 static enum damacy_status
 kick_compute(struct wave_pool* wp, struct damacy_wave* wave)
 {
@@ -1157,7 +1185,7 @@ kick_compute(struct wave_pool* wp, struct damacy_wave* wave)
   enum damacy_status st = kick_decode(wp, wave, &tot);
   if (st != DAMACY_OK)
     return st;
-  st = kick_assemble(wp, wave);
+  st = kick_assemble(wp, wave, &tot);
   if (st != DAMACY_OK)
     return st;
 
@@ -1168,8 +1196,7 @@ CudaFail:
   return DAMACY_CUDA;
 }
 
-// All wave events have fired (asm_end signaled implies everything
-// earlier on the same stream did too). Pull elapsed times into stats.
+// All wave events have fired; pull elapsed times into stats.
 static void
 drain_wave_metrics(const struct wave_pool* wp, struct damacy_wave* wave)
 {
@@ -1180,10 +1207,17 @@ drain_wave_metrics(const struct wave_pool* wp, struct damacy_wave* wave)
   if (cuEventElapsedTime(&ms, wave->ev.h2d_start, wave->ev.bulk_h2d_end) ==
       CUDA_SUCCESS)
     metric_record(&st->h2d, ms, wave->io_bytes, wave->io_bytes);
-  if (cuEventElapsedTime(&ms, wave->ev.decomp_start, wave->ev.decomp_end) ==
+  if (cuEventElapsedTime(&ms, wave->ev.decomp_start, wave->ev.decode_done) ==
       CUDA_SUCCESS)
     metric_record(
-      &st->decompress, ms, wave->decomp_in_bytes, wave->decomp_out_bytes);
+      &st->decode, ms, wave->decomp_in_bytes, wave->decomp_out_bytes);
+  if (cuEventElapsedTime(&ms, wave->ev.decode_done, wave->ev.decomp_end) ==
+      CUDA_SUCCESS)
+    metric_record(&st->post_decode, ms, 0, 0);
+  if (wave->prev_decode_anchor &&
+      cuEventElapsedTime(
+        &ms, wave->prev_decode_anchor, wave->ev.decomp_start) == CUDA_SUCCESS)
+    metric_record(&st->decode_gap, ms, 0, 0);
   metric_record(&st->decompress_parse, wave->parse_ms, 0, 0);
   if (cuEventElapsedTime(&ms, wave->ev.asm_start, wave->ev.asm_end) ==
       CUDA_SUCCESS)

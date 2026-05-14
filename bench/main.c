@@ -565,11 +565,12 @@ emit_results(const struct scenario* sc, const struct run_metrics* rm, FILE* out)
   emit_metric(&jw, &rm->stats.plan, "batch");
   emit_metric(&jw, &rm->stats.io, "wave");
   emit_metric(&jw, &rm->stats.h2d, "wave");
-  emit_metric(&jw, &rm->stats.decompress, "wave");
+  emit_metric(&jw, &rm->stats.decode, "wave");
+  emit_metric(&jw, &rm->stats.post_decode, "wave");
+  emit_metric(&jw, &rm->stats.decode_gap, "wave");
   emit_metric(&jw, &rm->stats.decompress_parse, "wave");
   emit_metric(&jw, &rm->stats.assemble, "wave");
-  emit_metric(&jw, &rm->stats.pop_wait_io, "poll");
-  emit_metric(&jw, &rm->stats.pop_wait_compute, "poll");
+  emit_metric(&jw, &rm->stats.pop_wait, "poll");
   emit_metric(&jw, &rm->stats.flush_wait, "call");
   jw_array_end(&jw);
 
@@ -584,6 +585,8 @@ emit_results(const struct scenario* sc, const struct run_metrics* rm, FILE* out)
   jw_uint(&jw, rm->stats.batches_truncated);
   jw_key(&jw, "waves_emitted");
   jw_uint(&jw, rm->stats.waves_emitted);
+  jw_key(&jw, "worker_steps");
+  jw_uint(&jw, rm->stats.worker_steps);
   jw_key(&jw, "chunks_dispatched");
   jw_uint(&jw, rm->stats.chunks_dispatched);
   jw_key(&jw, "distinct_zarrs");
@@ -613,8 +616,8 @@ emit_results(const struct scenario* sc, const struct run_metrics* rm, FILE* out)
   double throughput_mb_s =
     wall_s > 0.0 ? (sample_bytes_total / 1e6) / wall_s : 0.0;
   double sum_stage_ms = (double)rm->stats.plan.ms + (double)rm->stats.io.ms +
-                        (double)rm->stats.h2d.ms +
-                        (double)rm->stats.decompress.ms +
+                        (double)rm->stats.h2d.ms + (double)rm->stats.decode.ms +
+                        (double)rm->stats.post_decode.ms +
                         (double)rm->stats.assemble.ms;
   double stage_concurrency =
     rm->wall_ms > 0.0 ? sum_stage_ms / rm->wall_ms : 0.0;

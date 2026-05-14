@@ -159,5 +159,5 @@ add_cuda_lib(damacy SOURCES damacy.h damacy.c damacy_status.c
     LINKS platform planner zarr_meta_cache zarr_shard_cache zarr store
           decoder blosc1_host assemble dtype log lookahead gpu_budget
           batch_pool wave damacy_stats damacy_config damacy_nvtx strbuf
-          threadpool CUDA::cuda_driver
+          threadpool scheduler CUDA::cuda_driver
 )

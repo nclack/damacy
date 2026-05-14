@@ -244,15 +244,19 @@ extern "C"
     struct damacy_metric plan;
     struct damacy_metric io;
     struct damacy_metric h2d;
-    struct damacy_metric decompress;
-    // Host wall-clock around the blosc1 chunk-header parse (overlaps
-    // the bulk H2D). nvcomp + post-decode kernels share stream_decode
-    // so they're no longer separately measurable; both fold into
-    // `decompress` above.
-    struct damacy_metric decompress_parse;
+    // decode: stream_decode work only (nvcomp + status_reduce).
+    // post_decode: stream_post work — post-decode kernels + 4B D2H +
+    // cross-stream wait on decode_done. A large post_decode avg means
+    // stream_post is bottlenecking; a small avg means it overlaps the
+    // next wave's decode cleanly.
+    struct damacy_metric decode;
+    struct damacy_metric post_decode;
+    // Stream_decode idle between consecutive waves' decode submissions.
+    // Sums to the wave-boundary gap visible in nsys.
+    struct damacy_metric decode_gap;
+    struct damacy_metric decompress_parse; // host wall around blosc1 parse
     struct damacy_metric assemble;
-    struct damacy_metric pop_wait_io;
-    struct damacy_metric pop_wait_compute;
+    struct damacy_metric pop_wait; // user thread blocked on the scheduler cv
     struct damacy_metric flush_wait;
 
     uint64_t zarr_meta_hits, zarr_meta_misses;
@@ -261,6 +265,7 @@ extern "C"
     uint64_t batches_truncated;
     uint64_t waves_emitted;
     uint64_t chunks_dispatched;
+    uint64_t worker_steps; // scheduler ticks (proxy for worker CPU)
 
     // Total GPU bytes currently committed to wave-resident buffers and
     // batch-output pools, counted against max_gpu_memory_bytes. Grows from

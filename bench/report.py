@@ -87,11 +87,12 @@ def _stage_table(r: Results) -> Table:
         "plan": "white",
         "io": "yellow",
         "h2d": "magenta",
-        "decompress": "green",
+        "decode": "green",
+        "post_decode": "green",
+        "decode_gap": "red",
         "decompress.parse": "green",
         "assemble": "green",
-        "pop_wait_io": "red",
-        "pop_wait_compute": "red",
+        "pop_wait": "red",
         "flush_wait": "red",
     }
 
@@ -102,10 +103,11 @@ def _stage_table(r: Results) -> Table:
         "io": "italic dim",
         "decompress.parse": "italic dim",
         "h2d": "bold dim",
-        "decompress": "bold dim",
+        "decode": "bold dim",
+        "post_decode": "bold dim",
+        "decode_gap": "dim",
         "assemble": "bold dim",
-        "pop_wait_io": "dim",
-        "pop_wait_compute": "dim",
+        "pop_wait": "dim",
         "flush_wait": "dim",
     }
 

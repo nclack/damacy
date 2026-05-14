@@ -30,7 +30,8 @@ enum wave_state
   WAVE_FREE = 0,
   WAVE_IO,
   WAVE_H2D,
-  WAVE_ASSEMBLE, // covers decompress + assemble on stream_decode; polled on asm_end
+  WAVE_ASSEMBLE, // covers decompress + assemble on stream_decode; polled on
+                 // asm_end
 };
 
 struct damacy_wave
@@ -93,19 +94,24 @@ struct damacy_wave
   struct store_read* store_reads;
   struct store_event io_event;
 
-  // Per-stage CUevents. ev.h2d_end is the cuStreamWaitEvent target on
-  // stream_decode; ev.asm_end is the wave's "done" event polled in
-  // wave_pool_advance.
+  // Per-stage CUevents. h2d_end gates stream_decode; decode_done gates
+  // stream_post; asm_end is polled in wave_pool_advance.
   struct wave_events
   {
     CUevent h2d_start;
-    CUevent bulk_h2d_end; // bulk slab H2D done; used for stats.h2d
-    CUevent h2d_end;      // + fanout/op H2Ds + d_blosc1_totals zero done
+    CUevent bulk_h2d_end;
+    CUevent h2d_end;
     CUevent decomp_start;
+    CUevent decode_done;
     CUevent decomp_end;
     CUevent asm_start;
     CUevent asm_end;
   } ev;
+
+  // Borrowed slot from wave_pool.decode_done_ring: anchor recorded by
+  // the previous kick_decode; drain_wave_metrics measures the gap to
+  // this wave's decomp_start.
+  CUevent prev_decode_anchor;
 
   // Host-side IO timing: submit→completion wall-clock.
   uint64_t io_t_start_ns;
@@ -131,11 +137,19 @@ struct wave_pool
 {
   struct damacy_wave waves[2];
 
-  // wave_pool owns these — created in wave_pool_init, destroyed in
-  // wave_pool_destroy. stream_decode carries nvcomp decode +
-  // post-decode (memcpy / (bit)unshuffle) + assemble in FIFO order.
+  // stream_decode: nvcomp decode + status_reduce. stream_post:
+  // everything past ev.decode_done — gated cross-stream so wave N's
+  // tail overlaps wave N+1's decode.
   CUstream stream_h2d;
   CUstream stream_decode;
+  CUstream stream_post;
+
+  // Ring of decode-done anchors for decode_gap measurement. wave events
+  // are reused across iterations, so cuEventElapsedTime against
+  // wave->ev.decode_done would race with the next iteration's record.
+  // 4 slots covers the worst case: 2 waves × (current + previous).
+  CUevent decode_done_ring[4];
+  uint8_t decode_done_ring_idx;
 
   // Pool-shared zstd decoder. Decodes serialize FIFO on stream_decode
   // (at most one wave's decode in-flight), so a single nvcomp temp +
@@ -207,7 +221,7 @@ wave_pool_shared_predict_bytes(uint64_t dev_decompressed_bytes,
 // batch_size is the cfg.batch_size that batch_metadata is sized off.
 struct wave_pool_sizing
 {
-  uint64_t host_slab_per_wave;     // pinned-host + dev_compressed mirror
+  uint64_t host_slab_per_wave;        // pinned-host + dev_compressed mirror
   uint64_t dev_decompressed_per_wave; // dev_decompressed + unshuffle scratch
   // Worst-case post-grow pool footprint at this geometry: assumes both
   // per-wave fanout SOAs and the shared decoder scratch have grown all
@@ -225,11 +239,13 @@ wave_pool_resolve_sizing(uint64_t max_gpu_memory_bytes,
                          struct wave_pool_sizing* out);
 
 // Returns 0 on success, 1 on failure (after self-cleanup).
-int wave_init(struct damacy_wave* wave,
-              uint64_t host_slab_bytes,
-              uint64_t dev_decompressed_bytes);
+int
+wave_init(struct damacy_wave* wave,
+          uint64_t host_slab_bytes,
+          uint64_t dev_decompressed_bytes);
 
-void wave_destroy(struct damacy_wave* wave, int cuda_skip);
+void
+wave_destroy(struct damacy_wave* wave, int cuda_skip);
 
 // Create both streams + initialize both waves and wire borrowed
 // pointers. host_slab_per_wave / dev_decompressed_per_wave come from
@@ -238,55 +254,62 @@ void wave_destroy(struct damacy_wave* wave, int cuda_skip);
 // point at a uint64_t the caller owns. Returns 0 on success, 1 on
 // failure (after self-cleanup so the caller can free the enclosing
 // struct).
-int wave_pool_init(struct wave_pool* wp,
-                   struct damacy_batch_pool* pool,
-                   struct store* store,
-                   struct threadpool* compute_pool,
-                   struct damacy_stats* stats,
-                   enum damacy_status* failed_status,
-                   enum damacy_dtype dtype,
-                   uint64_t host_slab_per_wave,
-                   uint64_t dev_decompressed_per_wave,
-                   uint64_t max_chunk_uncompressed_bytes,
-                   uint64_t max_gpu_memory_bytes,
-                   uint64_t* gpu_bytes_committed);
+int
+wave_pool_init(struct wave_pool* wp,
+               struct damacy_batch_pool* pool,
+               struct store* store,
+               struct threadpool* compute_pool,
+               struct damacy_stats* stats,
+               enum damacy_status* failed_status,
+               enum damacy_dtype dtype,
+               uint64_t host_slab_per_wave,
+               uint64_t dev_decompressed_per_wave,
+               uint64_t max_chunk_uncompressed_bytes,
+               uint64_t max_gpu_memory_bytes,
+               uint64_t* gpu_bytes_committed);
 
 // Sync + destroy streams, then wave_destroy each wave. cuda_skip=1
 // leaks GPU resources but still releases the host heap (used when the
 // CUDA context is no longer valid).
-void wave_pool_destroy(struct wave_pool* wp, int cuda_skip);
+void
+wave_pool_destroy(struct wave_pool* wp, int cuda_skip);
 
 // 4 pinned-host + 4 device allocs for one nvcomp fanout. Returns 0 ok,
 // 1 on first failure (logged). Partial-failure cleanup relies on `h`
 // and `d` being zero-initialized by the caller — wave_destroy then
 // NULL-checks each pointer and frees only what was set.
-int fanout_alloc_pinned(struct blosc1_host_fanout* h,
-                        struct nvcomp_fanout* d,
-                        size_t n);
+int
+fanout_alloc_pinned(struct blosc1_host_fanout* h,
+                    struct nvcomp_fanout* d,
+                    size_t n);
 
 // Free the 4 pinned-host + 4 device buffers a prior fanout_alloc_pinned
 // allocated, zero the SOA structs so they're safe to re-allocate into.
 // NULL-safe per pointer (matches wave_destroy's freeing pattern).
-void fanout_free_pinned(struct blosc1_host_fanout* h, struct nvcomp_fanout* d);
+void
+fanout_free_pinned(struct blosc1_host_fanout* h, struct nvcomp_fanout* d);
 
 // H2D the 4 SOA arrays of one fanout in lockstep onto `s`.
-enum damacy_status fanout_upload(CUstream s,
-                                 const struct nvcomp_fanout* d,
-                                 const struct blosc1_host_fanout* h,
-                                 size_t n);
+enum damacy_status
+fanout_upload(CUstream s,
+              const struct nvcomp_fanout* d,
+              const struct blosc1_host_fanout* h,
+              size_t n);
 
 // Pool-level predicates over the 2-wave array.
-int find_free_wave(const struct wave_pool* wp);
-int any_wave_in_flight(const struct wave_pool* wp);
+int
+find_free_wave(const struct wave_pool* wp);
+int
+any_wave_in_flight(const struct wave_pool* wp);
 
 // Drive each in-flight wave forward by one stage (IO retired → H2D,
 // h2d_end retired → compute, asm_end retired → finalize). Sets
 // *wp->failed_status on driver errors.
-enum damacy_status wave_pool_advance(struct wave_pool* wp);
+enum damacy_status
+wave_pool_advance(struct wave_pool* wp);
 
 // Pack chunks from `slot_idx`'s remaining work into `wave_idx`, submit
 // IO, transition the wave to WAVE_IO. DAMACY_OOM if a single chunk is
 // larger than the wave's slabs.
-enum damacy_status wave_pool_peel(struct wave_pool* wp,
-                                  uint16_t wave_idx,
-                                  uint16_t slot_idx);
+enum damacy_status
+wave_pool_peel(struct wave_pool* wp, uint16_t wave_idx, uint16_t slot_idx);
