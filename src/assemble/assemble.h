@@ -14,9 +14,10 @@
 #include "damacy_limits.h"
 #include "planner/planner.h"
 
-#include <cuda.h>
 #include <stddef.h>
 #include <stdint.h>
+
+typedef struct CUstream_st* CUstream;
 
 #ifdef __cplusplus
 extern "C"
