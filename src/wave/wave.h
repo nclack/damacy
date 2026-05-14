@@ -307,28 +307,6 @@ wave_pool_init(struct wave_pool* wp,
 void
 wave_pool_destroy(struct wave_pool* wp, int cuda_skip);
 
-// 4 pinned-host + 4 device allocs for one nvcomp fanout. Returns 0 ok,
-// 1 on first failure (logged). Partial-failure cleanup relies on `h`
-// and `d` being zero-initialized by the caller — wave_destroy then
-// NULL-checks each pointer and frees only what was set.
-int
-fanout_alloc_pinned(struct blosc1_host_fanout* h,
-                    struct nvcomp_fanout* d,
-                    size_t n);
-
-// Free the 4 pinned-host + 4 device buffers a prior fanout_alloc_pinned
-// allocated, zero the SOA structs so they're safe to re-allocate into.
-// NULL-safe per pointer (matches wave_destroy's freeing pattern).
-void
-fanout_free_pinned(struct blosc1_host_fanout* h, struct nvcomp_fanout* d);
-
-// H2D the 4 SOA arrays of one fanout in lockstep onto `s`.
-enum damacy_status
-fanout_upload(CUstream s,
-              const struct nvcomp_fanout* d,
-              const struct blosc1_host_fanout* h,
-              size_t n);
-
 // Pool-level predicates.
 int
 find_free_wave(const struct wave_pool* wp);

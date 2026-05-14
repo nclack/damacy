@@ -84,14 +84,21 @@ add_cuda_lib(batch_pool SOURCES batch_pool/batch_pool.h batch_pool/batch_pool.c
     LINKS planner log CUDA::cuda_driver
 )
 
+# Pinned-host + device SOA fanout used by the zstd decoder batch path.
+# Pure: no streams, no scheduler — alloc/free/upload/grow primitives.
+add_cuda_lib(fanout SOURCES wave/fanout.h wave/fanout.c
+    LINKS blosc1_host decoder gpu_budget log CUDA::cuda_driver
+)
+
 # In-flight wave: per-wave host slab + device decompress arena, blosc1
 # parse scratch, nvcomp fanout SOA, per-stage CUevents, decoders. Also
 # owns the wave_pool aggregate (4 streams + both waves + borrowed
 # pointers into the orchestrator); damacy.c keeps one inline and drives
 # it through wave_pool_advance / wave_pool_peel.
 add_cuda_lib(wave SOURCES wave/wave.h wave/wave.c
-    LINKS decoder assemble store planner blosc1_host batch_pool
-          damacy_stats damacy_config damacy_nvtx strbuf log CUDA::cuda_driver
+    LINKS decoder assemble store planner blosc1_host batch_pool fanout
+          gpu_budget damacy_stats damacy_config damacy_nvtx strbuf log
+          CUDA::cuda_driver
 )
 
 # Read-side store
