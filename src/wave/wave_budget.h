@@ -1,26 +1,22 @@
 // GPU memory geometry for one wave + the resolver that picks per-wave
 // extents from a configured cap.
 //
-// Pure (no driver allocs; nvcomp temp queries are read-only). The
+// Pure: no driver allocs (nvcomp temp queries are read-only). The
 // runtime committer (struct gpu_budget) is the only object that holds
 // state; everything here returns predicted bytes by value.
 //
-// The decoder-scratch grow lives here too: it shares the
-// wave_decoder_caps / predict_decoder_scratch_bytes math with the
-// resolver, and surfacing it as a separate function keeps the math in
-// one TU. The grow's only side effect outside the decoder + budget is
-// the cuStreamSynchronize on stream_decode, which the caller passes
-// in.
+// The runtime grow that consumes this math (decoder_scratch_grow) is
+// implemented in wave_budget.c — it shares wave_decoder_caps and
+// predict_decoder_scratch_bytes with the resolver — but its only
+// caller is wave_pool, which forward-declares it locally.
 #pragma once
 
 #include "damacy.h"
 
-#include <cuda.h>
 #include <stddef.h>
 #include <stdint.h>
 
 struct damacy_config;
-struct decoder_zstd;
 struct gpu_budget;
 
 // Pool-level prediction (2 waves + shared scratch + batch meta). The
@@ -99,26 +95,6 @@ wave_pool_resolve_sizing(uint64_t max_gpu_memory_bytes,
                          uint64_t max_chunk_uncompressed_bytes,
                          uint32_t batch_size,
                          struct wave_pool_sizing* out);
-
-// Grow the pool's shared zstd decoder scratch (d_temp + d_statuses +
-// d_uncompressed_actual_sizes) to fit `need` substreams in a single
-// batch. The scratch is monotonic and wave-agnostic.
-//
-// Synchronizes `stream_decode` first so any prior decode reading the
-// to-be-freed scratch has retired. stream_h2d is NOT touched — the
-// other wave's queued fanout_upload writes to ITS OWN SOA, not the
-// decoder scratch we're freeing.
-//
-// On decoder_zstd_grow failure the decoder is left zombie
-// (cur_max_batch == 0); the committed bytes are rolled back and
-// subsequent calls short-circuit on the zombie state.
-enum damacy_status
-decoder_scratch_grow(struct decoder_zstd* decoder,
-                     CUstream stream_decode,
-                     uint64_t dev_per_wave,
-                     uint64_t max_chunk_uncompressed_bytes,
-                     struct gpu_budget* budget,
-                     size_t need);
 
 // Initial substream + per-substream + per-batch caps used at
 // decoder_zstd_create time. The substream count is the initial floor

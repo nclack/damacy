@@ -13,7 +13,6 @@
 
 #include "damacy.h"
 #include "damacy_limits.h"
-#include "decoder/decoder_zstd.h"
 #include "wave/host_slab.h"
 #include "wave/wave.h"
 
@@ -22,6 +21,7 @@
 
 struct damacy_batch_pool;
 struct damacy_stats;
+struct decoder_zstd;
 struct gpu_budget;
 struct store;
 struct threadpool;
@@ -105,8 +105,6 @@ void
 wave_pool_destroy(struct wave_pool* wp, int cuda_skip);
 
 // Pool-level predicates.
-int
-find_free_wave(const struct wave_pool* wp);
 int
 any_wave_in_flight(const struct wave_pool* wp);
 // True if any host_slab_slot is past SLOT_FREE — peel-in-flight, IO

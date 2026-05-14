@@ -3,6 +3,7 @@
 #include "batch_pool/batch_pool.h"
 #include "damacy_config.h"
 #include "damacy_stats.h"
+#include "decoder/decoder_zstd.h"
 #include "decoder/status_reduce.h"
 #include "fanout.h"
 #include "gpu_budget/gpu_budget.h"
@@ -18,6 +19,18 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+
+// Defined in wave_budget.c — kept private to wave_pool because the
+// "grow" surface is an orchestration concern, while the math it
+// reuses (wave_decoder_caps, predict_decoder_scratch_bytes) lives
+// alongside the pure predictor.
+enum damacy_status
+decoder_scratch_grow(struct decoder_zstd* decoder,
+                     CUstream stream_decode,
+                     uint64_t dev_per_wave,
+                     uint64_t max_chunk_uncompressed_bytes,
+                     struct gpu_budget* budget,
+                     size_t need);
 
 // Wave-index helper for NVTX range labels.
 static inline ptrdiff_t
@@ -128,15 +141,6 @@ wave_pool_destroy(struct wave_pool* wp, int cuda_skip)
   wp->store = NULL;
   wp->compute_pool = NULL;
   wp->stats = NULL;
-}
-
-int
-find_free_wave(const struct wave_pool* wp)
-{
-  for (int w = 0; w < DAMACY_N_WAVES; ++w)
-    if (wp->waves[w].state == WAVE_FREE)
-      return w;
-  return -1;
 }
 
 int
@@ -384,9 +388,13 @@ kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
   return DAMACY_OK;
 
 Error:
+  // IO already retired into io_t_end_ns at bind; record it unconditionally
+  // so failure paths don't bias the rolling stats.
+  record_io_metric(wp, wave);
   if (needs_end_record) {
-    // Drain IO into stats since finalize_wave won't run for this wave.
-    record_io_metric(wp, wave);
+    // Keep the polling state machine from hanging on a never-recorded
+    // h2d_end. submit_bulk_h2d failed before bulk_h2d_end was recorded,
+    // so this branch handles only the post-bulk_h2d failures.
     cuEventRecord(wave->ev.h2d_end, wp->stream_h2d);
   }
   damacy_nvtx_range_pop(); // kick_h2d
