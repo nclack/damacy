@@ -1,52 +1,18 @@
-// Two roles for the same memory accounting:
+// Runtime GPU-memory committer. Tracks bytes committed against a
+// configured cap; single source of truth for "have we exceeded?" and
+// "how many bytes are committed?" across wave_pool, batch_pool, and
+// the observe-and-grow paths.
 //
-//   1. Predictor (struct gpu_budget_breakdown / gpu_budget_predict):
-//      consulted at damacy_create / damacy_config_describe to size
-//      wave-resident buffers before any allocation. Pure: no driver
-//      calls beyond the nvcomp temp-bytes query.
-//
-//   2. Runtime committer (struct gpu_budget / try_commit / release):
-//      one object owned by struct damacy; threaded through wave_pool,
-//      batch_pool, and the observe-and-grow paths. Single source of
-//      truth for "have we exceeded the cap?" and "how many bytes are
-//      committed?". Replaces the open-coded checks that used to live
-//      in three different modules.
+// The predictor that drives the cap-vs-need check at create time
+// lives in wave/wave_budget.h (gpu_budget_predict +
+// gpu_budget_breakdown). Splitting them avoids the cycle that would
+// otherwise arise between gpu_budget (committer) and wave_budget
+// (per-component byte math used by the grow paths).
 #pragma once
 
 #include "damacy.h"
 
 #include <stdint.h>
-
-// --- predictor ------------------------------------------------------------
-
-struct gpu_budget_breakdown
-{
-  uint64_t dev_compressed;   // 2× host_slab_per_wave (H2D mirror)
-  uint64_t dev_decompressed; // 2× dev_decompressed_per_wave
-  uint64_t blosc1_meta;      // 2× per-wave parse + assemble metadata
-  // 2× per-wave nvcomp fanout SOA + op arrays. The fanout slice is
-  // sized off DAMACY_BLOSC_ZSTD_INITIAL_BATCH_CAP. The per-wave fanout
-  // may grow at runtime up to DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE; the
-  // wave grow path checks the delta against the configured budget and
-  // refuses to exceed it.
-  uint64_t fanout_soa;
-  // 1× (zstd_temp + actual+status), pool-shared, sized off the initial
-  // floor; observe-and-grow may raise this at runtime up to the
-  // structural ceiling. Same budget enforcement applies.
-  uint64_t nvcomp_temp;
-  uint64_t batch_metadata; // 2× cfg.batch_size × sizeof(sample_plan)
-  uint64_t total;
-};
-
-// Per-wave host/device extents come from wave_pool_resolve_sizing.
-// max_chunk_uncompressed_bytes and batch_size still come from cfg.
-enum damacy_status
-gpu_budget_predict(const struct damacy_config* cfg,
-                   uint64_t host_slab_per_wave,
-                   uint64_t dev_decompressed_per_wave,
-                   struct gpu_budget_breakdown* out);
-
-// --- runtime committer ---------------------------------------------------
 
 // Tracks bytes committed against a configured cap. Single-threaded
 // access only — callers serialize through scheduler_lock (or are on

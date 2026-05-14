@@ -183,60 +183,6 @@ struct wave_pool
   enum damacy_dtype dtype;
 };
 
-// Predicted device-resident byte cost of one wave (wave_init's GPU
-// allocs only). gpu_budget/ doubles the per-component sums for the
-// 2-wave pool. The shared nvcomp scratch is queried separately via
-// wave_pool_shared_predict_bytes (counted once, not 2×).
-struct wave_alloc_summary
-{
-  uint64_t dev_compressed;   // dev_compressed alloc (mirrors host slab)
-  uint64_t dev_decompressed; // dev_decompressed arena
-  uint64_t blosc1_meta;      // d_assemble_chunks + d_blosc1_totals
-  uint64_t fanout_soa;       // device fanouts + memcpy op SOA
-};
-
-enum damacy_status
-wave_predict_bytes(uint64_t host_slab_bytes,
-                   uint64_t dev_decompressed_bytes,
-                   struct wave_alloc_summary* out);
-
-// Pool-shared nvcomp scratch (temp + actual-size + status). Sized for
-// one wave's worth of substreams since decodes serialize FIFO on
-// stream_decode. Returns DAMACY_OK on success; non-OK if a decoder
-// query fails.
-enum damacy_status
-wave_pool_shared_predict_bytes(uint64_t dev_decompressed_bytes,
-                               uint64_t max_chunk_uncompressed_bytes,
-                               uint64_t* out_nvcomp_temp);
-
-// Wave geometry resolver. Picks the per-wave host slab and
-// dev_decompressed extents that fit inside `max_gpu_memory_bytes` once
-// every other component (2× wave, 1× nvcomp scratch, fanout SOAs,
-// blosc1 meta, batch_metadata) is accounted for. The resolver insists
-// on holding at least one chunk at `max_chunk_uncompressed_bytes` per
-// wave; if the smallest viable geometry doesn't fit, returns
-// DAMACY_OOM with a logged breakdown so the user knows what to raise.
-//
-// batch_size is the cfg.batch_size that batch_metadata is sized off.
-struct wave_pool_sizing
-{
-  uint64_t host_slab_per_wave;        // pinned-host + dev_compressed mirror
-  uint64_t dev_decompressed_per_wave; // dev_decompressed + unshuffle scratch
-  // Worst-case post-grow pool footprint at this geometry: assumes both
-  // per-wave fanout SOAs and the shared decoder scratch have grown all
-  // the way to DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE. gpu_budget_predict
-  // (which uses the initial floor) returns the smaller initial number;
-  // the delta is the headroom reserved for observe-and-grow. Always
-  // <= max_gpu_memory_bytes by resolver construction.
-  uint64_t worst_case_total_bytes;
-};
-
-enum damacy_status
-wave_pool_resolve_sizing(uint64_t max_gpu_memory_bytes,
-                         uint64_t max_chunk_uncompressed_bytes,
-                         uint32_t batch_size,
-                         struct wave_pool_sizing* out);
-
 // Returns 0 on success, 1 on failure (after self-cleanup). The wave
 // allocates dev_compressed sized to the slot capacity so bulk H2D can
 // copy a full slot byte-for-byte.

@@ -71,11 +71,14 @@ add_src_lib(lookahead SOURCES lookahead/lookahead.h lookahead/lookahead.c
     LINKS log
 )
 
-# GPU-memory predictor consulted at damacy_create. Pure: no allocations,
-# no driver calls. Defers per-wave sizing to wave_predict_bytes() so
-# wave/ stays the single source of truth for what wave_init allocates.
+# Runtime GPU-memory committer: tracks bytes committed against a
+# configured cap. Single source of truth for "have we exceeded?" and
+# "how many bytes are committed?" across wave_pool, batch_pool, and the
+# observe-and-grow paths. The predictor that consumes the resolved
+# geometry lives in wave_budget (gpu_budget_predict) — splitting them
+# avoids the cycle between committer and per-component byte math.
 add_cuda_lib(gpu_budget SOURCES gpu_budget/gpu_budget.h gpu_budget/gpu_budget.c
-    LINKS wave planner log damacy_config
+    LINKS log
 )
 
 # Two-slot batch state machine + lazy device-tensor pool. Owns planner
@@ -97,6 +100,16 @@ add_cuda_lib(fanout SOURCES wave/fanout.h wave/fanout.c
     LINKS blosc1_host decoder gpu_budget log CUDA::cuda_driver
 )
 
+# GPU memory geometry for a wave: per-wave byte predictions, the
+# resolver that picks per-wave extents from a configured cap, and the
+# decoder-scratch grow path that shares the same caps math. No state;
+# all functions pure aside from the decoder grow's
+# cuStreamSynchronize.
+add_cuda_lib(wave_budget SOURCES wave/wave_budget.h wave/wave_budget.c
+    LINKS decoder fanout planner assemble gpu_budget damacy_config log
+          CUDA::cuda_driver
+)
+
 # In-flight wave: per-wave host slab + device decompress arena, blosc1
 # parse scratch, nvcomp fanout SOA, per-stage CUevents, decoders. Also
 # owns the wave_pool aggregate (4 streams + both waves + borrowed
@@ -104,8 +117,8 @@ add_cuda_lib(fanout SOURCES wave/fanout.h wave/fanout.c
 # it through wave_pool_advance / wave_pool_peel.
 add_cuda_lib(wave SOURCES wave/wave.h wave/wave.c
     LINKS decoder assemble store planner blosc1_host batch_pool fanout
-          host_slab gpu_budget damacy_stats damacy_config damacy_nvtx strbuf log
-          CUDA::cuda_driver
+          host_slab wave_budget gpu_budget damacy_stats damacy_config
+          damacy_nvtx strbuf log CUDA::cuda_driver
 )
 
 # Read-side store
@@ -170,6 +183,6 @@ add_cuda_lib(assemble SOURCES assemble/assemble.h assemble/assemble.cu
 add_cuda_lib(damacy SOURCES damacy.h damacy.c damacy_status.c
     LINKS platform planner zarr_meta_cache zarr_shard_cache zarr store
           decoder blosc1_host assemble dtype log lookahead gpu_budget
-          batch_pool wave damacy_stats damacy_config damacy_nvtx strbuf
-          threadpool scheduler CUDA::cuda_driver
+          batch_pool wave wave_budget damacy_stats damacy_config damacy_nvtx
+          strbuf threadpool scheduler CUDA::cuda_driver
 )

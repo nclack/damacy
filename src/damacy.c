@@ -21,6 +21,7 @@
 #include "util/cuda_check.h"
 #include "util/prelude.h"
 #include "wave/wave.h"
+#include "wave/wave_budget.h"
 #include "zarr/zarr_meta_cache.h"
 #include "zarr/zarr_metadata.h"
 #include "zarr/zarr_shard_cache.h"

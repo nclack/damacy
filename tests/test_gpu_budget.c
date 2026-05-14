@@ -10,7 +10,7 @@
 #include "cuda_init.h"
 #include "damacy.h"
 #include "expect.h"
-#include "gpu_budget/gpu_budget.h"
+#include "wave/wave_budget.h"
 
 #include <stdio.h>
 
