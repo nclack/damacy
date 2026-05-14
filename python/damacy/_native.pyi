@@ -67,8 +67,14 @@ class Batch:
         device_ptr (int), shape (tuple[int, ...]), dtype (str),
         ready_stream (int), batch_id (int)."""
 
-    def release(self) -> None:
-        """Return the batch slot to the pool. Idempotent."""
+    def release(self, event: int = ..., /) -> None:
+        """Return the batch slot to the pool. Idempotent.
+
+        With no argument or ``event=None`` the slot is freed
+        immediately. With ``event`` set to an integer CUevent handle,
+        damacy queues a ``cuStreamWaitEvent`` against its internal
+        stream_post before reusing the slot's buffer; the host returns
+        at once instead of synchronizing."""
 
     def __dlpack__(
         self,

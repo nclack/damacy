@@ -242,6 +242,14 @@ plan_into_slot(struct damacy* self, uint16_t slot_idx, uint32_t n_samples)
 
   // Degenerate batch: no chunks → zero the output and skip to READY.
   if (slot->n_chunks == 0) {
+    // cuMemsetD8 runs on the legacy null stream, which doesn't serialize
+    // with damacy's non-blocking streams. If a deferred release queued a
+    // wait on stream_post, host-sync stream_post first so the memset
+    // can't race a still-in-flight consumer read.
+    if (slot->deferred_release_pending) {
+      cuStreamSynchronize(self->wave_pool.stream_post);
+      slot->deferred_release_pending = 0;
+    }
     if (cuMemsetD8(CUDPTR(slot->dev_ptr), 0, self->batch_pool.n_bytes) !=
         CUDA_SUCCESS) {
       status = DAMACY_CUDA;
@@ -253,6 +261,9 @@ plan_into_slot(struct damacy* self, uint16_t slot_idx, uint32_t n_samples)
 Cleanup:
   for (uint32_t i = 0; i < n_samples; ++i)
     sample_slot_clear(&self->batch_samples[i]);
+  // The normal reuse path is already gated by the stream_post wait
+  // recorded at release time; just clear the flag.
+  slot->deferred_release_pending = 0;
   if (status != DAMACY_OK)
     self->failed_status = status;
   return status;
@@ -759,6 +770,67 @@ damacy_release(struct damacy* self, struct damacy_batch* b)
   self->batch_pool.slots[s].n_chunks = 0;
   self->batch_pool.slots[s].n_chunks_dispatched = 0;
   scheduler_unlock(self->sched);
+}
+
+enum damacy_status
+damacy_release_event(struct damacy* self, struct damacy_batch* b, void* event)
+{
+  // NULL event → degenerate to the immediate-release path.
+  if (!event) {
+    damacy_release(self, b);
+    return DAMACY_OK;
+  }
+  if (!self || !b)
+    return DAMACY_INVAL;
+  if (b != &self->handle) {
+    log_warn("damacy_release_event: foreign handle (not the active batch)");
+    return DAMACY_INVAL;
+  }
+  uint16_t s = b->slot_idx;
+  if (s >= 2) {
+    log_warn("damacy_release_event: slot_idx=%u out of range", (unsigned)s);
+    return DAMACY_INVAL;
+  }
+
+  // Push the retained-primary context so cuStreamWaitEvent / cuEventRecord
+  // land on the right device when the caller is on another thread.
+  struct ctx_guard cg = { 0 };
+  enum damacy_status r = ctx_guard_enter(self, &cg);
+  if (r != DAMACY_OK)
+    return r;
+
+  scheduler_lock(self->sched);
+  struct damacy_batch_slot* slot = &self->batch_pool.slots[s];
+  if (slot->state != BATCH_HELD) {
+    log_warn(
+      "damacy_release_event: slot %u not HELD (state=%d); double release?",
+      (unsigned)s,
+      (int)slot->state);
+    r = DAMACY_INVAL;
+    goto Done;
+  }
+
+  // Defer reuse on stream_post (where assemble writes the slot's
+  // dev_ptr). stream_post is FIFO, so any subsequent kick_assemble — for
+  // either slot — picks up this wait. The flag is read by plan_into_slot
+  // to host-sync stream_post before its sync cuMemsetD8 (which targets the
+  // legacy null stream and would otherwise race).
+  if (cuStreamWaitEvent(self->wave_pool.stream_post, (CUevent)event, 0) !=
+      CUDA_SUCCESS) {
+    r = DAMACY_CUDA;
+    goto Done;
+  }
+  slot->deferred_release_pending = 1;
+
+  slot->state = BATCH_FREE;
+  slot->n_chunks = 0;
+  slot->n_chunks_dispatched = 0;
+  r = DAMACY_OK;
+
+Done:
+  scheduler_unlock(self->sched);
+  ctx_guard_exit(&cg);
+  return r;
 }
 
 // --- flush ----------------------------------------------------------------

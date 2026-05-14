@@ -43,6 +43,13 @@ struct damacy_batch_slot
   uint32_t n_chunks;
   uint32_t n_chunks_dispatched; // 0 .. n_chunks; chunks given to a wave
   int32_t chunks_remaining;     // n_chunks - chunks completed via waves
+
+  // Set by damacy_release_event when a deferred-release wait has been
+  // queued on stream_post. plan_into_slot's degenerate (zero-chunk) path
+  // reads this and host-syncs stream_post before its sync cuMemsetD8;
+  // the normal reuse path is already gated by the cuStreamWaitEvent on
+  // stream_post itself.
+  int deferred_release_pending;
 };
 
 struct damacy_batch_pool

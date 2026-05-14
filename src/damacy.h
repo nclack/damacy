@@ -229,6 +229,30 @@ extern "C"
   // a thread other than the one that called damacy_pop.
   void damacy_release(struct damacy* d, struct damacy_batch* b);
 
+  // Deferred release: tell damacy not to reuse the batch's buffer until
+  // `event` (a CUevent) has fired. Useful when the consumer kicked off
+  // an async D2D copy on a side stream and wants the host to return
+  // immediately instead of blocking on cuEventSynchronize before exiting
+  // a `with` block.
+  //
+  // Damacy records the wait on its internal stream_post (which is where
+  // assemble writes the slot's output buffer), so the next batch's
+  // assemble kernel — which writes to the same buffer — will wait on
+  // `event` before launching. No host synchronization is performed; this
+  // call returns as soon as the wait is queued and the slot state
+  // transitions to FREE.
+  //
+  // The event must remain valid for the duration of this call; damacy
+  // captures it into stream_post's command queue via cuStreamWaitEvent
+  // and is done with the handle by return. Passing a NULL event is
+  // equivalent to damacy_release.
+  //
+  // Returns DAMACY_OK on success or DAMACY_CUDA if the driver call fails;
+  // the slot is released back to the pool on either outcome.
+  enum damacy_status damacy_release_event(struct damacy* d,
+                                          struct damacy_batch* b,
+                                          void* event);
+
   // Drain anything currently planned/in-flight, finalize any partial last
   // batch (truncated to the number of complete samples) and ready it for
   // pop. Idempotent. Stream is resumable after flush; subsequent push
