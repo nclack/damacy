@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778769859540,
+  "lastUpdate": 1778794182507,
   "repoUrl": "https://github.com/nclack/damacy",
   "entries": {
     "damacy timings": [
@@ -1179,6 +1179,98 @@ window.BENCHMARK_DATA = {
           {
             "name": "damacy/mixed/decompress.parse.ms_avg",
             "value": 0.0705636,
+            "unit": "ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Nathan Clack",
+            "username": "nclack",
+            "email": "nclack@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "6aa6fb855c9198dffd96640fa7e9936cb507c8a4",
+          "message": "reorganize wave/ + gpu_budget (#47)\n\nImplements the recommended sequencing from the #45 review.\n\nCloses nothing standalone; follow-up to #45.",
+          "timestamp": "2026-05-14T21:26:06Z",
+          "url": "https://github.com/nclack/damacy/commit/6aa6fb855c9198dffd96640fa7e9936cb507c8a4"
+        },
+        "date": 1778794181213,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "damacy/default/init",
+            "value": 78.7684,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/time_to_first_batch",
+            "value": 648.091,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/wall",
+            "value": 9501.39,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/io.ms_avg",
+            "value": 4.09809,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/h2d.ms_avg",
+            "value": 6.04684,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/assemble.ms_avg",
+            "value": 1.65444,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/decompress.parse.ms_avg",
+            "value": 0.016541,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/init",
+            "value": 79.3757,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/time_to_first_batch",
+            "value": 237.885,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/wall",
+            "value": 9576.93,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/io.ms_avg",
+            "value": 4.19116,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/h2d.ms_avg",
+            "value": 6.16243,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/assemble.ms_avg",
+            "value": 1.81032,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/decompress.parse.ms_avg",
+            "value": 0.0743274,
             "unit": "ms"
           }
         ]
