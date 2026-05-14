@@ -377,43 +377,6 @@ wave_destroy(struct damacy_wave* wave, int cuda_skip)
   memset(wave, 0, sizeof(*wave));
 }
 
-// Allocate one host_slab_slot's pinned buffer + store_reads array.
-// Returns 0 on success, 1 on failure (after self-cleanup).
-static int
-slot_init(struct host_slab_slot* slot, uint64_t cap)
-{
-  memset(slot, 0, sizeof(*slot));
-  slot->cap = cap;
-  if (cuMemAllocHost(&slot->buf, cap) != CUDA_SUCCESS)
-    goto Error;
-  slot->store_reads = (struct store_read*)calloc(DAMACY_MAX_CHUNKS_PER_WAVE,
-                                                 sizeof(struct store_read));
-  if (!slot->store_reads)
-    goto Error;
-  return 0;
-Error:
-  if (slot->buf) {
-    cuMemFreeHost(slot->buf);
-    slot->buf = NULL;
-  }
-  free(slot->store_reads);
-  slot->store_reads = NULL;
-  return 1;
-}
-
-static void
-slot_destroy(struct host_slab_slot* slot, int cuda_skip)
-{
-  if (!slot)
-    return;
-  if (!cuda_skip && slot->buf)
-    cuMemFreeHost(slot->buf);
-  slot->buf = NULL;
-  free(slot->store_reads);
-  slot->store_reads = NULL;
-  slot->state = SLOT_FREE;
-}
-
 int
 wave_pool_init(struct wave_pool* wp,
                struct damacy_batch_pool* pool,
@@ -657,52 +620,13 @@ any_wave_in_flight(const struct wave_pool* wp)
 int
 any_slot_in_flight(const struct wave_pool* wp)
 {
-  for (uint8_t s = 0; s < wp->n_slots; ++s)
-    if (wp->slots[s].state != SLOT_FREE)
-      return 1;
-  return 0;
+  return host_slab_any_in_flight(wp->slots, wp->n_slots);
 }
 
 int
 any_slot_free(const struct wave_pool* wp)
 {
-  for (uint8_t s = 0; s < wp->n_slots; ++s)
-    if (wp->slots[s].state == SLOT_FREE)
-      return 1;
-  return 0;
-}
-
-static int
-find_free_slot(const struct wave_pool* wp)
-{
-  for (uint8_t s = 0; s < wp->n_slots; ++s)
-    if (wp->slots[s].state == SLOT_FREE)
-      return s;
-  return -1;
-}
-
-static int
-find_ready_slot(const struct wave_pool* wp)
-{
-  for (uint8_t s = 0; s < wp->n_slots; ++s)
-    if (wp->slots[s].state == SLOT_READY)
-      return s;
-  return -1;
-}
-
-// Release a slot from SLOT_BUSY back to SLOT_FREE. Called when
-// bulk_h2d_end fires on stream_h2d (the host bytes have been consumed
-// by the GPU copy) or from the failure cleanup in advance/kick_h2d.
-static void
-slot_release(struct host_slab_slot* slot)
-{
-  slot->state = SLOT_FREE;
-  slot->used_bytes = 0;
-  slot->n_chunks = 0;
-  slot->io_bytes = 0;
-  slot->batch_pool_slot = 0;
-  slot->batch_chunk_offset = 0;
-  slot->io_event = (struct store_event){ 0 };
+  return host_slab_any_free(wp->slots, wp->n_slots);
 }
 
 // --- peel / advance -------------------------------------------------------
@@ -1129,7 +1053,7 @@ wave_pool_peel(struct wave_pool* wp, uint16_t batch_slot_idx)
   uint32_t remaining = batch->n_chunks - base;
   if (remaining == 0)
     return DAMACY_OK;
-  int slot_idx = find_free_slot(wp);
+  int slot_idx = host_slab_find_free(wp->slots, wp->n_slots);
   if (slot_idx < 0)
     return DAMACY_OK;
   struct host_slab_slot* hs = &wp->slots[slot_idx];
@@ -1263,7 +1187,7 @@ wave_pool_advance(struct wave_pool* wp)
     struct damacy_wave* wave = &wp->waves[w];
     if (wave->state != WAVE_FREE)
       continue;
-    int rs = find_ready_slot(wp);
+    int rs = host_slab_find_ready(wp->slots, wp->n_slots);
     if (rs < 0)
       break;
     enum damacy_status s = bind_slot_to_wave(wp, wave, rs);

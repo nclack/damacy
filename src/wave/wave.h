@@ -23,6 +23,7 @@
 #include "decoder/decoder_memcpy.h"
 #include "decoder/decoder_zstd.h"
 #include "store/store.h"
+#include "wave/host_slab.h"
 
 #include <cuda.h>
 #include <stdint.h>
@@ -34,38 +35,6 @@ enum wave_state
                  // (slot release) and h2d_end (state transition)
   WAVE_ASSEMBLE, // covers decompress + assemble on stream_decode; polled on
                  // asm_end
-};
-
-// Lifecycle of a pinned-host slab slot:
-//   FREE  → peel writes bytes + submits IO → IO
-//   IO    → store_event_query succeeds       → READY
-//   READY → bind to a free wave              → BUSY
-//   BUSY  → bulk_h2d_end fires on stream_h2d → FREE
-enum slot_state
-{
-  SLOT_FREE = 0,
-  SLOT_IO,
-  SLOT_READY,
-  SLOT_BUSY,
-};
-
-struct host_slab_slot
-{
-  enum slot_state state;
-  void* buf; // pinned host (cuMemAllocHost)
-  uint64_t cap;
-  uint64_t used_bytes;
-
-  uint16_t batch_pool_slot;
-  uint32_t batch_chunk_offset;
-  uint32_t n_chunks;
-
-  struct store_read* store_reads; // capacity DAMACY_MAX_CHUNKS_PER_WAVE
-  struct store_event io_event;
-
-  uint64_t io_t_start_ns; // peel-submit wall-clock
-  uint64_t io_t_end_ns;   // SLOT_IO → SLOT_READY transition
-  uint64_t io_bytes;
 };
 
 struct damacy_wave

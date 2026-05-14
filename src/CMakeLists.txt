@@ -84,6 +84,13 @@ add_cuda_lib(batch_pool SOURCES batch_pool/batch_pool.h batch_pool/batch_pool.c
     LINKS planner log CUDA::cuda_driver
 )
 
+# Pinned-host slab slot pool: one slot per wave's worth of compressed
+# bytes plus the store_read records that drove its IO. Pure alloc /
+# release / find primitives.
+add_cuda_lib(host_slab SOURCES wave/host_slab.h wave/host_slab.c
+    LINKS store CUDA::cuda_driver
+)
+
 # Pinned-host + device SOA fanout used by the zstd decoder batch path.
 # Pure: no streams, no scheduler — alloc/free/upload/grow primitives.
 add_cuda_lib(fanout SOURCES wave/fanout.h wave/fanout.c
@@ -97,7 +104,7 @@ add_cuda_lib(fanout SOURCES wave/fanout.h wave/fanout.c
 # it through wave_pool_advance / wave_pool_peel.
 add_cuda_lib(wave SOURCES wave/wave.h wave/wave.c
     LINKS decoder assemble store planner blosc1_host batch_pool fanout
-          gpu_budget damacy_stats damacy_config damacy_nvtx strbuf log
+          host_slab gpu_budget damacy_stats damacy_config damacy_nvtx strbuf log
           CUDA::cuda_driver
 )
 
