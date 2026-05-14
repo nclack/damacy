@@ -222,14 +222,10 @@ record_io_metric(const struct wave_pool* wp, const struct damacy_wave* wave)
   metric_record(&wp->stats->io, io_ms, wave->io_bytes, wave->io_bytes);
 }
 
-// Bulk H2D, host parse overlapping the DMA, fanout/op H2Ds, then
-// h2d_end. stream_decode gates on h2d_end before nvcomp launch.
+// Phase 1: record h2d_start, queue the slab memcpy, record bulk_h2d_end.
 static enum damacy_status
-kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
+submit_bulk_h2d(struct wave_pool* wp, struct damacy_wave* wave)
 {
-  damacy_nvtx_range_pushf("kick_h2d/w%td", wave_index_of(wp, wave));
-  enum damacy_status rs;
-
   CU(CudaFail, cuEventRecord(wave->ev.h2d_start, wp->stream_h2d));
   damacy_nvtx_range_push("bulk_h2d");
   CU(BulkCudaFail,
@@ -241,17 +237,24 @@ kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
   // measures just the slab copy.
   CU(BulkCudaFail, cuEventRecord(wave->ev.bulk_h2d_end, wp->stream_h2d));
   damacy_nvtx_range_pop(); // bulk_h2d
+  return DAMACY_OK;
+BulkCudaFail:
+  damacy_nvtx_range_pop(); // bulk_h2d
+CudaFail:
+  return DAMACY_CUDA;
+}
 
-  build_blosc1_host_chunks(wp, wave);
-
-  // Tight upper bound on zstd substream count for THIS wave — every
-  // chunk could be blosc(zstd) with the maximum number of blosc-blocks.
-  // need_zsubs <= DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE by the
-  // damacy_limits static_assert (peel caps n_chunks). The fanout grow
-  // is per-wave: the OTHER wave's SOA is a separate allocation and
-  // untouched here, so this can run safely while the other wave is in
-  // WAVE_H2D / WAVE_ASSEMBLE. The decoder-scratch grow synchronizes
-  // stream_decode first.
+// Phase 2: grow per-wave fanout SOA + shared decoder scratch to cover
+// this wave's worst-case substream count. Tight upper bound: every chunk
+// could be blosc(zstd) with the maximum number of blosc-blocks.
+// need_zsubs <= DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE by the
+// damacy_limits static_assert (peel caps n_chunks). Fanout grow is
+// per-wave: the OTHER wave's SOA is a separate allocation and untouched
+// here, so this can run safely while the other wave is in WAVE_H2D /
+// WAVE_ASSEMBLE. decoder_scratch_grow synchronizes stream_decode first.
+static enum damacy_status
+prepare_decode_caps(struct wave_pool* wp, struct damacy_wave* wave)
+{
   const size_t need_zsubs =
     (size_t)wave->n_chunks * (size_t)DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK;
   enum damacy_status gs = fanout_grow(&wave->h_zstd_fan,
@@ -259,20 +262,21 @@ kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
                                       &wave->fanout_cap,
                                       need_zsubs,
                                       wp->budget);
-  if (gs == DAMACY_OK)
-    gs = decoder_scratch_grow(wp->zstd_decoder,
+  if (gs != DAMACY_OK)
+    return gs;
+  return decoder_scratch_grow(wp->zstd_decoder,
                               wp->stream_decode,
                               wp->dev_per_wave,
                               wp->max_chunk_uncompressed_bytes,
                               wp->budget,
                               need_zsubs);
-  if (gs != DAMACY_OK) {
-    record_io_metric(wp, wave);
-    cuEventRecord(wave->ev.h2d_end, wp->stream_h2d);
-    rs = gs;
-    goto Done;
-  }
+}
 
+// Phase 3: parse blosc1 headers on the host while the bulk slab DMA is
+// in flight. Populates fanout / memcpy_ops / assemble_chunks / totals.
+static enum damacy_status
+host_parse(struct wave_pool* wp, struct damacy_wave* wave)
+{
   damacy_nvtx_range_push("host_parse");
   uint64_t parse_t0 = monotonic_ns();
   int rc = blosc1_host_parse(&(struct blosc1_host_parse_args){
@@ -288,26 +292,27 @@ kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
   wave->parse_ms = (float)((monotonic_ns() - parse_t0) / 1.0e6);
   damacy_nvtx_range_pop(); // host_parse
   if (rc) {
-    // Drain the IO metric before bailing — finalize_wave won't run for
-    // this wave and we don't want failed runs to silently undercount IO.
-    record_io_metric(wp, wave);
     log_blosc1_parse_errors(wp, wave);
-    cuEventRecord(wave->ev.h2d_end, wp->stream_h2d);
-    rs = DAMACY_DECODE;
-    goto Done;
+    return DAMACY_DECODE;
   }
+  return DAMACY_OK;
+}
 
+// Phase 4: H2D the fanout SOA + memcpy_ops + assemble_chunks, zero
+// d_blosc1_totals, then record h2d_end. stream_decode gates on h2d_end
+// before nvcomp launch.
+static enum damacy_status
+upload_decode_meta(struct wave_pool* wp, struct damacy_wave* wave)
+{
   damacy_nvtx_range_push("fanout_h2d");
   const struct blosc1_totals* tot = wave->h_blosc1_totals;
   if (tot->n_zstd > 0 && fanout_upload(wp->stream_h2d,
                                        &wave->zstd_fan,
                                        &wave->h_zstd_fan,
-                                       (size_t)tot->n_zstd) != DAMACY_OK) {
-    damacy_nvtx_range_pop(); // fanout_h2d
+                                       (size_t)tot->n_zstd) != DAMACY_OK)
     goto CudaFail;
-  }
   if (tot->n_memcpy > 0)
-    CU(FanoutCudaFail,
+    CU(CudaFail,
        cuMemcpyHtoDAsync(CUDPTR(wave->d_memcpy_ops),
                          wave->h_memcpy_ops,
                          (size_t)tot->n_memcpy * sizeof(struct gpu_memcpy_op),
@@ -318,39 +323,74 @@ kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
   // ready before assemble_launch (which itself queues after the decode
   // kernels). Overlaps with the bulk slab H2D + nvcomp decode on the
   // device.
-  CU(FanoutCudaFail,
+  CU(CudaFail,
      cuMemcpyHtoDAsync(CUDPTR(wave->d_assemble_chunks),
                        wave->h_assemble_chunks,
                        (size_t)wave->n_chunks * sizeof(struct assemble_chunk),
                        wp->stream_h2d));
 
   // Zero so status_reduce's atomicAdds land in a clean n_codec_errors.
-  CU(FanoutCudaFail,
+  CU(CudaFail,
      cuMemsetD8Async(CUDPTR(wave->d_blosc1_totals),
                      0,
                      sizeof(struct blosc1_totals),
                      wp->stream_h2d));
 
-  CU(FanoutCudaFail, cuEventRecord(wave->ev.h2d_end, wp->stream_h2d));
+  CU(CudaFail, cuEventRecord(wave->ev.h2d_end, wp->stream_h2d));
   damacy_nvtx_range_pop(); // fanout_h2d
-  wave->state = WAVE_H2D;
-  rs = DAMACY_OK;
-  goto Done;
-
-FanoutCudaFail:
-  // h2d_end intentionally not recorded: kick_h2d returns DAMACY_CUDA so
-  // wave_pool_advance bails before the wave reaches WAVE_ASSEMBLE,
-  // finalize_wave never runs for this wave, and drain_wave_metrics
-  // never reads h2d_end. Recording it here would be dead work.
-  damacy_nvtx_range_pop(); // fanout_h2d
-  goto CudaFail;
-BulkCudaFail:
-  damacy_nvtx_range_pop(); // bulk_h2d
+  return DAMACY_OK;
 CudaFail:
-  rs = DAMACY_CUDA;
-Done:
+  // h2d_end intentionally not recorded: kick_h2d returns DAMACY_CUDA so
+  // the wave never reaches WAVE_H2D polling, finalize_wave never runs,
+  // and drain_wave_metrics never reads h2d_end.
+  damacy_nvtx_range_pop(); // fanout_h2d
+  return DAMACY_CUDA;
+}
+
+// Bulk H2D, host parse overlapping the DMA, fanout/op H2Ds, then
+// h2d_end. stream_decode gates on h2d_end before nvcomp launch.
+static enum damacy_status
+kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
+{
+  damacy_nvtx_range_pushf("kick_h2d/w%td", wave_index_of(wp, wave));
+  enum damacy_status s;
+  // Set between phases where bulk_h2d_end has been recorded but h2d_end
+  // has not. On those failures the cleanup path records h2d_end so the
+  // polling state machine doesn't hang on a never-recorded event.
+  int needs_end_record = 0;
+
+  s = submit_bulk_h2d(wp, wave);
+  if (s != DAMACY_OK)
+    goto Error;
+
+  build_blosc1_host_chunks(wp, wave);
+
+  needs_end_record = 1;
+  s = prepare_decode_caps(wp, wave);
+  if (s != DAMACY_OK)
+    goto Error;
+
+  s = host_parse(wp, wave);
+  if (s != DAMACY_OK)
+    goto Error;
+
+  needs_end_record = 0; // upload_decode_meta records h2d_end itself
+  s = upload_decode_meta(wp, wave);
+  if (s != DAMACY_OK)
+    goto Error;
+
+  wave->state = WAVE_H2D;
   damacy_nvtx_range_pop(); // kick_h2d
-  return rs;
+  return DAMACY_OK;
+
+Error:
+  if (needs_end_record) {
+    // Drain IO into stats since finalize_wave won't run for this wave.
+    record_io_metric(wp, wave);
+    cuEventRecord(wave->ev.h2d_end, wp->stream_h2d);
+  }
+  damacy_nvtx_range_pop(); // kick_h2d
+  return s;
 }
 
 static void
