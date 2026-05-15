@@ -13,6 +13,9 @@ import time
 import pytest
 from damacy import _native
 
+# Touches the C extension; needs a primary CUDA context.
+pytestmark = pytest.mark.usefixtures("cuda_ctx")
+
 
 def test_module_constants():
     assert _native.MAX_CHUNK_UNCOMPRESSED_BYTES == (2 << 20)

@@ -92,6 +92,7 @@ class Dtype(IntEnum):
     def coerce(cls, value: str | int | Dtype) -> Dtype:
         """Accept enum / int / one of {"f32", "float32", "bf16", "bfloat16"}.
 
+        ```pycon
         >>> Dtype.coerce("f32") is Dtype.F32
         True
         >>> Dtype.coerce("BFloat16") is Dtype.BF16
@@ -102,6 +103,8 @@ class Dtype(IntEnum):
         Traceback (most recent call last):
             ...
         ValueError: unknown dtype: 'nope'
+
+        ```
         """
         if isinstance(value, cls):
             return value
@@ -252,6 +255,7 @@ class Sample:
     ``tuple[tuple[int, int], ...]`` regardless of how it was spelled,
     so equivalent inputs hash and compare equal:
 
+    ```pycon
     >>> a = Sample(uri="cell.zarr", aabb=[(0, 64), (0, 256), (0, 256)])
     >>> b = Sample(
     ...     uri="cell.zarr",
@@ -268,17 +272,23 @@ class Sample:
     >>> a.aabb
     ((0, 64), (0, 256), (0, 256))
 
+    ```
+
     Bare ints in ``aabb`` are rejected so the behaviour stays
     consistent with NumPy/zarr indexing semantics
     (``np.s_[64]`` means "point 64", not "extent (0, 64)"):
 
+    ```pycon
     >>> Sample(uri="cell.zarr", aabb=[64, 256, 256])
     Traceback (most recent call last):
         ...
     TypeError: aabb axis 0: expected slice or (start, stop) tuple; got int
 
+    ```
+
     Slice validation rejects strided slices and unbounded stops:
 
+    ```pycon
     >>> Sample(uri="cell.zarr", aabb=[slice(0, 64, 2), slice(0, 256), slice(0, 256)])
     Traceback (most recent call last):
         ...
@@ -287,6 +297,8 @@ class Sample:
     Traceback (most recent call last):
         ...
     ValueError: aabb axis 0: slice stop is required (got slice(0, None, None))
+
+    ```
     """
 
     uri: str
@@ -318,6 +330,7 @@ class Config:
 
     Build variants with :func:`dataclasses.replace`:
 
+    ```pycon
     >>> import dataclasses
     >>> base = Config(batch_size=8, max_gpu_memory_bytes=1 << 30)
     >>> base.dtype is Dtype.F32
@@ -325,15 +338,20 @@ class Config:
     >>> dataclasses.replace(base, batch_size=64).batch_size
     64
 
+    ```
+
     Validation runs in ``__init__`` so invalid configs fail before we
     touch CUDA. The constructor accepts :class:`Dtype`, an int, or one
     of ``"f32"`` / ``"float32"`` / ``"bf16"`` / ``"bfloat16"`` for the
     ``dtype`` argument; the stored field is always a :class:`Dtype`.
 
+    ```pycon
     >>> Config(batch_size=0)
     Traceback (most recent call last):
         ...
     ValueError: batch_size must be >= 1 (got 0)
+
+    ```
 
     Attributes:
         batch_size: Samples per batch (>= 1).

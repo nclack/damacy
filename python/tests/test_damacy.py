@@ -31,6 +31,10 @@ from damacy import (
     _native,
 )
 
+# All tests in this file exercise the C extension end-to-end and need
+# a primary CUDA context. Skip cleanly on CPU-only runners.
+pytestmark = pytest.mark.usefixtures("cuda_ctx")
+
 
 def _base_config(dtype: str | int | damacy.Dtype = "f32") -> Config:
     """Minimum-viable Config for tests.
