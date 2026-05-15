@@ -45,7 +45,17 @@ RUN apt-get update \
         python3 \
         python3-dev \
         libnuma1 \
+        libmount1 \
+        libudev1 \
  && rm -rf /var/lib/apt/lists/*
+
+# cuFile compat mode — lets cuFileDriverOpen succeed on hosts without
+# nvidia-fs (e.g., CI runners with consumer GPUs). Reads still write to
+# the caller's device pointer; they route through cuFile's internal
+# host bounce buffer rather than DMA. Sufficient for correctness tests
+# of the GDS code path. Harmless when DAMACY_ENABLE_GDS=OFF (no callers).
+RUN echo '{"properties":{"allow_compat_mode":true}}' > /etc/cufile.json
+ENV CUFILE_ENV_PATH_JSON=/etc/cufile.json
 
 # ----- uv (static binary) + venv ---------------------------------------------
 # Official installer drops uv at /root/.local/bin/uv; relocate to /usr/local/bin
@@ -75,6 +85,7 @@ RUN uv pip install scikit-build-core pytest pytest-cov
 # cluster runs of damacy_bench.
 ARG CMAKE_BUILD_TYPE=RelWithDebInfo
 ARG DAMACY_COVERAGE=OFF
+ARG DAMACY_ENABLE_GDS=OFF
 
 # gcovr + codecov-cli are only needed when DAMACY_COVERAGE=ON; install
 # them into the project venv so they're on PATH for the test workflow.
@@ -99,10 +110,11 @@ WORKDIR /workspace/damacy
 COPY . /workspace/damacy
 
 # Configure + build the C library, damacy_bench, and the Python extension.
-# CMAKE_BUILD_TYPE and DAMACY_COVERAGE come from --build-arg above.
+# CMAKE_BUILD_TYPE, DAMACY_COVERAGE, DAMACY_ENABLE_GDS come from --build-arg.
 RUN cmake -S . -B build -G Ninja \
         -DDAMACY_PYTHON=ON \
         -DDAMACY_COVERAGE=${DAMACY_COVERAGE} \
+        -DDAMACY_ENABLE_GDS=${DAMACY_ENABLE_GDS} \
         -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
 RUN cmake --build build
 

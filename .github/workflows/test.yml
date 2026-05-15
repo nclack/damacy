@@ -51,6 +51,7 @@ jobs:
           docker build \
             --build-arg CMAKE_BUILD_TYPE=Debug \
             --build-arg DAMACY_COVERAGE=ON \
+            --build-arg DAMACY_ENABLE_GDS=ON \
             --tag "$IMAGE" .
 
       - name: Run ctest + Python smoke + gcovr + codecov upload
