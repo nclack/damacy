@@ -49,11 +49,10 @@ RUN apt-get update \
         libudev1 \
  && rm -rf /var/lib/apt/lists/*
 
-# cuFile compat mode — lets cuFileDriverOpen succeed on hosts without
-# nvidia-fs (consumer GPUs / CI runners). Reads route through cuFile's
-# host bounce buffer instead of DMA. Harmless when enable_gds is unset.
-RUN echo '{"properties":{"allow_compat_mode":true}}' > /etc/cufile.json
-ENV CUFILE_ENV_PATH_JSON=/etc/cufile.json
+# Default /etc/cufile.json from the CUDA toolkit already enables
+# allow_compat_mode and ships the posix_pool / posix_gds_min_kb /
+# posix_unaligned_writes settings that compat-mode cuFileHandleRegister
+# needs on tmpfs. Don't replace it.
 
 # ----- uv (static binary) + venv ---------------------------------------------
 # Official installer drops uv at /root/.local/bin/uv; relocate to /usr/local/bin
