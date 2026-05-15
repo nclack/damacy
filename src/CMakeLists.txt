@@ -32,16 +32,12 @@ add_src_lib(crc32c SOURCES util/crc32c.c util/crc32c.h LINKS platform)
 add_src_lib(hash   SOURCES util/hash.c   util/hash.h)
 add_src_lib(lru    SOURCES util/lru.c    util/lru.h LINKS log)
 
-# NUMA-aware pinned-host placement + thread affinity. The .c carries
-# both flavors gated on DAMACY_NUMA_ENABLED; the libnuma flavor links
-# the shared lib found in the top-level CMakeLists. CUDA::cuda_driver
-# for cuDeviceGetAttribute(HOST_NUMA_ID) and the BDF fallback.
-add_cuda_lib(numa SOURCES numa/numa.h numa/numa.c LINKS log CUDA::cuda_driver)
-if(DAMACY_NUMA_AVAILABLE)
-    target_include_directories(numa PRIVATE ${NUMA_INCLUDE_DIR})
-    target_link_libraries(numa PUBLIC ${NUMA_LIBRARY})
-    target_compile_definitions(numa PUBLIC DAMACY_NUMA_ENABLED=1)
-endif()
+# NUMA-aware pinned-host placement + thread affinity. libnuma is loaded
+# via dlopen at runtime (see numa/numa.c) so a single binary works on
+# hosts with or without libnuma installed; -ldl is universally available
+# on Linux. CUDA::cuda_driver for cuDeviceGetAttribute(HOST_NUMA_ID) and
+# the BDF sysfs fallback.
+add_cuda_lib(numa SOURCES numa/numa.h numa/numa.c LINKS log CUDA::cuda_driver ${CMAKE_DL_LIBS})
 
 # Platform abstraction (posix-only for now; chucky-style platform-split lives here)
 add_src_lib(platform    SOURCES platform/platform.h    LINKS Threads::Threads)

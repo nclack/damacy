@@ -9,12 +9,29 @@
 #include <stdio.h>
 #include <string.h>
 
-#if defined(DAMACY_NUMA_ENABLED) && DAMACY_NUMA_ENABLED
+#if defined(__linux__)
 
 #include <assert.h>
-#include <numa.h>
+#include <dlfcn.h>
 #include <pthread.h>
 #include <sched.h>
+
+// Minimal redeclaration of libnuma's `struct bitmask`. We dlopen
+// libnuma instead of linking it so a single binary ships across hosts
+// with and without numactl installed; that means we cannot include
+// <numa.h>. The (size, maskp) pair has been stable since libnuma 2.0
+// — older fields don't exist and newer ones (if any) come after.
+struct numa_bitmask
+{
+  unsigned long size;
+  unsigned long* maskp;
+};
+
+typedef int (*pfn_numa_available)(void);
+typedef int (*pfn_numa_max_node)(void);
+typedef struct numa_bitmask* (*pfn_numa_allocate_cpumask)(void);
+typedef void (*pfn_numa_free_cpumask)(struct numa_bitmask*);
+typedef int (*pfn_numa_node_to_cpus)(int, struct numa_bitmask*);
 
 // numa_resolved.cpu_mask is a raw 128-byte blob — make sure cpu_set_t
 // fits. glibc's default CPU_SETSIZE is 1024 bits = 128 bytes; if a
@@ -22,17 +39,77 @@
 static_assert(sizeof(cpu_set_t) <= 128,
               "cpu_set_t larger than numa_resolved.cpu_mask");
 
+// Resolved libnuma symbol table. `handle` doubles as the lazy-load
+// state machine: NULL = not yet attempted, (void*)-1 = dlopen/dlsym
+// failed (don't retry), anything else = a live handle with the function
+// pointers populated.
+#define LIBNUMA_FAILED ((void*)-1)
+static struct
+{
+  void* handle;
+  pfn_numa_available available;
+  pfn_numa_max_node max_node;
+  pfn_numa_allocate_cpumask allocate_cpumask;
+  pfn_numa_free_cpumask free_cpumask;
+  pfn_numa_node_to_cpus node_to_cpus;
+} g_libnuma;
+
 // One-shot guard so we only log "libnuma unavailable" once across the
 // process lifetime — repeated damacy_create calls shouldn't spam.
 static int g_numa_unavailable_logged = 0;
 
-// Probe libnuma at runtime. Returns 1 if usable, 0 if the kernel doesn't
-// support NUMA (numa_available() < 0). Logs a single INFO message on
-// first failure.
+// dlopen libnuma.so.1 and resolve the 5 symbols we need. Returns 1 on
+// full success, 0 on any failure (which is then memoized via the
+// LIBNUMA_FAILED sentinel so the next call short-circuits). Not thread-
+// safe vs. the very first call; numa_init is invoked from damacy_create
+// before any workers spin up.
+static int
+try_load_libnuma(void)
+{
+  if (g_libnuma.handle == LIBNUMA_FAILED)
+    return 0;
+  if (g_libnuma.handle != NULL)
+    return 1;
+
+  void* h = dlopen("libnuma.so.1", RTLD_LAZY | RTLD_LOCAL);
+  if (!h) {
+    g_libnuma.handle = LIBNUMA_FAILED;
+    return 0;
+  }
+
+  g_libnuma.available = (pfn_numa_available)dlsym(h, "numa_available");
+  g_libnuma.max_node = (pfn_numa_max_node)dlsym(h, "numa_max_node");
+  g_libnuma.allocate_cpumask =
+    (pfn_numa_allocate_cpumask)dlsym(h, "numa_allocate_cpumask");
+  g_libnuma.free_cpumask = (pfn_numa_free_cpumask)dlsym(h, "numa_free_cpumask");
+  g_libnuma.node_to_cpus = (pfn_numa_node_to_cpus)dlsym(h, "numa_node_to_cpus");
+
+  if (!g_libnuma.available || !g_libnuma.max_node ||
+      !g_libnuma.allocate_cpumask || !g_libnuma.free_cpumask ||
+      !g_libnuma.node_to_cpus) {
+    dlclose(h);
+    g_libnuma.handle = LIBNUMA_FAILED;
+    return 0;
+  }
+
+  g_libnuma.handle = h;
+  return 1;
+}
+
+// Probe libnuma at runtime. Returns 1 if usable, 0 if libnuma can't be
+// loaded or the kernel doesn't support NUMA (numa_available() < 0).
+// Logs a single INFO message on first failure.
 static int
 runtime_numa_ok(void)
 {
-  if (numa_available() < 0) {
+  if (!try_load_libnuma()) {
+    if (!g_numa_unavailable_logged) {
+      log_info("numa: libnuma.so.1 not loadable — NUMA placement disabled");
+      g_numa_unavailable_logged = 1;
+    }
+    return 0;
+  }
+  if (g_libnuma.available() < 0) {
     if (!g_numa_unavailable_logged) {
       log_info("numa: numa_available()<0 — NUMA placement disabled");
       g_numa_unavailable_logged = 1;
@@ -93,11 +170,11 @@ resolve_from_driver(CUdevice cu_dev)
 static int
 build_node_cpu_mask(int node, uint8_t out[128])
 {
-  struct bitmask* bm = numa_allocate_cpumask();
+  struct numa_bitmask* bm = g_libnuma.allocate_cpumask();
   if (!bm)
     return 1;
-  if (numa_node_to_cpus(node, bm) != 0) {
-    numa_free_cpumask(bm);
+  if (g_libnuma.node_to_cpus(node, bm) != 0) {
+    g_libnuma.free_cpumask(bm);
     return 1;
   }
   cpu_set_t cs;
@@ -112,7 +189,7 @@ build_node_cpu_mask(int node, uint8_t out[128])
       ++popcnt;
     }
   }
-  numa_free_cpumask(bm);
+  g_libnuma.free_cpumask(bm);
   if (popcnt == 0)
     return 1;
   memcpy(out, &cs, sizeof(cs) < 128 ? sizeof(cs) : 128);
@@ -137,9 +214,9 @@ numa_init(enum numa_strategy strategy,
   // Single-node box: nothing to pin against. numa_max_node() returns the
   // highest configured node id; 0 means just node 0 exists. Treat as
   // no-op so single-socket CI runs don't pretend to pin.
-  if (numa_max_node() <= 0) {
+  if (g_libnuma.max_node() <= 0) {
     log_info("numa: max_node=%d — single-node host, no pinning",
-             numa_max_node());
+             g_libnuma.max_node());
     return;
   }
 
@@ -148,10 +225,10 @@ numa_init(enum numa_strategy strategy,
   if (strategy == NUMA_PIN_TO) {
     node = override_node;
     source = "override";
-    if (node < 0 || node > numa_max_node()) {
+    if (node < 0 || node > g_libnuma.max_node()) {
       log_warn("numa: pin_to node=%d out of range [0..%d] — no pinning",
                node,
-               numa_max_node());
+               g_libnuma.max_node());
       return;
     }
   } else {
@@ -254,11 +331,10 @@ numa_apply_thread_affinity(const struct numa_resolved* r,
   }
 }
 
-#else /* DAMACY_NUMA_ENABLED */
+#else /* !__linux__ */
 
-// Build-time no-op flavor. Compiled when libnuma wasn't found at
-// configure time (or DAMACY_NUMA explicitly OFF). The control surface
-// stays identical so call sites don't need #ifdefs.
+// Non-Linux: libnuma is Linux-only and dlopen-able only there. Compile
+// the control surface as no-ops so call sites stay #ifdef-free.
 
 static int g_numa_off_logged = 0;
 
@@ -274,7 +350,7 @@ numa_init(enum numa_strategy strategy,
   memset(out, 0, sizeof(*out));
   out->node = -1;
   if (!g_numa_off_logged) {
-    log_info("numa: libnuma not enabled at build time — no pinning");
+    log_info("numa: non-Linux platform — no pinning");
     g_numa_off_logged = 1;
   }
 }
@@ -300,4 +376,4 @@ numa_apply_thread_affinity(const struct numa_resolved* r,
   (void)thread_label;
 }
 
-#endif /* DAMACY_NUMA_ENABLED */
+#endif /* __linux__ */

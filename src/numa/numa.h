@@ -9,9 +9,10 @@
 //   3. numa_apply_thread_affinity — pin a worker thread permanently
 //      (io_queue, scheduler) to the node's CPU set.
 //
-// All entry points are NULL-safe and graceful no-ops when libnuma is
-// absent at build time (DAMACY_NUMA off) or NUMA is unavailable at
-// runtime (numa_available() < 0, single-node, etc.).
+// All entry points are NULL-safe and graceful no-ops when libnuma
+// can't be dlopen'd at runtime, NUMA is unavailable
+// (numa_available() < 0), the host is single-node, or the build target
+// isn't Linux.
 #pragma once
 
 #include <cuda.h>
@@ -30,7 +31,7 @@ extern "C"
   };
 
   // Resolved NUMA placement plan. node < 0 means "no pinning"; produced
-  // by numa_init when strategy is disabled, the platform lacks libnuma,
+  // by numa_init when strategy is disabled, libnuma can't be loaded,
   // numa_available() < 0, the driver attr returns -1, or the resolved
   // node has no CPUs. cpu_mask is opaque; numa_apply_thread_affinity
   // consumes it.
@@ -44,8 +45,8 @@ extern "C"
   };
 
   // Resolve the GPU's host-NUMA node and populate `out`. Logs once at
-  // INFO if libnuma is missing or numa_available() < 0; that log line
-  // is emitted from the first call and silenced thereafter.
+  // INFO if libnuma can't be loaded or numa_available() < 0; that log
+  // line is emitted from the first call and silenced thereafter.
   void numa_init(enum numa_strategy strategy,
                  int override_node,
                  CUdevice cu_device,
@@ -53,7 +54,7 @@ extern "C"
 
   // Temporarily pin the calling thread to the resolved node's CPU set,
   // saving the prior mask in `saved`. Pair with numa_scope_exit. No-op
-  // (and writes a zero `saved`) when `r->node < 0` or libnuma is off.
+  // (and writes a zero `saved`) when `r->node < 0`.
   void numa_scope_enter(const struct numa_resolved* r, uint8_t saved[128]);
 
   // Restore the affinity captured by numa_scope_enter. Safe to call when
@@ -62,8 +63,8 @@ extern "C"
 
   // Permanently set the current thread's CPU affinity to the resolved
   // node's CPU set. Intended to run from worker-thread entry. No-op
-  // when `r->node < 0` or libnuma is off. Logs the thread's resulting
-  // mask at TRACE for diagnosis.
+  // when `r->node < 0`. Logs the thread's resulting mask at TRACE for
+  // diagnosis.
   void numa_apply_thread_affinity(const struct numa_resolved* r,
                                   const char* thread_label);
 

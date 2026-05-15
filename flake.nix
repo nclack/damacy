@@ -91,14 +91,10 @@
             cudaPkgs.nsight_systems
             cudaPkgs.nsight_compute
           ] ++ (with pkgs; [
-            # libnuma for the NUMA-aware pinned-host placement + thread
-            # affinity feature (src/numa). CMake gates the feature off
-            # if it can't find numa.h / -lnuma, so this is optional —
-            # but bundling both numactl outputs keeps headers (`.dev`)
-            # and the runtime lib (`.out`) on the devShell's compile +
-            # link paths so the feature is actually built.
+            # libnuma is loaded at runtime via dlopen (see src/numa/numa.c);
+            # only needed if you want NUMA pinning to actually do anything.
+            # Kept in the devShell so multi-socket dev boxes resolve a node.
             numactl
-            numactl.dev
             lldb
             gh
             man-pages
