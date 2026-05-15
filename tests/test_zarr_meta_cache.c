@@ -34,6 +34,44 @@ static const char* MINIMAL_ZARR_JSON =
   "\"index_location\":\"end\"}}]"
   "}";
 
+// Non-sharded zarr v3: top-level [bytes, zstd] codec list, no
+// sharding_indexed wrapper. Each chunk is its own file.
+static const char* UNSHARDED_ZSTD_ZARR_JSON =
+  "{"
+  "\"zarr_format\":3,"
+  "\"node_type\":\"array\","
+  "\"shape\":[64,1024],"
+  "\"data_type\":\"uint16\","
+  "\"chunk_grid\":{\"name\":\"regular\",\"configuration\":{"
+  "\"chunk_shape\":[32,128]}},"
+  "\"chunk_key_encoding\":{\"name\":\"default\",\"configuration\":{"
+  "\"separator\":\"/\"}},"
+  "\"fill_value\":0,"
+  "\"codecs\":[{\"name\":\"bytes\",\"configuration\":{\"endian\":\"little\"}},"
+  "{\"name\":\"zstd\",\"configuration\":{\"level\":3}}]"
+  "}";
+
+// Sharded zarr v3 with index_location: "start".
+static const char* SHARDED_START_ZARR_JSON =
+  "{"
+  "\"zarr_format\":3,"
+  "\"node_type\":\"array\","
+  "\"shape\":[64,1024],"
+  "\"data_type\":\"uint16\","
+  "\"chunk_grid\":{\"name\":\"regular\",\"configuration\":{"
+  "\"chunk_shape\":[64,512]}},"
+  "\"chunk_key_encoding\":{\"name\":\"default\",\"configuration\":{"
+  "\"separator\":\"/\"}},"
+  "\"fill_value\":0,"
+  "\"codecs\":[{\"name\":\"sharding_indexed\",\"configuration\":{"
+  "\"chunk_shape\":[32,128],"
+  "\"codecs\":[{\"name\":\"bytes\",\"configuration\":{\"endian\":\"little\"}},"
+  "{\"name\":\"zstd\",\"configuration\":{\"level\":3,\"checksum\":false}}],"
+  "\"index_codecs\":[{\"name\":\"bytes\",\"configuration\":{"
+  "\"endian\":\"little\"}},{\"name\":\"crc32c\"}],"
+  "\"index_location\":\"start\"}}]"
+  "}";
+
 static int
 test_meta_cache(void)
 {
@@ -102,10 +140,84 @@ test_meta_cache(void)
   return 0;
 }
 
+// Non-sharded zarr v3 should parse with sharded=0 and
+// inner_chunk_shape == shard_shape.
+static int
+test_meta_cache_unsharded(void)
+{
+  char tmpl[] = "/tmp/damacy_meta_unsharded_XXXXXX";
+  char* root = mkdtemp(tmpl);
+  EXPECT(root);
+
+  char path[512];
+  snprintf(path, sizeof path, "%s/foo", root);
+  EXPECT(mkdir(path, 0755) == 0);
+  snprintf(path, sizeof path, "%s/foo/zarr.json", root);
+  EXPECT(fixture_write_file(path, UNSHARDED_ZSTD_ZARR_JSON) == 0);
+
+  struct store_fs_config sc = { .root = root, .nthreads = 1 };
+  struct store* store = store_fs_create(&sc);
+  EXPECT(store);
+
+  struct zarr_meta_cache* c = zarr_meta_cache_create(store, 4);
+  EXPECT(c);
+
+  const struct zarr_metadata* m = NULL;
+  EXPECT(zarr_meta_cache_get(c, "foo", &m) == DAMACY_OK);
+  EXPECT(m);
+  EXPECT(m->rank == 2);
+  EXPECT(m->shape[0] == 64 && m->shape[1] == 1024);
+  EXPECT(m->shard_shape[0] == 32 && m->shard_shape[1] == 128);
+  EXPECT(m->inner_chunk_shape[0] == 32 && m->inner_chunk_shape[1] == 128);
+  EXPECT(m->sharded == 0);
+  EXPECT(m->inner_codec.id == CODEC_ZSTD);
+
+  zarr_meta_cache_destroy(c);
+  store_destroy(store);
+  fixture_rm_tree(root);
+  return 0;
+}
+
+// Sharded zarr v3 with index_location: "start" should parse with
+// index_location_end == 0.
+static int
+test_meta_cache_index_start(void)
+{
+  char tmpl[] = "/tmp/damacy_meta_index_start_XXXXXX";
+  char* root = mkdtemp(tmpl);
+  EXPECT(root);
+
+  char path[512];
+  snprintf(path, sizeof path, "%s/foo", root);
+  EXPECT(mkdir(path, 0755) == 0);
+  snprintf(path, sizeof path, "%s/foo/zarr.json", root);
+  EXPECT(fixture_write_file(path, SHARDED_START_ZARR_JSON) == 0);
+
+  struct store_fs_config sc = { .root = root, .nthreads = 1 };
+  struct store* store = store_fs_create(&sc);
+  EXPECT(store);
+
+  struct zarr_meta_cache* c = zarr_meta_cache_create(store, 4);
+  EXPECT(c);
+
+  const struct zarr_metadata* m = NULL;
+  EXPECT(zarr_meta_cache_get(c, "foo", &m) == DAMACY_OK);
+  EXPECT(m);
+  EXPECT(m->sharded == 1);
+  EXPECT(m->index_location_end == 0);
+
+  zarr_meta_cache_destroy(c);
+  store_destroy(store);
+  fixture_rm_tree(root);
+  return 0;
+}
+
 int
 main(void)
 {
   RUN(test_meta_cache);
+  RUN(test_meta_cache_unsharded);
+  RUN(test_meta_cache_index_start);
   log_info("all tests passed");
   return 0;
 }

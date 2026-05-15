@@ -68,6 +68,54 @@ fixture_write_synthetic_shard(const char* path,
   return n_written == total_n_bytes ? 0 : 1;
 }
 
+int
+fixture_write_synthetic_shard_start(const char* path,
+                                    size_t payload_n_bytes,
+                                    const uint64_t* offsets,
+                                    const uint64_t* nbytes,
+                                    size_t n_entries)
+{
+  size_t header_n_bytes = zarr_shard_index_size(n_entries);
+  size_t total_n_bytes = header_n_bytes + payload_n_bytes;
+  uint8_t* buf = (uint8_t*)calloc(total_n_bytes, 1);
+  if (!buf)
+    return 1;
+  uint8_t* header = buf;
+  for (size_t i = 0; i < n_entries; ++i) {
+    fixture_write_le64(header + 16 * i + 0, offsets[i]);
+    fixture_write_le64(header + 16 * i + 8, nbytes[i]);
+  }
+  uint32_t crc = crc32c(header, n_entries * 16u);
+  fixture_write_le32(header + n_entries * 16u, crc);
+
+  FILE* file = fopen(path, "wb");
+  if (!file) {
+    free(buf);
+    return 1;
+  }
+  size_t n_written = fwrite(buf, 1, total_n_bytes, file);
+  fclose(file);
+  free(buf);
+  return n_written == total_n_bytes ? 0 : 1;
+}
+
+int
+fixture_write_zero_file(const char* path, size_t n_bytes)
+{
+  FILE* file = fopen(path, "wb");
+  if (!file)
+    return 1;
+  uint8_t* buf = (uint8_t*)calloc(n_bytes ? n_bytes : 1, 1);
+  if (!buf) {
+    fclose(file);
+    return 1;
+  }
+  size_t n_written = fwrite(buf, 1, n_bytes, file);
+  fclose(file);
+  free(buf);
+  return n_written == n_bytes ? 0 : 1;
+}
+
 // Append "%lld" / "%lld,%lld,..." to `dst` from `vals[0..rank)`. Returns
 // the number of bytes written (excluding NUL); -1 on truncation.
 static int

@@ -197,48 +197,70 @@ zarr_metadata_parse(const char* src, size_t src_len, struct zarr_metadata* out)
   };
 
   struct json_node sharding;
-  if (json_resolve(all, sharding_path, countof(sharding_path), &sharding, NULL))
-    return 1; // v0 requires sharded layout
-  out->sharded = 1;
+  enum json_err sharding_err =
+    json_resolve(all, sharding_path, countof(sharding_path), &sharding, NULL);
+  if (sharding_err == JSON_OK) {
+    out->sharded = 1;
 
-  // inner chunk shape
-  {
-    static const struct json_query path[] = {
-      { QUERY_KEY, .key = "configuration" }, { QUERY_KEY, .key = "chunk_shape" }
-    };
-    struct json_node n;
-    if (json_resolve(sharding.s, path, countof(path), &n, NULL))
-      return 1;
-    uint8_t rank2 = 0;
-    if (read_uint_array(n, out->inner_chunk_shape, &rank2, DAMACY_MAX_RANK))
-      return 1;
-    if (rank2 != out->rank)
-      return 1;
-  }
+    // inner chunk shape
+    {
+      static const struct json_query path[] = {
+        { QUERY_KEY, .key = "configuration" },
+        { QUERY_KEY, .key = "chunk_shape" }
+      };
+      struct json_node n;
+      if (json_resolve(sharding.s, path, countof(path), &n, NULL))
+        return 1;
+      uint8_t rank2 = 0;
+      if (read_uint_array(n, out->inner_chunk_shape, &rank2, DAMACY_MAX_RANK))
+        return 1;
+      if (rank2 != out->rank)
+        return 1;
+    }
 
-  // inner codecs
-  {
-    static const struct json_query path[] = {
-      { QUERY_KEY, .key = "configuration" }, { QUERY_KEY, .key = "codecs" }
-    };
-    struct json_node n;
-    if (json_resolve(sharding.s, path, countof(path), &n, NULL))
-      return 1;
-    if (parse_inner_codec(n, &out->inner_codec))
-      return 1;
-  }
+    // inner codecs
+    {
+      static const struct json_query path[] = {
+        { QUERY_KEY, .key = "configuration" }, { QUERY_KEY, .key = "codecs" }
+      };
+      struct json_node n;
+      if (json_resolve(sharding.s, path, countof(path), &n, NULL))
+        return 1;
+      if (parse_inner_codec(n, &out->inner_codec))
+        return 1;
+    }
 
-  // index_location (optional; defaults to "end")
-  out->index_location_end = 1;
-  {
-    static const struct json_query path[] = {
-      { QUERY_KEY, .key = "configuration" },
-      { QUERY_KEY, .key = "index_location" }
-    };
-    struct json_node n;
-    if (json_resolve(sharding.s, path, countof(path), &n, NULL) == JSON_OK &&
-        json_str_eq(n, "start"))
-      out->index_location_end = 0;
+    // index_location (optional; defaults to "end")
+    out->index_location_end = 1;
+    {
+      static const struct json_query path[] = {
+        { QUERY_KEY, .key = "configuration" },
+        { QUERY_KEY, .key = "index_location" }
+      };
+      struct json_node n;
+      if (json_resolve(sharding.s, path, countof(path), &n, NULL) == JSON_OK &&
+          json_str_eq(n, "start"))
+        out->index_location_end = 0;
+    }
+  } else if (sharding_err == JSON_ERR_NOT_FOUND) {
+    // Non-sharded zarr v3: each chunk is its own file. Treat as
+    // "shard of one" — the chunk_grid's chunk_shape IS the inner chunk
+    // shape, and the outer (shard) shape equals the inner. The
+    // top-level codecs list applies to each chunk directly.
+    out->sharded = 0;
+    out->index_location_end = 1;
+    for (uint8_t i = 0; i < out->rank; ++i)
+      out->inner_chunk_shape[i] = out->shard_shape[i];
+
+    static const struct json_query codecs_path[] = { { QUERY_KEY,
+                                                       .key = "codecs" } };
+    struct json_node codecs;
+    if (json_resolve(all, codecs_path, countof(codecs_path), &codecs, NULL))
+      return 1;
+    if (parse_inner_codec(codecs, &out->inner_codec))
+      return 1;
+  } else {
+    return 1;
   }
 
   // Sanity: shard_shape must be a multiple of inner_chunk_shape on each dim.

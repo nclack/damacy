@@ -589,6 +589,254 @@ test_codec_id_blosc_unknown_cname(void)
   return 0;
 }
 
+// Non-sharded zarr v3: each chunk is its own file at c/<i>/<j>/...
+// inner_chunk_shape == chunk_grid's chunk_shape; the cache synthesises
+// a 1-entry index per file. Verify the planner plans correctly.
+static const char* UNSHARDED_ZSTD_ZARR_JSON =
+  "{"
+  "\"zarr_format\":3,"
+  "\"node_type\":\"array\","
+  "\"shape\":[4,8],"
+  "\"data_type\":\"uint16\","
+  "\"chunk_grid\":{\"name\":\"regular\",\"configuration\":{"
+  "\"chunk_shape\":[2,4]}},"
+  "\"chunk_key_encoding\":{\"name\":\"default\",\"configuration\":{"
+  "\"separator\":\"/\"}},"
+  "\"fill_value\":0,"
+  "\"codecs\":[{\"name\":\"bytes\",\"configuration\":{\"endian\":\"little\"}},"
+  "{\"name\":\"zstd\",\"configuration\":{\"level\":3}}]"
+  "}";
+
+// Sharded zarr v3 with index_location: "start" (otherwise identical to
+// MINIMAL_ZARR_JSON).
+static const char* SHARDED_INDEX_START_ZARR_JSON =
+  "{"
+  "\"zarr_format\":3,"
+  "\"node_type\":\"array\","
+  "\"shape\":[4,8],"
+  "\"data_type\":\"uint16\","
+  "\"chunk_grid\":{\"name\":\"regular\",\"configuration\":{"
+  "\"chunk_shape\":[4,8]}},"
+  "\"chunk_key_encoding\":{\"name\":\"default\",\"configuration\":{"
+  "\"separator\":\"/\"}},"
+  "\"fill_value\":0,"
+  "\"codecs\":[{\"name\":\"sharding_indexed\",\"configuration\":{"
+  "\"chunk_shape\":[2,4],"
+  "\"codecs\":[{\"name\":\"bytes\",\"configuration\":{\"endian\":\"little\"}},"
+  "{\"name\":\"zstd\",\"configuration\":{\"level\":3,\"checksum\":false}}],"
+  "\"index_codecs\":[{\"name\":\"bytes\",\"configuration\":{"
+  "\"endian\":\"little\"}},{\"name\":\"crc32c\"}],"
+  "\"index_location\":\"start\"}}]"
+  "}";
+
+// Build a fixture for a non-sharded array. Each chunk c/<i>/<j> is a
+// plain file whose entire content is the (synthetic) compressed chunk.
+static int
+fixture_init_unsharded(struct fixture* f, const uint32_t* chunk_bytes_2x2)
+{
+  strcpy(f->root, "/tmp/damacy_planner_un_XXXXXX");
+  EXPECT(mkdtemp(f->root));
+  char p[256];
+  snprintf(p, sizeof p, "%s/foo", f->root);
+  EXPECT(mkdir(p, 0755) == 0);
+  snprintf(p, sizeof p, "%s/foo/zarr.json", f->root);
+  EXPECT(fixture_write_file(p, UNSHARDED_ZSTD_ZARR_JSON) == 0);
+  snprintf(p, sizeof p, "%s/foo/c", f->root);
+  EXPECT(mkdir(p, 0755) == 0);
+  for (uint8_t i = 0; i < 2; ++i) {
+    snprintf(p, sizeof p, "%s/foo/c/%u", f->root, i);
+    EXPECT(mkdir(p, 0755) == 0);
+    for (uint8_t j = 0; j < 2; ++j) {
+      snprintf(p, sizeof p, "%s/foo/c/%u/%u", f->root, i, j);
+      EXPECT(fixture_write_zero_file(p, chunk_bytes_2x2[i * 2 + j]) == 0);
+    }
+  }
+
+  struct store_fs_config sc = { .root = f->root, .nthreads = 1 };
+  f->store = store_fs_create(&sc);
+  EXPECT(f->store);
+  f->meta = zarr_meta_cache_create(f->store, 4);
+  EXPECT(f->meta);
+  f->shards = zarr_shard_cache_create(f->store, 4);
+  EXPECT(f->shards);
+  struct planner_config pcfg = {
+    .meta_cache = f->meta,
+    .shard_cache = f->shards,
+    .page_alignment = PAGE,
+  };
+  EXPECT(planner_create(&pcfg, &f->planner) == DAMACY_OK);
+  return 0;
+}
+
+static int
+test_unsharded_single_chunk(void)
+{
+  // 2x2 grid of chunks; each file is its own "shard of one".
+  const uint32_t chunk_bytes[4] = { 32, 40, 48, 56 };
+  struct fixture f = { 0 };
+  if (fixture_init_unsharded(&f, chunk_bytes))
+    return 1;
+
+  // Sample covers exactly chunk (1, 0): y in [2,4), x in [0,4).
+  struct damacy_sample s = mk_sample("foo", 2, 4, 0, 4);
+  int64_t dst_strides[3];
+  mk_dst_strides_2d(1, 2, 4, dst_strides);
+
+  struct read_op reads[8] = { 0 };
+  struct chunk_plan chunks[8] = { 0 };
+  struct sample_plan samples[4] = { 0 };
+  struct planner_output out = {
+    .read_ops = reads,
+    .read_ops_cap = 8,
+    .chunk_plans = chunks,
+    .chunk_plans_cap = 8,
+    .sample_plans = samples,
+    .sample_plans_cap = 4,
+  };
+  EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
+
+  EXPECT(out.n_chunk_plans == 1);
+  EXPECT(out.n_read_ops == 1);
+  EXPECT(out.n_sample_plans == 1);
+
+  // The "chunk file" is c/1/0; offset 0; nbytes 48 (chunk_bytes[2]).
+  // shard_path constructed inside the planner is "foo/c/1/0".
+  EXPECT(strcmp(reads[0].shard_path, "foo/c/1/0") == 0);
+  EXPECT(reads[0].file_offset == 0);
+  EXPECT(reads[0].nbytes == PAGE);
+  EXPECT(chunks[0].offset_in_read == 0);
+  EXPECT(chunks[0].compressed_nbytes == 48);
+  EXPECT(chunks[0].decompressed_nbytes == 16);
+  EXPECT(chunks[0].codec_id == CODEC_ZSTD);
+  EXPECT(chunks[0].chunk_d[0] == 0 && chunks[0].chunk_d[1] == 0);
+
+  fixture_destroy(&f);
+  return 0;
+}
+
+static int
+test_unsharded_multi_chunk(void)
+{
+  // Sample spans all 4 chunks; one read_op per chunk file.
+  const uint32_t chunk_bytes[4] = { 30, 40, 50, 60 };
+  struct fixture f = { 0 };
+  if (fixture_init_unsharded(&f, chunk_bytes))
+    return 1;
+
+  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  int64_t dst_strides[3];
+  mk_dst_strides_2d(1, 4, 8, dst_strides);
+
+  struct read_op reads[8] = { 0 };
+  struct chunk_plan chunks[8] = { 0 };
+  struct sample_plan samples[4] = { 0 };
+  struct planner_output out = {
+    .read_ops = reads,
+    .read_ops_cap = 8,
+    .chunk_plans = chunks,
+    .chunk_plans_cap = 8,
+    .sample_plans = samples,
+    .sample_plans_cap = 4,
+  };
+  EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
+  EXPECT(out.n_chunk_plans == 4);
+  EXPECT(out.n_read_ops == 4);
+  EXPECT(out.n_sample_plans == 1);
+
+  // Chunks emitted row-major; their compressed_nbytes match per-file sizes.
+  EXPECT(chunks[0].compressed_nbytes == 30);
+  EXPECT(chunks[1].compressed_nbytes == 40);
+  EXPECT(chunks[2].compressed_nbytes == 50);
+  EXPECT(chunks[3].compressed_nbytes == 60);
+
+  // Distinct chunk files: each read_op carries a distinct path.
+  EXPECT(strcmp(reads[0].shard_path, "foo/c/0/0") == 0);
+  EXPECT(strcmp(reads[1].shard_path, "foo/c/0/1") == 0);
+  EXPECT(strcmp(reads[2].shard_path, "foo/c/1/0") == 0);
+  EXPECT(strcmp(reads[3].shard_path, "foo/c/1/1") == 0);
+  for (uint32_t i = 0; i < 4; ++i) {
+    EXPECT(reads[i].file_offset == 0);
+    EXPECT(chunks[i].offset_in_read == 0);
+  }
+
+  fixture_destroy(&f);
+  return 0;
+}
+
+// index_location: "start" — index sits at offset 0, payload follows.
+// Verify the planner reads the right offsets (absolute file offsets in
+// the index entries) and produces working chunk_plans.
+static int
+test_sharded_index_start(void)
+{
+  // 4 inner chunks; absolute offsets all clear of the index header
+  // (index = 4*16+4 = 68 bytes). Use multiples of 256 for clarity.
+  const uint64_t offsets[4] = { 256, 512, 768, 1024 };
+  const uint64_t nbytes[4] = { 32, 32, 32, 32 };
+
+  struct fixture f = { 0 };
+  // Re-use fixture_init_with_json but write a start-mode shard.
+  strcpy(f.root, "/tmp/damacy_planner_is_XXXXXX");
+  EXPECT(mkdtemp(f.root));
+  char p[256];
+  snprintf(p, sizeof p, "%s/foo", f.root);
+  EXPECT(mkdir(p, 0755) == 0);
+  snprintf(p, sizeof p, "%s/foo/zarr.json", f.root);
+  EXPECT(fixture_write_file(p, SHARDED_INDEX_START_ZARR_JSON) == 0);
+  snprintf(p, sizeof p, "%s/foo/c", f.root);
+  EXPECT(mkdir(p, 0755) == 0);
+  snprintf(p, sizeof p, "%s/foo/c/0", f.root);
+  EXPECT(mkdir(p, 0755) == 0);
+  snprintf(p, sizeof p, "%s/foo/c/0/0", f.root);
+  EXPECT(fixture_write_synthetic_shard_start(p, 4096, offsets, nbytes, 4) == 0);
+
+  struct store_fs_config sc = { .root = f.root, .nthreads = 1 };
+  f.store = store_fs_create(&sc);
+  EXPECT(f.store);
+  f.meta = zarr_meta_cache_create(f.store, 4);
+  EXPECT(f.meta);
+  f.shards = zarr_shard_cache_create(f.store, 4);
+  EXPECT(f.shards);
+  struct planner_config pcfg = {
+    .meta_cache = f.meta,
+    .shard_cache = f.shards,
+    .page_alignment = PAGE,
+  };
+  EXPECT(planner_create(&pcfg, &f.planner) == DAMACY_OK);
+
+  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  int64_t dst_strides[3];
+  mk_dst_strides_2d(1, 4, 8, dst_strides);
+  struct read_op reads[8] = { 0 };
+  struct chunk_plan chunks[8] = { 0 };
+  struct sample_plan samples[4] = { 0 };
+  struct planner_output out = {
+    .read_ops = reads,
+    .read_ops_cap = 8,
+    .chunk_plans = chunks,
+    .chunk_plans_cap = 8,
+    .sample_plans = samples,
+    .sample_plans_cap = 4,
+  };
+  EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
+  EXPECT(out.n_chunk_plans == 4);
+  EXPECT(out.n_read_ops == 4);
+
+  // All 4 chunks live inside the first PAGE, so each read_op page-aligns
+  // to the same {file_offset=0, nbytes=PAGE}. The interesting per-chunk
+  // values are offset_in_read (= absolute file offset, since page is 0)
+  // and compressed_nbytes.
+  for (uint32_t i = 0; i < 4; ++i) {
+    EXPECT(reads[i].file_offset == 0);
+    EXPECT(reads[i].nbytes == PAGE);
+    EXPECT(chunks[i].offset_in_read == offsets[i]);
+    EXPECT(chunks[i].compressed_nbytes == nbytes[i]);
+  }
+
+  fixture_destroy(&f);
+  return 0;
+}
+
 int
 main(void)
 {
@@ -602,6 +850,9 @@ main(void)
   RUN(test_codec_id_blosc_zstd);
   RUN(test_codec_id_none);
   RUN(test_codec_id_blosc_unknown_cname);
+  RUN(test_unsharded_single_chunk);
+  RUN(test_unsharded_multi_chunk);
+  RUN(test_sharded_index_start);
   log_info("all tests passed");
   return 0;
 }
