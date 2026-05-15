@@ -40,8 +40,9 @@ resolve_use_gpu_blosc_parse(const struct damacy_config* cfg);
 
 // Resolves the enable_gds flag: returns 1 when either cfg->enable_gds
 // is non-zero or the DAMACY_GDS_ENABLE environment variable is set to
-// "1". 0 otherwise. damacy_create cross-checks against use_gpu_parse
-// + store_supports_gds and rejects with DAMACY_INVAL if either is
-// missing.
+// "1". 0 otherwise. damacy_create rejects with DAMACY_INVAL when this
+// resolves to 1 and (a) use_gpu_blosc_parse is not also on, or
+// (b) libcufile.so.0 is not loadable / cuFileDriverOpen fails inside
+// store_fs_create.
 uint8_t
 resolve_enable_gds(const struct damacy_config* cfg);

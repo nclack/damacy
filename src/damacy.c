@@ -532,16 +532,36 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     }
   }
 
+  // Resolve the GPU-parse / GDS opt-ins up front so the store and the
+  // wave pool can be wired with the right backend in one shot.
+  uint8_t use_gpu_parse = resolve_use_gpu_blosc_parse(cfg);
+  uint8_t want_gds = resolve_enable_gds(cfg);
+  if (want_gds && !use_gpu_parse) {
+    log_error("damacy: enable_gds requires use_gpu_blosc_parse (no host "
+              "buffer is available to parse from)");
+    s = DAMACY_INVAL;
+    goto Fail;
+  }
+
+  // CHECK doesn't touch `s`; seed it for the meta/shard/planner CHECKs
+  // below. The store_fs_create branch overrides with INVAL if want_gds.
   s = DAMACY_OOM;
+
   // Sample.uri is absolute; the fs store joins root+key, so empty root
   // turns join into a pass-through.
   struct store_fs_config sc = {
     .root = "",
     .nthreads = (int)cfg->n_io_threads,
     .affinity = &self->numa,
+    .enable_gds = (int)want_gds,
   };
   self->store = store_fs_create(&sc);
-  CHECK(Fail, self->store);
+  if (!self->store) {
+    // When the caller asked for GDS, NULL almost always means cuFile
+    // init failed (logged by store_fs_gds_init) — surface INVAL not OOM.
+    s = want_gds ? DAMACY_INVAL : DAMACY_OOM;
+    goto Fail;
+  }
 
   self->meta_cache =
     zarr_meta_cache_create(self->store, cfg->n_zarrs_meta_cache);
@@ -561,32 +581,6 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   for (int b = 0; b < 2; ++b)
     CHECK(Fail,
           batch_slot_init(&self->batch_pool.slots[b], cfg->batch_size) == 0);
-
-  // Resolve the GPU-parse / GDS opt-ins early so wave_pool_init can
-  // size the per-slot buffers correctly.
-  uint8_t use_gpu_parse = resolve_use_gpu_blosc_parse(cfg);
-  uint8_t want_gds = resolve_enable_gds(cfg);
-  if (want_gds) {
-#ifndef DAMACY_ENABLE_GDS
-    log_error("damacy: enable_gds requested but build lacks DAMACY_ENABLE_GDS");
-    s = DAMACY_INVAL;
-    goto Fail;
-#else
-    if (!store_supports_gds(self->store)) {
-      log_error("damacy: enable_gds requested but cuFile driver init failed; "
-                "falling back is not automatic — disable enable_gds in cfg "
-                "or set up GDS on this host");
-      s = DAMACY_INVAL;
-      goto Fail;
-    }
-    if (!use_gpu_parse) {
-      log_error("damacy: enable_gds requires use_gpu_blosc_parse (no host "
-                "buffer is available to parse from)");
-      s = DAMACY_INVAL;
-      goto Fail;
-    }
-#endif
-  }
 
   s = DAMACY_OOM;
   // Pin the calling thread to the GPU's NUMA node for the duration of

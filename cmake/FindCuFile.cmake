@@ -1,15 +1,9 @@
-# FindCuFile.cmake — locate cufile.h + libcufile.
-#
-# Search order:
-#   1. CUFILE_ROOT environment variable (nix/devShell, vendored installs)
-#   2. CUDAToolkit_ROOT / CUDA_PATH
-#   3. Compiler default search paths
+# FindCuFile.cmake — locate cufile.h. Damacy dlopen's libcufile, so we
+# deliberately do not search for / require the library.
 #
 # Sets:
 #   CuFile_FOUND        — TRUE on success
 #   CuFile_INCLUDE_DIR  — directory containing cufile.h
-#   CuFile_LIBRARY      — full path to libcufile.so
-#   CuFile::cufile      — imported target
 
 set(_cufile_root_hints "")
 if(DEFINED ENV{CUFILE_ROOT})
@@ -29,27 +23,7 @@ find_path(
     PATH_SUFFIXES include targets/x86_64-linux/include
 )
 
-find_library(
-    CuFile_LIBRARY
-    NAMES cufile
-    HINTS ${_cufile_root_hints}
-    PATH_SUFFIXES lib lib64 targets/x86_64-linux/lib
-)
-
 include(FindPackageHandleStandardArgs)
-find_package_handle_standard_args(
-    CuFile
-    REQUIRED_VARS CuFile_INCLUDE_DIR CuFile_LIBRARY
-)
+find_package_handle_standard_args(CuFile REQUIRED_VARS CuFile_INCLUDE_DIR)
 
-if(CuFile_FOUND AND NOT TARGET CuFile::cufile)
-    add_library(CuFile::cufile UNKNOWN IMPORTED)
-    set_target_properties(
-        CuFile::cufile
-        PROPERTIES
-            IMPORTED_LOCATION "${CuFile_LIBRARY}"
-            INTERFACE_INCLUDE_DIRECTORIES "${CuFile_INCLUDE_DIR}"
-    )
-endif()
-
-mark_as_advanced(CuFile_INCLUDE_DIR CuFile_LIBRARY)
+mark_as_advanced(CuFile_INCLUDE_DIR)

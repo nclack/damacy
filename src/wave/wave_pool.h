@@ -85,9 +85,10 @@ struct wave_pool
   // GDS opt-in: peel issues store_read_submit_dev into the slot's
   // device staging buffer; bind aliases wave->dev_compressed to it;
   // submit_bulk_h2d skips the H2D copy. Validated at damacy_create:
-  // requires build with DAMACY_ENABLE_GDS, requires the store to
-  // support submit_dev, requires use_gpu_parse (no host buffer to
-  // parse from). Set by wave_pool_init from the enable_gds parameter.
+  // requires the store to support submit_dev (libcufile.so.0 loadable
+  // + cuFileDriverOpen succeeded) and requires use_gpu_parse (no host
+  // buffer to parse from). Set by wave_pool_init from the enable_gds
+  // parameter.
   uint8_t use_gds;
 };
 

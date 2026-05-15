@@ -36,8 +36,9 @@ struct store
 };
 
 // Cache slot: key string + open file handle. gds_handle is the registered
-// CUfileHandle_t when GDS is enabled and the file has been touched on the
-// device path; NULL otherwise. Owned by store_fs_gds when populated.
+// CUfileHandle_t when the store was created with enable_gds and the file
+// has been touched on the device path; NULL otherwise. Owned by
+// store_fs_gds when populated.
 struct fs_cache_slot
 {
   char* key;
@@ -57,9 +58,9 @@ struct store_fs
   size_t n_slots;
   size_t cap_slots;
 
-  // GDS state. gds_enabled is 1 when cuFileDriverOpen succeeded and the
-  // store can satisfy submit_dev. driver_opened tracks whether we need
-  // to call cuFileDriverClose at destroy.
-  uint8_t gds_enabled;
+  // GDS lifecycle. Set to 1 by store_fs_gds_init after a successful
+  // cuFileDriverOpen so destroy knows to call cuFileDriverClose. The
+  // "is GDS enabled?" question is answered by base.vt: store_supports_gds
+  // returns true iff vt->submit_dev is non-NULL.
   uint8_t gds_driver_opened;
 };

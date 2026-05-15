@@ -87,6 +87,8 @@
             cudaPkgs.cudatoolkit
             cudaPkgs.nvcomp
             cudaPkgs.nvcomp.static
+            # libcufile is dlopen'd at runtime (see store_fs_gds.c):
+            # cufile.h via CUFILE_ROOT, libcufile.so.0 via LD_LIBRARY_PATH.
             cudaPkgs.libcufile
             cudaPkgs.nsight_systems
             cudaPkgs.nsight_compute

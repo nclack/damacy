@@ -1,14 +1,11 @@
-// GPUDirect Storage (cuFile) backend for store_fs. Only compiled when
-// DAMACY_ENABLE_GDS is ON. Wires submit_dev into the fs store's vtable
-// and owns the per-FD cuFileHandle_t cache (lazy registration).
-//
-// Lifecycle: cuFileDriverOpen() at store_fs_create; cuFileDriverClose()
-// at store_fs destroy. Per-FD handles registered on first device read
-// and deregistered when the fs cache slot's platform_file is closed.
+// GPUDirect Storage (cuFile) backend for store_fs. libcufile is
+// dlopen'd lazily at first store_fs_create(enable_gds=1); the handle
+// is leaked at process exit (mirrors src/numa/numa.c). Per-FD cuFile
+// handles are registered on first device read and deregistered when
+// the cache slot's platform_file is closed.
 #pragma once
 
 #include <stddef.h>
-#include <stdint.h>
 
 struct store;
 struct store_fs;
@@ -20,16 +17,16 @@ extern "C"
 {
 #endif
 
-  // Try to enable GDS on a freshly-created store_fs. Calls
-  // cuFileDriverOpen, sets the submit_dev vtable slot on success, and
-  // returns 0; returns non-zero (and leaves the store_fs unchanged) if
-  // cuFile init fails. Idempotent fallback: callers that don't want
-  // hard-fail behavior can ignore the return code.
+  // dlopen libcufile + cuFileDriverOpen. Sets fs->gds_driver_opened on
+  // success. Returns 0 on success, non-zero on failure.
   int store_fs_gds_init(struct store_fs* fs);
 
-  // Tear down the cuFile driver and any registered handles. Safe to
-  // call when GDS was never enabled (no-op).
+  // No-op when GDS was never enabled.
   void store_fs_gds_destroy(struct store_fs* fs);
+
+  struct store_event store_fs_gds_submit_dev(struct store* s,
+                                             const struct store_read* reads,
+                                             size_t n);
 
 #ifdef __cplusplus
 }

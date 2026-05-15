@@ -173,13 +173,12 @@ extern "C"
 
     // Read compressed chunk bytes directly into device memory via
     // NVIDIA GPUDirect Storage (cuFile), skipping the pinned-host
-    // staging slab and the bulk H2D copy. Requires the build to be
-    // compiled with -DDAMACY_ENABLE_GDS=ON, requires use_gpu_blosc_parse
-    // (or its env override) since there is no host-side compressed
-    // buffer to parse, and requires cuFileDriverOpen to succeed at
-    // store init. Otherwise damacy_create returns DAMACY_INVAL. The
-    // DAMACY_GDS_ENABLE=1 environment variable overrides this at
-    // damacy_create time when set.
+    // staging slab and the bulk H2D copy. libcufile is dlopen'd at
+    // store init; if it isn't present on the host, or cuFileDriverOpen
+    // fails, damacy_create returns DAMACY_INVAL. Requires
+    // use_gpu_blosc_parse (or its env override) since there is no
+    // host-side compressed buffer to parse. The DAMACY_GDS_ENABLE=1
+    // environment variable overrides this at damacy_create time when set.
     int enable_gds;
   };
 

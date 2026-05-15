@@ -634,10 +634,10 @@ test_gpu_parse_parity_none(void)
   return run_gpu_host_parity("none");
 }
 
-// Probe whether the cuFile driver opens on this host. Creates a
-// throwaway store and queries store_supports_gds. On builds compiled
-// without DAMACY_ENABLE_GDS the store_fs vtable's submit_dev slot is
-// NULL and this returns 0 regardless of cuFile presence.
+// Probe whether the cuFile runtime is loadable + the driver opens on
+// this host. Tries to create a throwaway store with enable_gds=1;
+// success means libcufile.so.0 was found and cuFileDriverOpen returned
+// SUCCESS.
 static int
 gds_runtime_available(void)
 {
@@ -645,11 +645,10 @@ gds_runtime_available(void)
   char* root = mkdtemp(tmpl);
   if (!root)
     return 0;
-  struct store_fs_config sc = { .root = root, .nthreads = 1 };
+  struct store_fs_config sc = { .root = root, .nthreads = 1, .enable_gds = 1 };
   struct store* s = store_fs_create(&sc);
-  int ok = s ? store_supports_gds(s) : 0;
-  if (s)
-    store_destroy(s);
+  int ok = (s != NULL);
+  store_destroy(s);
   fixture_rm_tree(root);
   return ok;
 }

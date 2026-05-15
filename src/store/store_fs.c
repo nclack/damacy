@@ -2,12 +2,9 @@
 
 #include "log/log.h"
 #include "store/store.h"
+#include "store/store_fs_gds.h"
 #include "util/prelude.h"
 #include "util/strbuf.h"
-
-#ifdef DAMACY_ENABLE_GDS
-#include "store/store_fs_gds.h"
-#endif
 
 #include <stdlib.h>
 #include <string.h>
@@ -225,11 +222,8 @@ fs_destroy(struct store* s)
     io_event_wait(fs->q, io_queue_record(fs->q));
     io_queue_destroy(fs->q);
   }
-#ifdef DAMACY_ENABLE_GDS
-  // Deregister cuFile handles + close the driver before we close the
-  // underlying fds — order matters: cuFile handles reference the fd.
+  // Order matters: cuFile handles reference the fds we're about to close.
   store_fs_gds_destroy(fs);
-#endif
   for (size_t i = 0; i < fs->n_slots; ++i) {
     free(fs->slots[i].key);
     platform_file_close(fs->slots[i].file);
@@ -254,25 +248,27 @@ store_fs_free_partial(struct store_fs* fs)
   free(fs);
 }
 
-static struct store_vtable fs_vtable = {
+static const struct store_vtable fs_vtable_host = {
   .destroy = fs_destroy,
   .stat = fs_stat,
   .submit = fs_submit,
-  .submit_dev = NULL, // patched by store_fs_gds_init when GDS enabled
+  .submit_dev = NULL,
   .event_wait = fs_event_wait,
   .event_query = fs_event_query,
   .map = fs_map,
   .unmap = fs_unmap,
 };
 
-// Mutable-vtable accessor used by store_fs_gds_init to install
-// submit_dev once cuFile driver init succeeds. Single shared vtable;
-// patching is idempotent (writes the same pointer if called twice).
-struct store_vtable*
-store_fs_vtable_mut(void)
-{
-  return &fs_vtable;
-}
+static const struct store_vtable fs_vtable_gds = {
+  .destroy = fs_destroy,
+  .stat = fs_stat,
+  .submit = fs_submit,
+  .submit_dev = store_fs_gds_submit_dev,
+  .event_wait = fs_event_wait,
+  .event_query = fs_event_query,
+  .map = fs_map,
+  .unmap = fs_unmap,
+};
 
 // Bridge from store_fs_gds.c — it needs to ensure the file is open
 // (cache slot exists) before registering its FD with cuFile.
@@ -292,7 +288,7 @@ store_fs_create(const struct store_fs_config* cfg)
 
   fs = (struct store_fs*)calloc(1, sizeof(*fs));
   CHECK_SILENT(Fail, fs);
-  fs->base.vt = &fs_vtable;
+  fs->base.vt = &fs_vtable_host;
   // Init the mutex up front so store_fs_free_partial can always
   // unconditionally destroy it.
   pthread_mutex_init(&fs->cache_mu, NULL);
@@ -300,12 +296,14 @@ store_fs_create(const struct store_fs_config* cfg)
   CHECK_SILENT(Fail, fs->root);
   fs->q = io_queue_create(cfg->nthreads, cfg->affinity);
   CHECK_SILENT(Fail, fs->q);
-#ifdef DAMACY_ENABLE_GDS
-  // Best-effort: if cuFile init fails the store still works through
-  // the host-staging submit; callers introspect store_supports_gds.
-  if (store_fs_gds_init(fs) == 0)
+
+  if (cfg->enable_gds) {
+    // No silent fallback: enable_gds wires different sizing/parse paths
+    // upstream, so demoting on GDS init failure would surprise callers.
+    CHECK_SILENT(Fail, store_fs_gds_init(fs) == 0);
+    fs->base.vt = &fs_vtable_gds;
     log_info("damacy: cuFile driver opened; GDS submit_dev available");
-#endif
+  }
   return &fs->base;
 
 Fail:
