@@ -241,10 +241,49 @@ batch_do_release(BatchObj* self)
   }
 }
 
-static PyObject*
-Batch_release(BatchObj* self, PyObject* Py_UNUSED(ignored))
+// Deferred-release variant: damacy waits on `event` on its internal
+// stream_post before reusing the slot's buffer. Returns 0 on success or
+// -1 with a Python exception set on failure. self->handle is cleared
+// either way, so re-entry is a no-op (matches batch_do_release).
+static int
+batch_do_release_event(BatchObj* self, void* event)
 {
-  batch_do_release(self);
+  if (!self->handle || !self->parent || !self->parent->handle)
+    return 0;
+  struct damacy* d = self->parent->handle;
+  struct damacy_batch* b = self->handle;
+  self->handle = NULL;
+  enum damacy_status s;
+  WITH_GIL_RELEASED(s = damacy_release_event(d, b, event));
+  if (s != DAMACY_OK) {
+    raise_status(s, "release");
+    return -1;
+  }
+  return 0;
+}
+
+static PyObject*
+Batch_release(BatchObj* self, PyObject* args, PyObject* kw)
+{
+  static char* kws[] = { "event", NULL };
+  PyObject* event_obj = Py_None;
+  if (!PyArg_ParseTupleAndKeywords(args, kw, "|O", kws, &event_obj))
+    return NULL;
+  if (event_obj == Py_None) {
+    batch_do_release(self);
+    Py_RETURN_NONE;
+  }
+  // Accept an integer CUevent handle (cast from cudaEvent_t /
+  // torch.cuda.Event.cuda_event). The Python wrapper resolves higher-level
+  // objects to this int before calling.
+  unsigned long long ev = PyLong_AsUnsignedLongLong(event_obj);
+  if (ev == (unsigned long long)-1 && PyErr_Occurred()) {
+    PyErr_SetString(PyExc_TypeError,
+                    "Batch.release: event must be an integer CUevent handle");
+    return NULL;
+  }
+  if (batch_do_release_event(self, (void*)(uintptr_t)ev) != 0)
+    return NULL;
   Py_RETURN_NONE;
 }
 
@@ -598,9 +637,12 @@ Batch_dlpack_device(BatchObj* self, PyObject* Py_UNUSED(ignored))
 
 static PyMethodDef Batch_methods[] = {
   { "release",
-    (PyCFunction)Batch_release,
-    METH_NOARGS,
-    "Return the batch slot to the pool. Idempotent." },
+    (PyCFunction)(void (*)(void))Batch_release,
+    METH_VARARGS | METH_KEYWORDS,
+    "release(event=None): return the slot to the pool. With event=None "
+    "(default), release is immediate. With event set to an integer CUevent "
+    "handle, damacy stream-waits on it before reusing the slot's buffer — "
+    "the host returns immediately. Idempotent." },
   { "__dlpack__",
     (PyCFunction)(void (*)(void))Batch_dlpack,
     METH_VARARGS | METH_KEYWORDS,

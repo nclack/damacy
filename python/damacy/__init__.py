@@ -571,6 +571,52 @@ LOG_FATAL: int = _native.LOG_FATAL
 # ---- Batch --------------------------------------------------------------
 
 
+def _coerce_cuda_event_handle(event: object) -> int | None:
+    """Resolve a user-supplied stream/event hint to a raw CUevent handle.
+
+    Accepts:
+      * ``None`` — caller wants the immediate-release path.
+      * An ``int`` — already a CUevent handle.
+      * ``torch.cuda.Event`` — read its ``.cuda_event`` attribute.
+      * ``torch.cuda.Stream`` — call ``.record_event()`` and re-coerce.
+      * ``cupy.cuda.Event`` — read its ``.ptr`` attribute (an int).
+      * ``cupy.cuda.Stream`` — call ``.record()`` and re-coerce.
+
+    Returns the integer handle, or ``None`` if ``event is None``.
+
+    Raises ``TypeError`` for anything else. JAX does not expose CUevent
+    handles through its public API; jax users need to drop to ``cuda``
+    via dlpack and provide their own event.
+
+    Stream paths record on the user's stream at call time, so the
+    resulting event captures the stream's then-current position.
+    """
+    if event is None:
+        return None
+    if isinstance(event, int):
+        return event
+    # torch.cuda.Stream
+    if hasattr(event, "record_event"):
+        rec = event.record_event()  # type: ignore[union-attr]
+        return _coerce_cuda_event_handle(rec)
+    # cupy.cuda.Stream — .record() returns an Event
+    if hasattr(event, "record") and callable(event.record):  # type: ignore[union-attr]
+        rec = event.record()  # type: ignore[union-attr]
+        return _coerce_cuda_event_handle(rec)
+    # torch.cuda.Event
+    handle = getattr(event, "cuda_event", None)
+    if handle is not None:
+        return int(handle)
+    # cupy.cuda.Event — handle is in .ptr (also a generic fallback)
+    ptr = getattr(event, "ptr", None)
+    if isinstance(ptr, int):
+        return ptr
+    raise TypeError(
+        f"event must be a CUevent handle (int), a torch.cuda or cupy.cuda "
+        f"Event/Stream; got {type(event).__name__}"
+    )
+
+
 class Batch:
     """A batch of samples on the device, ready for consumption.
 
@@ -582,6 +628,19 @@ class Batch:
     The DLPack capsule (``batch.__dlpack__()``) keeps the underlying
     storage alive as long as the consumer holds it; releasing the
     Batch object while a tensor still views it is safe.
+
+    **Deferred release.** If the consumer kicks off an async D2D copy on
+    a side stream, the default ``with`` block forces a host-side
+    ``cuStreamSynchronize`` on the producer stream before the slot is
+    reused. To avoid that block, call :meth:`release` explicitly with
+    the consumer's stream or event — damacy will stream-wait on it
+    before re-assembling into the slot's buffer::
+
+        batch = d.pop()
+        tensor = torch.empty_like(...)  # on side_stream
+        with torch.cuda.stream(side_stream):
+            tensor.copy_(torch.from_dlpack(batch))
+        batch.release(event=side_stream)  # no host sync
     """
 
     __slots__ = ("_native",)
@@ -591,11 +650,40 @@ class Batch:
 
     @property
     def info(self) -> BatchInfo:
+        """Snapshot of the on-device batch geometry. Raises after release."""
         return BatchInfo._from_native(self._native.info)
 
-    def release(self) -> None:
-        """Return the slot to the pool. Idempotent."""
-        self._native.release()
+    def release(
+        self,
+        *,
+        event: object | None = None,
+    ) -> None:
+        """Return the slot to the pool. Idempotent.
+
+        Args:
+            event: If ``None`` (default), the slot is freed immediately;
+                damacy may reuse the buffer right away, so callers must
+                have host-synced any work that reads it. Otherwise the
+                slot reuse waits on the supplied CUDA event before
+                damacy's assemble kernel writes the buffer again — the
+                host returns at once. Accepted forms:
+
+                * ``int`` — raw CUevent handle.
+                * ``torch.cuda.Event`` — its ``.cuda_event`` is read.
+                * ``torch.cuda.Stream`` — ``record_event()`` is called
+                  on it; the recorded event captures the stream's
+                  current position.
+
+        Raises:
+            DamacyError: If the deferred-release CUDA call fails. On
+                failure the slot is still released back to the pool;
+                damacy logs and re-raises rather than silently leaking.
+        """
+        handle = _coerce_cuda_event_handle(event)
+        if handle is None:
+            self._native.release()
+        else:
+            self._native.release(handle)
 
     # DLPack passthrough — torch.from_dlpack(batch) etc. just works.
 
@@ -891,10 +979,38 @@ class Pipeline:
     # ---- stats -------------------------------------------------------
 
     def stats(self) -> Stats:
+        """Cumulative pipeline metrics as a :class:`Stats` snapshot.
+
+        The snapshot is taken at call time; pipeline counters keep
+        accumulating in the background. Per-stage :class:`Metric`
+        fields carry cumulative milliseconds, the best single
+        observation, input/output byte totals, and a sample count.
+        Cache hit/miss counters and lifetime totals (batches emitted,
+        waves emitted, chunks dispatched, …) round out the snapshot.
+
+        ``gpu_bytes_committed`` reflects the live GPU footprint
+        counted against ``Config.max_gpu_memory_bytes``; it grows from
+        wave-init to first pop (lazy batch-output sizing) and stays
+        flat afterward.
+
+        Use :meth:`stats_reset` to zero the cumulative timing
+        counters. ``gpu_bytes_committed`` is not reset — it reflects
+        the live commitment, not a delta.
+
+        Raises:
+            ShutdownError: If the pipeline has been closed.
+        """
         self._check_open()
         return Stats._from_native(self._native.stats())
 
     def stats_reset(self) -> None:
+        """Zero the cumulative timing counters and per-stage rolling
+        totals. Cache hit/miss counters and ``gpu_bytes_committed`` are
+        left alone — they reflect live state, not deltas.
+
+        Raises:
+            ShutdownError: If the pipeline has been closed.
+        """
         self._check_open()
         self._native.stats_reset()
 
