@@ -336,11 +336,12 @@ decoder_scratch_grow(struct decoder_zstd* decoder,
         decoder, new_cap, (size_t)zstd_per, (size_t)total_uncompressed) != 0)
     goto CudaFail;
 
-  log_info("zstd decoder: grew %zu -> %zu (need=%zu, +%llu bytes)",
-           cur,
-           new_cap,
-           need,
-           (unsigned long long)delta_bytes);
+  // Internal observe-and-grow event — DEBUG to keep INFO clean.
+  log_debug("zstd decoder: grew %zu -> %zu (need=%zu, +%llu bytes)",
+            cur,
+            new_cap,
+            need,
+            (unsigned long long)delta_bytes);
   return DAMACY_OK;
 
 CudaFail:

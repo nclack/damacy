@@ -152,10 +152,12 @@ fanout_grow(struct blosc1_host_fanout* h,
     return DAMACY_CUDA;
   }
   *cap = (uint32_t)new_cap;
-  log_info("wave fanout: grew %u -> %zu (need=%zu, +%llu bytes)",
-           (unsigned)cur,
-           new_cap,
-           need,
-           (unsigned long long)delta_bytes);
+  // Per-wave observe-and-grow event; chatty enough that INFO is noise in
+  // a normal bench (one line per wave_pool slot). Surfaced at DEBUG.
+  log_debug("wave fanout: grew %u -> %zu (need=%zu, +%llu bytes)",
+            (unsigned)cur,
+            new_cap,
+            need,
+            (unsigned long long)delta_bytes);
   return DAMACY_OK;
 }
