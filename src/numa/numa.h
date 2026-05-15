@@ -15,6 +15,8 @@
 // isn't Linux.
 #pragma once
 
+#include "damacy.h"
+
 #include <cuda.h>
 #include <stdint.h>
 
@@ -22,13 +24,6 @@
 extern "C"
 {
 #endif
-
-  enum numa_strategy
-  {
-    NUMA_AUTO = 0, // resolve GPU node + apply
-    NUMA_DISABLED, // no-op (no resolution, no affinity)
-    NUMA_PIN_TO,   // use the explicit numa_node override
-  };
 
   // Resolved NUMA placement plan. node < 0 means "no pinning"; produced
   // by numa_init when strategy is disabled, libnuma can't be loaded,
@@ -47,7 +42,7 @@ extern "C"
   // Resolve the GPU's host-NUMA node and populate `out`. Logs once at
   // INFO if libnuma can't be loaded or numa_available() < 0; that log
   // line is emitted from the first call and silenced thereafter.
-  void numa_init(enum numa_strategy strategy,
+  void numa_init(enum damacy_numa_strategy strategy,
                  int override_node,
                  CUdevice cu_device,
                  struct numa_resolved* out);

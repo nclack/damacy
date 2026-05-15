@@ -432,10 +432,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   {
     CUdevice cu_dev;
     if (cuCtxGetDevice(&cu_dev) == CUDA_SUCCESS) {
-      numa_init((enum numa_strategy)cfg->numa_strategy,
-                cfg->numa_node,
-                cu_dev,
-                &self->numa);
+      numa_init(cfg->numa_strategy, cfg->numa_node, cu_dev, &self->numa);
     } else {
       // Should never happen — ctx_guard_enter just pushed our ctx, or
       // the caller's ctx is live. Be safe; treat as disabled.

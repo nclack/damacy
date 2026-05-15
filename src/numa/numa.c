@@ -15,6 +15,7 @@
 #include <dlfcn.h>
 #include <pthread.h>
 #include <sched.h>
+#include <stdatomic.h>
 
 // Minimal redeclaration of libnuma's `struct bitmask`. We dlopen
 // libnuma instead of linking it so a single binary ships across hosts
@@ -42,11 +43,12 @@ static_assert(sizeof(cpu_set_t) <= 128,
 // Resolved libnuma symbol table. `handle` doubles as the lazy-load
 // state machine: NULL = not yet attempted, (void*)-1 = dlopen/dlsym
 // failed (don't retry), anything else = a live handle with the function
-// pointers populated.
+// pointers populated. Atomic because numa_init may legitimately be
+// called from concurrent damacy_create instances.
 #define LIBNUMA_FAILED ((void*)-1)
 static struct
 {
-  void* handle;
+  _Atomic(void*) handle;
   pfn_numa_available available;
   pfn_numa_max_node max_node;
   pfn_numa_allocate_cpumask allocate_cpumask;
@@ -56,24 +58,29 @@ static struct
 
 // One-shot guard so we only log "libnuma unavailable" once across the
 // process lifetime — repeated damacy_create calls shouldn't spam.
-static int g_numa_unavailable_logged = 0;
+// Atomic so concurrent first-callers see at most one duplicate log line.
+static _Atomic int g_numa_unavailable_logged = 0;
 
 // dlopen libnuma.so.1 and resolve the 5 symbols we need. Returns 1 on
 // full success, 0 on any failure (which is then memoized via the
-// LIBNUMA_FAILED sentinel so the next call short-circuits). Not thread-
-// safe vs. the very first call; numa_init is invoked from damacy_create
-// before any workers spin up.
+// LIBNUMA_FAILED sentinel so the next call short-circuits). Concurrent
+// first-callers may briefly race and each dlopen; one wins the publish
+// to g_libnuma.handle and the losers dlclose their copy. Symbol pointers
+// resolved by both racers point at the same library, so the table is
+// consistent regardless of who wins.
 static int
 try_load_libnuma(void)
 {
-  if (g_libnuma.handle == LIBNUMA_FAILED)
+  void* cur = atomic_load_explicit(&g_libnuma.handle, memory_order_acquire);
+  if (cur == LIBNUMA_FAILED)
     return 0;
-  if (g_libnuma.handle != NULL)
+  if (cur != NULL)
     return 1;
 
   void* h = dlopen("libnuma.so.1", RTLD_LAZY | RTLD_LOCAL);
   if (!h) {
-    g_libnuma.handle = LIBNUMA_FAILED;
+    atomic_store_explicit(
+      &g_libnuma.handle, LIBNUMA_FAILED, memory_order_release);
     return 0;
   }
 
@@ -88,32 +95,42 @@ try_load_libnuma(void)
       !g_libnuma.allocate_cpumask || !g_libnuma.free_cpumask ||
       !g_libnuma.node_to_cpus) {
     dlclose(h);
-    g_libnuma.handle = LIBNUMA_FAILED;
+    atomic_store_explicit(
+      &g_libnuma.handle, LIBNUMA_FAILED, memory_order_release);
     return 0;
   }
 
-  g_libnuma.handle = h;
+  void* expected = NULL;
+  if (!atomic_compare_exchange_strong_explicit(&g_libnuma.handle,
+                                               &expected,
+                                               h,
+                                               memory_order_acq_rel,
+                                               memory_order_acquire)) {
+    // Another thread won the race; close our copy.
+    dlclose(h);
+  }
   return 1;
 }
 
 // Probe libnuma at runtime. Returns 1 if usable, 0 if libnuma can't be
 // loaded or the kernel doesn't support NUMA (numa_available() < 0).
-// Logs a single INFO message on first failure.
+// Logs a single INFO message on first failure (atomic CAS guards against
+// duplicate log lines when concurrent damacy_create instances race).
 static int
 runtime_numa_ok(void)
 {
   if (!try_load_libnuma()) {
-    if (!g_numa_unavailable_logged) {
+    int expected = 0;
+    if (atomic_compare_exchange_strong(
+          &g_numa_unavailable_logged, &expected, 1))
       log_info("numa: libnuma.so.1 not loadable — NUMA placement disabled");
-      g_numa_unavailable_logged = 1;
-    }
     return 0;
   }
   if (g_libnuma.available() < 0) {
-    if (!g_numa_unavailable_logged) {
+    int expected = 0;
+    if (atomic_compare_exchange_strong(
+          &g_numa_unavailable_logged, &expected, 1))
       log_info("numa: numa_available()<0 — NUMA placement disabled");
-      g_numa_unavailable_logged = 1;
-    }
     return 0;
   }
   return 1;
@@ -148,8 +165,10 @@ resolve_from_sysfs(CUdevice cu_dev)
   return node;
 }
 
-// CUDA driver attribute path. Returns -1 if the attribute is unsupported
-// or reports "no NUMA".
+// CUDA driver attribute path. Returns -1 if the attribute is
+// unsupported, reports "no NUMA", or returns a node id beyond
+// numa_max_node() (some misconfigured hosts report stale ids; libnuma's
+// behavior on out-of-range nodes is implementation-defined).
 static int
 resolve_from_driver(CUdevice cu_dev)
 {
@@ -157,6 +176,8 @@ resolve_from_driver(CUdevice cu_dev)
 #ifdef CU_DEVICE_ATTRIBUTE_HOST_NUMA_ID
   if (cuDeviceGetAttribute(&node, CU_DEVICE_ATTRIBUTE_HOST_NUMA_ID, cu_dev) !=
       CUDA_SUCCESS)
+    return -1;
+  if (node >= 0 && node > g_libnuma.max_node())
     return -1;
 #else
   (void)cu_dev;
@@ -197,7 +218,7 @@ build_node_cpu_mask(int node, uint8_t out[128])
 }
 
 void
-numa_init(enum numa_strategy strategy,
+numa_init(enum damacy_numa_strategy strategy,
           int override_node,
           CUdevice cu_device,
           struct numa_resolved* out)
@@ -205,24 +226,19 @@ numa_init(enum numa_strategy strategy,
   memset(out, 0, sizeof(*out));
   out->node = -1;
 
-  if (strategy == NUMA_DISABLED) {
+  if (strategy == DAMACY_NUMA_DISABLED) {
     log_info("numa: strategy=disabled — no pinning");
     return;
   }
   if (!runtime_numa_ok())
     return;
-  // Single-node box: nothing to pin against. numa_max_node() returns the
-  // highest configured node id; 0 means just node 0 exists. Treat as
-  // no-op so single-socket CI runs don't pretend to pin.
-  if (g_libnuma.max_node() <= 0) {
-    log_info("numa: max_node=%d — single-node host, no pinning",
-             g_libnuma.max_node());
-    return;
-  }
 
   int node = -1;
   const char* source = "?";
-  if (strategy == NUMA_PIN_TO) {
+  if (strategy == DAMACY_NUMA_PIN_TO) {
+    // PIN_TO is an explicit user override; honor it on single-node hosts
+    // too so node=0 isn't silently dropped to no-op. Out-of-range still
+    // falls through to the no-op path with a clear warning.
     node = override_node;
     source = "override";
     if (node < 0 || node > g_libnuma.max_node()) {
@@ -232,6 +248,14 @@ numa_init(enum numa_strategy strategy,
       return;
     }
   } else {
+    // AUTO path: nothing useful to pin against on a single-node box.
+    // numa_max_node() returns the highest configured node id; 0 means
+    // just node 0 exists.
+    if (g_libnuma.max_node() <= 0) {
+      log_info("numa: max_node=%d — single-node host, no pinning",
+               g_libnuma.max_node());
+      return;
+    }
     node = resolve_from_driver(cu_device);
     source = "cuda";
     if (node < 0) {
@@ -339,7 +363,7 @@ numa_apply_thread_affinity(const struct numa_resolved* r,
 static int g_numa_off_logged = 0;
 
 void
-numa_init(enum numa_strategy strategy,
+numa_init(enum damacy_numa_strategy strategy,
           int override_node,
           CUdevice cu_device,
           struct numa_resolved* out)

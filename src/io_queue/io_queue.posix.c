@@ -49,8 +49,8 @@ struct io_queue
 
   // Stored at create-time; workers pin themselves on entry. The struct
   // is small (POD), so we copy it rather than borrow the pointer.
+  // numa_apply_thread_affinity is a no-op when affinity.node < 0.
   struct numa_resolved affinity;
-  int affinity_set;
 };
 
 // retired_seq = (lowest in-flight or queued seq) − 1, or next_seq when drained.
@@ -77,8 +77,7 @@ worker_thread(void* arg)
   struct io_queue* q = wa->q;
   const int wid = wa->wid;
 
-  if (q->affinity_set)
-    numa_apply_thread_affinity(&q->affinity, "io_queue_worker");
+  numa_apply_thread_affinity(&q->affinity, "io_queue_worker");
 
   for (;;) {
     struct io_job job;
@@ -141,10 +140,12 @@ io_queue_create(int nthreads, const struct numa_resolved* affinity)
   q->ring = (struct io_job*)calloc(q->ring_cap, sizeof(struct io_job));
   CHECK_SILENT(Fail, q->ring);
 
-  if (affinity && affinity->node >= 0) {
+  // Copy unconditionally; numa_apply_thread_affinity no-ops when
+  // node < 0, which is also what calloc gave us by default.
+  if (affinity)
     q->affinity = *affinity;
-    q->affinity_set = 1;
-  }
+  else
+    q->affinity.node = -1;
 
   q->nworkers = nthreads;
   memset(q->worker_seq, 0xff, sizeof(q->worker_seq));
