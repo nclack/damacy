@@ -5,7 +5,8 @@
 // p.stats()       → damacy_stats_get → dict
 // batch.release() → damacy_release (tp_dealloc auto-releases)
 // batch.info      → dict snapshot of damacy_batch_info
-// batch.__dlpack__ → DLPack v1 capsule
+// batch.__dlpack__ → DLPack v0 (default) or v1 capsule, dispatched by
+//                     the consumer's `max_version` kwarg.
 //
 // Long-running C calls (push/pop/flush/destroy/release) drop the GIL.
 
@@ -20,8 +21,13 @@
 #include <stdint.h>
 #include <string.h>
 
-// ---------- DLPack (v1.0) — minimal definitions, no external dep. ----------
+// ---------- DLPack — minimal definitions, no external dep. ----------------
 // https://dmlc.github.io/dlpack/latest/c_api.html
+//
+// v0 layout (DLManagedTensor, capsule "dltensor") is what PyTorch 2.8
+// consumes today. v1.0 layout (DLManagedTensorVersioned, capsule
+// "dltensor_versioned") is what CuPy / array-API future consumers ask
+// for via max_version=(1,0).
 
 typedef enum
 {
@@ -67,6 +73,17 @@ typedef struct
   uint32_t minor;
 } DLPackVersion;
 
+// v0
+struct DLManagedTensor;
+typedef void (*DLManagedTensorDeleterV0)(struct DLManagedTensor* self);
+typedef struct DLManagedTensor
+{
+  DLTensor dl_tensor;
+  void* manager_ctx;
+  DLManagedTensorDeleterV0 deleter;
+} DLManagedTensor;
+
+// v1.0
 struct DLManagedTensorVersioned;
 typedef void (*DLManagedTensorDeleter)(struct DLManagedTensorVersioned* self);
 
@@ -290,37 +307,62 @@ dtype_to_dl(enum damacy_dtype dt, DLDataType* out_dt, uint8_t* out_bpe)
   return -1;
 }
 
-// Storage layout for one exported tensor. Lives in DLManagedTensorVersioned
-// .manager_ctx so the deleter can free it.
+// Storage layout for one exported tensor. Holds both v0 and v1 managed
+// headers — only one is wired up per export, picked by max_version. The
+// capsule's manager_ctx points back to the payload so the deleter can
+// drop the batch ref and free both at once.
 struct dlpack_payload
 {
-  DLManagedTensorVersioned mt;
-  int64_t shape[DAMACY_MAX_RANK + 1]; // referenced by mt.dl_tensor.shape
+  DLManagedTensor mt_v0;
+  DLManagedTensorVersioned mt_v1;
+  int64_t shape[DAMACY_MAX_RANK + 1]; // referenced by dl_tensor.shape
   PyObject* batch;                    // strong ref; dropped by deleter
 };
 
+// Drop the batch ref and free the payload under the GIL. Shared by both
+// v0 and v1 deleters. PyMem_Free uses pymalloc which itself requires the
+// GIL, so the free stays inside the GIL window.
 static void
-dlpack_deleter(DLManagedTensorVersioned* self)
+dlpack_payload_free(struct dlpack_payload* p)
+{
+  if (!p)
+    return;
+  PyGILState_STATE g = PyGILState_Ensure();
+  Py_XDECREF(p->batch);
+  PyMem_Free(p);
+  PyGILState_Release(g);
+}
+
+static void
+dlpack_deleter_v0(DLManagedTensor* self)
 {
   if (!self)
     return;
-  struct dlpack_payload* p = (struct dlpack_payload*)self->manager_ctx;
-  // Acquire the GIL; the consumer may call us from any thread.
-  PyGILState_STATE g = PyGILState_Ensure();
-  Py_XDECREF(p->batch);
-  PyGILState_Release(g);
-  PyMem_Free(p);
+  dlpack_payload_free((struct dlpack_payload*)self->manager_ctx);
+}
+
+static void
+dlpack_deleter_v1(DLManagedTensorVersioned* self)
+{
+  if (!self)
+    return;
+  dlpack_payload_free((struct dlpack_payload*)self->manager_ctx);
 }
 
 static void
 dlpack_capsule_destructor(PyObject* capsule)
 {
   // Only fires when the capsule was never consumed; otherwise the
-  // consumer renames to "used_dltensor_versioned" and runs the deleter.
+  // consumer renames to "used_dltensor" / "used_dltensor_versioned"
+  // and runs the deleter itself.
   const char* name = PyCapsule_GetName(capsule);
   if (!name)
     return;
-  if (strcmp(name, "dltensor_versioned") == 0) {
+  if (strcmp(name, "dltensor") == 0) {
+    DLManagedTensor* mt = PyCapsule_GetPointer(capsule, name);
+    if (mt && mt->deleter)
+      mt->deleter(mt);
+  } else if (strcmp(name, "dltensor_versioned") == 0) {
     DLManagedTensorVersioned* mt = PyCapsule_GetPointer(capsule, name);
     if (mt && mt->deleter)
       mt->deleter(mt);
@@ -351,8 +393,16 @@ sync_streams_for_consumer(void* producer_stream_v, PyObject* stream_obj)
       // 0 isn't strictly defined in DLPack but PyTorch sometimes passes
       // it; treat as legacy default.
       consumer = (CUstream)0;
-    } else if (s == 1 || s == 2) {
-      consumer = (CUstream)(uintptr_t)s; // legacy / per-thread
+    } else if (s == 1) {
+      // DLPack sentinel 1 is the runtime API's cudaStreamLegacy. The
+      // driver API's equivalent is the default stream NULL — passing
+      // 0x1 to cuStreamWaitEvent fails with INVALID_VALUE.
+      consumer = (CUstream)NULL;
+    } else if (s == 2) {
+      // DLPack sentinel 2 is the runtime API's cudaStreamPerThread.
+      // There's no driver-API handle for it, so fall back to a host
+      // sync on the producer (safe, heavier than an event wait).
+      sync_now = 1;
     } else {
       consumer = (CUstream)(uintptr_t)s;
     }
@@ -391,6 +441,53 @@ sync_streams_for_consumer(void* producer_stream_v, PyObject* stream_obj)
   return 0;
 }
 
+// Parse max_version per the array-API DLPack protocol. Returns 0 on
+// success, -1 on error (PyErr set). *out_major / *out_minor land at the
+// requested version, or (0,0) when the consumer didn't specify one.
+//
+// Accepts None, a 2-tuple (major, minor), or any 2-element sequence;
+// PyTorch passes None today, CuPy and NumPy pass (1, 0).
+static int
+parse_max_version(PyObject* obj, uint32_t* out_major, uint32_t* out_minor)
+{
+  *out_major = 0;
+  *out_minor = 0;
+  if (!obj || obj == Py_None)
+    return 0;
+  PyObject* seq = PySequence_Fast(obj,
+                                  "max_version must be a (major, minor) "
+                                  "tuple or None");
+  if (!seq)
+    return -1;
+  Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
+  if (n != 2) {
+    Py_DECREF(seq);
+    PyErr_SetString(PyExc_TypeError,
+                    "max_version must be a 2-element sequence (major, minor)");
+    return -1;
+  }
+  // Check each conversion individually — a live PyErr from the first
+  // call must not leak into the second.
+  long mj = PyLong_AsLong(PySequence_Fast_GET_ITEM(seq, 0));
+  if (mj == -1 && PyErr_Occurred()) {
+    Py_DECREF(seq);
+    return -1;
+  }
+  long mn = PyLong_AsLong(PySequence_Fast_GET_ITEM(seq, 1));
+  if (mn == -1 && PyErr_Occurred()) {
+    Py_DECREF(seq);
+    return -1;
+  }
+  Py_DECREF(seq);
+  if (mj < 0 || mn < 0) {
+    PyErr_SetString(PyExc_ValueError, "max_version components must be >= 0");
+    return -1;
+  }
+  *out_major = (uint32_t)mj;
+  *out_minor = (uint32_t)mn;
+  return 0;
+}
+
 static PyObject*
 Batch_dlpack(BatchObj* self, PyObject* args, PyObject* kw)
 {
@@ -402,7 +499,6 @@ Batch_dlpack(BatchObj* self, PyObject* args, PyObject* kw)
   if (!PyArg_ParseTupleAndKeywords(
         args, kw, "|OOOO", kws, &stream_obj, &max_version, &dl_device, &copy))
     return NULL;
-  (void)max_version;
   (void)dl_device;
   if (copy != Py_None && PyObject_IsTrue(copy)) {
     PyErr_SetString(PyExc_BufferError,
@@ -410,6 +506,16 @@ Batch_dlpack(BatchObj* self, PyObject* args, PyObject* kw)
     return NULL;
   }
   RETURN_IF_DESTROYED(self, "Batch has been released");
+
+  // Decide the wire format. Per the array-API DLPack protocol:
+  //   - max_version is None      → emit v0 capsule (legacy, what
+  //                                 PyTorch 2.8 consumes today).
+  //   - max_version.major >= 1   → emit v1.0 capsule.
+  //   - max_version.major == 0   → emit v0 capsule.
+  uint32_t want_major = 0, want_minor = 0;
+  if (parse_max_version(max_version, &want_major, &want_minor) != 0)
+    return NULL;
+  const int emit_versioned = (max_version != Py_None) && (want_major >= 1);
 
   struct damacy_batch_info info;
   damacy_batch_info(self->handle, &info);
@@ -443,11 +549,7 @@ Batch_dlpack(BatchObj* self, PyObject* args, PyObject* kw)
   Py_INCREF(self);
   p->batch = (PyObject*)self;
 
-  p->mt.version = (DLPackVersion){ 1, 0 };
-  p->mt.manager_ctx = p;
-  p->mt.deleter = dlpack_deleter;
-  p->mt.flags = 0;
-  p->mt.dl_tensor = (DLTensor){
+  DLTensor dl = {
     .data = info.device_ptr,
     .device = (DLDevice){ .device_type = kDLCUDA, .device_id = dev_id },
     .ndim = (int32_t)info.rank,
@@ -457,8 +559,21 @@ Batch_dlpack(BatchObj* self, PyObject* args, PyObject* kw)
     .byte_offset = 0,
   };
 
-  PyObject* cap =
-    PyCapsule_New(&p->mt, "dltensor_versioned", dlpack_capsule_destructor);
+  PyObject* cap = NULL;
+  if (emit_versioned) {
+    p->mt_v1.version = (DLPackVersion){ 1, 0 };
+    p->mt_v1.manager_ctx = p;
+    p->mt_v1.deleter = dlpack_deleter_v1;
+    p->mt_v1.flags = 0;
+    p->mt_v1.dl_tensor = dl;
+    cap =
+      PyCapsule_New(&p->mt_v1, "dltensor_versioned", dlpack_capsule_destructor);
+  } else {
+    p->mt_v0.dl_tensor = dl;
+    p->mt_v0.manager_ctx = p;
+    p->mt_v0.deleter = dlpack_deleter_v0;
+    cap = PyCapsule_New(&p->mt_v0, "dltensor", dlpack_capsule_destructor);
+  }
   if (!cap) {
     Py_DECREF(self);
     PyMem_Free(p);
@@ -489,7 +604,10 @@ static PyMethodDef Batch_methods[] = {
   { "__dlpack__",
     (PyCFunction)(void (*)(void))Batch_dlpack,
     METH_VARARGS | METH_KEYWORDS,
-    "DLPack v1 capsule export. Honors stream=... per the DLPack protocol." },
+    "DLPack capsule export. Default (max_version=None) emits a v0 "
+    "\"dltensor\" capsule for PyTorch compatibility. max_version=(1,0) "
+    "or higher emits a v1.0 \"dltensor_versioned\" capsule. Honors "
+    "stream=... per the DLPack protocol." },
   { "__dlpack_device__",
     (PyCFunction)Batch_dlpack_device,
     METH_NOARGS,
