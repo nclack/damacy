@@ -247,8 +247,11 @@ extern "C"
   // and is done with the handle by return. Passing a NULL event is
   // equivalent to damacy_release.
   //
-  // Returns DAMACY_OK on success or DAMACY_CUDA if the driver call fails;
-  // the slot is released back to the pool on either outcome.
+  // Returns DAMACY_OK on success or DAMACY_CUDA if the driver call fails.
+  // In either case the slot is released back to the pool — on the
+  // DAMACY_CUDA path the deferred wait was not installed and the slot
+  // falls back to immediate release, so the caller knows reuse is not
+  // gated on `event` but won't block on a future pop.
   enum damacy_status damacy_release_event(struct damacy* d,
                                           struct damacy_batch* b,
                                           void* event);

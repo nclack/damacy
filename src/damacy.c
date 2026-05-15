@@ -769,6 +769,7 @@ damacy_release(struct damacy* self, struct damacy_batch* b)
   self->batch_pool.slots[s].state = BATCH_FREE;
   self->batch_pool.slots[s].n_chunks = 0;
   self->batch_pool.slots[s].n_chunks_dispatched = 0;
+  self->batch_pool.slots[s].deferred_release_pending = 0;
   scheduler_unlock(self->sched);
 }
 
@@ -817,6 +818,12 @@ damacy_release_event(struct damacy* self, struct damacy_batch* b, void* event)
   // legacy null stream and would otherwise race).
   if (cuStreamWaitEvent(self->wave_pool.stream_post, (CUevent)event, 0) !=
       CUDA_SUCCESS) {
+    // Deferred wait couldn't be installed; fall back to immediate release
+    // so the slot doesn't leak (caller would block forever in pop).
+    slot->state = BATCH_FREE;
+    slot->n_chunks = 0;
+    slot->n_chunks_dispatched = 0;
+    slot->deferred_release_pending = 0;
     r = DAMACY_CUDA;
     goto Done;
   }

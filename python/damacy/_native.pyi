@@ -67,7 +67,7 @@ class Batch:
         device_ptr (int), shape (tuple[int, ...]), dtype (str),
         ready_stream (int), batch_id (int)."""
 
-    def release(self, event: int = ..., /) -> None:
+    def release(self, event: int | None = None) -> None:
         """Return the batch slot to the pool. Idempotent.
 
         With no argument or ``event=None`` the slot is freed

@@ -581,16 +581,7 @@ test_missing_shard_fills_nonzero(void)
   return 0;
 }
 
-// NOTE: We previously had a content-comparing "smoke" test that popped a
-// batch, did a side-stream D2H, released with an event, popped again, and
-// checked the captured bytes belonged to the first batch. It passed even
-// with cuStreamWaitEvent commented out — the D2H retired before any reuse
-// could overwrite the slot, so it never exercised the race. Engineering a
-// truly deterministic test that *fails* without the wait turned out to be
-// non-trivial here (cudaLaunchHostFunc-based delays still left subsequent
-// damacy_pop blocked for the sleep duration regardless of the wait, for
-// reasons not chased down). Tracking that as a follow-up; meanwhile this
-// file keeps only the deterministic API-contract test (NULL fallback).
+
 // Engineered race for damacy_release_event.
 //
 // The side stream runs a GPU-side spin (clock64 loop) and records an
@@ -624,6 +615,16 @@ test_release_event_blocks_assemble(void)
 
   int prio_lo = 0, prio_hi = 0;
   EXPECT(cudaDeviceGetStreamPriorityRange(&prio_lo, &prio_hi) == cudaSuccess);
+  if (prio_lo == prio_hi) {
+    log_warn("stream priorities are degenerate (lo==hi==%d); skipping "
+             "test_release_event_blocks_assemble — the spin kernel would "
+             "share priority with stream_post and could pass for the wrong "
+             "reason",
+             prio_lo);
+    damacy_destroy(d);
+    fixture_rm_tree(root);
+    return 0;
+  }
   cudaStream_t side = NULL;
   EXPECT(cudaStreamCreateWithPriority(&side, cudaStreamNonBlocking, prio_lo) ==
          cudaSuccess);
