@@ -319,8 +319,9 @@ struct dlpack_payload
   PyObject* batch;                    // strong ref; dropped by deleter
 };
 
-// Drop the batch ref under the GIL and free the payload. Shared by both
-// v0 and v1 deleters.
+// Drop the batch ref and free the payload under the GIL. Shared by both
+// v0 and v1 deleters. PyMem_Free uses pymalloc which itself requires the
+// GIL, so the free stays inside the GIL window.
 static void
 dlpack_payload_free(struct dlpack_payload* p)
 {
@@ -328,8 +329,8 @@ dlpack_payload_free(struct dlpack_payload* p)
     return;
   PyGILState_STATE g = PyGILState_Ensure();
   Py_XDECREF(p->batch);
-  PyGILState_Release(g);
   PyMem_Free(p);
+  PyGILState_Release(g);
 }
 
 static void
@@ -392,8 +393,16 @@ sync_streams_for_consumer(void* producer_stream_v, PyObject* stream_obj)
       // 0 isn't strictly defined in DLPack but PyTorch sometimes passes
       // it; treat as legacy default.
       consumer = (CUstream)0;
-    } else if (s == 1 || s == 2) {
-      consumer = (CUstream)(uintptr_t)s; // legacy / per-thread
+    } else if (s == 1) {
+      // DLPack sentinel 1 is the runtime API's cudaStreamLegacy. The
+      // driver API's equivalent is the default stream NULL — passing
+      // 0x1 to cuStreamWaitEvent fails with INVALID_VALUE.
+      consumer = (CUstream)NULL;
+    } else if (s == 2) {
+      // DLPack sentinel 2 is the runtime API's cudaStreamPerThread.
+      // There's no driver-API handle for it, so fall back to a host
+      // sync on the producer (safe, heavier than an event wait).
+      sync_now = 1;
     } else {
       consumer = (CUstream)(uintptr_t)s;
     }
@@ -457,11 +466,19 @@ parse_max_version(PyObject* obj, uint32_t* out_major, uint32_t* out_minor)
                     "max_version must be a 2-element sequence (major, minor)");
     return -1;
   }
+  // Check each conversion individually — a live PyErr from the first
+  // call must not leak into the second.
   long mj = PyLong_AsLong(PySequence_Fast_GET_ITEM(seq, 0));
-  long mn = PyLong_AsLong(PySequence_Fast_GET_ITEM(seq, 1));
-  Py_DECREF(seq);
-  if ((mj == -1 || mn == -1) && PyErr_Occurred())
+  if (mj == -1 && PyErr_Occurred()) {
+    Py_DECREF(seq);
     return -1;
+  }
+  long mn = PyLong_AsLong(PySequence_Fast_GET_ITEM(seq, 1));
+  if (mn == -1 && PyErr_Occurred()) {
+    Py_DECREF(seq);
+    return -1;
+  }
+  Py_DECREF(seq);
   if (mj < 0 || mn < 0) {
     PyErr_SetString(PyExc_ValueError, "max_version components must be >= 0");
     return -1;

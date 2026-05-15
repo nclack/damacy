@@ -45,6 +45,7 @@ pytestmark = pytest.mark.usefixtures("cuda_ctx")
 
 _kDLCUDA = 2
 _kDLFloat = 2  # DLDataTypeCode.kDLFloat
+_kDLBfloat = 4  # DLDataTypeCode.kDLBfloat
 
 
 class _DLDevice(ctypes.Structure):
@@ -580,6 +581,22 @@ def test_batch_dlpack_v1_capsule_fields(tiny_zarr):
             assert [t.shape[i] for i in range(t.ndim)] == list(info.shape)
             assert mt.deleter
             assert mt.manager_ctx
+            del cap
+
+
+def test_batch_dlpack_v0_capsule_fields_bf16(tiny_zarr):
+    """Same as v0_capsule_fields but with destination dtype=bf16 — the
+    DLDataType must report code=kDLBfloat (4), bits=16, lanes=1."""
+    uri = tiny_zarr
+    with Pipeline(_base_config(dtype="bf16")) as d:
+        d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
+        with d.pop() as batch:
+            cap = batch.__dlpack__(stream=None)
+            mt = _capsule_as(cap, b"dltensor", _DLManagedTensor)
+            t = mt.dl_tensor
+            assert t.dtype.code == _kDLBfloat
+            assert t.dtype.bits == 16
+            assert t.dtype.lanes == 1
             del cap
 
 
