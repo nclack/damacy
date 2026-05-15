@@ -65,11 +65,13 @@ jobs:
           # codecov wants the PR head. Fall back to GITHUB_SHA on push.
           COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          # /tmp must be tmpfs for the GDS parity test: cuFile compat
-          # mode refuses to cuFileHandleRegister an fd on overlay (the
-          # default container fs), failing with err=5027.
+          # cuFile compat mode (no nvidia-fs on this runner) rejects
+          # cuFileHandleRegister on overlay (container default) AND on
+          # tmpfs, with err=5027. Bind-mount the host's /tmp so test
+          # fixtures land on the runner's ext4 — the same FS where the
+          # local nix-develop runs pass.
           docker run --name "$CONTAINER" --device=nvidia.com/gpu=all \
-            --tmpfs /tmp:rw,size=1g \
+            -v /tmp:/tmp \
             -e CODECOV_TOKEN \
             -e COMMIT_SHA \
             -e GITHUB_ACTIONS \
