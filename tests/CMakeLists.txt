@@ -28,6 +28,7 @@ add_damacy_test(test_io_queue io_queue log)
 add_damacy_test(test_zarr_meta_cache zarr_meta_cache zarr store test_fixture)
 add_damacy_test(test_zarr_shard_cache zarr_shard_cache zarr store test_fixture)
 add_damacy_test(test_planner planner zarr_meta_cache zarr_shard_cache zarr store test_fixture)
+add_damacy_test(test_chunk_layout planner zarr_chunk_layout zarr_meta_cache zarr_shard_cache zarr store test_fixture)
 add_damacy_test(test_lookahead lookahead log)
 add_damacy_test(test_scheduler scheduler platform log)
 

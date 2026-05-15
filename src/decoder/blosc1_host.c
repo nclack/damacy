@@ -4,6 +4,7 @@
 #include "log/log.h"
 #include "threadpool/threadpool.h"
 #include "util/prelude.h"
+#include "zarr/zarr_chunk_layout.h"
 #include "zarr/zarr_metadata.h"
 
 #include <stdatomic.h>
@@ -40,6 +41,8 @@ blosc1_host_parse_err_str(uint8_t err)
       return "header.nbytes > DAMACY_BLOSC_MAX_CHUNK_UNCOMPRESSED_BYTES";
     case 11:
       return "truncated block cbytes prefix";
+    case 12:
+      return "chunk layout disagrees with array-level layout";
     default:
       return "unknown";
   }
@@ -218,6 +221,21 @@ parse_count_one(const struct blosc1_host_chunk* in,
   if (h.compformat != inner_codec_compformat(in->codec_id)) {
     h.err = 7;
     goto Done;
+  }
+
+  // Array-level layout invariant: every chunk in a zarr array shares
+  // typesize/blocksize/nblocks/shuffle. The planner cached the first
+  // probed layout on the sample_plan; assert subsequent chunks agree
+  // so wave_pool's pre-sized caps stay valid.
+  if (in->layout) {
+    const struct chunk_layout* L = in->layout;
+    if (h.typesize != L->typesize || h.blocksize != L->blocksize ||
+        h.nblocks != L->nblocks || h.shuffle != L->shuffle ||
+        h.bitshuffle != L->bitshuffle || h.memcpyed != L->memcpyed ||
+        ((h.compformat == 4) != (L->codec_id == CODEC_BLOSC_ZSTD))) {
+      h.err = 12;
+      goto Done;
+    }
   }
 
   if (h.memcpyed) {

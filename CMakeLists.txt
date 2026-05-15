@@ -42,6 +42,20 @@ option(
 # non-fuzz builds; src/CMakeLists.txt forces OFF under DAMACY_FUZZ.
 option(DAMACY_NVTX_ENABLED "Enable NVTX timeline instrumentation" ON)
 
+# DAMACY_ENABLE_GDS — link cuFile and compile the store_fs_gds backend
+# so callers can opt in to GPUDirect Storage at runtime via
+# damacy_config.enable_gds / DAMACY_GDS_ENABLE=1. OFF by default; ON
+# requires cufile.h + libcufile.so to be on the toolchain search paths
+# (CUDAToolkit_ROOT or the dev environment).
+option(
+    DAMACY_ENABLE_GDS
+    "Build with NVIDIA GPUDirect Storage (cuFile) support"
+    OFF
+)
+if(DAMACY_ENABLE_GDS AND NOT DAMACY_FUZZ)
+    find_package(CuFile REQUIRED)
+endif()
+
 # DAMACY_COVERAGE — gcov-style instrumentation on the `warnings` interface
 # target so every src lib/test inherits --coverage. Intended for CI; not
 # compatible with DAMACY_FUZZ (which uses clang source-based coverage).

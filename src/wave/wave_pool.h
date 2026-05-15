@@ -75,6 +75,20 @@ struct wave_pool
   struct threadpool* compute_pool;
   struct damacy_stats* stats;
   enum damacy_dtype dtype;
+
+  // Opt-in switch: when set, kick_h2d parses blosc1 chunk headers on
+  // device via blosc1_parse_kernel instead of on host via
+  // blosc1_host_parse. Set by damacy_create from
+  // cfg.use_gpu_blosc_parse or the DAMACY_GPU_BLOSC_PARSE env var.
+  uint8_t use_gpu_parse;
+
+  // GDS opt-in: peel issues store_read_submit_dev into the slot's
+  // device staging buffer; bind aliases wave->dev_compressed to it;
+  // submit_bulk_h2d skips the H2D copy. Validated at damacy_create:
+  // requires build with DAMACY_ENABLE_GDS, requires the store to
+  // support submit_dev, requires use_gpu_parse (no host buffer to
+  // parse from). Set by wave_pool_init from the enable_gds parameter.
+  uint8_t use_gds;
 };
 
 // Create the streams, initialize the wave array, and allocate
@@ -95,6 +109,7 @@ wave_pool_init(struct wave_pool* wp,
                uint64_t host_slab_per_wave,
                uint64_t dev_decompressed_per_wave,
                uint64_t max_chunk_uncompressed_bytes,
+               int enable_gds,
                struct gpu_budget* budget);
 
 // Sync + destroy streams, free per-wave + per-slot pinned host, then

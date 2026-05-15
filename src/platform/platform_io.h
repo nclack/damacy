@@ -32,6 +32,11 @@ extern "C"
                               size_t len,
                               uint64_t offset);
 
+  // POSIX-only: returns the underlying file descriptor (>= 0) or -1 if
+  // unavailable. Used by GDS (cuFileHandleRegister wants an fd) and
+  // nowhere else. Win32 will return -1 unconditionally.
+  int platform_file_fd(platform_file* f);
+
   // File size in bytes. Returns 0 on error.
   uint64_t platform_file_size(platform_file* f);
 

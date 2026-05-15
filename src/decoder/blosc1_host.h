@@ -15,6 +15,7 @@ extern "C"
 #endif
 
   struct threadpool;
+  struct chunk_layout;
 
   struct blosc1_host_chunk
   {
@@ -24,6 +25,10 @@ extern "C"
     uint32_t compressed_nbytes;
     uint32_t decompressed_nbytes;
     uint8_t codec_id;
+    // Optional: when non-NULL, parse_count_one asserts the parsed
+    // (typesize, blocksize, nblocks, shuffle, bitshuffle, dont_split)
+    // match this array-level layout and fails with err=12 on mismatch.
+    const struct chunk_layout* layout;
   };
 
   // Host-resident SOA fanout. Pointer slots hold device addresses.

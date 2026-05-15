@@ -65,6 +65,19 @@ extern "C"
                                        const struct store_read* reads,
                                        size_t n);
 
+  // Like store_read_submit but each `reads[i].dst` is a device pointer.
+  // The store routes the read directly into GPU memory when supported
+  // (NVIDIA GDS / cuFile); otherwise returns an event with seq == 0
+  // indicating failure. Callers should query store_supports_gds first
+  // and fall back to store_read_submit + an H2D copy when unsupported.
+  struct store_event store_read_submit_dev(struct store* s,
+                                           const struct store_read* reads,
+                                           size_t n);
+
+  // 1 if the store can satisfy store_read_submit_dev (cuFile driver
+  // initialized for fs stores); 0 otherwise.
+  int store_supports_gds(struct store* s);
+
   // Block until all reads up to and including ev.seq have completed.
   void store_event_wait(struct store* s, struct store_event ev);
 

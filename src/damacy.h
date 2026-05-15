@@ -163,6 +163,24 @@ extern "C"
     // Only consulted when numa_strategy == DAMACY_NUMA_PIN_TO. Out-of-
     // range values fall back to no-op with a warning.
     int numa_node;
+
+    // Parse blosc1 chunk headers on device instead of on host. Wired
+    // behind a flag so the GPU-parse path can be A/B-tested against
+    // the host parser before GDS lands (which requires it). The
+    // DAMACY_GPU_BLOSC_PARSE=1 environment variable overrides this
+    // at damacy_create time when set; otherwise the field value wins.
+    int use_gpu_blosc_parse;
+
+    // Read compressed chunk bytes directly into device memory via
+    // NVIDIA GPUDirect Storage (cuFile), skipping the pinned-host
+    // staging slab and the bulk H2D copy. Requires the build to be
+    // compiled with -DDAMACY_ENABLE_GDS=ON, requires use_gpu_blosc_parse
+    // (or its env override) since there is no host-side compressed
+    // buffer to parse, and requires cuFileDriverOpen to succeed at
+    // store init. Otherwise damacy_create returns DAMACY_INVAL. The
+    // DAMACY_GDS_ENABLE=1 environment variable overrides this at
+    // damacy_create time when set.
+    int enable_gds;
   };
 
   struct damacy;

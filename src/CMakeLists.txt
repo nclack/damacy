@@ -140,6 +140,11 @@ add_cuda_lib(wave_pool SOURCES wave/wave_pool.h wave/wave_pool.c
 add_src_lib(store SOURCES store/store.h store/store.c store/store_fs.h store/store_fs.c
     LINKS io_queue platform_io strbuf log
 )
+if(DAMACY_ENABLE_GDS AND NOT DAMACY_FUZZ)
+    target_sources(store PRIVATE store/store_fs_gds.h store/store_fs_gds.c)
+    target_link_libraries(store PUBLIC CuFile::cufile)
+    target_compile_definitions(store PUBLIC DAMACY_ENABLE_GDS=1)
+endif()
 
 # Zarr v3 metadata + shard-index parsers (cache-layer building blocks).
 add_src_lib(zarr SOURCES zarr/zarr_metadata.h zarr/zarr_metadata.c
@@ -147,11 +152,18 @@ add_src_lib(zarr SOURCES zarr/zarr_metadata.h zarr/zarr_metadata.c
     LINKS dtype json strbuf crc32c log
 )
 
+# Per-array blosc1 chunk-layout probe (16-byte header read via store).
+# Used by the planner to pre-size decoder/fanout caps and to assert
+# layout uniformity in the host parser.
+add_src_lib(zarr_chunk_layout SOURCES zarr/zarr_chunk_layout.h zarr/zarr_chunk_layout.c
+    LINKS zarr store log
+)
+
 # damacy-side metadata cache (LRU around zarr_metadata_parse).
 # damacy.h is header-included for the damacy_status enum; no link needed
 # (no symbols referenced).
 add_src_lib(zarr_meta_cache SOURCES zarr/zarr_meta_cache.h zarr/zarr_meta_cache.c
-    LINKS zarr lru store strbuf hash log
+    LINKS zarr zarr_chunk_layout lru store strbuf hash log
 )
 
 # damacy-side shard index cache (LRU around zarr_shard_index_parse).
@@ -171,8 +183,10 @@ add_cuda_lib(decoder
             decoder/decoder_zstd.h decoder/decoder_zstd.c
             decoder/decoder_memcpy.h decoder/decoder_memcpy.cu
             decoder/blosc1.h
+            decoder/blosc1_parse.h decoder/blosc1_parse.cu
             decoder/status_reduce.h decoder/status_reduce.cu
     LINKS CUDA::cudart_static CUDA::cuda_driver nvcomp::nvcomp log zarr
+          planner assemble zarr_chunk_layout
 )
 
 # Host-side blosc1 chunk-header parse. Pure C; no CUDA. Consumes the

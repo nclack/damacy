@@ -562,6 +562,32 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     CHECK(Fail,
           batch_slot_init(&self->batch_pool.slots[b], cfg->batch_size) == 0);
 
+  // Resolve the GPU-parse / GDS opt-ins early so wave_pool_init can
+  // size the per-slot buffers correctly.
+  uint8_t use_gpu_parse = resolve_use_gpu_blosc_parse(cfg);
+  uint8_t want_gds = resolve_enable_gds(cfg);
+  if (want_gds) {
+#ifndef DAMACY_ENABLE_GDS
+    log_error("damacy: enable_gds requested but build lacks DAMACY_ENABLE_GDS");
+    s = DAMACY_INVAL;
+    goto Fail;
+#else
+    if (!store_supports_gds(self->store)) {
+      log_error("damacy: enable_gds requested but cuFile driver init failed; "
+                "falling back is not automatic — disable enable_gds in cfg "
+                "or set up GDS on this host");
+      s = DAMACY_INVAL;
+      goto Fail;
+    }
+    if (!use_gpu_parse) {
+      log_error("damacy: enable_gds requires use_gpu_blosc_parse (no host "
+                "buffer is available to parse from)");
+      s = DAMACY_INVAL;
+      goto Fail;
+    }
+#endif
+  }
+
   s = DAMACY_OOM;
   // Pin the calling thread to the GPU's NUMA node for the duration of
   // wave_pool_init so first-touch of pinned-host slabs + per-wave
@@ -579,10 +605,16 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
                                sizing.host_slab_per_wave,
                                sizing.dev_decompressed_per_wave,
                                runtime_chunk_cap,
+                               (int)want_gds,
                                self->budget);
     numa_scope_exit(saved_aff);
     CHECK(Fail, wp_rc == 0);
   }
+  self->wave_pool.use_gpu_parse = use_gpu_parse;
+  if (use_gpu_parse)
+    log_info("damacy: blosc1 chunk-header parse on device (gpu_parse)");
+  if (want_gds)
+    log_info("damacy: compressed reads via cuFile / GDS (skip bulk H2D)");
 
   CHECK(Fail,
         lookahead_init(&self->lookahead,

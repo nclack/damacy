@@ -14,6 +14,7 @@
 #include "damacy_limits.h"
 #include "decoder/blosc1.h"
 #include "decoder/blosc1_host.h"
+#include "decoder/blosc1_parse.h"
 #include "decoder/decoder_memcpy.h"
 
 #include <cuda.h>
@@ -45,7 +46,14 @@ struct damacy_wave
   void* host_slab; // borrowed from slot; NULL when not bound
 
   // Wave-owned device buffers (per-wave; not pooled).
-  void* dev_compressed;   // mirror of slot bytes on device
+  // dev_compressed is the ACTIVE pointer the parse / decode kernels
+  // read from. On the host-staging path it equals dev_compressed_owned
+  // (this wave allocates and copies into it). On the GDS path it
+  // aliases the bound slot's dev_buf (cuFile writes directly into
+  // slot memory); dev_compressed_owned is NULL — the slot owns the
+  // device staging buffer instead.
+  void* dev_compressed;
+  void* dev_compressed_owned;
   void* dev_decompressed; // decode arena
   uint64_t dev_decompressed_cap;
 
@@ -57,6 +65,20 @@ struct damacy_wave
   struct blosc1_host_fanout h_zstd_fan;
   struct gpu_memcpy_op* h_memcpy_ops;
   struct blosc1_totals* h_blosc1_totals;
+
+  // GPU-parse path: per-wave input + counter buffers. h_parse_chunks is
+  // pinned host (cap DAMACY_MAX_CHUNKS_PER_WAVE); d_parse_chunks is the
+  // device mirror H2D'd alongside the bulk slab. d_n_zstd / d_n_memcpy
+  // are device counters the kernel atomic-adds into; the 12-byte
+  // (n_zstd, n_memcpy, parse_err) result lands in h_parse_counters via
+  // D2H before h2d_end fires. NULL on waves that haven't been used on
+  // the GPU-parse path (allocated lazily on first use).
+  struct gpu_parse_chunk* h_parse_chunks;
+  struct gpu_parse_chunk* d_parse_chunks;
+  uint32_t* d_n_zstd;
+  uint32_t* d_n_memcpy;
+  uint32_t* d_parse_err;
+  uint32_t* h_parse_counters; // [n_zstd, n_memcpy, parse_err]
 
   // status_reduce atomicAdds into n_codec_errors; finalize_wave reads.
   struct blosc1_totals* d_blosc1_totals;
@@ -113,13 +135,17 @@ struct damacy_wave
   uint64_t assemble_out_bytes;
 };
 
-// Returns 0 on success, 1 on failure (after self-cleanup). The wave
-// allocates dev_compressed sized to the slot capacity so bulk H2D can
-// copy a full slot byte-for-byte.
+// Returns 0 on success, 1 on failure (after self-cleanup). On the
+// host-staging path (enable_gds = 0) the wave allocates dev_compressed
+// sized to the slot capacity so bulk H2D can copy a full slot
+// byte-for-byte. On the GDS path (enable_gds = 1) the slot owns the
+// device staging buffer; bind_slot_to_wave aliases wave->dev_compressed
+// to slot->dev_buf at bind time.
 int
 wave_init(struct damacy_wave* wave,
           uint64_t slot_cap_bytes,
-          uint64_t dev_decompressed_bytes);
+          uint64_t dev_decompressed_bytes,
+          int enable_gds);
 
 // cuda_skip=1 leaks GPU + pinned-host resources (used when the CUDA
 // context is no longer valid) but releases the non-pinned heap.

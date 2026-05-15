@@ -3,6 +3,7 @@
 #include "batch_pool/batch_pool.h"
 #include "damacy_config.h"
 #include "damacy_stats.h"
+#include "decoder/blosc1_parse.h"
 #include "decoder/decoder_zstd.h"
 #include "decoder/status_reduce.h"
 #include "fanout.h"
@@ -15,6 +16,7 @@
 #include "util/prelude.h"
 #include "util/strbuf.h"
 #include "wave_budget.h"
+#include "zarr/zarr_metadata.h" // CODEC_*
 
 #include <stddef.h>
 #include <stdint.h>
@@ -50,6 +52,7 @@ wave_pool_init(struct wave_pool* wp,
                uint64_t host_slab_per_wave,
                uint64_t dev_decompressed_per_wave,
                uint64_t max_chunk_uncompressed_bytes,
+               int enable_gds,
                struct gpu_budget* budget)
 {
   memset(wp, 0, sizeof(*wp));
@@ -60,6 +63,7 @@ wave_pool_init(struct wave_pool* wp,
   wp->dtype = dtype;
   wp->budget = budget;
   wp->n_slots = host_buffer_waves;
+  wp->use_gds = (uint8_t)(enable_gds != 0);
 
   // NON_BLOCKING so we don't serialize against the legacy default stream.
   CU(Fail, cuStreamCreate(&wp->stream_h2d, CU_STREAM_NON_BLOCKING));
@@ -88,11 +92,15 @@ wave_pool_init(struct wave_pool* wp,
   wp->zstd_decoder = decoder_zstd_create(zsubs, zstd_per, total_uncompressed);
   CHECK(Fail, wp->zstd_decoder);
 
+  // GDS-only slots skip the pinned-host alloc; non-GDS slots skip the
+  // device alloc. Both code paths still need the store_reads array.
+  const uint64_t slot_host_cap = wp->use_gds ? 0ull : host_per_wave;
+  const uint64_t slot_dev_cap = wp->use_gds ? host_per_wave : 0ull;
   for (uint8_t s = 0; s < host_buffer_waves; ++s)
-    if (slot_init(&wp->slots[s], host_per_wave) != 0)
+    if (slot_init(&wp->slots[s], slot_host_cap, slot_dev_cap) != 0)
       goto Fail;
   for (int w = 0; w < DAMACY_N_WAVES; ++w) {
-    if (wave_init(&wp->waves[w], host_per_wave, dev_per_wave) != 0)
+    if (wave_init(&wp->waves[w], host_per_wave, dev_per_wave, wp->use_gds) != 0)
       goto Fail;
     wp->waves[w].bound_slot = -1;
   }
@@ -166,6 +174,29 @@ any_slot_free(const struct wave_pool* wp)
 
 // --- peel / advance -------------------------------------------------------
 
+// Populate the device-side parse input SOA (pinned host buffer that
+// kick_h2d uploads). Mirrors build_blosc1_host_chunks but stores arena
+// byte-offsets rather than pointers — the parse kernel adds them to
+// d_compressed / d_decompressed base pointers on device.
+static void
+build_gpu_parse_chunks(const struct wave_pool* wp, struct damacy_wave* wave)
+{
+  struct damacy_batch_slot* slot = &wp->pool->slots[wave->batch_pool_slot];
+  for (uint32_t i = 0; i < wave->n_chunks; ++i) {
+    struct chunk_plan* c = &slot->chunk_plans[wave->batch_chunk_offset + i];
+    struct read_op* r = &slot->read_ops[wave->batch_chunk_offset + i];
+    struct gpu_parse_chunk* gc = &wave->h_parse_chunks[i];
+    gc->compressed_offset =
+      (uint32_t)(r->dst_buf_offset + (uint64_t)c->offset_in_read);
+    gc->compressed_nbytes = c->compressed_nbytes;
+    gc->decompressed_offset = c->dev_decompressed_offset;
+    gc->decompressed_nbytes = c->decompressed_nbytes;
+    gc->sample_idx_in_batch = c->sample_idx_in_batch;
+    gc->codec_id = c->codec_id;
+    gc->is_fill = c->is_fill;
+  }
+}
+
 // host_slab and dev_compressed share offsets because kick_h2d copies
 // the slab byte-for-byte.
 static void
@@ -175,6 +206,7 @@ build_blosc1_host_chunks(const struct wave_pool* wp, struct damacy_wave* wave)
   for (uint32_t i = 0; i < wave->n_chunks; ++i) {
     struct chunk_plan* c = &slot->chunk_plans[wave->batch_chunk_offset + i];
     struct read_op* r = &slot->read_ops[wave->batch_chunk_offset + i];
+    const struct sample_plan* sp = &slot->sample_plans[c->sample_idx_in_batch];
     struct blosc1_host_chunk* hc = &wave->h_chunks[i];
     size_t base_off = (size_t)r->dst_buf_offset + (size_t)c->offset_in_read;
     hc->h_compressed = (const uint8_t*)wave->host_slab + base_off;
@@ -184,6 +216,7 @@ build_blosc1_host_chunks(const struct wave_pool* wp, struct damacy_wave* wave)
     hc->compressed_nbytes = c->compressed_nbytes;
     hc->decompressed_nbytes = c->decompressed_nbytes;
     hc->codec_id = c->codec_id;
+    hc->layout = sp->layout_probed ? &sp->layout : NULL;
   }
 }
 
@@ -227,16 +260,23 @@ record_io_metric(const struct wave_pool* wp, const struct damacy_wave* wave)
 }
 
 // Phase 1: record h2d_start, queue the slab memcpy, record bulk_h2d_end.
+// On the GDS path the cuFile read already landed bytes on the device
+// (synchronously from the io_queue worker before slot transitioned
+// SLOT_IO → SLOT_READY), so the memcpy is skipped — the bulk_h2d_end
+// event still fires immediately on stream_h2d to keep the slot-release
+// poll in wave_pool_advance shape-compatible across both paths.
 static enum damacy_status
 submit_bulk_h2d(struct wave_pool* wp, struct damacy_wave* wave)
 {
   CU(CudaFail, cuEventRecord(wave->ev.h2d_start, wp->stream_h2d));
   damacy_nvtx_range_push("bulk_h2d");
-  CU(BulkCudaFail,
-     cuMemcpyHtoDAsync(CUDPTR(wave->dev_compressed),
-                       wave->host_slab,
-                       wave->host_used_bytes,
-                       wp->stream_h2d));
+  if (!wp->use_gds) {
+    CU(BulkCudaFail,
+       cuMemcpyHtoDAsync(CUDPTR(wave->dev_compressed),
+                         wave->host_slab,
+                         wave->host_used_bytes,
+                         wp->stream_h2d));
+  }
   // Record bulk_h2d_end before queueing fanout/op H2Ds so stats.h2d
   // measures just the slab copy.
   CU(BulkCudaFail, cuEventRecord(wave->ev.bulk_h2d_end, wp->stream_h2d));
@@ -248,19 +288,45 @@ CudaFail:
   return DAMACY_CUDA;
 }
 
+// Per-chunk substream upper bound. Uses the probed blosc1 layout when
+// available; falls back to MAX_BLOCKS_PER_CHUNK for unprobed blosc-zstd,
+// 1 for plain zstd, and 0 for fill / raw-memcpy chunks (those don't
+// consume zstd substreams).
+static inline uint32_t
+chunk_zsubs_upper_bound(const struct chunk_plan* c,
+                        const struct sample_plan* sp)
+{
+  if (c->is_fill || c->codec_id == (uint8_t)CODEC_FILL ||
+      c->codec_id == (uint8_t)CODEC_NONE)
+    return 0;
+  if (c->codec_id == (uint8_t)CODEC_BLOSC_ZSTD) {
+    if (sp->layout_probed)
+      return sp->layout.nblocks;
+    return DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK;
+  }
+  // CODEC_ZSTD: one substream per chunk.
+  return 1;
+}
+
 // Phase 2: grow per-wave fanout SOA + shared decoder scratch to cover
-// this wave's worst-case substream count. Tight upper bound: every chunk
-// could be blosc(zstd) with the maximum number of blosc-blocks.
-// need_zsubs <= DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE by the
-// damacy_limits static_assert (peel caps n_chunks). Fanout grow is
-// per-wave: the OTHER wave's SOA is a separate allocation and untouched
-// here, so this can run safely while the other wave is in WAVE_H2D /
-// WAVE_ASSEMBLE. decoder_scratch_grow synchronizes stream_decode first.
+// this wave's tight substream upper bound, computed from probed
+// chunk_layouts when available. need_zsubs <=
+// DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE by the damacy_limits static_assert
+// (peel caps n_chunks). Fanout grow is per-wave: the OTHER wave's SOA is
+// a separate allocation and untouched here, so this can run safely
+// while the other wave is in WAVE_H2D / WAVE_ASSEMBLE.
+// decoder_scratch_grow synchronizes stream_decode first.
 static enum damacy_status
 prepare_decode_caps(struct wave_pool* wp, struct damacy_wave* wave)
 {
-  const size_t need_zsubs =
-    (size_t)wave->n_chunks * (size_t)DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK;
+  struct damacy_batch_slot* slot = &wp->pool->slots[wave->batch_pool_slot];
+  size_t need_zsubs = 0;
+  for (uint32_t i = 0; i < wave->n_chunks; ++i) {
+    const struct chunk_plan* c =
+      &slot->chunk_plans[wave->batch_chunk_offset + i];
+    const struct sample_plan* sp = &slot->sample_plans[c->sample_idx_in_batch];
+    need_zsubs += chunk_zsubs_upper_bound(c, sp);
+  }
   enum damacy_status gs = fanout_grow(&wave->h_zstd_fan,
                                       &wave->zstd_fan,
                                       &wave->fanout_cap,
@@ -300,6 +366,91 @@ host_parse(struct wave_pool* wp, struct damacy_wave* wave)
     return DAMACY_DECODE;
   }
   return DAMACY_OK;
+}
+
+// GPU-parse path: upload d_parse_chunks + d_assemble_chunks, zero
+// the device counters + d_blosc1_totals, launch the parse kernel, D2H
+// counters to the pinned host buffer, then record h2d_end. The kernel
+// writes the fanout / memcpy SOAs in place; the host reads
+// h_parse_counters in kick_compute (sequenced after h2d_end fires).
+static enum damacy_status
+gpu_parse(struct wave_pool* wp, struct damacy_wave* wave)
+{
+  damacy_nvtx_range_push("gpu_parse");
+  // Upload per-chunk parse inputs.
+  CU(CudaFail,
+     cuMemcpyHtoDAsync(CUDPTR(wave->d_parse_chunks),
+                       wave->h_parse_chunks,
+                       (size_t)wave->n_chunks * sizeof(struct gpu_parse_chunk),
+                       wp->stream_h2d));
+  // Upload assemble_chunks (sample_idx / chunk_d / is_fill from
+  // build_assemble_meta). Kernel overwrites the shuffle fields in
+  // place; stream_h2d FIFO orders this H2D before the kernel.
+  CU(CudaFail,
+     cuMemcpyHtoDAsync(CUDPTR(wave->d_assemble_chunks),
+                       wave->h_assemble_chunks,
+                       (size_t)wave->n_chunks * sizeof(struct assemble_chunk),
+                       wp->stream_h2d));
+
+  // Zero counters + parse_err scalar + d_blosc1_totals.
+  CU(CudaFail,
+     cuMemsetD8Async(
+       CUDPTR(wave->d_n_zstd), 0, sizeof(uint32_t), wp->stream_h2d));
+  CU(CudaFail,
+     cuMemsetD8Async(
+       CUDPTR(wave->d_n_memcpy), 0, sizeof(uint32_t), wp->stream_h2d));
+  CU(CudaFail,
+     cuMemsetD8Async(
+       CUDPTR(wave->d_parse_err), 0, sizeof(uint32_t), wp->stream_h2d));
+  CU(CudaFail,
+     cuMemsetD8Async(CUDPTR(wave->d_blosc1_totals),
+                     0,
+                     sizeof(struct blosc1_totals),
+                     wp->stream_h2d));
+
+  struct damacy_batch_slot* slot = &wp->pool->slots[wave->batch_pool_slot];
+  struct blosc1_parse_args pargs = {
+    .d_compressed = (const uint8_t*)wave->dev_compressed,
+    .d_decompressed = (uint8_t*)wave->dev_decompressed,
+    .d_chunks = wave->d_parse_chunks,
+    .d_sample_plans = (const struct sample_plan*)slot->d_sample_plans,
+    .n_chunks = wave->n_chunks,
+    .zstd = wave->zstd_fan,
+    .d_memcpy_ops = wave->d_memcpy_ops,
+    .d_assemble_chunks = wave->d_assemble_chunks,
+    .d_n_zstd = wave->d_n_zstd,
+    .d_n_memcpy = wave->d_n_memcpy,
+    .d_parse_err = wave->d_parse_err,
+  };
+  if (blosc1_parse_launch(wp->stream_h2d, &pargs))
+    goto CudaFail;
+
+  // D2H the 12 bytes (n_zstd, n_memcpy, parse_err). h_parse_counters is
+  // pinned; the read in kick_compute sees this value because the
+  // wave_pool_advance polls h2d_end (recorded after this D2H) before
+  // calling kick_compute.
+  CU(CudaFail,
+     cuMemcpyDtoHAsync(wave->h_parse_counters,
+                       CUDPTR(wave->d_n_zstd),
+                       sizeof(uint32_t),
+                       wp->stream_h2d));
+  CU(CudaFail,
+     cuMemcpyDtoHAsync(wave->h_parse_counters + 1,
+                       CUDPTR(wave->d_n_memcpy),
+                       sizeof(uint32_t),
+                       wp->stream_h2d));
+  CU(CudaFail,
+     cuMemcpyDtoHAsync(wave->h_parse_counters + 2,
+                       CUDPTR(wave->d_parse_err),
+                       sizeof(uint32_t),
+                       wp->stream_h2d));
+
+  CU(CudaFail, cuEventRecord(wave->ev.h2d_end, wp->stream_h2d));
+  damacy_nvtx_range_pop(); // gpu_parse
+  return DAMACY_OK;
+CudaFail:
+  damacy_nvtx_range_pop(); // gpu_parse
+  return DAMACY_CUDA;
 }
 
 // Phase 4: H2D the fanout SOA + memcpy_ops + assemble_chunks, zero
@@ -367,21 +518,27 @@ kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
   if (s != DAMACY_OK)
     goto Error;
 
-  build_blosc1_host_chunks(wp, wave);
-
   needs_end_record = 1;
   s = prepare_decode_caps(wp, wave);
   if (s != DAMACY_OK)
     goto Error;
 
-  s = host_parse(wp, wave);
-  if (s != DAMACY_OK)
-    goto Error;
-
-  needs_end_record = 0; // upload_decode_meta records h2d_end itself
-  s = upload_decode_meta(wp, wave);
-  if (s != DAMACY_OK)
-    goto Error;
+  if (wp->use_gpu_parse) {
+    build_gpu_parse_chunks(wp, wave);
+    needs_end_record = 0; // gpu_parse records h2d_end itself
+    s = gpu_parse(wp, wave);
+    if (s != DAMACY_OK)
+      goto Error;
+  } else {
+    build_blosc1_host_chunks(wp, wave);
+    s = host_parse(wp, wave);
+    if (s != DAMACY_OK)
+      goto Error;
+    needs_end_record = 0; // upload_decode_meta records h2d_end itself
+    s = upload_decode_meta(wp, wave);
+    if (s != DAMACY_OK)
+      goto Error;
+  }
 
   wave->state = WAVE_H2D;
   damacy_nvtx_range_pop(); // kick_h2d
@@ -551,7 +708,26 @@ kick_compute(struct wave_pool* wp, struct damacy_wave* wave)
 {
   CU(CudaFail, cuStreamWaitEvent(wp->stream_decode, wave->ev.h2d_end, 0));
 
-  const struct blosc1_totals tot = *wave->h_blosc1_totals;
+  struct blosc1_totals tot;
+  if (wp->use_gpu_parse) {
+    // h_parse_counters were D2H'd to pinned host on stream_h2d before
+    // h2d_end was recorded; cuEventQuery(h2d_end) returning CUDA_SUCCESS
+    // (the wave_pool_advance gate that called us) means this is safe
+    // to read without an explicit host sync.
+    tot.n_zstd = wave->h_parse_counters[0];
+    tot.n_memcpy = wave->h_parse_counters[1];
+    tot.n_unshuffle = 0;
+    tot.n_bitunshuffle = 0;
+    tot.n_parse_errors = wave->h_parse_counters[2];
+    tot.n_codec_errors = 0;
+    if (tot.n_parse_errors != 0) {
+      log_error("blosc1 gpu_parse: first parse err code=%u",
+                tot.n_parse_errors);
+      return DAMACY_DECODE;
+    }
+  } else {
+    tot = *wave->h_blosc1_totals;
+  }
   enum damacy_status st = kick_decode(wp, wave, &tot);
   if (st != DAMACY_OK)
     return st;
@@ -684,9 +860,13 @@ wave_pool_peel(struct wave_pool* wp, uint16_t batch_slot_idx)
     struct chunk_plan* c = &batch->chunk_plans[base + i];
     if (c->is_fill)
       continue;
+    // GDS path writes directly into the slot's device staging buffer;
+    // non-GDS path stages through the pinned host buffer.
+    void* dst = wp->use_gds ? (void*)((uint8_t*)hs->dev_buf + r->dst_buf_offset)
+                            : (void*)((uint8_t*)hs->buf + r->dst_buf_offset);
     hs->store_reads[n_reads++] = (struct store_read){
       .key = r->shard_path,
-      .dst = (uint8_t*)hs->buf + r->dst_buf_offset,
+      .dst = dst,
       .offset = r->file_offset,
       .len = r->nbytes,
     };
@@ -694,7 +874,9 @@ wave_pool_peel(struct wave_pool* wp, uint16_t batch_slot_idx)
   hs->io_t_start_ns = monotonic_ns();
   hs->is_fill_wave = (n_reads == 0);
   if (n_reads > 0) {
-    hs->io_event = store_read_submit(wp->store, hs->store_reads, n_reads);
+    hs->io_event =
+      wp->use_gds ? store_read_submit_dev(wp->store, hs->store_reads, n_reads)
+                  : store_read_submit(wp->store, hs->store_reads, n_reads);
     if (hs->io_event.seq == 0) {
       damacy_nvtx_range_pop();
       return DAMACY_IO;
@@ -735,6 +917,12 @@ bind_slot_to_wave(struct wave_pool* wp, struct damacy_wave* wave, int slot_idx)
                 0);
   wave->bound_slot = (int8_t)slot_idx;
   wave->host_slab = hs->buf;
+  // GDS path: cuFile wrote directly into the slot's device staging
+  // buffer; alias wave->dev_compressed to it so the parse + decode
+  // kernels read from the same memory the IO landed in. The slot
+  // retains ownership; the alias clears on finalize.
+  if (wp->use_gds)
+    wave->dev_compressed = hs->dev_buf;
   wave->batch_pool_slot = hs->batch_pool_slot;
   wave->batch_chunk_offset = hs->batch_chunk_offset;
   wave->n_chunks = hs->n_chunks;

@@ -26,7 +26,13 @@ enum slot_state
 struct host_slab_slot
 {
   enum slot_state state;
-  void* buf; // pinned host (cuMemAllocHost)
+  // Pinned host buffer used by the host-staging IO path. NULL when the
+  // slot was allocated as device-only (GDS). Cap is the slot's logical
+  // capacity in either case; reads use cap to gate chunk packing.
+  void* buf;
+  // Device buffer used by the GDS path; cuFile reads land here
+  // directly. NULL when the slot is host-only.
+  void* dev_buf;
   uint64_t cap;
   uint64_t used_bytes;
 
@@ -44,12 +50,15 @@ struct host_slab_slot
   uint64_t io_bytes;
 };
 
-// Allocate one slot's pinned buffer + store_reads array. Returns 0 on
-// success, 1 on failure (after self-cleanup). cuda_skip=1 in
-// slot_destroy leaks the pinned buffer (used when the CUDA context is
-// no longer valid) but releases the heap.
+// Allocate one slot's pinned buffer + store_reads array. `host_cap` is
+// the pinned host buffer size (0 = skip; GDS-only slots). `dev_cap`
+// is the device buffer size (0 = skip; host-staging-only slots). At
+// least one must be non-zero. Returns 0 on success, 1 on failure
+// (after self-cleanup). cuda_skip=1 in slot_destroy leaks the pinned
+// buffer (used when the CUDA context is no longer valid) but releases
+// the heap.
 int
-slot_init(struct host_slab_slot* slot, uint64_t cap);
+slot_init(struct host_slab_slot* slot, uint64_t host_cap, uint64_t dev_cap);
 
 void
 slot_destroy(struct host_slab_slot* slot, int cuda_skip);

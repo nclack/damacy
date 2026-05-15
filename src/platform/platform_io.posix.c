@@ -57,6 +57,12 @@ platform_file_close(platform_file* f)
   free(f);
 }
 
+int
+platform_file_fd(platform_file* f)
+{
+  return f ? f->fd : -1;
+}
+
 int64_t
 platform_file_pread(platform_file* f, void* dst, size_t len, uint64_t offset)
 {

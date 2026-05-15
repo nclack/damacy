@@ -3,6 +3,9 @@
 #include "damacy_limits.h"
 #include "util/prelude.h"
 
+#include <stdlib.h>
+#include <string.h>
+
 uint32_t
 damacy_dtype_bpe(enum damacy_dtype dt)
 {
@@ -101,4 +104,26 @@ resolve_host_buffer_waves(const struct damacy_config* cfg)
   if (v > DAMACY_MAX_HOST_BUFFER_WAVES)
     v = DAMACY_MAX_HOST_BUFFER_WAVES;
   return v;
+}
+
+uint8_t
+resolve_use_gpu_blosc_parse(const struct damacy_config* cfg)
+{
+  if (cfg && cfg->use_gpu_blosc_parse)
+    return 1;
+  const char* e = getenv("DAMACY_GPU_BLOSC_PARSE");
+  if (e && strcmp(e, "1") == 0)
+    return 1;
+  return 0;
+}
+
+uint8_t
+resolve_enable_gds(const struct damacy_config* cfg)
+{
+  if (cfg && cfg->enable_gds)
+    return 1;
+  const char* e = getenv("DAMACY_GDS_ENABLE");
+  if (e && strcmp(e, "1") == 0)
+    return 1;
+  return 0;
 }

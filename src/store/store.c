@@ -25,6 +25,25 @@ Empty:
   return (struct store_event){ 0 };
 }
 
+struct store_event
+store_read_submit_dev(struct store* s, const struct store_read* reads, size_t n)
+{
+  CHECK_SILENT(Empty, s);
+  CHECK_SILENT(Empty, s->vt);
+  CHECK_SILENT(Empty, s->vt->submit_dev);
+  return s->vt->submit_dev(s, reads, n);
+Empty:
+  return (struct store_event){ 0 };
+}
+
+int
+store_supports_gds(struct store* s)
+{
+  if (!s || !s->vt)
+    return 0;
+  return s->vt->submit_dev != NULL;
+}
+
 void
 store_event_wait(struct store* s, struct store_event ev)
 {

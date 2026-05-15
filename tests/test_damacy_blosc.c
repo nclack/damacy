@@ -15,12 +15,13 @@
 //   test_grow_inside_tight_budget       — tight budget + grow load;
 //                                         resolver's worst-case reservation
 //                                         keeps the grow inside the cap
-//   test_grow_decoder_rejected_at_inflated_committed
-//                                       — inflate gpu_bytes_committed so
-//                                         batch_pool + fanout grow fit but
-//                                         the decoder grow's ~7 MB delta
-//                                         exceeds the cap; pop returns
-//                                         DAMACY_OOM via the grow path
+//   test_layout_probe_avoids_decoder_grow
+//                                       — with the planner's chunk_layout
+//                                         probe, need_zsubs is computed
+//                                         from probed nblocks; the
+//                                         single-block fixture stays
+//                                         under the initial cap and the
+//                                         decoder grow never fires
 //   test_batch_pool_rejected_at_inflated_committed
 //                                       — inflate fully to the cap;
 //                                         batch-output pool allocation fails
@@ -29,6 +30,7 @@
 #include "cuda_init.h"
 #include "damacy.h"
 #include "fixture.h"
+#include "store/store.h"
 
 #include <cuda_runtime.h>
 #include <stdio.h>
@@ -465,23 +467,20 @@ test_grow_inside_tight_budget(void)
   return 0;
 }
 
-// Exercise the grow-time DAMACY_OOM path in wave_pool_grow_decoder.
-// The resolver normally reserves enough headroom that grows always
-// succeed; we forcibly inflate gpu_bytes_committed via a test-only hook
-// so the decoder grow's delta (~7 MB at the cap-jump from 1024 to 2048
-// substreams) would push past the cap. The smaller batch-output pool
-// (~64 KB) and fanout grow (~32 KB) still fit, so the failure lands in
-// the decoder-grow OOM branch specifically. damacy_pop surfaces the
-// failed_status as DAMACY_OOM.
+// With the planner's chunk_layout probe in place, the per-wave
+// substream count is computed from the probed nblocks rather than
+// MAX_BLOCKS_PER_CHUNK. This 256-byte-chunk fixture has nblocks=1, so
+// need_zsubs (64) stays under the initial 1024-cap and the
+// decoder/fanout grow paths do NOT fire — even with the budget
+// inflated to leave only 1 MB headroom. The pop succeeds.
 //
-// wave_grow_fanout's OOM check is structurally identical to the decoder
-// one but its delta is tiny (32 KB at this cap-jump), so isolating it
-// from the batch-output pool's earlier check would require a smaller
-// batch_pool need than the fanout delta — not reachable with the
-// workloads here. The check is exercised in passing (it evaluates and
-// returns OK on every grow) and is covered by code review.
+// The OOM-on-grow code path itself is unchanged; it just isn't
+// reachable for this fixture under the tight bound. A workload that
+// reaches it would need multi-block chunks (nblocks > 1 from blosc's
+// auto-tune, i.e., chunks much larger than 16 KB) and enough chunks
+// per wave to push past 1024 substreams.
 static int
-test_grow_decoder_rejected_at_inflated_committed(void)
+test_layout_probe_avoids_decoder_grow(void)
 {
   char root[64];
   EXPECT(mkdtemp_root(root, sizeof root) == 0);
@@ -505,11 +504,9 @@ test_grow_decoder_rejected_at_inflated_committed(void)
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
-  // Pick a small headroom: 1 MB. Enough for the lazy batch-output pool
-  // (64 KB) and the fanout grow (32 KB delta), but well short of the
-  // decoder-grow delta (~7 MB jumping from 1024 → 2048 substreams).
-  // So batch_pool_allocate + fanout grow both pass; the decoder grow
-  // is the one that surfaces DAMACY_OOM.
+  // Pre-fix: the decoder grow's ~7 MB delta from 1024 → 2048
+  // substreams (driven by need_zsubs = n_chunks * MAX_BLOCKS) tripped
+  // OOM here. Post-fix: probed nblocks = 1, need_zsubs = 64, no grow.
   const uint64_t headroom = 1ull << 20;
   (void)damacy_set_gpu_bytes_committed_for_test(
     d, cfg.max_gpu_memory_bytes - headroom);
@@ -519,7 +516,8 @@ test_grow_decoder_rejected_at_inflated_committed(void)
   EXPECT(damacy_push(d, slice).status == DAMACY_OK);
 
   struct damacy_batch* b = NULL;
-  EXPECT(damacy_pop(d, &b) == DAMACY_OOM);
+  EXPECT(damacy_pop(d, &b) == DAMACY_OK);
+  damacy_release(d, b);
 
   damacy_destroy(d);
   fixture_rm_tree(root);
@@ -528,9 +526,8 @@ test_grow_decoder_rejected_at_inflated_committed(void)
 
 // Exercise the batch-output pool's OOM branch with the
 // gpu_bytes_committed counter inflated to the cap. Belt-and-suspenders
-// alongside test_grow_decoder_rejected_at_inflated_committed: that
-// test only covers the decoder grow; this one shows that the same
-// hook plus a much tighter headroom trips the earlier
+// alongside test_layout_probe_avoids_decoder_grow: this one shows that
+// the same hook plus a much tighter headroom trips the earlier
 // batch_pool_allocate check, so neither grow path is reached.
 static int
 test_batch_pool_rejected_at_inflated_committed(void)
@@ -563,6 +560,235 @@ test_batch_pool_rejected_at_inflated_committed(void)
   return 0;
 }
 
+// A/B-equivalence: drive the same workload through the host parse and
+// the GPU parse (use_gpu_blosc_parse=1) and assert byte-equal output.
+// Single-block fixture (256-byte chunks) exercises the BLOSC_ZSTD
+// fast-path of the kernel.
+static int
+run_gpu_host_parity(const char* codec)
+{
+  char root[64];
+  EXPECT(mkdtemp_root(root, sizeof root) == 0);
+  char p[256];
+  snprintf(p, sizeof p, "%s/foo", root);
+  int64_t shape[2] = { 64, 32 };
+  int64_t inner[2] = { 8, 16 };
+  int64_t shard[2] = { 64, 32 };
+  EXPECT(fixture_write_zarr_codec(
+           p, shape, inner, shard, 2, "uint16", 0, codec) == 0);
+
+  const size_t n_elems = (size_t)shape[0] * (size_t)shape[1];
+  float* host_out = (float*)calloc(n_elems, sizeof(float));
+  float* gpu_out = (float*)calloc(n_elems, sizeof(float));
+  EXPECT(host_out && gpu_out);
+
+  // Host path.
+  {
+    struct damacy_config cfg = mk_cfg(root, 1);
+    struct damacy* d = NULL;
+    EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
+    size_t got = 0;
+    EXPECT(run_one(d, mk_sample(p, 0, 64, 0, 32), host_out, n_elems, &got) ==
+           0);
+    EXPECT(got == n_elems);
+    damacy_destroy(d);
+  }
+  // GPU-parse path (env override).
+  {
+    struct damacy_config cfg = mk_cfg(root, 1);
+    cfg.use_gpu_blosc_parse = 1;
+    struct damacy* d = NULL;
+    EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
+    size_t got = 0;
+    EXPECT(run_one(d, mk_sample(p, 0, 64, 0, 32), gpu_out, n_elems, &got) == 0);
+    EXPECT(got == n_elems);
+    damacy_destroy(d);
+  }
+
+  // Byte-equal: the two parse paths must produce identical assembled
+  // tensors. Mismatches isolate to one chunk via the row index.
+  for (size_t i = 0; i < n_elems; ++i)
+    EXPECT(host_out[i] == gpu_out[i]);
+
+  free(host_out);
+  free(gpu_out);
+  fixture_rm_tree(root);
+  return 0;
+}
+
+static int
+test_gpu_parse_parity_blosc_zstd(void)
+{
+  return run_gpu_host_parity("blosc-zstd");
+}
+
+static int
+test_gpu_parse_parity_zstd(void)
+{
+  return run_gpu_host_parity("zstd");
+}
+
+static int
+test_gpu_parse_parity_none(void)
+{
+  return run_gpu_host_parity("none");
+}
+
+// Probe whether the cuFile driver opens on this host. Creates a
+// throwaway store and queries store_supports_gds. On builds compiled
+// without DAMACY_ENABLE_GDS the store_fs vtable's submit_dev slot is
+// NULL and this returns 0 regardless of cuFile presence.
+static int
+gds_runtime_available(void)
+{
+  char tmpl[] = "/tmp/damacy_gds_probe_XXXXXX";
+  char* root = mkdtemp(tmpl);
+  if (!root)
+    return 0;
+  struct store_fs_config sc = { .root = root, .nthreads = 1 };
+  struct store* s = store_fs_create(&sc);
+  int ok = s ? store_supports_gds(s) : 0;
+  if (s)
+    store_destroy(s);
+  fixture_rm_tree(root);
+  return ok;
+}
+
+// A/B parity: same workload through host-staging + GPU parse vs
+// GDS + GPU parse. Skipped (logged + returns 0) when cuFile is
+// unavailable on this host.
+static int
+test_gds_parity_blosc_zstd(void)
+{
+  if (!gds_runtime_available()) {
+    log_info("test_gds_parity_blosc_zstd: GDS unavailable on this host; skip");
+    return 0;
+  }
+  char root[64];
+  EXPECT(mkdtemp_root(root, sizeof root) == 0);
+  char p[256];
+  snprintf(p, sizeof p, "%s/foo", root);
+  int64_t shape[2] = { 64, 32 };
+  int64_t inner[2] = { 8, 16 };
+  int64_t shard[2] = { 64, 32 };
+  EXPECT(fixture_write_zarr_codec(
+           p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
+
+  const size_t n_elems = (size_t)shape[0] * (size_t)shape[1];
+  float* host_out = (float*)calloc(n_elems, sizeof(float));
+  float* gds_out = (float*)calloc(n_elems, sizeof(float));
+  EXPECT(host_out && gds_out);
+
+  // Host-staging path (with gpu_parse for fair comparison).
+  {
+    struct damacy_config cfg = mk_cfg(root, 1);
+    cfg.use_gpu_blosc_parse = 1;
+    struct damacy* d = NULL;
+    EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
+    size_t got = 0;
+    EXPECT(run_one(d, mk_sample(p, 0, 64, 0, 32), host_out, n_elems, &got) ==
+           0);
+    EXPECT(got == n_elems);
+    damacy_destroy(d);
+  }
+  // GDS path.
+  {
+    struct damacy_config cfg = mk_cfg(root, 1);
+    cfg.use_gpu_blosc_parse = 1;
+    cfg.enable_gds = 1;
+    struct damacy* d = NULL;
+    EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
+    size_t got = 0;
+    EXPECT(run_one(d, mk_sample(p, 0, 64, 0, 32), gds_out, n_elems, &got) == 0);
+    EXPECT(got == n_elems);
+    damacy_destroy(d);
+  }
+
+  for (size_t i = 0; i < n_elems; ++i)
+    EXPECT(host_out[i] == gds_out[i]);
+
+  free(host_out);
+  free(gds_out);
+  fixture_rm_tree(root);
+  return 0;
+}
+
+// enable_gds without use_gpu_blosc_parse must fail at create with
+// DAMACY_INVAL. Skipped when GDS is unavailable (the error there is
+// the right one but for a different reason).
+static int
+test_gds_requires_gpu_parse(void)
+{
+  if (!gds_runtime_available()) {
+    log_info("test_gds_requires_gpu_parse: GDS unavailable; skip");
+    return 0;
+  }
+  char root[64];
+  EXPECT(mkdtemp_root(root, sizeof root) == 0);
+  struct damacy_config cfg = mk_cfg(root, 1);
+  cfg.enable_gds = 1; // missing use_gpu_blosc_parse
+  struct damacy* d = NULL;
+  enum damacy_status s = damacy_create(&cfg, &d);
+  EXPECT(s == DAMACY_INVAL);
+  EXPECT(d == NULL);
+  fixture_rm_tree(root);
+  return 0;
+}
+
+// Multi-block parity: 512 KB uint16 chunks → blosc auto-tunes to
+// blocksize=128 KB so nblocks=4. Exercises the kernel's per-block
+// warp ballot + atomicAdd path that the single-block tests can't reach.
+static int
+test_gpu_parse_parity_blosc_zstd_multiblock(void)
+{
+  char root[64];
+  EXPECT(mkdtemp_root(root, sizeof root) == 0);
+  char p[256];
+  snprintf(p, sizeof p, "%s/foo", root);
+  int64_t shape[2] = { 512, 1024 };
+  int64_t inner[2] = { 256, 1024 };
+  int64_t shard[2] = { 512, 1024 };
+  EXPECT(fixture_write_zarr_codec(
+           p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
+
+  const size_t n_elems = (size_t)shape[0] * (size_t)shape[1];
+  float* host_out = (float*)calloc(n_elems, sizeof(float));
+  float* gpu_out = (float*)calloc(n_elems, sizeof(float));
+  EXPECT(host_out && gpu_out);
+
+  {
+    struct damacy_config cfg = mk_cfg(root, 1);
+    cfg.max_chunk_uncompressed_bytes = 1ull << 20; // 1 MB allows 512 KB chunks
+    struct damacy* d = NULL;
+    EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
+    size_t got = 0;
+    EXPECT(run_one(d, mk_sample(p, 0, 512, 0, 1024), host_out, n_elems, &got) ==
+           0);
+    EXPECT(got == n_elems);
+    damacy_destroy(d);
+  }
+  {
+    struct damacy_config cfg = mk_cfg(root, 1);
+    cfg.max_chunk_uncompressed_bytes = 1ull << 20;
+    cfg.use_gpu_blosc_parse = 1;
+    struct damacy* d = NULL;
+    EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
+    size_t got = 0;
+    EXPECT(run_one(d, mk_sample(p, 0, 512, 0, 1024), gpu_out, n_elems, &got) ==
+           0);
+    EXPECT(got == n_elems);
+    damacy_destroy(d);
+  }
+
+  for (size_t i = 0; i < n_elems; ++i)
+    EXPECT(host_out[i] == gpu_out[i]);
+
+  free(host_out);
+  free(gpu_out);
+  fixture_rm_tree(root);
+  return 0;
+}
+
 int
 main(void)
 {
@@ -573,8 +799,14 @@ main(void)
   RUN(test_multi_wave_per_batch);
   RUN(test_wave_grows_substream_cap);
   RUN(test_grow_inside_tight_budget);
-  RUN(test_grow_decoder_rejected_at_inflated_committed);
+  RUN(test_layout_probe_avoids_decoder_grow);
   RUN(test_batch_pool_rejected_at_inflated_committed);
+  RUN(test_gpu_parse_parity_blosc_zstd);
+  RUN(test_gpu_parse_parity_zstd);
+  RUN(test_gpu_parse_parity_none);
+  RUN(test_gpu_parse_parity_blosc_zstd_multiblock);
+  RUN(test_gds_parity_blosc_zstd);
+  RUN(test_gds_requires_gpu_parse);
   log_info("all tests passed");
   return 0;
 }

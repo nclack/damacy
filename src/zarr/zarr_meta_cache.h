@@ -8,6 +8,7 @@
 
 #include "damacy.h"   // damacy_status
 #include "util/lru.h" // struct lru_counters
+#include "zarr/zarr_chunk_layout.h"
 #include "zarr/zarr_metadata.h"
 
 #include <stdint.h>
@@ -43,6 +44,32 @@ extern "C"
   enum damacy_status zarr_meta_cache_get(struct zarr_meta_cache* c,
                                          const char* uri,
                                          const struct zarr_metadata** out);
+
+  // Returns the cached chunk layout for `uri`, or NULL if no layout has
+  // been probed yet (or the URI isn't cached). The cache must already
+  // hold a meta entry for the URI — call zarr_meta_cache_get first.
+  const struct chunk_layout* zarr_meta_cache_layout_get(
+    struct zarr_meta_cache* c,
+    const char* uri);
+
+  // Records a probed layout against the meta entry for `uri`. No-op if
+  // a layout has already been set (the first probe wins; uniformity is
+  // asserted per-chunk by the host parser). Returns 0 on success.
+  int zarr_meta_cache_layout_set(struct zarr_meta_cache* c,
+                                 const char* uri,
+                                 const struct chunk_layout* layout);
+
+  // Cached probe: returns the cached layout if present, otherwise reads
+  // 16 bytes at first_chunk_off in shard_path via the cache's store,
+  // caches the result, and returns the cached pointer. Returns NULL on
+  // probe failure or if no meta entry exists for `uri`.
+  const struct chunk_layout* zarr_meta_cache_probe_layout(
+    struct zarr_meta_cache* c,
+    const char* uri,
+    const char* shard_path,
+    uint64_t first_chunk_off,
+    uint32_t first_chunk_cbytes,
+    uint8_t codec_id);
 
   struct zarr_meta_cache_stats
   {

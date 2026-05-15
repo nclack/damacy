@@ -15,6 +15,8 @@ struct meta_entry
 {
   char* uri; // owned, NUL-terminated
   struct zarr_metadata meta;
+  struct chunk_layout layout;
+  uint8_t layout_probed;
 };
 
 struct zarr_meta_cache
@@ -139,6 +141,70 @@ Invalid:
   if (out)
     *out = NULL;
   return DAMACY_INVAL;
+}
+
+const struct chunk_layout*
+zarr_meta_cache_layout_get(struct zarr_meta_cache* self, const char* uri)
+{
+  if (!self || !uri)
+    return NULL;
+  uint64_t hash = hash_fnv1a_str(uri);
+  struct lru_entry* hit = lru_get(self->lru, hash, uri);
+  if (!hit)
+    return NULL;
+  const struct meta_entry* entry =
+    (const struct meta_entry*)lru_entry_value(hit);
+  return entry->layout_probed ? &entry->layout : NULL;
+}
+
+int
+zarr_meta_cache_layout_set(struct zarr_meta_cache* self,
+                           const char* uri,
+                           const struct chunk_layout* layout)
+{
+  if (!self || !uri || !layout)
+    return 1;
+  uint64_t hash = hash_fnv1a_str(uri);
+  struct lru_entry* hit = lru_get(self->lru, hash, uri);
+  if (!hit)
+    return 1;
+  struct meta_entry* entry = (struct meta_entry*)lru_entry_value(hit);
+  if (entry->layout_probed)
+    return 0;
+  entry->layout = *layout;
+  entry->layout_probed = 1;
+  return 0;
+}
+
+const struct chunk_layout*
+zarr_meta_cache_probe_layout(struct zarr_meta_cache* self,
+                             const char* uri,
+                             const char* shard_path,
+                             uint64_t first_chunk_off,
+                             uint32_t first_chunk_cbytes,
+                             uint8_t codec_id)
+{
+  if (!self || !uri || !shard_path)
+    return NULL;
+  uint64_t hash = hash_fnv1a_str(uri);
+  struct lru_entry* hit = lru_get(self->lru, hash, uri);
+  if (!hit)
+    return NULL;
+  struct meta_entry* entry = (struct meta_entry*)lru_entry_value(hit);
+  if (entry->layout_probed)
+    return &entry->layout;
+
+  struct chunk_layout probed = { 0 };
+  if (zarr_chunk_layout_probe(self->store,
+                              shard_path,
+                              first_chunk_off,
+                              first_chunk_cbytes,
+                              codec_id,
+                              &probed))
+    return NULL;
+  entry->layout = probed;
+  entry->layout_probed = 1;
+  return &entry->layout;
 }
 
 void

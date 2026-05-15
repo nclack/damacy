@@ -8,9 +8,10 @@
 // scheduler; the planner zeroes them.
 #pragma once
 
-#include "damacy.h"             // damacy_status, damacy_sample, damacy_aabb
-#include "damacy_limits.h"      // DAMACY_MAX_RANK
-#include "zarr/zarr_metadata.h" // DAMACY_MAX_DTYPE_BYTES
+#include "damacy.h"                 // damacy_status, damacy_sample, damacy_aabb
+#include "damacy_limits.h"          // DAMACY_MAX_RANK
+#include "zarr/zarr_chunk_layout.h" // struct chunk_layout
+#include "zarr/zarr_metadata.h"     // DAMACY_MAX_DTYPE_BYTES
 
 #include <stddef.h>
 #include <stdint.h>
@@ -65,6 +66,11 @@ extern "C"
     // Array-level fill_value (zarr v3 metadata). Chunks tagged is_fill
     // broadcast these bytes; bytes are interpreted under src_dtype.
     uint8_t fill_value[DAMACY_MAX_DTYPE_BYTES];
+    // Per-array blosc1 chunk layout, populated lazily from the meta
+    // cache on first non-fill emit. layout_probed = 0 means downstream
+    // should fall back to MAX_BLOCKS_PER_CHUNK in cap calculations.
+    struct chunk_layout layout;
+    uint8_t layout_probed;
   };
 
   // Per-chunk plan. Carries IO/decompress fields plus assemble-side
