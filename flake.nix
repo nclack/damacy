@@ -105,6 +105,12 @@
           CUDAToolkit_ROOT = "${cudaPkgs.cudatoolkit}";
           Nvcomp_ROOT = "${cudaPkgs.nvcomp}";
           CUFILE_ROOT = "${cudaPkgs.libcufile}";
+          # Point cuFile at the vendored config (allow_compat_mode = true)
+          # so cuFileDriverOpen succeeds on hosts without nvidia-fs. In
+          # compat mode reads go through cuFile's host-bounce buffers
+          # internally — slower than real GDS, but exercises the same
+          # store_fs_gds code path.
+          CUFILE_ENV_PATH_JSON = "${cudaPkgs.libcufile}/etc/cufile.json";
 
           # cudatoolkit ships stub libcuda.so.1; the real one lives with the
           # NVIDIA driver. Prepend the driver dir so the runtime resolves the
@@ -118,6 +124,10 @@
               cudaPkgs.nvcomp
               cudaPkgs.libcufile
               pkgs.numactl  # libnuma for src/numa
+              # cuFile dlopens libmount.so (util-linux) and libudev.so
+              # (systemd) at driver init even in compat mode.
+              pkgs.util-linux.lib
+              pkgs.systemd
               pkgs.stdenv.cc.cc.lib
               pkgs.zlib  # numpy wheel _multiarray_umath dlopens libz.so.1
             ];
