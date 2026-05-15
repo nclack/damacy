@@ -91,6 +91,10 @@
             cudaPkgs.nsight_systems
             cudaPkgs.nsight_compute
           ] ++ (with pkgs; [
+            # libnuma is loaded at runtime via dlopen (see src/numa/numa.c);
+            # only needed if you want NUMA pinning to actually do anything.
+            # Kept in the devShell so multi-socket dev boxes resolve a node.
+            numactl
             lldb
             gh
             man-pages
@@ -113,6 +117,7 @@
               "${cudaPkgs.cudatoolkit}/lib64"
               cudaPkgs.nvcomp
               cudaPkgs.libcufile
+              pkgs.numactl  # libnuma for src/numa
               pkgs.stdenv.cc.cc.lib
               pkgs.zlib  # numpy wheel _multiarray_umath dlopens libz.so.1
             ];

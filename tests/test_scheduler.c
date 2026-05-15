@@ -31,7 +31,7 @@ static int
 test_create_destroy(void)
 {
   struct ctx c = { 0, 0 };
-  struct scheduler* s = scheduler_create(step_count, &c, 1000000);
+  struct scheduler* s = scheduler_create(step_count, &c, 1000000, NULL);
   EXPECT(s != NULL);
   scheduler_destroy(s);
   scheduler_destroy(NULL); // NULL-safe
@@ -42,7 +42,8 @@ static int
 test_step_runs_periodically(void)
 {
   struct ctx c = { 0, -1 }; // never signal; just count
-  struct scheduler* s = scheduler_create(step_count, &c, 500000); // 500 µs
+  struct scheduler* s =
+    scheduler_create(step_count, &c, 500000, NULL); // 500 µs
   EXPECT(s != NULL);
   platform_sleep_ns(20000000); // 20 ms → expect >> 10 ticks
   scheduler_lock(s);
@@ -57,7 +58,7 @@ static int
 test_signal_wakes_waiter(void)
 {
   struct ctx c = { 0, 5 };
-  struct scheduler* s = scheduler_create(step_count, &c, 500000);
+  struct scheduler* s = scheduler_create(step_count, &c, 500000, NULL);
   EXPECT(s != NULL);
   scheduler_lock(s);
   while (c.n_steps < c.target)
@@ -98,7 +99,7 @@ static int
 test_external_broadcast(void)
 {
   struct scheduler* s =
-    scheduler_create(step_noop, NULL, 1000000000); // 1 s tick
+    scheduler_create(step_noop, NULL, 1000000000, NULL); // 1 s tick
   EXPECT(s != NULL);
   int flag = 0;
   struct broadcaster_args a = { s, &flag };
@@ -118,9 +119,9 @@ test_external_broadcast(void)
 static int
 test_invalid_args(void)
 {
-  EXPECT(scheduler_create(NULL, NULL, 1000) == NULL);
-  EXPECT(scheduler_create(step_noop, NULL, 0) == NULL);
-  EXPECT(scheduler_create(step_noop, NULL, -1) == NULL);
+  EXPECT(scheduler_create(NULL, NULL, 1000, NULL) == NULL);
+  EXPECT(scheduler_create(step_noop, NULL, 0, NULL) == NULL);
+  EXPECT(scheduler_create(step_noop, NULL, -1, NULL) == NULL);
   return 0;
 }
 

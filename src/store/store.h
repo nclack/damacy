@@ -22,11 +22,15 @@ extern "C"
 #endif
 
   struct store;
+  struct numa_resolved;
 
   struct store_fs_config
   {
     const char* root; // root directory for keys; not owned
     int nthreads;     // io_queue worker count (>= 1)
+    // Optional NUMA placement plan for the io_queue worker threads.
+    // NULL (or node<0) skips affinity.
+    const struct numa_resolved* affinity;
   };
 
   // Create a filesystem-backed store. Returns NULL on failure.

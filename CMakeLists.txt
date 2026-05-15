@@ -29,6 +29,12 @@ option(
     OFF
 )
 
+# NUMA-aware pinned-host allocation + io_queue/scheduler thread affinity
+# is built unconditionally on Linux: libnuma is dlopen'd at runtime so a
+# single wheel/binary works on hosts with or without libnuma installed.
+# The runtime probe in src/numa/numa.c falls back to a no-op when
+# libnuma.so.1 isn't loadable.
+
 # DAMACY_NVTX_ENABLED — Phase 6 timeline observability. ON wires the
 # nvtx/ wrappers to NVTX v3 (CUDA::nvtx3, header-only) so Nsight Systems
 # sees per-wave ranges and named streams. OFF compiles call sites to

@@ -266,7 +266,7 @@ store_fs_create(const struct store_fs_config* cfg)
   pthread_mutex_init(&fs->cache_mu, NULL);
   fs->root = strdup(cfg->root);
   CHECK_SILENT(Fail, fs->root);
-  fs->q = io_queue_create(cfg->nthreads);
+  fs->q = io_queue_create(cfg->nthreads, cfg->affinity);
   CHECK_SILENT(Fail, fs->q);
   return &fs->base;
 

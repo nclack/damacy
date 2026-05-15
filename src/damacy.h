@@ -28,6 +28,17 @@ extern "C"
     DAMACY_BF16,
   };
 
+  // NUMA placement strategy for pinned-host allocations and worker
+  // threads. `AUTO` (default) resolves the GPU's host-NUMA node from
+  // the driver and pins; `DISABLED` is a full no-op (today's behavior);
+  // `PIN_TO` uses the explicit damacy_config.numa_node override.
+  enum damacy_numa_strategy
+  {
+    DAMACY_NUMA_AUTO = 0,
+    DAMACY_NUMA_DISABLED,
+    DAMACY_NUMA_PIN_TO,
+  };
+
   enum damacy_status
   {
     DAMACY_OK = 0,
@@ -140,6 +151,18 @@ extern "C"
     // -1 captures current CUcontext; >= 0 retains the primary for that
     // device internally and rejects a current context on another device.
     int device;
+
+    // NUMA placement plan for pinned-host allocations + io_queue /
+    // scheduler worker thread affinity. AUTO resolves the GPU's
+    // host-NUMA node via cuDeviceGetAttribute(HOST_NUMA_ID) (with a
+    // /sys/bus/pci/devices/<BDF>/numa_node fallback). DISABLED is a
+    // no-op; PIN_TO forces `numa_node`. The whole feature is a no-op
+    // when libnuma is not linked in or numa_available()<0 at runtime
+    // (a single INFO log line announces it once).
+    enum damacy_numa_strategy numa_strategy;
+    // Only consulted when numa_strategy == DAMACY_NUMA_PIN_TO. Out-of-
+    // range values fall back to no-op with a warning.
+    int numa_node;
   };
 
   struct damacy;

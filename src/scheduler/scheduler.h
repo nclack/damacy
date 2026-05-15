@@ -10,15 +10,19 @@ extern "C"
 #endif
 
   struct scheduler;
+  struct numa_resolved;
 
   // Worker tick callback. Invoked under scheduler_lock. Return non-zero
   // to have the scheduler broadcast its cond.
   typedef int (*scheduler_step_fn)(void* arg);
 
-  // Spawn the worker. idle_ns must be > 0. Returns NULL on failure.
+  // Spawn the worker. idle_ns must be > 0. `affinity` is the resolved
+  // NUMA placement plan from numa_init; pass NULL (or a struct with
+  // node<0) to skip affinity. Returns NULL on failure.
   struct scheduler* scheduler_create(scheduler_step_fn step,
                                      void* arg,
-                                     int64_t idle_ns);
+                                     int64_t idle_ns,
+                                     const struct numa_resolved* affinity);
 
   // Signal shutdown, join, free. NULL-safe.
   void scheduler_destroy(struct scheduler* s);

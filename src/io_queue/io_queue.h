@@ -13,14 +13,18 @@ extern "C"
 #endif
 
   struct io_queue;
+  struct numa_resolved;
 
   struct io_event
   {
     uint64_t seq;
   };
 
-  // nthreads in [1, DAMACY_MAX_IO_THREADS]. Returns NULL on failure.
-  struct io_queue* io_queue_create(int nthreads);
+  // nthreads in [1, DAMACY_MAX_IO_THREADS]. `affinity` is the resolved
+  // NUMA placement plan from numa_init; pass NULL (or a struct with
+  // node<0) to skip affinity. Returns NULL on failure.
+  struct io_queue* io_queue_create(int nthreads,
+                                   const struct numa_resolved* affinity);
 
   // Drains queued jobs, then joins workers. Caller must ensure no
   // io_queue_post() is concurrent with or follows this call; racing posts

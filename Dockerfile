@@ -31,7 +31,10 @@ ARG NVCOMP_URL=https://developer.download.nvidia.com/compute/nvcomp/redist/nvcom
 
 # ----- system toolchain via apt ----------------------------------------------
 # Just enough to drive cmake + ninja + python; gcc/g++/nvcc come from the
-# cuda devel base image.
+# cuda devel base image. libnuma is loaded at runtime via dlopen (see
+# src/numa/numa.c) so libnuma-dev isn't needed to build; we install the
+# runtime package so NUMA pinning actually does something on multi-
+# socket cluster nodes.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -41,6 +44,7 @@ RUN apt-get update \
         ninja-build \
         python3 \
         python3-dev \
+        libnuma1 \
  && rm -rf /var/lib/apt/lists/*
 
 # ----- uv (static binary) + venv ---------------------------------------------

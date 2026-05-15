@@ -1,6 +1,7 @@
 #include "scheduler/scheduler.h"
 
 #include "log/log.h"
+#include "numa/numa.h"
 #include "platform/platform.h"
 
 #include <stdlib.h>
@@ -14,12 +15,15 @@ struct scheduler
   void* arg;
   int64_t idle_ns;
   int shutdown; // protected by m
+  // numa_apply_thread_affinity is a no-op when affinity.node < 0.
+  struct numa_resolved affinity;
 };
 
 static void
 worker_main(void* p)
 {
   struct scheduler* s = (struct scheduler*)p;
+  numa_apply_thread_affinity(&s->affinity, "scheduler_worker");
   for (;;) {
     platform_mutex_lock(s->m);
     if (s->shutdown) {
@@ -35,7 +39,10 @@ worker_main(void* p)
 }
 
 struct scheduler*
-scheduler_create(scheduler_step_fn step, void* arg, int64_t idle_ns)
+scheduler_create(scheduler_step_fn step,
+                 void* arg,
+                 int64_t idle_ns,
+                 const struct numa_resolved* affinity)
 {
   if (!step || idle_ns <= 0) {
     log_error("scheduler: invalid arguments (step=%d idle_ns=%lld)",
@@ -51,6 +58,13 @@ scheduler_create(scheduler_step_fn step, void* arg, int64_t idle_ns)
   s->step = step;
   s->arg = arg;
   s->idle_ns = idle_ns;
+  // Copy unconditionally; numa_apply_thread_affinity no-ops when
+  // node < 0. calloc would leave node = 0 (a valid node id), so be
+  // explicit when the caller passes NULL.
+  if (affinity)
+    s->affinity = *affinity;
+  else
+    s->affinity.node = -1;
   s->m = platform_mutex_new();
   s->cv = platform_cond_new();
   if (!s->m || !s->cv) {

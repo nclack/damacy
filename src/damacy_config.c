@@ -56,6 +56,15 @@ validate_config(const struct damacy_config* cfg)
   CHECK_SILENT(Invalid,
                cfg->max_chunk_uncompressed_bytes <=
                  DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES);
+  // numa_strategy is a small enum; AUTO=0 so designated-init callers
+  // get the default. PIN_TO requires a non-negative node; AUTO and
+  // DISABLED ignore numa_node.
+  CHECK_SILENT(Invalid,
+               cfg->numa_strategy == DAMACY_NUMA_AUTO ||
+                 cfg->numa_strategy == DAMACY_NUMA_DISABLED ||
+                 cfg->numa_strategy == DAMACY_NUMA_PIN_TO);
+  if (cfg->numa_strategy == DAMACY_NUMA_PIN_TO)
+    CHECK_SILENT(Invalid, cfg->numa_node >= 0);
   return DAMACY_OK;
 Invalid:
   return DAMACY_INVAL;
