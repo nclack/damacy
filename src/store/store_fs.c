@@ -67,6 +67,10 @@ Out:
     platform_file_close(f);
     return NULL;
   }
+  // realloc leaves new slots uninitialized; zero before populating so
+  // fields the caller doesn't touch (e.g. gds_handle, used by the GDS
+  // backend) start as NULL rather than random bytes.
+  memset(&fs->slots[fs->n_slots], 0, sizeof(struct fs_cache_slot));
   fs->slots[fs->n_slots].key = dup;
   fs->slots[fs->n_slots].file = f;
   fs->n_slots++;
