@@ -154,6 +154,8 @@ parse_count_one(const struct blosc1_host_chunk* in,
   struct blosc1_chunk_counts c = { 0 };
   h.codec_id = in->codec_id;
 
+  if (in->codec_id == CODEC_FILL)
+    goto Done; // counts stay zero; assemble handles the broadcast
   if (in->codec_id == CODEC_NONE) {
     c.n_memcpy = 1;
     goto Done;
@@ -267,6 +269,8 @@ emit_one(const struct blosc1_host_chunk* in,
   chunk_meta->shuffle_typesize = 0;
   chunk_meta->shuffle_blocksize = 0;
 
+  if (in->codec_id == CODEC_FILL)
+    return; // no codec / memcpy work; assemble broadcasts fill_value
   if (in->codec_id == CODEC_NONE) {
     struct gpu_memcpy_op* slot = &memcpy_ops[o->memcpy_off];
     slot->d_src = d_comp;

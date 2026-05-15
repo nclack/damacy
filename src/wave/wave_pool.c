@@ -414,6 +414,7 @@ build_assemble_meta(const struct wave_pool* wp, struct damacy_wave* wave)
     struct assemble_chunk* a = &wave->h_assemble_chunks[i];
     a->src_base_byte_off = (uint64_t)c->dev_decompressed_offset;
     a->sample_idx_in_batch = c->sample_idx_in_batch;
+    a->is_fill = c->is_fill;
     for (uint8_t d = 0; d < spatial_rank; ++d)
       a->chunk_d[d] = c->chunk_d[d];
 
@@ -673,9 +674,17 @@ wave_pool_peel(struct wave_pool* wp, uint16_t batch_slot_idx)
     return DAMACY_OOM;
   }
 
+  // Only emit store_read entries for chunks that actually touch the
+  // store (skip fill chunks). chunk_plan.is_fill is the source of
+  // truth; read_op.nbytes happens to be 0 for fills today but the flag
+  // decouples this peel from that representation.
+  uint32_t n_reads = 0;
   for (uint32_t i = 0; i < take; ++i) {
     struct read_op* r = &batch->read_ops[base + i];
-    hs->store_reads[i] = (struct store_read){
+    struct chunk_plan* c = &batch->chunk_plans[base + i];
+    if (c->is_fill)
+      continue;
+    hs->store_reads[n_reads++] = (struct store_read){
       .key = r->shard_path,
       .dst = (uint8_t*)hs->buf + r->dst_buf_offset,
       .offset = r->file_offset,
@@ -683,10 +692,17 @@ wave_pool_peel(struct wave_pool* wp, uint16_t batch_slot_idx)
     };
   }
   hs->io_t_start_ns = monotonic_ns();
-  hs->io_event = store_read_submit(wp->store, hs->store_reads, take);
-  if (hs->io_event.seq == 0) {
-    damacy_nvtx_range_pop();
-    return DAMACY_IO;
+  hs->is_fill_wave = (n_reads == 0);
+  if (n_reads > 0) {
+    hs->io_event = store_read_submit(wp->store, hs->store_reads, n_reads);
+    if (hs->io_event.seq == 0) {
+      damacy_nvtx_range_pop();
+      return DAMACY_IO;
+    }
+  } else {
+    // All chunks in this wave are fill — no IO. The SLOT_IO poll keys
+    // on is_fill_wave; io_event stays zero as a safe fallback.
+    hs->io_event = (struct store_event){ .seq = 0 };
   }
 
   hs->batch_pool_slot = batch_slot_idx;
@@ -755,10 +771,14 @@ bind_slot_to_wave(struct wave_pool* wp, struct damacy_wave* wave, int slot_idx)
 enum damacy_status
 wave_pool_advance(struct wave_pool* wp)
 {
-  // Pass 1: SLOT_IO → SLOT_READY when IO completes.
+  // Pass 1: SLOT_IO → SLOT_READY when IO completes. Fill-only waves
+  // (is_fill_wave) skip the IO query — no submission was made.
   for (uint8_t s = 0; s < wp->n_slots; ++s) {
     struct host_slab_slot* hs = &wp->slots[s];
-    if (hs->state == SLOT_IO && store_event_query(wp->store, hs->io_event)) {
+    if (hs->state != SLOT_IO)
+      continue;
+    int ready = hs->is_fill_wave || store_event_query(wp->store, hs->io_event);
+    if (ready) {
       hs->io_t_end_ns = monotonic_ns();
       hs->state = SLOT_READY;
     }

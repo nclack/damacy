@@ -1,8 +1,10 @@
 #include "zarr/zarr_metadata.h"
 
+#include "log/log.h"
 #include "util/json.h"
 #include "util/prelude.h"
 
+#include <math.h>
 #include <string.h>
 
 // Read a JSON array of unsigned integers into out[0..max_rank). Sets
@@ -35,6 +37,146 @@ read_uint_array(struct json_node arr,
     return 1;
   *out_rank = (uint8_t)n;
   return 0;
+}
+
+// Pack v's low n bytes little-endian into dst[0..n).
+static void
+pack_le(uint8_t* dst, uint64_t v, size_t n)
+{
+  for (size_t i = 0; i < n; ++i)
+    dst[i] = (uint8_t)(v >> (8 * i));
+}
+
+// Encode a host float as IEEE-754 binary16 (round-toward-zero, no
+// denormal-exact handling). NaN/Inf map to the same-signed half class.
+static uint16_t
+float_to_half_bits(float fv)
+{
+  uint32_t f_bits;
+  memcpy(&f_bits, &fv, sizeof f_bits);
+  uint32_t sign = (f_bits >> 31) & 1u;
+  int32_t e = (int32_t)((f_bits >> 23) & 0xFFu) - 127;
+  uint32_t m = f_bits & 0x7FFFFFu;
+  if (((f_bits >> 23) & 0xFFu) == 0xFFu) {
+    // NaN / Inf: preserve class, collapse mantissa.
+    return (uint16_t)((sign << 15) | (31u << 10) | (m ? 0x200u : 0u));
+  }
+  if ((f_bits & 0x7FFFFFFFu) == 0)
+    return (uint16_t)(sign << 15);
+  if (e > 15)
+    return (uint16_t)((sign << 15) | (31u << 10));
+  if (e < -14)
+    return (uint16_t)(sign << 15);
+  return (uint16_t)((sign << 15) | ((uint32_t)(e + 15) << 10) |
+                    ((m + 0x1000u) >> 13));
+}
+
+// f16 / f32 / f64 string-literal handling per zarr v3 (NaN, Infinity,
+// -Infinity, optionally -NaN). Returns 0 on match + writes the float bytes.
+static int
+parse_float_special(struct json_node n, enum dtype dt, uint8_t* out)
+{
+  if (n.type != JSON_STRING || n.flag == JSON_NODE_FLAG_STR_ESCAPED)
+    return 1;
+  int negative = 0;
+  const char* s = n.s.beg;
+  size_t len = cslice_len(n.s);
+  if (len > 0 && s[0] == '-') {
+    negative = 1;
+    ++s;
+    --len;
+  } else if (len > 0 && s[0] == '+') {
+    ++s;
+    --len;
+  }
+  double v;
+  if (len == 3 && memcmp(s, "NaN", 3) == 0)
+    v = (double)NAN;
+  else if (len == 8 && memcmp(s, "Infinity", 8) == 0)
+    v = (double)INFINITY;
+  else
+    return 1;
+  if (negative)
+    v = -v;
+  if (dt == dtype_f16) {
+    uint16_t h = float_to_half_bits((float)v);
+    pack_le(out, h, 2);
+  } else if (dt == dtype_f32) {
+    float f = (float)v;
+    memcpy(out, &f, sizeof f);
+  } else if (dt == dtype_f64) {
+    memcpy(out, &v, sizeof v);
+  } else {
+    return 1;
+  }
+  return 0;
+}
+
+// Decode a JSON number / string fill_value into the dtype's binary form.
+// out is bpe bytes wide; written little-endian for ints, IEEE-754 host
+// representation for floats (treated as little-endian on supported targets).
+static int
+parse_fill_value(struct json_node n, enum dtype dt, uint8_t* out, size_t bpe)
+{
+  if (bpe == 0 || bpe > DAMACY_MAX_DTYPE_BYTES)
+    return 1;
+  memset(out, 0, bpe);
+  switch (dt) {
+    case dtype_u8:
+    case dtype_u16:
+    case dtype_u32:
+    case dtype_u64: {
+      uint64_t v = 0;
+      if (json_as_uint(n, &v))
+        return 1;
+      pack_le(out, v, bpe);
+      return 0;
+    }
+    case dtype_i8:
+    case dtype_i16:
+    case dtype_i32:
+    case dtype_i64: {
+      int64_t v = 0;
+      if (json_as_int(n, &v))
+        return 1;
+      pack_le(out, (uint64_t)v, bpe);
+      return 0;
+    }
+    case dtype_f16: {
+      // Zarr v3 permits NaN / Infinity strings as well as numbers. Both
+      // paths share float_to_half_bits so the special-string case writes
+      // exactly 2 bytes (not 4 via the f32 path).
+      double v = 0;
+      if (n.type == JSON_NUMBER && json_as_double(n, &v) == JSON_OK) {
+        uint16_t h = float_to_half_bits((float)v);
+        pack_le(out, h, 2);
+        return 0;
+      }
+      return parse_float_special(n, dtype_f16, out);
+    }
+    case dtype_f32: {
+      if (n.type == JSON_NUMBER) {
+        double v = 0;
+        if (json_as_double(n, &v))
+          return 1;
+        float f = (float)v;
+        memcpy(out, &f, sizeof f);
+        return 0;
+      }
+      return parse_float_special(n, dtype_f32, out);
+    }
+    case dtype_f64: {
+      if (n.type == JSON_NUMBER) {
+        double v = 0;
+        if (json_as_double(n, &v))
+          return 1;
+        memcpy(out, &v, sizeof v);
+        return 0;
+      }
+      return parse_float_special(n, dtype_f64, out);
+    }
+  }
+  return 1;
 }
 
 static int
@@ -164,6 +306,22 @@ zarr_metadata_parse(const char* src, size_t src_len, struct zarr_metadata* out)
       return 1;
     if (parse_data_type(n, &out->dtype))
       return 1;
+  }
+
+  // fill_value (spec: mandatory). Missing → log warning, zero-fill.
+  {
+    static const struct json_query path[] = { { QUERY_KEY,
+                                                .key = "fill_value" } };
+    struct json_node n;
+    size_t bpe = dtype_bpe(out->dtype);
+    if (bpe == 0 || bpe > DAMACY_MAX_DTYPE_BYTES)
+      return 1;
+    if (json_resolve(all, path, countof(path), &n, NULL) == JSON_OK) {
+      if (parse_fill_value(n, out->dtype, out->fill_value, bpe))
+        return 1;
+    } else {
+      log_warn("zarr.json missing mandatory fill_value; treating as zero");
+    }
   }
 
   // chunk_grid -> outer (shard) shape

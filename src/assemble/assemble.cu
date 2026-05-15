@@ -91,6 +91,8 @@ load_src_as_float(const uint8_t* src, uint8_t src_dtype)
   switch ((enum dtype)src_dtype) {
     case dtype_u8:
       return (float)(*src);
+    case dtype_i8:
+      return (float)*(const int8_t*)src;
     case dtype_u16:
       return (float)(*(const uint16_t*)src);
     case dtype_i16:
@@ -99,10 +101,16 @@ load_src_as_float(const uint8_t* src, uint8_t src_dtype)
       return (float)(*(const uint32_t*)src);
     case dtype_i32:
       return (float)(*(const int32_t*)src);
+    case dtype_u64:
+      return (float)*(const uint64_t*)src;
+    case dtype_i64:
+      return (float)*(const int64_t*)src;
     case dtype_f16:
       return __half2float(*(const __half*)src);
     case dtype_f32:
       return *(const float*)src;
+    case dtype_f64:
+      return (float)*(const double*)src;
     default:
       return 0.0f;
   }
@@ -228,9 +236,18 @@ assemble_body(int rank,
   if (rem != 0 || !in_bounds)
     return;
 
+  dst_t* dst = (dst_t*)(output_base + dst_off_elems * (int64_t)sizeof(dst_t));
+
+  // Fill-mode chunks: read the broadcast value from the sample's
+  // fill_value (an array-level zarr property) instead of the arena.
+  if (c.is_fill) {
+    float v = load_src_as_float(s.fill_value, s.src_dtype);
+    *dst = cast_to_dst<dst_t>(v);
+    return;
+  }
+
   const uint32_t sbpe = src_bpe(s.src_dtype);
   const uint8_t* chunk_base = arena_base + c.src_base_byte_off;
-  dst_t* dst = (dst_t*)(output_base + dst_off_elems * (int64_t)sizeof(dst_t));
 
   // Each block handles one chunk, so the shuffle switch is uniform
   // across the block — no warp divergence.

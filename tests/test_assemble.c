@@ -502,6 +502,333 @@ test_rank5(void)
     5, S, N, aabb_lo_relative, aabb_extent, dtype_u16, DAMACY_F32, 0);
 }
 
+// Run a rank-3 scenario with the middle chunk in a 2x2x2 grid marked
+// is_fill; the assemble kernel should broadcast `fill_byte_pattern` across
+// the chunk region for src_dtype (which we choose so the bit pattern
+// maps to a known float value). Returns 0 on full match.
+static int
+run_fill_scenario(enum dtype src_dtype,
+                  enum damacy_dtype dst_dtype,
+                  uint32_t fill_xor,
+                  uint32_t fill_chunk_idx)
+{
+  const int rank = 3;
+  const uint32_t S[3] = { 4, 4, 4 };
+  const uint32_t N[3] = { 2, 2, 2 };
+  const int64_t aabb_lo_relative[3] = { 0, 0, 0 };
+  const int64_t aabb_extent[3] = { 8, 8, 8 };
+  const uint32_t sbpe = src_dtype_bpe(src_dtype);
+  const uint32_t dbpe = dst_dtype_bpe(dst_dtype);
+  EXPECT(sbpe > 0 && dbpe > 0);
+
+  uint64_t out_volume_elems = 1;
+  for (int d = 0; d < rank; ++d)
+    out_volume_elems *= (uint64_t)aabb_extent[d];
+  size_t out_bytes = (size_t)out_volume_elems * dbpe;
+
+  uint64_t chunk_volume_elems = 1;
+  for (int d = 0; d < rank; ++d)
+    chunk_volume_elems *= S[d];
+  uint64_t chunk_bytes = chunk_volume_elems * sbpe;
+
+  uint32_t n_chunks = 1;
+  for (int d = 0; d < rank; ++d)
+    n_chunks *= N[d];
+  size_t arena_bytes = (size_t)n_chunks * chunk_bytes;
+
+  uint8_t* h_arena = (uint8_t*)malloc(arena_bytes);
+  EXPECT(h_arena);
+  for (uint32_t cidx = 0; cidx < n_chunks; ++cidx) {
+    uint8_t* base = h_arena + (size_t)cidx * chunk_bytes;
+    for (uint64_t e = 0; e < chunk_volume_elems; ++e)
+      write_src_value(base + e * sbpe, expected_src_u32(cidx, e, 0), src_dtype);
+  }
+
+  int64_t dst_strides[MAX_RANK];
+  dst_strides[rank - 1] = 1;
+  for (int d = rank - 2; d >= 0; --d)
+    dst_strides[d] = dst_strides[d + 1] * aabb_extent[d + 1];
+  int64_t src_strides[MAX_RANK];
+  src_strides[rank - 1] = 1;
+  for (int d = rank - 2; d >= 0; --d)
+    src_strides[d] = src_strides[d + 1] * (int64_t)S[d + 1];
+
+  struct sample_plan sp = { 0 };
+  sp.rank = (uint8_t)rank;
+  sp.src_dtype = (uint8_t)src_dtype;
+  sp.chunk_count = n_chunks;
+  for (int d = 0; d < rank; ++d) {
+    sp.dims[d].chunk_shape = S[d];
+    sp.dims[d].chunk_grid_extent = N[d];
+    sp.dims[d].aabb_lo_relative = aabb_lo_relative[d];
+    sp.dims[d].aabb_extent = aabb_extent[d];
+    sp.dims[d].dst_stride = dst_strides[d];
+    sp.dims[d].src_stride = src_strides[d];
+  }
+
+  struct assemble_chunk* h_chunks =
+    (struct assemble_chunk*)calloc(n_chunks, sizeof(struct assemble_chunk));
+  EXPECT(h_chunks);
+  uint32_t fill_u32 = expected_src_u32(0, 0, fill_xor);
+  // fill_value lives on the sample_plan now (array-level zarr property),
+  // not on each chunk. Written once for the whole sample.
+  write_src_value(sp.fill_value, fill_u32, src_dtype);
+  for (uint32_t cidx = 0; cidx < n_chunks; ++cidx) {
+    uint32_t chunk_d[MAX_RANK] = { 0 };
+    uint32_t rem = cidx;
+    for (int d = rank - 1; d >= 0; --d) {
+      chunk_d[d] = rem % N[d];
+      rem /= N[d];
+    }
+    h_chunks[cidx].src_base_byte_off = (uint64_t)cidx * chunk_bytes;
+    h_chunks[cidx].sample_idx_in_batch = 0;
+    for (int d = 0; d < rank; ++d)
+      h_chunks[cidx].chunk_d[d] = chunk_d[d];
+    if (cidx == fill_chunk_idx)
+      h_chunks[cidx].is_fill = 1;
+  }
+
+  CUdeviceptr d_arena = 0, d_output = 0, d_sp = 0, d_chunks = 0;
+  EXPECT(cuMemAlloc(&d_arena, arena_bytes) == CUDA_SUCCESS);
+  EXPECT(cuMemAlloc(&d_output, out_bytes) == CUDA_SUCCESS);
+  EXPECT(cuMemAlloc(&d_sp, sizeof(struct sample_plan)) == CUDA_SUCCESS);
+  EXPECT(
+    cuMemAlloc(&d_chunks, (size_t)n_chunks * sizeof(struct assemble_chunk)) ==
+    CUDA_SUCCESS);
+  EXPECT(cuMemcpyHtoD(d_arena, h_arena, arena_bytes) == CUDA_SUCCESS);
+  EXPECT(cuMemsetD8(d_output, 0xCC, out_bytes) == CUDA_SUCCESS);
+  EXPECT(cuMemcpyHtoD(d_sp, &sp, sizeof(sp)) == CUDA_SUCCESS);
+  EXPECT(cuMemcpyHtoD(d_chunks,
+                      h_chunks,
+                      (size_t)n_chunks * sizeof(struct assemble_chunk)) ==
+         CUDA_SUCCESS);
+
+  uint32_t max_bpc = assemble_blocks_per_chunk((uint8_t)rank, sp.dims);
+  EXPECT(max_bpc > 0);
+  EXPECT(assemble_launch(0,
+                         (uint8_t)rank,
+                         (const struct sample_plan*)(uintptr_t)d_sp,
+                         1,
+                         (const struct assemble_chunk*)(uintptr_t)d_chunks,
+                         n_chunks,
+                         max_bpc,
+                         (const void*)(uintptr_t)d_arena,
+                         (void*)(uintptr_t)d_output,
+                         dst_dtype) == 0);
+  EXPECT(cuStreamSynchronize(0) == CUDA_SUCCESS);
+
+  uint8_t* h_output = (uint8_t*)malloc(out_bytes);
+  EXPECT(h_output);
+  EXPECT(cuMemcpyDtoH(h_output, d_output, out_bytes) == CUDA_SUCCESS);
+
+  // Decode the expected fill value as float (mirrors kernel path).
+  float fill_f_want = src_to_float(fill_u32, src_dtype);
+  if (dst_dtype == DAMACY_BF16)
+    fill_f_want = bf16_to_f32(f32_to_bf16(fill_f_want));
+
+  uint32_t v[MAX_RANK] = { 0 };
+  int finished = 0;
+  while (!finished) {
+    uint64_t out_elem_off = 0;
+    for (int d = 0; d < rank; ++d)
+      out_elem_off += (uint64_t)v[d] * (uint64_t)dst_strides[d];
+
+    uint32_t chunk_d[MAX_RANK] = { 0 };
+    uint32_t intra[MAX_RANK] = { 0 };
+    for (int d = 0; d < rank; ++d) {
+      int64_t src_abs = (int64_t)v[d] + aabb_lo_relative[d];
+      chunk_d[d] = (uint32_t)(src_abs / S[d]);
+      intra[d] = (uint32_t)(src_abs - (int64_t)chunk_d[d] * S[d]);
+    }
+    uint32_t cidx = (uint32_t)ravel(chunk_d, N, rank);
+    uint64_t elem_idx = ravel(intra, S, rank);
+    float want =
+      (cidx == fill_chunk_idx)
+        ? fill_f_want
+        : src_to_float(expected_src_u32(cidx, elem_idx, 0), src_dtype);
+    if (dst_dtype == DAMACY_BF16 && cidx != fill_chunk_idx)
+      want = bf16_to_f32(f32_to_bf16(want));
+    float got = read_dst_as_float(h_output + out_elem_off * dbpe, dst_dtype);
+    int ok = (got == want);
+    if (!ok && (want != want) && (got != got))
+      ok = 1; // both NaN
+    if (!ok) {
+      log_error("fill rank=%d v=(%u,%u,%u) cidx=%u elem=%llu got=%f want=%f",
+                rank,
+                v[0],
+                v[1],
+                v[2],
+                cidx,
+                (unsigned long long)elem_idx,
+                got,
+                want);
+      free(h_output);
+      free(h_chunks);
+      free(h_arena);
+      return 1;
+    }
+    finished = 1;
+    for (int d = rank - 1; d >= 0; --d) {
+      v[d]++;
+      if ((int64_t)v[d] < aabb_extent[d]) {
+        finished = 0;
+        break;
+      }
+      v[d] = 0;
+    }
+  }
+
+  free(h_output);
+  free(h_chunks);
+  free(h_arena);
+  cuMemFree(d_arena);
+  cuMemFree(d_output);
+  cuMemFree(d_sp);
+  cuMemFree(d_chunks);
+  return 0;
+}
+
+// Mixed AABB: 7 real chunks + 1 fill chunk in a 2x2x2 grid.
+static int
+test_rank3_fill_int16_neg1(void)
+{
+  // int16 = 2 bytes; -1 → 0xFFFF; expected float -1.
+  return run_fill_scenario(dtype_i16, DAMACY_F32, 0xFFFFu, /*fill_chunk*/ 3);
+}
+
+// Float NaN fill_value — the kernel broadcasts NaN across the fill chunk.
+static int
+test_rank3_fill_f32_nan(void)
+{
+  // dtype_f32 with the bit pattern of NAN.
+  uint32_t nan_bits;
+  float nan_f = NAN;
+  memcpy(&nan_bits, &nan_f, sizeof nan_bits);
+  // expected_src_u32(0,0,xor) = 0 ^ xor = xor; pick xor = nan_bits.
+  return run_fill_scenario(dtype_f32, DAMACY_F32, nan_bits, /*fill_chunk*/ 5);
+}
+
+// All-fill case: every chunk in the wave is fill, exercises the kernel
+// branch with no real chunks. Builds the scenario inline (the mixed
+// helper picks exactly one fill chunk).
+static int
+test_rank3_all_fill(void)
+{
+  const int rank = 3;
+  const uint32_t S[3] = { 4, 4, 4 };
+  const uint32_t N[3] = { 2, 2, 2 };
+  const int64_t aabb_extent[3] = { 8, 8, 8 };
+  const enum dtype src_dtype = dtype_u16;
+  const enum damacy_dtype dst_dtype = DAMACY_F32;
+  const uint32_t fill_u32 = 7u;
+  const uint32_t sbpe = src_dtype_bpe(src_dtype);
+  const uint32_t dbpe = dst_dtype_bpe(dst_dtype);
+
+  uint32_t n_chunks = 1;
+  for (int d = 0; d < rank; ++d)
+    n_chunks *= N[d];
+  uint64_t out_volume_elems = 1;
+  for (int d = 0; d < rank; ++d)
+    out_volume_elems *= (uint64_t)aabb_extent[d];
+  size_t out_bytes = (size_t)out_volume_elems * dbpe;
+  uint64_t chunk_volume_elems = 1;
+  for (int d = 0; d < rank; ++d)
+    chunk_volume_elems *= S[d];
+  size_t arena_bytes = (size_t)n_chunks * chunk_volume_elems * sbpe;
+
+  int64_t dst_strides[MAX_RANK];
+  dst_strides[rank - 1] = 1;
+  for (int d = rank - 2; d >= 0; --d)
+    dst_strides[d] = dst_strides[d + 1] * aabb_extent[d + 1];
+  int64_t src_strides[MAX_RANK];
+  src_strides[rank - 1] = 1;
+  for (int d = rank - 2; d >= 0; --d)
+    src_strides[d] = src_strides[d + 1] * (int64_t)S[d + 1];
+
+  struct sample_plan sp = { 0 };
+  sp.rank = (uint8_t)rank;
+  sp.src_dtype = (uint8_t)src_dtype;
+  sp.chunk_count = n_chunks;
+  for (int d = 0; d < rank; ++d) {
+    sp.dims[d].chunk_shape = S[d];
+    sp.dims[d].chunk_grid_extent = N[d];
+    sp.dims[d].aabb_lo_relative = 0;
+    sp.dims[d].aabb_extent = aabb_extent[d];
+    sp.dims[d].dst_stride = dst_strides[d];
+    sp.dims[d].src_stride = src_strides[d];
+  }
+
+  // fill_value lives on the sample_plan now (array-level zarr property),
+  // not on each chunk. Written once for the whole sample.
+  write_src_value(sp.fill_value, fill_u32, src_dtype);
+  struct assemble_chunk* h_chunks =
+    (struct assemble_chunk*)calloc(n_chunks, sizeof(struct assemble_chunk));
+  EXPECT(h_chunks);
+  for (uint32_t cidx = 0; cidx < n_chunks; ++cidx) {
+    uint32_t chunk_d[MAX_RANK] = { 0 };
+    uint32_t rem = cidx;
+    for (int d = rank - 1; d >= 0; --d) {
+      chunk_d[d] = rem % N[d];
+      rem /= N[d];
+    }
+    for (int d = 0; d < rank; ++d)
+      h_chunks[cidx].chunk_d[d] = chunk_d[d];
+    h_chunks[cidx].is_fill = 1;
+  }
+
+  CUdeviceptr d_arena = 0, d_output = 0, d_sp = 0, d_chunks = 0;
+  EXPECT(cuMemAlloc(&d_arena, arena_bytes) == CUDA_SUCCESS);
+  EXPECT(cuMemAlloc(&d_output, out_bytes) == CUDA_SUCCESS);
+  EXPECT(cuMemAlloc(&d_sp, sizeof sp) == CUDA_SUCCESS);
+  EXPECT(
+    cuMemAlloc(&d_chunks, (size_t)n_chunks * sizeof(struct assemble_chunk)) ==
+    CUDA_SUCCESS);
+  // Poison the arena so any accidental arena read shows up as garbage.
+  EXPECT(cuMemsetD8(d_arena, 0xAA, arena_bytes) == CUDA_SUCCESS);
+  EXPECT(cuMemsetD8(d_output, 0xCC, out_bytes) == CUDA_SUCCESS);
+  EXPECT(cuMemcpyHtoD(d_sp, &sp, sizeof sp) == CUDA_SUCCESS);
+  EXPECT(cuMemcpyHtoD(d_chunks,
+                      h_chunks,
+                      (size_t)n_chunks * sizeof(struct assemble_chunk)) ==
+         CUDA_SUCCESS);
+
+  uint32_t max_bpc = assemble_blocks_per_chunk((uint8_t)rank, sp.dims);
+  EXPECT(assemble_launch(0,
+                         (uint8_t)rank,
+                         (const struct sample_plan*)(uintptr_t)d_sp,
+                         1,
+                         (const struct assemble_chunk*)(uintptr_t)d_chunks,
+                         n_chunks,
+                         max_bpc,
+                         (const void*)(uintptr_t)d_arena,
+                         (void*)(uintptr_t)d_output,
+                         dst_dtype) == 0);
+  EXPECT(cuStreamSynchronize(0) == CUDA_SUCCESS);
+
+  uint8_t* h_output = (uint8_t*)malloc(out_bytes);
+  EXPECT(h_output);
+  EXPECT(cuMemcpyDtoH(h_output, d_output, out_bytes) == CUDA_SUCCESS);
+
+  float want = src_to_float(fill_u32, src_dtype);
+  for (uint64_t e = 0; e < out_volume_elems; ++e) {
+    float got = read_dst_as_float(h_output + e * dbpe, dst_dtype);
+    if (got != want) {
+      log_error(
+        "all_fill: elem %llu got=%f want=%f", (unsigned long long)e, got, want);
+      free(h_output);
+      free(h_chunks);
+      return 1;
+    }
+  }
+  free(h_output);
+  free(h_chunks);
+  cuMemFree(d_arena);
+  cuMemFree(d_output);
+  cuMemFree(d_sp);
+  cuMemFree(d_chunks);
+  return 0;
+}
+
 static int
 test_rank3_non_pow2(void)
 {
@@ -546,6 +873,9 @@ main(void)
   RUN(test_rank3_f32_to_bf16);
   RUN(test_rank3_boundary_one_voxel);
   RUN(test_rank3_non_pow2);
+  RUN(test_rank3_fill_int16_neg1);
+  RUN(test_rank3_fill_f32_nan);
+  RUN(test_rank3_all_fill);
   RUN(test_rank4);
   RUN(test_rank5);
 
