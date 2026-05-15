@@ -20,7 +20,7 @@
 #  * nvcomp is the standalone NVIDIA distribution (not the pip wheel) extracted
 #    to /opt/nvcomp; CMake locates it via -DNvcomp_ROOT.
 
-ARG CUDA_IMAGE=nvidia/cuda:13.0.1-devel-ubuntu24.04
+ARG CUDA_IMAGE=nvidia/cuda:13.2.1-devel-ubuntu24.04
 FROM ${CUDA_IMAGE}
 
 ARG DEBIAN_FRONTEND=noninteractive
