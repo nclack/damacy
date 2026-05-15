@@ -273,7 +273,8 @@ numa_init(enum damacy_numa_strategy strategy,
     return;
   }
   out->node = node;
-  log_info("numa: resolved GPU host-NUMA node=%d (source=%s)", node, source);
+  log_info(
+    "numa: enabled — pinning to host-NUMA node=%d (source=%s)", node, source);
 }
 
 void
