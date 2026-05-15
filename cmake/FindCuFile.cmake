@@ -19,7 +19,7 @@ endif()
 find_path(
     CuFile_INCLUDE_DIR
     NAMES cufile.h
-    HINTS ${_cufile_root_hints}
+    HINTS ${_cufile_root_hints} ${CUDAToolkit_INCLUDE_DIRS}
     PATH_SUFFIXES include targets/x86_64-linux/include
 )
 
