@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778813271775,
+  "lastUpdate": 1778854187303,
   "repoUrl": "https://github.com/nclack/damacy",
   "entries": {
     "damacy timings": [
@@ -1363,6 +1363,98 @@ window.BENCHMARK_DATA = {
           {
             "name": "damacy/mixed/decompress.parse.ms_avg",
             "value": 0.0774709,
+            "unit": "ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Nathan Clack",
+            "username": "nclack",
+            "email": "nclack@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "31a723316a30fec4664af320c710ef68602dc2c8",
+          "message": "log: clarify numa enabled, quiet grow events (#57)",
+          "timestamp": "2026-05-15T03:08:13Z",
+          "url": "https://github.com/nclack/damacy/commit/31a723316a30fec4664af320c710ef68602dc2c8"
+        },
+        "date": 1778854186503,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "damacy/default/init",
+            "value": 79.5541,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/time_to_first_batch",
+            "value": 923.092,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/wall",
+            "value": 9250.94,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/io.ms_avg",
+            "value": 4.11355,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/h2d.ms_avg",
+            "value": 6.04314,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/assemble.ms_avg",
+            "value": 1.71036,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/decompress.parse.ms_avg",
+            "value": 0.0177785,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/init",
+            "value": 77.6219,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/time_to_first_batch",
+            "value": 229.806,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/wall",
+            "value": 9434.89,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/io.ms_avg",
+            "value": 4.29346,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/h2d.ms_avg",
+            "value": 6.16081,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/assemble.ms_avg",
+            "value": 1.93798,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/decompress.parse.ms_avg",
+            "value": 0.0752841,
             "unit": "ms"
           }
         ]
