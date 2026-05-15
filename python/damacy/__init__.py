@@ -577,16 +577,19 @@ def _coerce_cuda_event_handle(event: object) -> int | None:
     Accepts:
       * ``None`` — caller wants the immediate-release path.
       * An ``int`` — already a CUevent handle.
-      * Anything with a ``cuda_event`` attribute (torch.cuda.Event) — read it.
-      * Anything with a ``record_event()`` method (torch.cuda.Stream) — call it
-        and re-coerce the returned object.
+      * ``torch.cuda.Event`` — read its ``.cuda_event`` attribute.
+      * ``torch.cuda.Stream`` — call ``.record_event()`` and re-coerce.
+      * ``cupy.cuda.Event`` — read its ``.ptr`` attribute (an int).
+      * ``cupy.cuda.Stream`` — call ``.record()`` and re-coerce.
 
     Returns the integer handle, or ``None`` if ``event is None``.
 
-    Raises ``TypeError`` for anything else. The Stream path records on
-    the user's stream at call time, so the resulting event captures the
-    stream's then-current position — exactly what the user wants when
-    asking "don't reuse until my stream finishes the work I just queued".
+    Raises ``TypeError`` for anything else. JAX does not expose CUevent
+    handles through its public API; jax users need to drop to ``cuda``
+    via dlpack and provide their own event.
+
+    Stream paths record on the user's stream at call time, so the
+    resulting event captures the stream's then-current position.
     """
     if event is None:
         return None
@@ -596,13 +599,21 @@ def _coerce_cuda_event_handle(event: object) -> int | None:
     if hasattr(event, "record_event"):
         rec = event.record_event()  # type: ignore[union-attr]
         return _coerce_cuda_event_handle(rec)
+    # cupy.cuda.Stream — .record() returns an Event
+    if hasattr(event, "record") and callable(event.record):  # type: ignore[union-attr]
+        rec = event.record()  # type: ignore[union-attr]
+        return _coerce_cuda_event_handle(rec)
     # torch.cuda.Event
     handle = getattr(event, "cuda_event", None)
     if handle is not None:
         return int(handle)
+    # cupy.cuda.Event — handle is in .ptr (also a generic fallback)
+    ptr = getattr(event, "ptr", None)
+    if isinstance(ptr, int):
+        return ptr
     raise TypeError(
-        f"event must be a CUevent handle (int), a torch.cuda.Event, or a "
-        f"torch.cuda.Stream; got {type(event).__name__}"
+        f"event must be a CUevent handle (int), a torch.cuda or cupy.cuda "
+        f"Event/Stream; got {type(event).__name__}"
     )
 
 

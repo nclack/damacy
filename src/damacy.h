@@ -242,6 +242,13 @@ extern "C"
   // call returns as soon as the wait is queued and the slot state
   // transitions to FREE.
   //
+  // Latency note: stream_post is shared across both batch slots, so the
+  // wait gates EVERY subsequent assemble until `event` fires — not just
+  // the released slot's next reuse. A long-held consumer event therefore
+  // stalls the second slot's assemble too. For maximum overlap, release
+  // with an event that completes quickly relative to the consumer's
+  // step time.
+  //
   // The event must remain valid for the duration of this call; damacy
   // captures it into stream_post's command queue via cuStreamWaitEvent
   // and is done with the handle by return. Passing a NULL event is

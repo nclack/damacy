@@ -93,6 +93,28 @@ def test_coerce_cuda_event_handle_records_stream_like():
     assert damacy._coerce_cuda_event_handle(FakeStream()) == 1234
 
 
+def test_coerce_cuda_event_handle_reads_cupy_event_ptr():
+    """CuPy events expose their handle through `.ptr`."""
+
+    class FakeCupyEvent:
+        ptr = 0xCAFE
+
+    assert damacy._coerce_cuda_event_handle(FakeCupyEvent()) == 0xCAFE
+
+
+def test_coerce_cuda_event_handle_records_cupy_stream():
+    """CuPy streams use `.record()` (not `.record_event()`)."""
+
+    class FakeCupyEvent:
+        ptr = 0xBEEF
+
+    class FakeCupyStream:
+        def record(self):
+            return FakeCupyEvent()
+
+    assert damacy._coerce_cuda_event_handle(FakeCupyStream()) == 0xBEEF
+
+
 def test_coerce_cuda_event_handle_rejects_unknown():
     with pytest.raises(TypeError, match="event must be"):
         damacy._coerce_cuda_event_handle(object())
