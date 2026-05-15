@@ -516,6 +516,69 @@ test_missing_shard_fills(void)
   return 0;
 }
 
+// Same as test_missing_shard_fills but with a non-zero fill_value. The
+// dst buffer is zero-initialised so this would silently pass if the
+// fill path were broken; the explicit non-zero value catches regressions
+// where the cast/load path produces 0.0f. fixture_write_zarr doesn't
+// expose fill_value, so the generated zarr.json is rewritten in-place.
+static int
+test_missing_shard_fills_nonzero(void)
+{
+  static const char* ZARR_JSON_FILL_42 =
+    "{"
+    "\"zarr_format\":3,"
+    "\"node_type\":\"array\","
+    "\"shape\":[4,8],"
+    "\"data_type\":\"uint16\","
+    "\"chunk_grid\":{\"name\":\"regular\",\"configuration\":{"
+    "\"chunk_shape\":[4,8]}},"
+    "\"chunk_key_encoding\":{\"name\":\"default\",\"configuration\":{"
+    "\"separator\":\"/\"}},"
+    "\"fill_value\":42,"
+    "\"codecs\":[{\"name\":\"sharding_indexed\",\"configuration\":{"
+    "\"chunk_shape\":[2,4],"
+    "\"codecs\":[{\"name\":\"bytes\",\"configuration\":{\"endian\":\"little\"}}"
+    ","
+    "{\"name\":\"zstd\",\"configuration\":{\"level\":3,\"checksum\":false}}],"
+    "\"index_codecs\":[{\"name\":\"bytes\",\"configuration\":{"
+    "\"endian\":\"little\"}},{\"name\":\"crc32c\"}],"
+    "\"index_location\":\"end\"}}]"
+    "}";
+
+  char root[64];
+  EXPECT(mkdtemp_root(root, sizeof root) == 0);
+  char p[256];
+  snprintf(p, sizeof p, "%s/foo", root);
+  int64_t shape[2] = { 4, 8 }, inner[2] = { 2, 4 }, shard[2] = { 4, 8 };
+  EXPECT(fixture_write_zarr(p, shape, inner, shard, 2, "uint16", 0) == 0);
+
+  // Overwrite zarr.json with a non-zero fill_value.
+  char meta_path[512];
+  snprintf(meta_path, sizeof meta_path, "%s/foo/zarr.json", root);
+  EXPECT(fixture_write_file(meta_path, ZARR_JSON_FILL_42) == 0);
+
+  // Delete the shard file: every chunk is now absent → fill_value.
+  char shard_path[512];
+  snprintf(shard_path, sizeof shard_path, "%s/foo/c/0/0", root);
+  EXPECT(unlink(shard_path) == 0);
+
+  struct damacy_config cfg = mk_cfg(root, 1);
+  struct damacy* d = NULL;
+  EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
+
+  float out[4 * 8] = { 0 };
+  size_t got = 0;
+  if (run_one(d, mk_sample(p, 0, 4, 0, 8), out, 4 * 8, &got))
+    return 1;
+  EXPECT(got == 4 * 8);
+  for (int i = 0; i < 4 * 8; ++i)
+    EXPECT(out[i] == 42.0f);
+
+  damacy_destroy(d);
+  fixture_rm_tree(root);
+  return 0;
+}
+
 int
 main(void)
 {
@@ -528,6 +591,7 @@ main(void)
   RUN(test_pipelined);
   RUN(test_lookahead_backpressure);
   RUN(test_missing_shard_fills);
+  RUN(test_missing_shard_fills_nonzero);
   log_info("all tests passed");
   return 0;
 }

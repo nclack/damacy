@@ -36,6 +36,8 @@ struct host_slab_slot
 
   struct store_read* store_reads; // capacity DAMACY_MAX_CHUNKS_PER_WAVE
   struct store_event io_event;
+  uint8_t is_fill_wave; // 1 if every chunk in this slot is a fill chunk
+                        // (no IO submitted); polling skips io_event entirely.
 
   uint64_t io_t_start_ns; // peel-submit wall-clock
   uint64_t io_t_end_ns;   // SLOT_IO → SLOT_READY transition

@@ -51,6 +51,7 @@ slot_release(struct host_slab_slot* slot)
   slot->batch_pool_slot = 0;
   slot->batch_chunk_offset = 0;
   slot->io_event = (struct store_event){ 0 };
+  slot->is_fill_wave = 0;
 }
 
 int

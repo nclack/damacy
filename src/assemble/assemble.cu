@@ -91,6 +91,8 @@ load_src_as_float(const uint8_t* src, uint8_t src_dtype)
   switch ((enum dtype)src_dtype) {
     case dtype_u8:
       return (float)(*src);
+    case dtype_i8:
+      return (float)*(const int8_t*)src;
     case dtype_u16:
       return (float)(*(const uint16_t*)src);
     case dtype_i16:
@@ -99,10 +101,16 @@ load_src_as_float(const uint8_t* src, uint8_t src_dtype)
       return (float)(*(const uint32_t*)src);
     case dtype_i32:
       return (float)(*(const int32_t*)src);
+    case dtype_u64:
+      return (float)*(const uint64_t*)src;
+    case dtype_i64:
+      return (float)*(const int64_t*)src;
     case dtype_f16:
       return __half2float(*(const __half*)src);
     case dtype_f32:
       return *(const float*)src;
+    case dtype_f64:
+      return (float)*(const double*)src;
     default:
       return 0.0f;
   }

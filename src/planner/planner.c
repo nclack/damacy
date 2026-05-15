@@ -218,9 +218,18 @@ emit_chunk(const struct emit_ctx* ctx,
     return DAMACY_DECODE;
 
   const struct zarr_shard_entry* entry = &ctx->shard_entries[entry_idx];
-  if (entry->offset == ZARR_SHARD_EMPTY_OFFSET ||
-      entry->nbytes == ZARR_SHARD_EMPTY_NBYTES)
+  int off_sentinel = entry->offset == ZARR_SHARD_EMPTY_OFFSET;
+  int nb_sentinel = entry->nbytes == ZARR_SHARD_EMPTY_NBYTES;
+  if (off_sentinel && nb_sentinel)
     return emit_fill_chunk(ctx, chunk_coord, out);
+  if (off_sentinel != nb_sentinel) {
+    log_error("zarr shard index entry %llu half-sentinel "
+              "(offset=0x%llx, nbytes=0x%llx); treating as corrupt",
+              (unsigned long long)entry_idx,
+              (unsigned long long)entry->offset,
+              (unsigned long long)entry->nbytes);
+    return DAMACY_DECODE;
+  }
 
   if (entry->nbytes > DAMACY_MAX_CHUNK_BYTES)
     return DAMACY_DECODE;

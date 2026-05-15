@@ -47,8 +47,32 @@ pack_le(uint8_t* dst, uint64_t v, size_t n)
     dst[i] = (uint8_t)(v >> (8 * i));
 }
 
-// f32 / f64 string-literal handling per zarr v3 (NaN, Infinity, -Infinity,
-// optionally -NaN). Returns 0 on match + writes the float bytes.
+// Encode a host float as IEEE-754 binary16 (round-toward-zero, no
+// denormal-exact handling). NaN/Inf map to the same-signed half class.
+static uint16_t
+float_to_half_bits(float fv)
+{
+  uint32_t f_bits;
+  memcpy(&f_bits, &fv, sizeof f_bits);
+  uint32_t sign = (f_bits >> 31) & 1u;
+  int32_t e = (int32_t)((f_bits >> 23) & 0xFFu) - 127;
+  uint32_t m = f_bits & 0x7FFFFFu;
+  if (((f_bits >> 23) & 0xFFu) == 0xFFu) {
+    // NaN / Inf: preserve class, collapse mantissa.
+    return (uint16_t)((sign << 15) | (31u << 10) | (m ? 0x200u : 0u));
+  }
+  if ((f_bits & 0x7FFFFFFFu) == 0)
+    return (uint16_t)(sign << 15);
+  if (e > 15)
+    return (uint16_t)((sign << 15) | (31u << 10));
+  if (e < -14)
+    return (uint16_t)(sign << 15);
+  return (uint16_t)((sign << 15) | ((uint32_t)(e + 15) << 10) |
+                    ((m + 0x1000u) >> 13));
+}
+
+// f16 / f32 / f64 string-literal handling per zarr v3 (NaN, Infinity,
+// -Infinity, optionally -NaN). Returns 0 on match + writes the float bytes.
 static int
 parse_float_special(struct json_node n, enum dtype dt, uint8_t* out)
 {
@@ -74,7 +98,10 @@ parse_float_special(struct json_node n, enum dtype dt, uint8_t* out)
     return 1;
   if (negative)
     v = -v;
-  if (dt == dtype_f32) {
+  if (dt == dtype_f16) {
+    uint16_t h = float_to_half_bits((float)v);
+    pack_le(out, h, 2);
+  } else if (dt == dtype_f32) {
     float f = (float)v;
     memcpy(out, &f, sizeof f);
   } else if (dt == dtype_f64) {
@@ -116,33 +143,16 @@ parse_fill_value(struct json_node n, enum dtype dt, uint8_t* out, size_t bpe)
       return 0;
     }
     case dtype_f16: {
-      // Zarr v3 permits NaN / Infinity strings as well as numbers; damacy
-      // doesn't currently round-trip f16 fill values, so only zero numeric
-      // values are accepted. Round to nearest even is the spec rule but
-      // damacy never decompresses into f16 host bytes today.
+      // Zarr v3 permits NaN / Infinity strings as well as numbers. Both
+      // paths share float_to_half_bits so the special-string case writes
+      // exactly 2 bytes (not 4 via the f32 path).
       double v = 0;
       if (n.type == JSON_NUMBER && json_as_double(n, &v) == JSON_OK) {
-        // Best-effort half encoding via float round trip.
-        uint32_t f_bits;
-        float fv = (float)v;
-        memcpy(&f_bits, &fv, sizeof f_bits);
-        uint32_t sign = (f_bits >> 31) & 1u;
-        int32_t e = (int32_t)((f_bits >> 23) & 0xFFu) - 127;
-        uint32_t m = f_bits & 0x7FFFFFu;
-        uint16_t h;
-        if ((f_bits & 0x7FFFFFFFu) == 0)
-          h = (uint16_t)(sign << 15);
-        else if (e > 15)
-          h = (uint16_t)((sign << 15) | (31u << 10));
-        else if (e < -14)
-          h = (uint16_t)(sign << 15);
-        else
-          h = (uint16_t)((sign << 15) | ((uint32_t)(e + 15) << 10) |
-                         ((m + 0x1000u) >> 13));
+        uint16_t h = float_to_half_bits((float)v);
         pack_le(out, h, 2);
         return 0;
       }
-      return parse_float_special(n, dtype_f32, out);
+      return parse_float_special(n, dtype_f16, out);
     }
     case dtype_f32: {
       if (n.type == JSON_NUMBER) {
