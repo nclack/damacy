@@ -171,6 +171,7 @@ def _summary_table(r: Results) -> Table:
     t.add_column(justify="right")
     tm = r.timings_ms
     d = r.derived
+    hold_ms = r.scenario.consumer.hold_ms
     rows = [
         ("init", _fmt_ms(tm.init) + " ms"),
         ("time_to_first_batch", _fmt_ms(tm.time_to_first_batch) + " ms"),
@@ -182,6 +183,16 @@ def _summary_table(r: Results) -> Table:
         (
             "stage_concurrency",
             f"{d.stage_concurrency:.2f}  [dim](sum stage ms / wall ms)[/dim]",
+        ),
+        (
+            "consumer hold/batch",
+            f"{hold_ms:.1f} ms"
+            if hold_ms > 0
+            else "[dim]0 (no backpressure sim)[/dim]",
+        ),
+        (
+            "consumer_block (total)",
+            f"{_fmt_ms(tm.consumer_block)} ms  [dim](wait for next batch)[/dim]",
         ),
         ("chunks/batch", f"{d.chunks_per_batch:.0f}"),
         ("chunks/wave", f"{d.chunks_per_wave:.0f}"),
