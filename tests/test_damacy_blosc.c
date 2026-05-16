@@ -31,6 +31,7 @@
 #include "damacy.h"
 #include "fixture.h"
 #include "store/store.h"
+#include "store/store_fs_gds.h"
 
 #include <cuda_runtime.h>
 #include <stdio.h>
@@ -558,10 +559,8 @@ test_batch_pool_rejected_at_inflated_committed(void)
   return 0;
 }
 
-// Probe whether the cuFile runtime is loadable + the driver opens on
-// this host. Tries to create a throwaway store with enable_gds=1;
-// success means libcufile.so.0 was found and cuFileDriverOpen returned
-// SUCCESS.
+// Returns 1 iff store_fs_gds_create succeeds on this host (libcufile
+// loadable, driver opens). 0 when GDS isn't built or isn't available.
 static int
 gds_runtime_available(void)
 {
@@ -569,8 +568,8 @@ gds_runtime_available(void)
   char* root = mkdtemp(tmpl);
   if (!root)
     return 0;
-  struct store_fs_config sc = { .root = root, .nthreads = 1, .enable_gds = 1 };
-  struct store* s = store_fs_create(&sc);
+  struct store_fs_config sc = { .root = root, .nthreads = 1 };
+  struct store* s = store_fs_gds_create(&sc);
   int ok = (s != NULL);
   store_destroy(s);
   fixture_rm_tree(root);

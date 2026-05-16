@@ -2,7 +2,6 @@
 
 #include "log/log.h"
 #include "store/store.h"
-#include "store/store_fs_gds.h"
 #include "util/prelude.h"
 #include "util/strbuf.h"
 
@@ -64,9 +63,6 @@ Out:
     platform_file_close(f);
     return NULL;
   }
-  // realloc leaves new slots uninitialized; zero before populating so
-  // fields the caller doesn't touch (e.g. gds_handle, used by the GDS
-  // backend) start as NULL rather than random bytes.
   memset(&fs->slots[fs->n_slots], 0, sizeof(struct fs_cache_slot));
   fs->slots[fs->n_slots].key = dup;
   fs->slots[fs->n_slots].file = f;
@@ -144,15 +140,9 @@ Drain:
   return ev; // ev.seq == 0 signals failure
 }
 
-// GDS submits return STORE_FS_GDS_SENTINEL_SEQ instead of an io_queue
-// seq — cuFileReadAsync is stream-ordered with the parse + decode work
-// that follows, so the SLOT_IO → SLOT_READY transition is bookkeeping
-// and the real wait is the cuEventQuery(bulk_h2d_end) gate downstream.
 static void
 fs_event_wait(struct store* s, struct store_event ev)
 {
-  if (ev.seq == STORE_FS_GDS_SENTINEL_SEQ)
-    return;
   struct store_fs* fs = (struct store_fs*)s;
   io_event_wait(fs->q, (struct io_event){ .seq = ev.seq });
 }
@@ -160,8 +150,6 @@ fs_event_wait(struct store* s, struct store_event ev)
 static int
 fs_event_query(struct store* s, struct store_event ev)
 {
-  if (ev.seq == STORE_FS_GDS_SENTINEL_SEQ)
-    return 1;
   struct store_fs* fs = (struct store_fs*)s;
   return io_event_query(fs->q, (struct io_event){ .seq = ev.seq });
 }
@@ -225,13 +213,10 @@ fs_destroy(struct store* s)
   struct store_fs* fs = (struct store_fs*)s;
   if (!fs)
     return;
-  // Drain pending I/O before tearing down file handles.
   if (fs->q) {
     io_event_wait(fs->q, io_queue_record(fs->q));
     io_queue_destroy(fs->q);
   }
-  // Order matters: cuFile handles reference the fds we're about to close.
-  store_fs_gds_destroy(fs);
   for (size_t i = 0; i < fs->n_slots; ++i) {
     free(fs->slots[i].key);
     platform_file_close(fs->slots[i].file);
@@ -267,19 +252,6 @@ static const struct store_vtable fs_vtable_host = {
   .unmap = fs_unmap,
 };
 
-static const struct store_vtable fs_vtable_gds = {
-  .destroy = fs_destroy,
-  .stat = fs_stat,
-  .submit = fs_submit,
-  .submit_dev = store_fs_gds_submit_dev,
-  .event_wait = fs_event_wait,
-  .event_query = fs_event_query,
-  .map = fs_map,
-  .unmap = fs_unmap,
-};
-
-// Bridge from store_fs_gds.c — it needs to ensure the file is open
-// (cache slot exists) before registering its FD with cuFile.
 platform_file*
 store_fs_get_file_external(struct store_fs* fs, const char* key)
 {
@@ -305,13 +277,6 @@ store_fs_create(const struct store_fs_config* cfg)
   fs->q = io_queue_create(cfg->nthreads, cfg->affinity);
   CHECK_SILENT(Fail, fs->q);
 
-  if (cfg->enable_gds) {
-    // No silent fallback: enable_gds wires different sizing/parse paths
-    // upstream, so demoting on GDS init failure would surprise callers.
-    CHECK_SILENT(Fail, store_fs_gds_init(fs) == 0);
-    fs->base.vt = &fs_vtable_gds;
-    log_info("damacy: cuFile driver opened; GDS submit_dev available");
-  }
   return &fs->base;
 
 Fail:

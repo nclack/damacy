@@ -136,10 +136,9 @@ add_cuda_lib(wave_pool SOURCES wave/wave_pool.h wave/wave_pool.c
           damacy_nvtx log CUDA::cuda_driver
 )
 
-# Read-side store. store_fs_gds.c dlopen's libcufile at runtime; we
-# only need the header at compile time. Fuzz build skips it (no CUDA);
-# non-GDS builds skip it too (gated on DAMACY_ENABLE_GDS). The GDS path
-# calls cuStreamSynchronize / cuLaunchHostFunc, so link CUDA::cuda_driver.
+# Read-side store. store_fs.c is the host impl; store_fs_gds.c is an
+# independent cuFile-backed store. DAMACY_ENABLE_GDS=OFF links the stub
+# (store_fs_gds_create returns NULL); runtime GDS opt-in then fails INVAL.
 add_src_lib(store SOURCES store/store.h store/store.c store/store_fs.h store/store_fs.c
     LINKS io_queue platform_io strbuf log
 )
@@ -147,6 +146,8 @@ if(NOT DAMACY_FUZZ AND DAMACY_ENABLE_GDS)
     target_sources(store PRIVATE store/store_fs_gds.h store/store_fs_gds.c)
     target_include_directories(store PRIVATE ${CuFile_INCLUDE_DIR})
     target_link_libraries(store PRIVATE CUDA::cuda_driver ${CMAKE_DL_LIBS})
+else()
+    target_sources(store PRIVATE store/store_fs_gds.h store/store_fs_gds_stub.c)
 endif()
 
 # Zarr v3 metadata + shard-index parsers (cache-layer building blocks).

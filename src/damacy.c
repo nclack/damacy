@@ -18,6 +18,7 @@
 #include "platform/platform.h"
 #include "scheduler/scheduler.h"
 #include "store/store.h"
+#include "store/store_fs_gds.h"
 #include "util/cuda_check.h"
 #include "util/prelude.h"
 #include "wave/wave_budget.h"
@@ -520,26 +521,19 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     }
   }
 
-  // Resolve the GDS opt-in up front so the store and wave pool can be
-  // wired with the right backend in one shot.
   uint8_t want_gds = resolve_enable_gds(cfg);
 
-  // CHECK doesn't touch `s`; seed it for the meta/shard/planner CHECKs
-  // below. The store_fs_create branch overrides with INVAL if want_gds.
   s = DAMACY_OOM;
 
-  // Sample.uri is absolute; the fs store joins root+key, so empty root
-  // turns join into a pass-through.
+  // Sample.uri is absolute; fs store joins root+key, so empty root is a
+  // pass-through.
   struct store_fs_config sc = {
     .root = "",
     .nthreads = (int)cfg->n_io_threads,
     .affinity = &self->numa,
-    .enable_gds = (int)want_gds,
   };
-  self->store = store_fs_create(&sc);
+  self->store = want_gds ? store_fs_gds_create(&sc) : store_fs_create(&sc);
   if (!self->store) {
-    // When the caller asked for GDS, NULL almost always means cuFile
-    // init failed (logged by store_fs_gds_init) — surface INVAL not OOM.
     s = want_gds ? DAMACY_INVAL : DAMACY_OOM;
     goto Fail;
   }

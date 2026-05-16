@@ -31,16 +31,12 @@ extern "C"
     // Optional NUMA placement plan for the io_queue worker threads.
     // NULL (or node<0) skips affinity.
     const struct numa_resolved* affinity;
-    // Opt in to NVIDIA GPUDirect Storage (cuFile). 0 = host-staging
-    // only; submit_dev returns a zero event. 1 = dlopen libcufile.so.0
-    // and call cuFileDriverOpen at create time; either step failing
-    // fails the create. The library is never linked, so a damacy build
-    // works on hosts without cuFile as long as the caller leaves this
-    // at 0.
-    int enable_gds;
   };
 
-  // Create a filesystem-backed store. Returns NULL on failure.
+  // Create a filesystem-backed store (host-staging only). Returns NULL on
+  // failure. For GPUDirect Storage, see store_fs_gds_create in
+  // store_fs_gds.h — that's a separate store implementation; this one
+  // never references cuFile.
   struct store* store_fs_create(const struct store_fs_config* cfg);
 
   // Destroy a store created by store_fs_create or any future backend.
