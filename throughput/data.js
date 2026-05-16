@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778854190536,
+  "lastUpdate": 1778911223333,
   "repoUrl": "https://github.com/nclack/damacy",
   "entries": {
     "damacy throughput": [
@@ -415,6 +415,38 @@ window.BENCHMARK_DATA = {
           {
             "name": "damacy/mixed/throughput",
             "value": 5690.27,
+            "unit": "MB/s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Nathan Clack",
+            "username": "nclack",
+            "email": "nclack@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "ab5c77f5b7aa17082a5aa0dbcda90184a2376f23",
+          "message": "blosc: gpu parse + cufile reader (#58)\n\nGPU blosc1 parse + opt-in cuFile reader.\n\n- **chunk-layout probe** — first non-fill emit reads the 16-byte blosc1\nheader, caches `nblocks` on the meta entry; tightens `need_zsubs` to\nactual.\n- **GPU parse** — `blosc1_parse.cu` on `stream_h2d`. Kernel A: per-chunk\nclassify (memcpyed vs codec'd) + shuffle fields. Kernel B: per-block\nfan-out (raw → memcpy_op, codec → zstd_fan). Host parser is gone.\n- **GDS store** — `store_fs_gds.c` is an independent store; composes a\nhost `store_fs` for stat/submit/map and overrides `submit_dev` with\n`cuFileReadAsync`. `damacy.c` picks the constructor.",
+          "timestamp": "2026-05-16T05:56:20Z",
+          "url": "https://github.com/nclack/damacy/commit/ab5c77f5b7aa17082a5aa0dbcda90184a2376f23"
+        },
+        "date": 1778911222573,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "damacy/default/throughput",
+            "value": 6091.72,
+            "unit": "MB/s"
+          },
+          {
+            "name": "damacy/mixed/throughput",
+            "value": 5964.07,
             "unit": "MB/s"
           }
         ]
