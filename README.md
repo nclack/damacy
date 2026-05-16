@@ -112,12 +112,12 @@ Damacy links only the essentials. Optional features dlopen their backends lazily
 |---|---|---|---|
 | `libcuda.so.1` | always | nothing — damacy cannot run without it | NVIDIA driver install (`/run/opengl-driver/lib`, `/usr/lib/x86_64-linux-gnu`, …) |
 | `libnuma.so.1` | optional | NUMA pinning of pinned-host slabs + io_queue / scheduler threads (single-socket hosts: no effect) | `dlopen` via dynamic loader (`LD_LIBRARY_PATH`, `ld.so.cache`) |
-| `libcufile.so.0` | optional | `damacy_config.enable_gds = 1` — direct read of compressed chunks into device memory via NVIDIA GPUDirect Storage | `dlopen` via dynamic loader; ships with the CUDA toolkit and with nvidia-fs |
+| `libcufile.so.0` | optional | `damacy_config.enable_gds = 1` — direct read of compressed chunks into device memory via NVIDIA GPUDirect Storage | `dlopen` via dynamic loader; ships with the CUDA toolkit and with nvidia-fs. Requires a build with `-DDAMACY_ENABLE_GDS=ON` (default OFF) |
 | `libmount.so.1`, `libudev.so.1` | required *if and only if* using GDS | cuFile dlopen's these at driver init even in compat mode | dynamic loader |
 
 GDS notes:
 
-- `enable_gds = 1` requires `use_gpu_blosc_parse = 1` (the compressed bytes never land on the host, so blosc1 headers must be parsed on the device).
+- Build with `cmake -DDAMACY_ENABLE_GDS=ON` to link the cuFile backend. The default-OFF build still accepts `enable_gds = 1` but `damacy_create` returns `DAMACY_INVAL` (no silent fallback).
 - On hosts without nvidia-fs, point `CUFILE_ENV_PATH_JSON` at a JSON with `{"properties":{"allow_compat_mode":true}}` to enable cuFile compat mode — reads go through cuFile's host-bounce buffer instead of DMA. Useful for correctness testing on consumer GPUs.
 - If libcufile can't be loaded or `cuFileDriverOpen` fails, `damacy_create` returns `DAMACY_INVAL`.
 
