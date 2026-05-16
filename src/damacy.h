@@ -331,6 +331,9 @@ extern "C"
     uint64_t batches_truncated;
     uint64_t waves_emitted;
     uint64_t chunks_dispatched;
+    uint64_t chunks_planned;  // total chunk_plans emitted (incl. fills)
+    uint64_t chunks_to_load;  // non-fill chunks (filter survivors)
+    uint64_t reads_issued;    // real read_ops after coalesce
     uint64_t worker_steps; // scheduler ticks (proxy for worker CPU)
 
     // Total GPU bytes currently committed to wave-resident buffers and

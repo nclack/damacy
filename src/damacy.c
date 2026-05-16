@@ -218,6 +218,10 @@ plan_into_slot(struct damacy* self, uint16_t slot_idx, uint32_t n_samples)
   if (status != DAMACY_OK)
     goto Cleanup;
 
+  self->stats.chunks_planned += plan_out.n_chunk_plans;
+  self->stats.chunks_to_load += plan_out.n_chunks_to_load;
+  self->stats.reads_issued += plan_out.n_loads_issued;
+
   slot->n_chunks = plan_out.n_chunk_plans;
   slot->n_chunks_dispatched = 0;
   slot->chunks_remaining = (int32_t)plan_out.n_chunk_plans;

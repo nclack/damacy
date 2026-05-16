@@ -623,7 +623,27 @@ planner_plan(struct planner* self,
     }
   }
 
-  return coalesce_batch_read_ops(self, out);
+  {
+    enum damacy_status s = coalesce_batch_read_ops(self, out);
+    if (s != DAMACY_OK)
+      return s;
+  }
+
+  {
+    uint32_t to_load = 0;
+    for (uint32_t i = 0; i < out->n_chunk_plans; ++i)
+      if (!out->chunk_plans[i].is_fill)
+        to_load++;
+    uint32_t loads = 0;
+    for (uint32_t i = 0; i < out->n_read_ops; ++i) {
+      const struct read_op* r = &out->read_ops[i];
+      if (r->nbytes != 0 && r->shard_path[0] != '\0')
+        loads++;
+    }
+    out->n_chunks_to_load = to_load;
+    out->n_loads_issued = loads;
+  }
+  return DAMACY_OK;
 
 Invalid:
   return DAMACY_INVAL;

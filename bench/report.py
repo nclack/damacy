@@ -147,6 +147,11 @@ def _counters_table(r: Results) -> Table:
         ("batches_truncated", f"{c.batches_truncated:,}"),
         ("waves_emitted", f"{c.waves_emitted:,}"),
         ("chunks_dispatched", f"{c.chunks_dispatched:,}"),
+        ("chunks_planned", f"{c.chunks_planned:,}"),
+        (
+            "filter→fuse",
+            f"{c.chunks_planned:,} → {c.chunks_to_load:,} → {c.reads_issued:,}",
+        ),
         ("distinct_zarrs", f"{c.distinct_zarrs}"),
         ("distinct_shards", f"{c.distinct_shards}"),
         ("zarr_meta hits/misses", f"{c.zarr_meta_hits:,} / {c.zarr_meta_misses:,}"),

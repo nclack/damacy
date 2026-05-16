@@ -595,6 +595,12 @@ emit_results(const struct scenario* sc, const struct run_metrics* rm, FILE* out)
   jw_uint(&jw, rm->stats.worker_steps);
   jw_key(&jw, "chunks_dispatched");
   jw_uint(&jw, rm->stats.chunks_dispatched);
+  jw_key(&jw, "chunks_planned");
+  jw_uint(&jw, rm->stats.chunks_planned);
+  jw_key(&jw, "chunks_to_load");
+  jw_uint(&jw, rm->stats.chunks_to_load);
+  jw_key(&jw, "reads_issued");
+  jw_uint(&jw, rm->stats.reads_issued);
   jw_key(&jw, "distinct_zarrs");
   jw_uint(&jw, rm->stats.zarr_meta_misses);
   jw_key(&jw, "distinct_shards");

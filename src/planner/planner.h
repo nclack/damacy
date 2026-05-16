@@ -132,6 +132,8 @@ extern "C"
     struct sample_plan* sample_plans;
     uint32_t sample_plans_cap;
     uint32_t n_sample_plans;
+    uint32_t n_chunks_to_load; // non-fill chunks (= IO requests pre-coalesce)
+    uint32_t n_loads_issued;   // real (non-fill) read_ops after coalesce
   };
 
   // Plan one training batch — i.e., the N samples that land in one

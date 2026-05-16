@@ -118,6 +118,9 @@ class Counters(BaseModel):
     batches_truncated: int
     waves_emitted: int
     chunks_dispatched: int
+    chunks_planned: int = 0
+    chunks_to_load: int = 0
+    reads_issued: int = 0
     distinct_zarrs: int
     distinct_shards: int
     zarr_meta_hits: int
