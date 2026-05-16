@@ -89,6 +89,7 @@ extern "C"
     uint32_t offset_in_read; // chunk start within the read
     uint32_t compressed_nbytes;
     uint32_t decompressed_nbytes;
+    uint64_t host_buf_offset;         // scheduler-assigned (per wave)
     uint32_t dev_decompressed_offset; // scheduler-assigned (per wave)
     uint16_t batch_pool_slot;
     uint16_t sample_idx_in_batch; // index into planner_output.sample_plans

@@ -16,7 +16,38 @@ struct planner
 {
   struct planner_config cfg;
   struct strbuf path_sb;
+  uint32_t* scratch_u32;
+  uint32_t scratch_u32_cap;
+  struct read_op* scratch_ops;
+  uint32_t scratch_ops_cap;
 };
+
+static enum damacy_status
+planner_ensure_scratch(struct planner* self, uint32_t need)
+{
+  if (need > self->scratch_u32_cap) {
+    free(self->scratch_u32);
+    self->scratch_u32 = NULL;
+    self->scratch_u32_cap = 0;
+    uint32_t* mem = (uint32_t*)malloc((size_t)need * 3u * sizeof(uint32_t));
+    if (!mem)
+      return DAMACY_OOM;
+    self->scratch_u32 = mem;
+    self->scratch_u32_cap = need;
+  }
+  if (need > self->scratch_ops_cap) {
+    free(self->scratch_ops);
+    self->scratch_ops = NULL;
+    self->scratch_ops_cap = 0;
+    struct read_op* mem =
+      (struct read_op*)malloc((size_t)need * sizeof(struct read_op));
+    if (!mem)
+      return DAMACY_OOM;
+    self->scratch_ops = mem;
+    self->scratch_ops_cap = need;
+  }
+  return DAMACY_OK;
+}
 
 // --- math helpers --------------------------------------------------------
 
@@ -96,66 +127,110 @@ align_up_u64(uint64_t value, uint64_t alignment)
   return ((value + alignment - 1) / alignment) * alignment;
 }
 
-// Fuse page-adjacent reads (same shard_path, next.file_offset within
-// leader's range) into a single read_op. Fill-mode reads never fuse.
-// In-place: walks read_ops in chunk_plan order (1:1 pre-coalesce),
-// compacts survivors, rewrites read_op_idx / offset_in_read.
-static void
-coalesce_sample_read_ops(struct planner_output* out,
-                         uint32_t read_op_start,
-                         uint32_t chunk_plan_start)
+static int
+perm_lt(const struct read_op* ops, uint32_t a, uint32_t b)
 {
-  uint32_t old_n = out->n_read_ops;
-  if (old_n - read_op_start < 2)
-    return;
-  uint32_t n_in = old_n - read_op_start;
+  int cmp = strncmp(ops[a].shard_path, ops[b].shard_path, DAMACY_MAX_PATH);
+  if (cmp != 0)
+    return cmp < 0;
+  if (ops[a].file_offset != ops[b].file_offset)
+    return ops[a].file_offset < ops[b].file_offset;
+  return a < b;
+}
 
-  uint32_t write = read_op_start;
-  uint32_t leader_new_idx = UINT32_MAX;
+static enum damacy_status
+coalesce_batch_read_ops(struct planner* self, struct planner_output* out)
+{
+  uint32_t n = out->n_read_ops;
+  if (n < 2)
+    return DAMACY_OK;
+
+  enum damacy_status s = planner_ensure_scratch(self, n);
+  if (s != DAMACY_OK)
+    return s;
+
+  uint32_t* perm = self->scratch_u32;
+  uint32_t* remap = self->scratch_u32 + n;
+  uint32_t* offset_shift = self->scratch_u32 + 2u * n;
+  struct read_op* tmp = self->scratch_ops;
+
+  for (uint32_t i = 0; i < n; ++i)
+    remap[i] = UINT32_MAX;
+
+  uint32_t n_io = 0;
+  for (uint32_t i = 0; i < n; ++i) {
+    struct read_op* r = &out->read_ops[i];
+    if (r->nbytes != 0 && r->shard_path[0] != '\0')
+      perm[n_io++] = i;
+  }
+
+  for (uint32_t i = 1; i < n_io; ++i) {
+    uint32_t key = perm[i];
+    uint32_t j = i;
+    while (j > 0 && !perm_lt(out->read_ops, perm[j - 1], key)) {
+      perm[j] = perm[j - 1];
+      j--;
+    }
+    perm[j] = key;
+  }
+
+  uint32_t write = 0;
+  uint32_t leader_old = UINT32_MAX;
   uint64_t leader_end = 0;
-
-  for (uint32_t k = 0; k < n_in; ++k) {
-    uint32_t old_idx = read_op_start + k;
-    struct read_op* curr = &out->read_ops[old_idx];
-    struct chunk_plan* cp = &out->chunk_plans[chunk_plan_start + k];
-
+  for (uint32_t k = 0; k < n_io; ++k) {
+    uint32_t e = perm[k];
+    struct read_op* curr = &out->read_ops[e];
     int fusable = 0;
-    if (leader_new_idx != UINT32_MAX && curr->nbytes != 0 &&
-        curr->shard_path[0] != '\0') {
-      struct read_op* leader = &out->read_ops[leader_new_idx];
-      if (leader->nbytes != 0 && leader->shard_path[0] != '\0' &&
-          strncmp(curr->shard_path, leader->shard_path, DAMACY_MAX_PATH) == 0 &&
+    uint64_t curr_end = (uint64_t)curr->file_offset + curr->nbytes;
+    if (leader_old != UINT32_MAX) {
+      struct read_op* leader = &out->read_ops[leader_old];
+      if (strncmp(curr->shard_path, leader->shard_path, DAMACY_MAX_PATH) == 0 &&
           curr->file_offset >= leader->file_offset &&
           curr->file_offset <= leader_end) {
-        uint64_t curr_end = (uint64_t)curr->file_offset + curr->nbytes;
         uint64_t fused_end = curr_end > leader_end ? curr_end : leader_end;
         if (fused_end - leader->file_offset <= UINT32_MAX)
           fusable = 1;
       }
     }
-
     if (fusable) {
-      struct read_op* leader = &out->read_ops[leader_new_idx];
-      uint64_t curr_end = (uint64_t)curr->file_offset + curr->nbytes;
+      uint32_t new_idx = remap[leader_old];
       uint64_t fused_end = curr_end > leader_end ? curr_end : leader_end;
-      uint64_t shift = curr->file_offset - leader->file_offset;
-      leader->nbytes = (uint32_t)(fused_end - leader->file_offset);
+      tmp[new_idx].nbytes = (uint32_t)(fused_end - tmp[new_idx].file_offset);
+      remap[e] = new_idx;
+      offset_shift[e] =
+        (uint32_t)(curr->file_offset - tmp[new_idx].file_offset);
       leader_end = fused_end;
-      cp->read_op_idx = leader_new_idx;
-      if (!cp->is_fill)
-        cp->offset_in_read = (uint32_t)(shift + cp->offset_in_read);
     } else {
-      if (write != old_idx)
-        out->read_ops[write] = *curr;
-      cp->read_op_idx = write;
-      leader_new_idx = write;
-      leader_end = (uint64_t)out->read_ops[write].file_offset +
-                   out->read_ops[write].nbytes;
+      tmp[write] = *curr;
+      remap[e] = write;
+      offset_shift[e] = 0;
+      leader_old = e;
+      leader_end = curr_end;
       write++;
     }
   }
 
+  for (uint32_t i = 0; i < n; ++i) {
+    if (remap[i] != UINT32_MAX)
+      continue;
+    tmp[write] = out->read_ops[i];
+    remap[i] = write;
+    offset_shift[i] = 0;
+    write++;
+  }
+
+  memcpy(out->read_ops, tmp, (size_t)write * sizeof(struct read_op));
   out->n_read_ops = write;
+
+  for (uint32_t i = 0; i < out->n_chunk_plans; ++i) {
+    struct chunk_plan* cp = &out->chunk_plans[i];
+    uint32_t old = cp->read_op_idx;
+    cp->read_op_idx = remap[old];
+    if (!cp->is_fill)
+      cp->offset_in_read += offset_shift[old];
+  }
+
+  return DAMACY_OK;
 }
 
 // --- public API ----------------------------------------------------------
@@ -194,6 +269,8 @@ planner_destroy(struct planner* self)
   if (!self)
     return;
   strbuf_free(&self->path_sb);
+  free(self->scratch_u32);
+  free(self->scratch_ops);
   free(self);
 }
 
@@ -424,11 +501,6 @@ planner_plan(struct planner* self,
     if (chunk_range(&sample->aabb, meta, chunk_lo, chunk_hi))
       return DAMACY_INVAL;
 
-    uint32_t sample_read_op_start = out->n_read_ops;
-    uint32_t sample_chunk_plan_start = out->n_chunk_plans;
-
-    // Emit the per-sample header before chunks. chunk_offset records
-    // where this sample's chunks start in the chunk_plans stream.
     if (out->n_sample_plans >= out->sample_plans_cap)
       return DAMACY_OOM;
     struct sample_plan* sp = &out->sample_plans[out->n_sample_plans];
@@ -549,12 +621,9 @@ planner_plan(struct planner* self,
       if (finished)
         break;
     }
-
-    coalesce_sample_read_ops(
-      out, sample_read_op_start, sample_chunk_plan_start);
   }
 
-  return DAMACY_OK;
+  return coalesce_batch_read_ops(self, out);
 
 Invalid:
   return DAMACY_INVAL;
