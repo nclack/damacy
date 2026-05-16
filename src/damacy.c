@@ -1,8 +1,8 @@
 // damacy: streaming loader. Two batch slots and two wave slots in flight.
 // A worker thread (src/scheduler) drives the pipeline; the user-thread
 // API (push/pop/release/flush) coordinates via scheduler_lock + the
-// scheduler's condition variable. Background I/O on the io_queue and
-// host parse on compute_pool round out the threading model.
+// scheduler's condition variable. Background I/O on the io_queue rounds
+// out the threading model.
 
 #include "damacy.h"
 
@@ -18,7 +18,6 @@
 #include "platform/platform.h"
 #include "scheduler/scheduler.h"
 #include "store/store.h"
-#include "threadpool/threadpool.h"
 #include "util/cuda_check.h"
 #include "util/prelude.h"
 #include "wave/wave_budget.h"
@@ -64,8 +63,6 @@ struct damacy
   struct zarr_meta_cache* meta_cache;
   struct zarr_shard_cache* shard_cache;
   struct planner* planner;
-
-  struct threadpool* compute_pool; // host blosc1 parse
 
   struct damacy_lookahead lookahead;
   struct damacy_batch_pool batch_pool;
@@ -346,9 +343,6 @@ destroy_inner(struct damacy* self, int cuda_skip)
 
   wave_pool_destroy(&self->wave_pool, cuda_skip);
 
-  threadpool_free(self->compute_pool);
-  self->compute_pool = NULL;
-
   free(self->batch_stage);
   self->batch_stage = NULL;
   free(self->batch_samples);
@@ -451,12 +445,6 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     }
   }
 
-  self->compute_pool = threadpool_new((int)cfg->n_compute_threads);
-  if (!self->compute_pool) {
-    s = DAMACY_OOM;
-    goto Fail;
-  }
-
   // max_gpu_memory_bytes is the primary knob. Apply the default
   // (~1 GB) if the user left it at 0.
   const uint64_t resolved_max_gpu = resolve_max_gpu_memory(cfg);
@@ -532,16 +520,9 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     }
   }
 
-  // Resolve the GPU-parse / GDS opt-ins up front so the store and the
-  // wave pool can be wired with the right backend in one shot.
-  uint8_t use_gpu_parse = resolve_use_gpu_blosc_parse(cfg);
+  // Resolve the GDS opt-in up front so the store and wave pool can be
+  // wired with the right backend in one shot.
   uint8_t want_gds = resolve_enable_gds(cfg);
-  if (want_gds && !use_gpu_parse) {
-    log_error("damacy: enable_gds requires use_gpu_blosc_parse (no host "
-              "buffer is available to parse from)");
-    s = DAMACY_INVAL;
-    goto Fail;
-  }
 
   // CHECK doesn't touch `s`; seed it for the meta/shard/planner CHECKs
   // below. The store_fs_create branch overrides with INVAL if want_gds.
@@ -592,7 +573,6 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     int wp_rc = wave_pool_init(&self->wave_pool,
                                &self->batch_pool,
                                self->store,
-                               self->compute_pool,
                                &self->stats,
                                cfg->dtype,
                                resolve_host_buffer_waves(cfg),
@@ -604,9 +584,6 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     numa_scope_exit(saved_aff);
     CHECK(Fail, wp_rc == 0);
   }
-  self->wave_pool.use_gpu_parse = use_gpu_parse;
-  if (use_gpu_parse)
-    log_info("damacy: blosc1 chunk-header parse on device (gpu_parse)");
   if (want_gds)
     log_info("damacy: compressed reads via cuFile / GDS (skip bulk H2D)");
 

@@ -231,11 +231,9 @@ test_three_codecs_mixed_batch(void)
                expected_f32_from_u16_2d(y, x, 32, offsets[i]));
   damacy_release(d, b);
 
-  // Sub-stage metrics: blosc1 GPU pipeline must have stamped the parse
-  // and the stream_decode timings. zstd is the only inner codec supported.
+  // Sub-stage metric sanity: stream_decode must have fired.
   struct damacy_stats st;
   damacy_stats_get(d, &st);
-  EXPECT(st.decompress_parse.count > 0);
   EXPECT(st.decode.count > 0);
 
   damacy_destroy(d);
@@ -560,80 +558,6 @@ test_batch_pool_rejected_at_inflated_committed(void)
   return 0;
 }
 
-// A/B-equivalence: drive the same workload through the host parse and
-// the GPU parse (use_gpu_blosc_parse=1) and assert byte-equal output.
-// Single-block fixture (256-byte chunks) exercises the BLOSC_ZSTD
-// fast-path of the kernel.
-static int
-run_gpu_host_parity(const char* codec)
-{
-  char root[64];
-  EXPECT(mkdtemp_root(root, sizeof root) == 0);
-  char p[256];
-  snprintf(p, sizeof p, "%s/foo", root);
-  int64_t shape[2] = { 64, 32 };
-  int64_t inner[2] = { 8, 16 };
-  int64_t shard[2] = { 64, 32 };
-  EXPECT(fixture_write_zarr_codec(
-           p, shape, inner, shard, 2, "uint16", 0, codec) == 0);
-
-  const size_t n_elems = (size_t)shape[0] * (size_t)shape[1];
-  float* host_out = (float*)calloc(n_elems, sizeof(float));
-  float* gpu_out = (float*)calloc(n_elems, sizeof(float));
-  EXPECT(host_out && gpu_out);
-
-  // Host path.
-  {
-    struct damacy_config cfg = mk_cfg(root, 1);
-    struct damacy* d = NULL;
-    EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
-    size_t got = 0;
-    EXPECT(run_one(d, mk_sample(p, 0, 64, 0, 32), host_out, n_elems, &got) ==
-           0);
-    EXPECT(got == n_elems);
-    damacy_destroy(d);
-  }
-  // GPU-parse path (env override).
-  {
-    struct damacy_config cfg = mk_cfg(root, 1);
-    cfg.use_gpu_blosc_parse = 1;
-    struct damacy* d = NULL;
-    EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
-    size_t got = 0;
-    EXPECT(run_one(d, mk_sample(p, 0, 64, 0, 32), gpu_out, n_elems, &got) == 0);
-    EXPECT(got == n_elems);
-    damacy_destroy(d);
-  }
-
-  // Byte-equal: the two parse paths must produce identical assembled
-  // tensors. Mismatches isolate to one chunk via the row index.
-  for (size_t i = 0; i < n_elems; ++i)
-    EXPECT(host_out[i] == gpu_out[i]);
-
-  free(host_out);
-  free(gpu_out);
-  fixture_rm_tree(root);
-  return 0;
-}
-
-static int
-test_gpu_parse_parity_blosc_zstd(void)
-{
-  return run_gpu_host_parity("blosc-zstd");
-}
-
-static int
-test_gpu_parse_parity_zstd(void)
-{
-  return run_gpu_host_parity("zstd");
-}
-
-static int
-test_gpu_parse_parity_none(void)
-{
-  return run_gpu_host_parity("none");
-}
-
 // Probe whether the cuFile runtime is loadable + the driver opens on
 // this host. Tries to create a throwaway store with enable_gds=1;
 // success means libcufile.so.0 was found and cuFileDriverOpen returned
@@ -653,9 +577,8 @@ gds_runtime_available(void)
   return ok;
 }
 
-// A/B parity: same workload through host-staging + GPU parse vs
-// GDS + GPU parse. Skipped (logged + returns 0) when cuFile is
-// unavailable on this host.
+// Host-staging vs GDS through the GPU parse pipeline. Skipped (logged +
+// returns 0) when cuFile is unavailable on this host.
 static int
 test_gds_parity_blosc_zstd(void)
 {
@@ -678,10 +601,9 @@ test_gds_parity_blosc_zstd(void)
   float* gds_out = (float*)calloc(n_elems, sizeof(float));
   EXPECT(host_out && gds_out);
 
-  // Host-staging path (with gpu_parse for fair comparison).
+  // Host-staging path.
   {
     struct damacy_config cfg = mk_cfg(root, 1);
-    cfg.use_gpu_blosc_parse = 1;
     struct damacy* d = NULL;
     EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
     size_t got = 0;
@@ -693,7 +615,6 @@ test_gds_parity_blosc_zstd(void)
   // GDS path.
   {
     struct damacy_config cfg = mk_cfg(root, 1);
-    cfg.use_gpu_blosc_parse = 1;
     cfg.enable_gds = 1;
     struct damacy* d = NULL;
     EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
@@ -712,82 +633,6 @@ test_gds_parity_blosc_zstd(void)
   return 0;
 }
 
-// enable_gds without use_gpu_blosc_parse must fail at create with
-// DAMACY_INVAL. Skipped when GDS is unavailable (the error there is
-// the right one but for a different reason).
-static int
-test_gds_requires_gpu_parse(void)
-{
-  if (!gds_runtime_available()) {
-    log_info("test_gds_requires_gpu_parse: GDS unavailable; skip");
-    return 0;
-  }
-  char root[64];
-  EXPECT(mkdtemp_root(root, sizeof root) == 0);
-  struct damacy_config cfg = mk_cfg(root, 1);
-  cfg.enable_gds = 1; // missing use_gpu_blosc_parse
-  struct damacy* d = NULL;
-  enum damacy_status s = damacy_create(&cfg, &d);
-  EXPECT(s == DAMACY_INVAL);
-  EXPECT(d == NULL);
-  fixture_rm_tree(root);
-  return 0;
-}
-
-// Multi-block parity: 512 KB uint16 chunks → blosc auto-tunes to
-// blocksize=128 KB so nblocks=4. Exercises the kernel's per-block
-// warp ballot + atomicAdd path that the single-block tests can't reach.
-static int
-test_gpu_parse_parity_blosc_zstd_multiblock(void)
-{
-  char root[64];
-  EXPECT(mkdtemp_root(root, sizeof root) == 0);
-  char p[256];
-  snprintf(p, sizeof p, "%s/foo", root);
-  int64_t shape[2] = { 512, 1024 };
-  int64_t inner[2] = { 256, 1024 };
-  int64_t shard[2] = { 512, 1024 };
-  EXPECT(fixture_write_zarr_codec(
-           p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
-
-  const size_t n_elems = (size_t)shape[0] * (size_t)shape[1];
-  float* host_out = (float*)calloc(n_elems, sizeof(float));
-  float* gpu_out = (float*)calloc(n_elems, sizeof(float));
-  EXPECT(host_out && gpu_out);
-
-  {
-    struct damacy_config cfg = mk_cfg(root, 1);
-    cfg.max_chunk_uncompressed_bytes = 1ull << 20; // 1 MB allows 512 KB chunks
-    struct damacy* d = NULL;
-    EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
-    size_t got = 0;
-    EXPECT(run_one(d, mk_sample(p, 0, 512, 0, 1024), host_out, n_elems, &got) ==
-           0);
-    EXPECT(got == n_elems);
-    damacy_destroy(d);
-  }
-  {
-    struct damacy_config cfg = mk_cfg(root, 1);
-    cfg.max_chunk_uncompressed_bytes = 1ull << 20;
-    cfg.use_gpu_blosc_parse = 1;
-    struct damacy* d = NULL;
-    EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
-    size_t got = 0;
-    EXPECT(run_one(d, mk_sample(p, 0, 512, 0, 1024), gpu_out, n_elems, &got) ==
-           0);
-    EXPECT(got == n_elems);
-    damacy_destroy(d);
-  }
-
-  for (size_t i = 0; i < n_elems; ++i)
-    EXPECT(host_out[i] == gpu_out[i]);
-
-  free(host_out);
-  free(gpu_out);
-  fixture_rm_tree(root);
-  return 0;
-}
-
 int
 main(void)
 {
@@ -800,12 +645,7 @@ main(void)
   RUN(test_grow_inside_tight_budget);
   RUN(test_layout_probe_avoids_decoder_grow);
   RUN(test_batch_pool_rejected_at_inflated_committed);
-  RUN(test_gpu_parse_parity_blosc_zstd);
-  RUN(test_gpu_parse_parity_zstd);
-  RUN(test_gpu_parse_parity_none);
-  RUN(test_gpu_parse_parity_blosc_zstd_multiblock);
   RUN(test_gds_parity_blosc_zstd);
-  RUN(test_gds_requires_gpu_parse);
   log_info("all tests passed");
   return 0;
 }

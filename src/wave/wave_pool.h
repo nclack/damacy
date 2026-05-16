@@ -24,7 +24,6 @@ struct damacy_stats;
 struct decoder_zstd;
 struct gpu_budget;
 struct store;
-struct threadpool;
 
 struct wave_pool
 {
@@ -72,23 +71,15 @@ struct wave_pool
   // and never updated.
   struct damacy_batch_pool* pool;
   struct store* store;
-  struct threadpool* compute_pool;
   struct damacy_stats* stats;
   enum damacy_dtype dtype;
-
-  // Opt-in switch: when set, kick_h2d parses blosc1 chunk headers on
-  // device via blosc1_parse_kernel instead of on host via
-  // blosc1_host_parse. Set by damacy_create from
-  // cfg.use_gpu_blosc_parse or the DAMACY_GPU_BLOSC_PARSE env var.
-  uint8_t use_gpu_parse;
 
   // GDS opt-in: peel issues store_read_submit_dev into the slot's
   // device staging buffer; bind aliases wave->dev_compressed to it;
   // submit_bulk_h2d skips the H2D copy. Validated at damacy_create:
   // requires the store to support submit_dev (libcufile.so.0 loadable
-  // + cuFileDriverOpen succeeded) and requires use_gpu_parse (no host
-  // buffer to parse from). Set by wave_pool_init from the enable_gds
-  // parameter.
+  // + cuFileDriverOpen succeeded). Set by wave_pool_init from the
+  // enable_gds parameter.
   uint8_t use_gds;
 };
 
@@ -103,7 +94,6 @@ int
 wave_pool_init(struct wave_pool* wp,
                struct damacy_batch_pool* pool,
                struct store* store,
-               struct threadpool* compute_pool,
                struct damacy_stats* stats,
                enum damacy_dtype dtype,
                uint8_t host_buffer_waves,

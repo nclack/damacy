@@ -104,7 +104,7 @@ add_cuda_lib(host_slab SOURCES wave/host_slab.h wave/host_slab.c
 # Pinned-host + device SOA fanout used by the zstd decoder batch path.
 # Pure: no streams, no scheduler — alloc/free/upload/grow primitives.
 add_cuda_lib(fanout SOURCES wave/fanout.h wave/fanout.c
-    LINKS blosc1_host decoder gpu_budget log CUDA::cuda_driver
+    LINKS decoder gpu_budget log CUDA::cuda_driver
 )
 
 # GPU memory geometry for a wave: per-wave byte predictions, the
@@ -122,7 +122,7 @@ add_cuda_lib(wave_budget SOURCES wave/wave_budget.h wave/wave_budget.c
 # per-stage CUevents. No streams, no scheduler — that lives in
 # wave_pool.
 add_cuda_lib(wave SOURCES wave/wave.h wave/wave.c
-    LINKS decoder assemble blosc1_host fanout log CUDA::cuda_driver
+    LINKS decoder assemble fanout log CUDA::cuda_driver
 )
 
 # wave_pool: the conductor the scheduler drives. Owns both waves + the
@@ -132,8 +132,8 @@ add_cuda_lib(wave SOURCES wave/wave.h wave/wave.c
 # state machine.
 add_cuda_lib(wave_pool SOURCES wave/wave_pool.h wave/wave_pool.c
     LINKS wave host_slab fanout wave_budget gpu_budget batch_pool decoder
-          assemble planner blosc1_host store damacy_stats damacy_config
-          damacy_nvtx strbuf log CUDA::cuda_driver
+          assemble planner store damacy_stats damacy_config
+          damacy_nvtx log CUDA::cuda_driver
 )
 
 # Read-side store. store_fs_gds.c dlopen's libcufile at runtime; we
@@ -154,8 +154,8 @@ add_src_lib(zarr SOURCES zarr/zarr_metadata.h zarr/zarr_metadata.c
 )
 
 # Per-array blosc1 chunk-layout probe (16-byte header read via store).
-# Used by the planner to pre-size decoder/fanout caps and to assert
-# layout uniformity in the host parser.
+# Used by the planner to pre-size decoder/fanout caps and to feed the
+# GPU parse kernels their per-chunk blocksize / nblocks / shuffle bits.
 add_src_lib(zarr_chunk_layout SOURCES zarr/zarr_chunk_layout.h zarr/zarr_chunk_layout.c
     LINKS zarr store log
 )
@@ -190,14 +190,6 @@ add_cuda_lib(decoder
           planner assemble zarr_chunk_layout
 )
 
-# Host-side blosc1 chunk-header parse. Pure C; no CUDA. Consumes the
-# struct definitions in decoder/blosc1.h (unmodified) and writes into
-# pinned-host fanout / op arrays the caller subsequently H2D's.
-add_src_lib(blosc1_host
-    SOURCES decoder/blosc1_host.h decoder/blosc1_host.c
-    LINKS threadpool zarr log
-)
-
 # Bytewise gather kernel: chunk windows → output batch tensor.
 # CUDA::cudart_static for the runtime-API hooks the `<<<...>>>` syntax
 # lowers to; CUDA::cuda_driver for CUstream / CUdeviceptr at the
@@ -212,7 +204,7 @@ add_cuda_lib(assemble SOURCES assemble/assemble.h assemble/assemble.cu
 # launch in assemble.cu).
 add_cuda_lib(damacy SOURCES damacy.h damacy.c damacy_status.c
     LINKS platform planner zarr_meta_cache zarr_shard_cache zarr store
-          decoder blosc1_host assemble dtype log lookahead gpu_budget
+          decoder assemble dtype log lookahead gpu_budget
           batch_pool wave_pool wave_budget damacy_stats damacy_config
-          damacy_nvtx strbuf threadpool scheduler CUDA::cuda_driver
+          damacy_nvtx strbuf scheduler CUDA::cuda_driver
 )

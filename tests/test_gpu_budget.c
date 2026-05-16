@@ -27,7 +27,6 @@ mk_cfg(uint32_t chunk_cap)
     .max_chunk_uncompressed_bytes = chunk_cap,
     .max_gpu_memory_bytes = 0,
     .device = -1,
-    .n_compute_threads = 0,
   };
 }
 

@@ -10,12 +10,10 @@
 #pragma once
 
 #include "assemble/assemble.h"
-#include "damacy.h"
-#include "damacy_limits.h"
 #include "decoder/blosc1.h"
-#include "decoder/blosc1_host.h"
 #include "decoder/blosc1_parse.h"
 #include "decoder/decoder_memcpy.h"
+#include "wave/fanout.h" // struct nvcomp_fanout_host
 
 #include <cuda.h>
 #include <stdint.h>
@@ -36,9 +34,8 @@ struct damacy_wave
   // cleared when bulk_h2d_end fires and the slot returns to the pool.
   int8_t bound_slot;
   // Copied from the bound slot at bind. The first three are read by
-  // build_blosc1_host_chunks / kick_h2d / finalize / log paths; the
-  // host_slab pointer aliases the slot's pinned buffer for the lifetime
-  // of the bulk H2D.
+  // kick_h2d / finalize / log paths; the host_slab pointer aliases the
+  // slot's pinned buffer for the lifetime of the bulk H2D.
   uint16_t batch_pool_slot;
   uint32_t batch_chunk_offset;
   uint32_t n_chunks;
@@ -57,27 +54,17 @@ struct damacy_wave
   void* dev_decompressed; // decode arena
   uint64_t dev_decompressed_cap;
 
-  // blosc1 host-parse state (all pinned). parse fills these; the fanout
-  // / op records H2D onto stream_h2d for codec + post-decode stages on
-  // stream_decode.
-  struct blosc1_host_chunk* h_chunks;
-  struct blosc1_host_scratch scratch;
-  struct blosc1_host_fanout h_zstd_fan;
-  struct gpu_memcpy_op* h_memcpy_ops;
-  struct blosc1_totals* h_blosc1_totals;
-
-  // GPU-parse path: per-wave input + counter buffers. h_parse_chunks is
-  // pinned host (cap DAMACY_MAX_CHUNKS_PER_WAVE); d_parse_chunks is the
-  // device mirror H2D'd alongside the bulk slab. d_n_zstd / d_n_memcpy
-  // are device counters initialized to the host-emitted slot counts;
-  // the kernels atomicAdd on top. The 12-byte (n_zstd, n_memcpy,
-  // parse_err) result lands in h_parse_counters via D2H before h2d_end
-  // fires.
+  // GPU parse inputs + counter buffers. h_parse_chunks is pinned host
+  // (cap DAMACY_MAX_CHUNKS_PER_WAVE); d_parse_chunks is the device mirror
+  // H2D'd alongside the bulk slab. d_n_zstd / d_n_memcpy are device
+  // counters seeded with the host-emitted slot counts; the kernels
+  // atomicAdd on top. The 12-byte (n_zstd, n_memcpy, parse_err) result
+  // lands in h_parse_counters via D2H before h2d_end fires.
   //
   // h_blosc_chunk_indices / d_block_chunk_map are inputs to the two
   // parse kernels; built by build_gpu_parse_chunks. d_is_memcpyed is a
   // per-chunk bitset Kernel A sets and Kernel B reads. n_blosc_zstd_*
-  // and n_host_* are transient per-wave counts owned by the GPU-parse
+  // and n_host_* are transient per-wave counts owned by the GPU parse
   // path (live for the duration of one kick_h2d).
   struct gpu_parse_chunk* h_parse_chunks;
   struct gpu_parse_chunk* d_parse_chunks;
@@ -95,8 +82,15 @@ struct damacy_wave
   uint32_t* d_parse_err;
   uint32_t* h_parse_counters; // [n_zstd, n_memcpy, parse_err]
 
+  // Host-pre-filled SOA prefix for the zstd fanout (whole-chunk ZSTD
+  // entries), uploaded to zstd_fan before Kernel B atomic-adds per-
+  // block entries on top.
+  struct nvcomp_fanout_host h_zstd_fan;
+  struct gpu_memcpy_op* h_memcpy_ops;
+
   // status_reduce atomicAdds into n_codec_errors; finalize_wave reads.
   struct blosc1_totals* d_blosc1_totals;
+  struct blosc1_totals* h_blosc1_totals;
 
   // Device SOA mirror of the host fanout (H2D'd in kick_h2d).
   struct nvcomp_fanout zstd_fan;
@@ -108,8 +102,6 @@ struct damacy_wave
   uint32_t fanout_cap;
 
   struct gpu_memcpy_op* d_memcpy_ops;
-
-  float parse_ms; // host wall-clock around blosc1_host_parse
 
   // Assemble per-wave-chunk metadata (host + device). One record per
   // chunk: arena offset + (sample_idx, chunk_d). Per-sample constants

@@ -1,5 +1,30 @@
 # dev log
 
+## 2026-05-15
+
+I've been using a more github based workflow, so not using this doc as much.
+
+Working on GDS and gpu-based blosc parsing.
+
+GDS _requires_ gpu-based blosc parsing. So I'm doing them together.
+
+Re blosc header parsing, I realized (a) all the chunks headers are the same
+for the most part and (b) with blosc-zstd there are some some assumptions we
+can make - I think it's basically just 1 substream.
+
+- [x] sanity check the parsing kernel
+
+Ritvik saw some large variance in latencies over NFS. Should take a look at
+being robust to that.
+
+- [ ] chunk coalescing.
+
+Found a better design for the parsing kernel. Adding that now.
+
+- [~] remove the cpu parsing once it looks like gpu is better.
+
+decompress and assemble are not overlapping
+      
 ## 2026-05-08
 
 Making the python interface nicer. Adding typing, linting and formatting w
@@ -27,7 +52,7 @@ hackathon projects wrt zarr on DALI. Should look at that.
 Ran `try-nvcomp` on this machine, and I get 42 GB/s, so we've got lots of
 headroom on this machine.
 
-- [ ] get blosc chunk header parsing on to the cpu
+- [x] get blosc chunk header parsing on to the cpu
 
 cleanup
 
@@ -37,14 +62,14 @@ cleanup
 
 continuing on blosc
 
-- [ ] performance pass on blosc kernels
+- [x] performance pass on blosc kernels
 - [x] benchmark scenarios - all blosc + mixed
-- [ ] evaluated eliminating the d2h after parsing the blosc headers
+- [x] evaluated eliminating the d2h after parsing the blosc headers
 - [x] test mixed codec sources
 
 looks pretty slow - or is it?
 
-- [ ] review all the limits - aggregate to a private header.
+- [x] review all the limits - aggregate to a private header.
 
 blosc chunk headers are parsed on gpu but that is probably a mistake. Just
 parse on cpu w a threadpool avoids the d2h, error handling better.
@@ -72,7 +97,7 @@ Goal for today would be to actually try this out on the cluster. Will also
 start on the python interface. It would be nice to get this into a state
 where I can hand it off.
 
-- [ ] zarr_metadata.c - separate parsing and validation
+- [x] zarr_metadata.c - separate parsing and validation
 
 ## 2026-05-04
 
@@ -91,7 +116,7 @@ the base scenario. I'd like 256kB chunks before compression. 3d zarrs with at
 least 4 shards each, maybe 512x512x512 each. sample random in bounds aabb. For
 building the batches, I want each "Sample" to be 64x64x64. Batch of about 1 GB.
 
-- [ ] deal with the "max chunks per batch" - wrong parameterization
+- [x] deal with the "max chunks per batch" - wrong parameterization
 - [x] review/reduce comments
 
 Need to speed up a`assemble.cu`.

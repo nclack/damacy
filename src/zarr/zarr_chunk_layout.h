@@ -1,8 +1,8 @@
 // Per-array blosc1 chunk layout, probed once from the first 16 bytes of
 // any non-fill chunk. Lets the planner and wave pool size their
 // decoder/fanout caps to exactly what the array needs (no first-wave
-// grow event) and gives the host parser a uniform-layout invariant to
-// assert per chunk.
+// grow event) and feeds blocksize / nblocks / shuffle into the GPU parse
+// kernels via sample_plan.layout.
 //
 // Probing is best-effort: failures leave the caller on the existing
 // observe-and-grow path with the initial-floor caps.

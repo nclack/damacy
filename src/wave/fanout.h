@@ -4,15 +4,24 @@
 // substream count outpaces the current cap.
 #pragma once
 
-#include "damacy.h"              // enum damacy_status
-#include "decoder/blosc1.h"      // struct nvcomp_fanout
-#include "decoder/blosc1_host.h" // struct blosc1_host_fanout
+#include "damacy.h"         // enum damacy_status
+#include "decoder/blosc1.h" // struct nvcomp_fanout
 
 #include <cuda.h>
 #include <stddef.h>
 #include <stdint.h>
 
 struct gpu_budget;
+
+// Host-resident mirror of nvcomp_fanout. Pointer slots hold device
+// addresses; fanout_upload pushes the four arrays to the device SOA.
+struct nvcomp_fanout_host
+{
+  const void** comp_ptrs;
+  size_t* comp_sizes;
+  void** decomp_ptrs;
+  size_t* decomp_buf_sizes;
+};
 
 // Next power of 2 ≥ v, with a floor of 1. SIZE_MAX wraps to 0; callers
 // bound `v` against a real ceiling before calling. Used by fanout_grow
@@ -26,7 +35,7 @@ fanout_next_pow2(size_t v);
 // and `d` being zero-initialized by the caller; the matching
 // fanout_free walks each pointer NULL-safely.
 int
-fanout_alloc_pinned(struct blosc1_host_fanout* h,
+fanout_alloc_pinned(struct nvcomp_fanout_host* h,
                     struct nvcomp_fanout* d,
                     size_t n);
 
@@ -34,13 +43,13 @@ fanout_alloc_pinned(struct blosc1_host_fanout* h,
 // allocated, zero the SOA structs so they're safe to re-allocate into.
 // NULL-safe per pointer.
 void
-fanout_free_pinned(struct blosc1_host_fanout* h, struct nvcomp_fanout* d);
+fanout_free_pinned(struct nvcomp_fanout_host* h, struct nvcomp_fanout* d);
 
 // H2D the 4 SOA arrays in lockstep onto `s`.
 enum damacy_status
 fanout_upload(CUstream s,
               const struct nvcomp_fanout* d,
-              const struct blosc1_host_fanout* h,
+              const struct nvcomp_fanout_host* h,
               size_t n);
 
 // Grow the fanout SOA pair to fit `need` substreams. *cap is the
@@ -58,7 +67,7 @@ fanout_upload(CUstream s,
 // that wave is between bind and kick_h2d's fanout_upload, so the
 // other wave's stream_h2d work is independent.
 enum damacy_status
-fanout_grow(struct blosc1_host_fanout* h,
+fanout_grow(struct nvcomp_fanout_host* h,
             struct nvcomp_fanout* d,
             uint32_t* cap,
             size_t need,

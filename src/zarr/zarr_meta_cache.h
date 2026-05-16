@@ -53,8 +53,8 @@ extern "C"
     const char* uri);
 
   // Records a probed layout against the meta entry for `uri`. No-op if
-  // a layout has already been set (the first probe wins; uniformity is
-  // asserted per-chunk by the host parser). Returns 0 on success.
+  // a layout has already been set (the first probe wins). Returns 0 on
+  // success.
   int zarr_meta_cache_layout_set(struct zarr_meta_cache* c,
                                  const char* uri,
                                  const struct chunk_layout* layout);

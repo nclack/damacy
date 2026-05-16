@@ -15,7 +15,6 @@
 #include "store/store_fs_gds.h" // store_fs_gds_set_stream (GDS-only)
 #include "util/cuda_check.h"
 #include "util/prelude.h"
-#include "util/strbuf.h"
 #include "wave_budget.h"
 #include "zarr/zarr_metadata.h" // CODEC_*
 
@@ -46,7 +45,6 @@ int
 wave_pool_init(struct wave_pool* wp,
                struct damacy_batch_pool* pool,
                struct store* store,
-               struct threadpool* compute_pool,
                struct damacy_stats* stats,
                enum damacy_dtype dtype,
                uint8_t host_buffer_waves,
@@ -59,7 +57,6 @@ wave_pool_init(struct wave_pool* wp,
   memset(wp, 0, sizeof(*wp));
   wp->pool = pool;
   wp->store = store;
-  wp->compute_pool = compute_pool;
   wp->stats = stats;
   wp->dtype = dtype;
   wp->budget = budget;
@@ -153,7 +150,6 @@ wave_pool_destroy(struct wave_pool* wp, int cuda_skip)
   // Borrowed pointers — owner frees them.
   wp->pool = NULL;
   wp->store = NULL;
-  wp->compute_pool = NULL;
   wp->stats = NULL;
 }
 
@@ -180,16 +176,17 @@ any_slot_free(const struct wave_pool* wp)
 
 // --- peel / advance -------------------------------------------------------
 
-// Precondition for the GPU-parse path: every BLOSC_ZSTD chunk in the
-// wave must have a probed per-sample layout with dont_split set. Kernel B
+// Precondition for the GPU parse: every BLOSC_ZSTD chunk in the wave
+// must have a probed per-sample layout with dont_split set. Kernel B
 // reads layout.blocksize / layout.nblocks per chunk; without a probed
 // layout we don't know nblocks ahead of launch, and dont_split=0 lets
 // blosc emit multiple substreams per block (out of scope for the
-// per-block fan-out kernel). FILL / NONE / ZSTD chunks never touch the
-// layout, so they're trivially eligible.
+// per-block fan-out kernel). dont_split is always 1 for blosc1-zstd in
+// practice; layout_probed is set on the first non-fill emit for any
+// sample touching the array. Anything that trips this check is a
+// malformed input and surfaces as DAMACY_DECODE.
 static int
-wave_can_use_gpu_parse(const struct wave_pool* wp,
-                       const struct damacy_wave* wave)
+wave_chunks_eligible(const struct wave_pool* wp, const struct damacy_wave* wave)
 {
   struct damacy_batch_slot* slot = &wp->pool->slots[wave->batch_pool_slot];
   for (uint32_t i = 0; i < wave->n_chunks; ++i) {
@@ -289,59 +286,6 @@ build_gpu_parse_chunks(const struct wave_pool* wp, struct damacy_wave* wave)
   wave->n_blosc_zstd_blocks = n_blosc_blocks;
 }
 
-// host_slab and dev_compressed share offsets because kick_h2d copies
-// the slab byte-for-byte.
-static void
-build_blosc1_host_chunks(const struct wave_pool* wp, struct damacy_wave* wave)
-{
-  struct damacy_batch_slot* slot = &wp->pool->slots[wave->batch_pool_slot];
-  for (uint32_t i = 0; i < wave->n_chunks; ++i) {
-    struct chunk_plan* c = &slot->chunk_plans[wave->batch_chunk_offset + i];
-    struct read_op* r = &slot->read_ops[wave->batch_chunk_offset + i];
-    const struct sample_plan* sp = &slot->sample_plans[c->sample_idx_in_batch];
-    struct blosc1_host_chunk* hc = &wave->h_chunks[i];
-    size_t base_off = (size_t)r->dst_buf_offset + (size_t)c->offset_in_read;
-    hc->h_compressed = (const uint8_t*)wave->host_slab + base_off;
-    hc->d_compressed = (uint8_t*)wave->dev_compressed + base_off;
-    hc->d_decompressed =
-      (uint8_t*)wave->dev_decompressed + c->dev_decompressed_offset;
-    hc->compressed_nbytes = c->compressed_nbytes;
-    hc->decompressed_nbytes = c->decompressed_nbytes;
-    hc->codec_id = c->codec_id;
-    hc->layout = sp->layout_probed ? &sp->layout : NULL;
-  }
-}
-
-// One log line per failing chunk (blosc1_host logs only the count).
-static void
-log_blosc1_parse_errors(const struct wave_pool* wp, struct damacy_wave* wave)
-{
-  struct damacy_batch_slot* slot = &wp->pool->slots[wave->batch_pool_slot];
-  struct strbuf coords = { 0 };
-  for (uint32_t i = 0; i < wave->n_chunks; ++i) {
-    const struct blosc1_chunk_hdr* h = &wave->scratch.hdrs[i];
-    if (h->err == 0)
-      continue;
-    const struct chunk_plan* c =
-      &slot->chunk_plans[wave->batch_chunk_offset + i];
-    const struct sample_plan* sp = &slot->sample_plans[c->sample_idx_in_batch];
-    strbuf_reset(&coords);
-    strbuf_append_cstr(&coords, "[");
-    for (uint8_t d = 0; d < sp->rank; ++d)
-      strbuf_appendf(&coords, d == 0 ? "%u" : ",%u", c->chunk_d[d]);
-    strbuf_append_cstr(&coords, "]");
-    log_error("blosc1: parse failed: batch_id=%llu sample=%u chunk_d=%s "
-              "codec_id=%u err=%u (%s)",
-              (unsigned long long)slot->batch_id,
-              (unsigned)c->sample_idx_in_batch,
-              strbuf_cstr(&coords),
-              (unsigned)c->codec_id,
-              (unsigned)h->err,
-              blosc1_host_parse_err_str(h->err));
-  }
-  strbuf_free(&coords);
-}
-
 // IO already retired into io_t_end_ns by the caller. Push io timing into
 // stats.io so failure paths don't bias the rolling totals.
 static void
@@ -434,33 +378,7 @@ prepare_decode_caps(struct wave_pool* wp, struct damacy_wave* wave)
                               need_zsubs);
 }
 
-// Phase 3: parse blosc1 headers on the host while the bulk slab DMA is
-// in flight. Populates fanout / memcpy_ops / assemble_chunks / totals.
-static enum damacy_status
-host_parse(struct wave_pool* wp, struct damacy_wave* wave)
-{
-  damacy_nvtx_range_push("host_parse");
-  uint64_t parse_t0 = monotonic_ns();
-  int rc = blosc1_host_parse(&(struct blosc1_host_parse_args){
-    .pool = wp->compute_pool,
-    .chunks = wave->h_chunks,
-    .n_chunks = wave->n_chunks,
-    .scratch = wave->scratch,
-    .zstd = wave->h_zstd_fan,
-    .memcpy_ops = wave->h_memcpy_ops,
-    .assemble_chunks = wave->h_assemble_chunks,
-    .out_totals = wave->h_blosc1_totals,
-  });
-  wave->parse_ms = (float)((monotonic_ns() - parse_t0) / 1.0e6);
-  damacy_nvtx_range_pop(); // host_parse
-  if (rc) {
-    log_blosc1_parse_errors(wp, wave);
-    return DAMACY_DECODE;
-  }
-  return DAMACY_OK;
-}
-
-// GPU-parse path: upload inputs (parse_chunks, assemble_chunks,
+// GPU parse: upload inputs (parse_chunks, assemble_chunks,
 // per-codec indirection tables, host-emitted SOA prefixes), seed device
 // counters from the host-emitted counts (the kernels atomicAdd above),
 // clear the memcpyed bitset + parse_err + totals, launch the two parse
@@ -591,57 +509,8 @@ CudaFail:
   return DAMACY_CUDA;
 }
 
-// Phase 4: H2D the fanout SOA + memcpy_ops + assemble_chunks, zero
-// d_blosc1_totals, then record h2d_end. stream_decode gates on h2d_end
-// before nvcomp launch.
-static enum damacy_status
-upload_decode_meta(struct wave_pool* wp, struct damacy_wave* wave)
-{
-  damacy_nvtx_range_push("fanout_h2d");
-  const struct blosc1_totals* tot = wave->h_blosc1_totals;
-  if (tot->n_zstd > 0 && fanout_upload(wp->stream_h2d,
-                                       &wave->zstd_fan,
-                                       &wave->h_zstd_fan,
-                                       (size_t)tot->n_zstd) != DAMACY_OK)
-    goto CudaFail;
-  if (tot->n_memcpy > 0)
-    CU(CudaFail,
-       cuMemcpyHtoDAsync(CUDPTR(wave->d_memcpy_ops),
-                         wave->h_memcpy_ops,
-                         (size_t)tot->n_memcpy * sizeof(struct gpu_memcpy_op),
-                         wp->stream_h2d));
-
-  // Assemble metadata: pinned host buffer was built in peel_wave; pushing
-  // the H2D here folds it into h2d_end's gating so stream_decode sees it
-  // ready before assemble_launch (which itself queues after the decode
-  // kernels). Overlaps with the bulk slab H2D + nvcomp decode on the
-  // device.
-  CU(CudaFail,
-     cuMemcpyHtoDAsync(CUDPTR(wave->d_assemble_chunks),
-                       wave->h_assemble_chunks,
-                       (size_t)wave->n_chunks * sizeof(struct assemble_chunk),
-                       wp->stream_h2d));
-
-  // Zero so status_reduce's atomicAdds land in a clean n_codec_errors.
-  CU(CudaFail,
-     cuMemsetD8Async(CUDPTR(wave->d_blosc1_totals),
-                     0,
-                     sizeof(struct blosc1_totals),
-                     wp->stream_h2d));
-
-  CU(CudaFail, cuEventRecord(wave->ev.h2d_end, wp->stream_h2d));
-  damacy_nvtx_range_pop(); // fanout_h2d
-  return DAMACY_OK;
-CudaFail:
-  // h2d_end intentionally not recorded: kick_h2d returns DAMACY_CUDA so
-  // the wave never reaches WAVE_H2D polling, finalize_wave never runs,
-  // and drain_wave_metrics never reads h2d_end.
-  damacy_nvtx_range_pop(); // fanout_h2d
-  return DAMACY_CUDA;
-}
-
-// Bulk H2D, host parse overlapping the DMA, fanout/op H2Ds, then
-// h2d_end. stream_decode gates on h2d_end before nvcomp launch.
+// Bulk H2D, GPU parse on stream_h2d, then h2d_end. stream_decode gates
+// on h2d_end before nvcomp launch.
 static enum damacy_status
 kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
 {
@@ -661,32 +530,17 @@ kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
   if (s != DAMACY_OK)
     goto Error;
 
-  int use_gpu_path = wp->use_gpu_parse && wave_can_use_gpu_parse(wp, wave);
-  if (use_gpu_path) {
-    build_gpu_parse_chunks(wp, wave);
-    needs_end_record = 0; // gpu_parse records h2d_end itself
-    s = gpu_parse(wp, wave);
-    if (s != DAMACY_OK)
-      goto Error;
-  } else {
-    // GPU path inapplicable (config off, or a BLOSC_ZSTD chunk lacks a
-    // probed/dont_split layout). Host parse needs the compressed bytes
-    // on host — only available on the host-staging path.
-    if (!wave->host_slab) {
-      log_error("blosc1: wave has chunks ineligible for GPU parse "
-                "and host parse is unavailable (GDS path)");
-      s = DAMACY_DECODE;
-      goto Error;
-    }
-    build_blosc1_host_chunks(wp, wave);
-    s = host_parse(wp, wave);
-    if (s != DAMACY_OK)
-      goto Error;
-    needs_end_record = 0; // upload_decode_meta records h2d_end itself
-    s = upload_decode_meta(wp, wave);
-    if (s != DAMACY_OK)
-      goto Error;
+  if (!wave_chunks_eligible(wp, wave)) {
+    log_error("blosc1: wave has a BLOSC_ZSTD chunk with unprobed layout "
+              "or dont_split=0; cannot parse on device");
+    s = DAMACY_DECODE;
+    goto Error;
   }
+  build_gpu_parse_chunks(wp, wave);
+  needs_end_record = 0; // gpu_parse records h2d_end itself
+  s = gpu_parse(wp, wave);
+  if (s != DAMACY_OK)
+    goto Error;
 
   wave->state = WAVE_H2D;
   damacy_nvtx_range_pop(); // kick_h2d
@@ -813,10 +667,6 @@ kick_assemble(struct wave_pool* wp,
   if (tot->n_memcpy > 0 &&
       decoder_memcpy_launch(s, wave->d_memcpy_ops, tot->n_memcpy))
     goto DecodeFail;
-  // (Bit)unshuffle is now folded into assemble_kernel via per-chunk
-  // shuffle_mode in assemble_chunk.
-  // Narrowed to the 4-byte n_codec_errors so the host parse's count
-  // fields in h_blosc1_totals stay intact for drain_wave_metrics.
   CU(CudaFail,
      cuMemcpyDtoHAsync(&wave->h_blosc1_totals->n_codec_errors,
                        CUDPTR(&wave->d_blosc1_totals->n_codec_errors),
@@ -856,25 +706,18 @@ kick_compute(struct wave_pool* wp, struct damacy_wave* wave)
 {
   CU(CudaFail, cuStreamWaitEvent(wp->stream_decode, wave->ev.h2d_end, 0));
 
-  struct blosc1_totals tot;
-  if (wp->use_gpu_parse) {
-    // h_parse_counters were D2H'd to pinned host on stream_h2d before
-    // h2d_end was recorded; cuEventQuery(h2d_end) returning CUDA_SUCCESS
-    // (the wave_pool_advance gate that called us) means this is safe
-    // to read without an explicit host sync.
-    tot.n_zstd = wave->h_parse_counters[0];
-    tot.n_memcpy = wave->h_parse_counters[1];
-    tot.n_unshuffle = 0;
-    tot.n_bitunshuffle = 0;
-    tot.n_parse_errors = wave->h_parse_counters[2];
-    tot.n_codec_errors = 0;
-    if (tot.n_parse_errors != 0) {
-      log_error("blosc1 gpu_parse: first parse err code=%u",
-                tot.n_parse_errors);
-      return DAMACY_DECODE;
-    }
-  } else {
-    tot = *wave->h_blosc1_totals;
+  // h_parse_counters were D2H'd to pinned host on stream_h2d before
+  // h2d_end was recorded; cuEventQuery(h2d_end) returning CUDA_SUCCESS
+  // (the wave_pool_advance gate that called us) means this is safe to
+  // read without an explicit host sync.
+  struct blosc1_totals tot = {
+    .n_zstd = wave->h_parse_counters[0],
+    .n_memcpy = wave->h_parse_counters[1],
+    .n_parse_errors = wave->h_parse_counters[2],
+  };
+  if (tot.n_parse_errors != 0) {
+    log_error("blosc1 gpu_parse: first parse err code=%u", tot.n_parse_errors);
+    return DAMACY_DECODE;
   }
   enum damacy_status st = kick_decode(wp, wave, &tot);
   if (st != DAMACY_OK)
@@ -911,7 +754,6 @@ drain_wave_metrics(const struct wave_pool* wp, struct damacy_wave* wave)
       cuEventElapsedTime(
         &ms, wave->prev_decode_anchor, wave->ev.decomp_start) == CUDA_SUCCESS)
     metric_record(&st->decode_gap, ms, 0, 0);
-  metric_record(&st->decompress_parse, wave->parse_ms, 0, 0);
   if (cuEventElapsedTime(&ms, wave->ev.asm_start, wave->ev.asm_end) ==
       CUDA_SUCCESS)
     metric_record(

@@ -48,7 +48,6 @@ validate_config(const struct damacy_config* cfg)
   CHECK_SILENT(Invalid, cfg->lookahead_batches >= 2);
   CHECK_SILENT(Invalid, cfg->n_io_threads > 0);
   CHECK_SILENT(Invalid, cfg->n_io_threads <= DAMACY_MAX_IO_THREADS);
-  CHECK_SILENT(Invalid, cfg->n_compute_threads <= DAMACY_MAX_COMPUTE_THREADS);
   CHECK_SILENT(Invalid,
                cfg->host_buffer_waves == 0 ||
                  (cfg->host_buffer_waves >= DAMACY_N_WAVES &&
@@ -104,17 +103,6 @@ resolve_host_buffer_waves(const struct damacy_config* cfg)
   if (v > DAMACY_MAX_HOST_BUFFER_WAVES)
     v = DAMACY_MAX_HOST_BUFFER_WAVES;
   return v;
-}
-
-uint8_t
-resolve_use_gpu_blosc_parse(const struct damacy_config* cfg)
-{
-  if (cfg && cfg->use_gpu_blosc_parse)
-    return 1;
-  const char* e = getenv("DAMACY_GPU_BLOSC_PARSE");
-  if (e && strcmp(e, "1") == 0)
-    return 1;
-  return 0;
 }
 
 uint8_t

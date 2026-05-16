@@ -37,28 +37,6 @@ wave_init(struct damacy_wave* wave,
 
   uint32_t cap = DAMACY_MAX_CHUNKS_PER_WAVE;
   CU(Error,
-     cuMemAllocHost((void**)&wave->h_chunks,
-                    (size_t)cap * sizeof(struct blosc1_host_chunk)));
-  CU(Error,
-     cuMemAllocHost((void**)&wave->scratch.hdrs,
-                    (size_t)cap * sizeof(struct blosc1_chunk_hdr)));
-  CU(Error,
-     cuMemAllocHost((void**)&wave->scratch.counts,
-                    (size_t)cap * sizeof(struct blosc1_chunk_counts)));
-  CU(Error,
-     cuMemAllocHost((void**)&wave->scratch.offsets,
-                    (size_t)cap * sizeof(struct blosc1_chunk_offsets)));
-  // Pure host scratch, but pinned for consistency with the rest of the
-  // scratch arrays. cap * MAX_BLOCKS uint32_t each (~64 KB at current caps).
-  CU(Error,
-     cuMemAllocHost((void**)&wave->scratch.bstarts,
-                    (size_t)cap * DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK *
-                      sizeof(uint32_t)));
-  CU(Error,
-     cuMemAllocHost((void**)&wave->scratch.block_ends,
-                    (size_t)cap * DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK *
-                      sizeof(uint32_t)));
-  CU(Error,
      cuMemAllocHost((void**)&wave->h_blosc1_totals,
                     sizeof(struct blosc1_totals)));
   CU(Error,
@@ -142,9 +120,6 @@ wave_destroy(struct damacy_wave* wave, int cuda_skip)
     return;
   if (!cuda_skip) {
     void* const host_ptrs[] = {
-      wave->h_chunks,          wave->scratch.hdrs,
-      wave->scratch.counts,    wave->scratch.offsets,
-      wave->scratch.bstarts,   wave->scratch.block_ends,
       wave->h_blosc1_totals,   wave->h_memcpy_ops,
       wave->h_assemble_chunks, wave->h_parse_chunks,
       wave->h_parse_counters,  wave->h_blosc_chunk_indices,

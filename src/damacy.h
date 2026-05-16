@@ -96,9 +96,6 @@ extern "C"
     uint32_t batch_size;        // samples per batch
     uint32_t lookahead_batches; // user-push queue depth (>= 2)
     uint32_t n_io_threads;
-    // Workers for host-side blosc1 chunk-header parsing. 0 = serial on
-    // the calling thread; total parallelism is n_compute_threads + 1.
-    uint32_t n_compute_threads;
 
     // LRU caps (FDs are cached per-key by the fs store; not bounded here).
     uint32_t n_zarrs_meta_cache;
@@ -164,20 +161,11 @@ extern "C"
     // range values fall back to no-op with a warning.
     int numa_node;
 
-    // Parse blosc1 chunk headers on device instead of on host. Wired
-    // behind a flag so the GPU-parse path can be A/B-tested against
-    // the host parser before GDS lands (which requires it). The
-    // DAMACY_GPU_BLOSC_PARSE=1 environment variable overrides this
-    // at damacy_create time when set; otherwise the field value wins.
-    int use_gpu_blosc_parse;
-
     // Read compressed chunk bytes directly into device memory via
     // NVIDIA GPUDirect Storage (cuFile), skipping the pinned-host
     // staging slab and the bulk H2D copy. libcufile is dlopen'd at
     // store init; if it isn't present on the host, or cuFileDriverOpen
-    // fails, damacy_create returns DAMACY_INVAL. Requires
-    // use_gpu_blosc_parse (or its env override) since there is no
-    // host-side compressed buffer to parse. The DAMACY_GDS_ENABLE=1
+    // fails, damacy_create returns DAMACY_INVAL. The DAMACY_GDS_ENABLE=1
     // environment variable overrides this at damacy_create time when set.
     int enable_gds;
   };
@@ -329,7 +317,6 @@ extern "C"
     // Stream_decode idle between consecutive waves' decode submissions.
     // Sums to the wave-boundary gap visible in nsys.
     struct damacy_metric decode_gap;
-    struct damacy_metric decompress_parse; // host wall around blosc1 parse
     struct damacy_metric assemble;
     // Time a host_slab_slot sat in SLOT_READY waiting for a WAVE_FREE
     // wave to bind to. Non-zero average → more host_buffer_waves slots
