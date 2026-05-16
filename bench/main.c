@@ -471,6 +471,10 @@ struct run_metrics
   double ttfb_ms; // first push -> first OK pop
   double wall_ms; // steady-state only (after warmup, after stats reset)
   double consumer_block_ms_total;
+  double consumer_push_ms_total; // time inside damacy_push between release and
+                                 // next OK pop
+  double consumer_pop_wait_ms_total; // time inside the final damacy_pop that
+                                     // returns OK
   uint64_t pushed;
   uint64_t popped;
   struct damacy_stats stats;
@@ -480,7 +484,9 @@ struct run_metrics
 // n_target_batches batches. When hold_ms > 0, sleeps after a successful
 // pop and before release to simulate the consumer holding the batch.
 // block_out accumulates wait time between releasing batch i-1 (or drive
-// entry) and popping batch i — the pipeline-stall signal.
+// entry) and popping batch i — the pipeline-stall signal. push_out and
+// pop_wait_out split that wait: time inside damacy_push (cumulative
+// across calls in the cycle) vs the final damacy_pop that returned OK.
 static int
 drive(struct damacy* d,
       const struct scenario* sc,
@@ -491,7 +497,9 @@ drive(struct damacy* d,
       uint64_t* pushed,
       uint64_t* popped,
       double* first_pop_t,
-      double* block_out)
+      double* block_out,
+      double* push_out,
+      double* pop_wait_out)
 {
   const uint32_t pool_cap = sc->batch_size * sc->lookahead_batches;
   const uint64_t samples_target =
@@ -507,6 +515,7 @@ drive(struct damacy* d,
   uint64_t pushed_local = 0;
   uint64_t popped_local = 0;
   double t_wait_start = now_seconds();
+  double push_acc_ms = 0.0;
   while (popped_local < n_target_batches) {
     if (pushed_local < samples_target) {
       if (cursor == in_pool) {
@@ -518,7 +527,9 @@ drive(struct damacy* d,
       }
       struct damacy_sample_slice slice = { .beg = pool + cursor,
                                            .end = pool + in_pool };
+      double tpush0 = now_seconds();
       struct damacy_push_result pr = damacy_push(d, slice);
+      push_acc_ms += (now_seconds() - tpush0) * 1e3;
       uint32_t consumed = (uint32_t)(pr.unconsumed.beg - slice.beg);
       cursor += consumed;
       pushed_local += consumed;
@@ -530,17 +541,23 @@ drive(struct damacy* d,
     }
 
     struct damacy_batch* b = NULL;
+    double tpop0 = now_seconds();
     enum damacy_status ps = damacy_pop(d, &b);
+    double tpop1 = now_seconds();
     if (ps == DAMACY_OK) {
-      double t_pop = now_seconds();
       if (first_pop_t && popped_local == 0)
-        *first_pop_t = t_pop;
+        *first_pop_t = tpop1;
       if (block_out)
-        *block_out += (t_pop - t_wait_start) * 1e3;
+        *block_out += (tpop1 - t_wait_start) * 1e3;
+      if (push_out)
+        *push_out += push_acc_ms;
+      if (pop_wait_out)
+        *pop_wait_out += (tpop1 - tpop0) * 1e3;
       ++popped_local;
       sleep_ms(hold_ms);
       damacy_release(d, b);
       t_wait_start = now_seconds();
+      push_acc_ms = 0.0;
     } else if (ps != DAMACY_AGAIN) {
       fprintf(stderr, "damacy_pop: %s\n", damacy_status_str(ps));
       free(pool);
@@ -611,6 +628,10 @@ emit_results(const struct scenario* sc, const struct run_metrics* rm, FILE* out)
   jw_float(&jw, rm->wall_ms);
   jw_key(&jw, "consumer_block");
   jw_float(&jw, rm->consumer_block_ms_total);
+  jw_key(&jw, "consumer_push");
+  jw_float(&jw, rm->consumer_push_ms_total);
+  jw_key(&jw, "consumer_pop_wait");
+  jw_float(&jw, rm->consumer_pop_wait_ms_total);
   jw_object_end(&jw);
 
   // Per-stage rows with a unit field.
@@ -826,6 +847,8 @@ main(int argc, char** argv)
               &rm.pushed,
               &rm.popped,
               &t_first_pop,
+              NULL,
+              NULL,
               NULL)) {
       damacy_destroy(d);
       uri_table_free(&uris);
@@ -861,7 +884,9 @@ main(int argc, char** argv)
               &pushed_steady,
               &popped_steady,
               &t_first_pop,
-              &rm.consumer_block_ms_total)) {
+              &rm.consumer_block_ms_total,
+              &rm.consumer_push_ms_total,
+              &rm.consumer_pop_wait_ms_total)) {
       damacy_destroy(d);
       uri_table_free(&uris);
       free(json_buf);
@@ -878,7 +903,9 @@ main(int argc, char** argv)
               &pushed_steady,
               &popped_steady,
               &t_first_pop_steady,
-              &rm.consumer_block_ms_total)) {
+              &rm.consumer_block_ms_total,
+              &rm.consumer_push_ms_total,
+              &rm.consumer_pop_wait_ms_total)) {
       damacy_destroy(d);
       uri_table_free(&uris);
       free(json_buf);

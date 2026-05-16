@@ -172,6 +172,10 @@ def _summary_table(r: Results) -> Table:
     tm = r.timings_ms
     d = r.derived
     hold_ms = r.scenario.consumer.hold_ms
+    n_batches = r.scenario.sampling.n_batches
+    block_per_batch = tm.consumer_block / n_batches if n_batches > 0 else 0.0
+    push_per_batch = tm.consumer_push / n_batches if n_batches > 0 else 0.0
+    pop_wait_per_batch = tm.consumer_pop_wait / n_batches if n_batches > 0 else 0.0
     rows = [
         ("init", _fmt_ms(tm.init) + " ms"),
         ("time_to_first_batch", _fmt_ms(tm.time_to_first_batch) + " ms"),
@@ -191,8 +195,16 @@ def _summary_table(r: Results) -> Table:
             else "[dim]0 (no backpressure sim)[/dim]",
         ),
         (
-            "consumer_block (total)",
-            f"{_fmt_ms(tm.consumer_block)} ms  [dim](wait for next batch)[/dim]",
+            "consumer_block/batch",
+            f"{_fmt_ms(block_per_batch)} ms  [dim](wait for next batch)[/dim]",
+        ),
+        (
+            "  push/batch",
+            f"{_fmt_ms(push_per_batch)} ms  [dim](inside damacy_push)[/dim]",
+        ),
+        (
+            "  pop_wait/batch",
+            f"{_fmt_ms(pop_wait_per_batch)} ms  [dim](inside damacy_pop)[/dim]",
         ),
         ("chunks/batch", f"{d.chunks_per_batch:.0f}"),
         ("chunks/wave", f"{d.chunks_per_wave:.0f}"),

@@ -116,6 +116,8 @@ class Timings(BaseModel):
     time_to_first_batch: float
     wall: float
     consumer_block: float = 0.0
+    consumer_push: float = 0.0
+    consumer_pop_wait: float = 0.0
 
 
 class Counters(BaseModel):
