@@ -78,6 +78,20 @@ wave_init(struct damacy_wave* wave,
                     (size_t)cap * sizeof(struct gpu_parse_chunk)));
   CU(Error, cuMemAlloc(&dptr, (size_t)cap * sizeof(struct gpu_parse_chunk)));
   wave->d_parse_chunks = (struct gpu_parse_chunk*)(uintptr_t)dptr;
+  CU(Error,
+     cuMemAllocHost((void**)&wave->h_blosc_chunk_indices,
+                    (size_t)cap * sizeof(uint32_t)));
+  CU(Error, cuMemAlloc(&dptr, (size_t)cap * sizeof(uint32_t)));
+  wave->d_blosc_chunk_indices = (uint32_t*)(uintptr_t)dptr;
+  CU(Error,
+     cuMemAllocHost((void**)&wave->h_block_chunk_map,
+                    DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE * sizeof(uint32_t)));
+  CU(Error,
+     cuMemAlloc(&dptr, DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE * sizeof(uint32_t)));
+  wave->d_block_chunk_map = (uint32_t*)(uintptr_t)dptr;
+  // Bitset: one bit per wave-local chunk index, rounded to uint32_t words.
+  CU(Error, cuMemAlloc(&dptr, (size_t)((cap + 31u) / 32u) * sizeof(uint32_t)));
+  wave->d_is_memcpyed = (uint32_t*)(uintptr_t)dptr;
   CU(Error, cuMemAlloc(&dptr, sizeof(uint32_t)));
   wave->d_n_zstd = (uint32_t*)(uintptr_t)dptr;
   CU(Error, cuMemAlloc(&dptr, sizeof(uint32_t)));
@@ -128,10 +142,13 @@ wave_destroy(struct damacy_wave* wave, int cuda_skip)
     return;
   if (!cuda_skip) {
     void* const host_ptrs[] = {
-      wave->h_chunks,        wave->scratch.hdrs,     wave->scratch.counts,
-      wave->scratch.offsets, wave->scratch.bstarts,  wave->scratch.block_ends,
-      wave->h_blosc1_totals, wave->h_memcpy_ops,     wave->h_assemble_chunks,
-      wave->h_parse_chunks,  wave->h_parse_counters,
+      wave->h_chunks,          wave->scratch.hdrs,
+      wave->scratch.counts,    wave->scratch.offsets,
+      wave->scratch.bstarts,   wave->scratch.block_ends,
+      wave->h_blosc1_totals,   wave->h_memcpy_ops,
+      wave->h_assemble_chunks, wave->h_parse_chunks,
+      wave->h_parse_counters,  wave->h_blosc_chunk_indices,
+      wave->h_block_chunk_map,
     };
     for (size_t i = 0; i < countof(host_ptrs); ++i)
       if (host_ptrs[i])
@@ -147,6 +164,9 @@ wave_destroy(struct damacy_wave* wave, int cuda_skip)
       wave->d_blosc1_totals,
       wave->d_memcpy_ops,
       wave->d_parse_chunks,
+      wave->d_blosc_chunk_indices,
+      wave->d_block_chunk_map,
+      wave->d_is_memcpyed,
       wave->d_n_zstd,
       wave->d_n_memcpy,
       wave->d_parse_err,

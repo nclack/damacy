@@ -180,27 +180,113 @@ any_slot_free(const struct wave_pool* wp)
 
 // --- peel / advance -------------------------------------------------------
 
-// Populate the device-side parse input SOA (pinned host buffer that
-// kick_h2d uploads). Mirrors build_blosc1_host_chunks but stores arena
-// byte-offsets rather than pointers — the parse kernel adds them to
-// d_compressed / d_decompressed base pointers on device.
+// Precondition for the GPU-parse path: every BLOSC_ZSTD chunk in the
+// wave must have a probed per-sample layout with dont_split set. Kernel B
+// reads layout.blocksize / layout.nblocks per chunk; without a probed
+// layout we don't know nblocks ahead of launch, and dont_split=0 lets
+// blosc emit multiple substreams per block (out of scope for the
+// per-block fan-out kernel). FILL / NONE / ZSTD chunks never touch the
+// layout, so they're trivially eligible.
+static int
+wave_can_use_gpu_parse(const struct wave_pool* wp,
+                       const struct damacy_wave* wave)
+{
+  struct damacy_batch_slot* slot = &wp->pool->slots[wave->batch_pool_slot];
+  for (uint32_t i = 0; i < wave->n_chunks; ++i) {
+    const struct chunk_plan* c =
+      &slot->chunk_plans[wave->batch_chunk_offset + i];
+    if (c->is_fill)
+      continue;
+    if (c->codec_id != (uint8_t)CODEC_BLOSC_ZSTD)
+      continue;
+    const struct sample_plan* sp = &slot->sample_plans[c->sample_idx_in_batch];
+    if (!sp->layout_probed)
+      return 0;
+    if (!sp->layout.dont_split)
+      return 0;
+  }
+  return 1;
+}
+
+// Build the per-wave parse inputs for the GPU path:
+//  - h_parse_chunks: arena-offset view of every chunk (kernel-resident).
+//  - h_assemble_chunks shuffle_* trio: defaulted to NONE for every chunk
+//    (Kernel A overrides for non-memcpyed BLOSC_ZSTD chunks).
+//  - h_memcpy_ops / h_zstd_fan prefixes: pre-emitted ops for CODEC_NONE
+//    and CODEC_ZSTD whole-chunk chunks. The kernel atomic-adds slots
+//    starting after these prefixes.
+//  - h_blosc_chunk_indices: list of wave-local indices of BLOSC_ZSTD
+//    chunks (input to Kernel A).
+//  - h_block_chunk_map: packed (chunk_idx<<16)|block_local_idx over
+//    every blosc block in every BLOSC_ZSTD chunk (input to Kernel B).
+//
+// Counts written to the wave: n_host_memcpy, n_host_zstd,
+// n_blosc_zstd_chunks, n_blosc_zstd_blocks.
 static void
 build_gpu_parse_chunks(const struct wave_pool* wp, struct damacy_wave* wave)
 {
   struct damacy_batch_slot* slot = &wp->pool->slots[wave->batch_pool_slot];
+  uint8_t* d_comp_base = (uint8_t*)wave->dev_compressed;
+  uint8_t* d_decomp_base = (uint8_t*)wave->dev_decompressed;
+  uint32_t n_host_memcpy = 0;
+  uint32_t n_host_zstd = 0;
+  uint32_t n_blosc_chunks = 0;
+  uint32_t n_blosc_blocks = 0;
+
   for (uint32_t i = 0; i < wave->n_chunks; ++i) {
     struct chunk_plan* c = &slot->chunk_plans[wave->batch_chunk_offset + i];
     struct read_op* r = &slot->read_ops[wave->batch_chunk_offset + i];
     struct gpu_parse_chunk* gc = &wave->h_parse_chunks[i];
-    gc->compressed_offset =
+    uint32_t comp_off =
       (uint32_t)(r->dst_buf_offset + (uint64_t)c->offset_in_read);
+    gc->compressed_offset = comp_off;
     gc->compressed_nbytes = c->compressed_nbytes;
     gc->decompressed_offset = c->dev_decompressed_offset;
     gc->decompressed_nbytes = c->decompressed_nbytes;
     gc->sample_idx_in_batch = c->sample_idx_in_batch;
     gc->codec_id = c->codec_id;
     gc->is_fill = c->is_fill;
+
+    struct assemble_chunk* a = &wave->h_assemble_chunks[i];
+    a->shuffle_mode = (uint8_t)ASSEMBLE_SHUFFLE_NONE;
+    a->shuffle_typesize = 0;
+    a->shuffle_blocksize = 0;
+
+    if (c->is_fill || c->codec_id == (uint8_t)CODEC_FILL)
+      continue;
+
+    if (c->codec_id == (uint8_t)CODEC_NONE) {
+      struct gpu_memcpy_op* op = &wave->h_memcpy_ops[n_host_memcpy++];
+      op->d_src = d_comp_base + comp_off;
+      op->d_dst = d_decomp_base + c->dev_decompressed_offset;
+      op->nbytes = c->decompressed_nbytes;
+      continue;
+    }
+
+    if (c->codec_id == (uint8_t)CODEC_ZSTD) {
+      wave->h_zstd_fan.comp_ptrs[n_host_zstd] = d_comp_base + comp_off;
+      wave->h_zstd_fan.comp_sizes[n_host_zstd] = c->compressed_nbytes;
+      wave->h_zstd_fan.decomp_ptrs[n_host_zstd] =
+        d_decomp_base + c->dev_decompressed_offset;
+      wave->h_zstd_fan.decomp_buf_sizes[n_host_zstd] = c->decompressed_nbytes;
+      n_host_zstd++;
+      continue;
+    }
+
+    // CODEC_BLOSC_ZSTD: defer to Kernel A (memcpyed flag) + Kernel B
+    // (per-block bstart/cb walk). nblocks is known per-sample from the
+    // probed layout; wave_can_use_gpu_parse asserted layout_probed.
+    const struct sample_plan* sp = &slot->sample_plans[c->sample_idx_in_batch];
+    uint32_t nblocks = sp->layout.nblocks;
+    wave->h_blosc_chunk_indices[n_blosc_chunks++] = i;
+    for (uint32_t b = 0; b < nblocks; ++b)
+      wave->h_block_chunk_map[n_blosc_blocks++] = (i << 16) | b;
   }
+
+  wave->n_host_memcpy = n_host_memcpy;
+  wave->n_host_zstd = n_host_zstd;
+  wave->n_blosc_zstd_chunks = n_blosc_chunks;
+  wave->n_blosc_zstd_blocks = n_blosc_blocks;
 }
 
 // host_slab and dev_compressed share offsets because kick_h2d copies
@@ -374,40 +460,82 @@ host_parse(struct wave_pool* wp, struct damacy_wave* wave)
   return DAMACY_OK;
 }
 
-// GPU-parse path: upload d_parse_chunks + d_assemble_chunks, zero
-// the device counters + d_blosc1_totals, launch the parse kernel, D2H
-// counters to the pinned host buffer, then record h2d_end. The kernel
-// writes the fanout / memcpy SOAs in place; the host reads
-// h_parse_counters in kick_compute (sequenced after h2d_end fires).
+// GPU-parse path: upload inputs (parse_chunks, assemble_chunks,
+// per-codec indirection tables, host-emitted SOA prefixes), seed device
+// counters from the host-emitted counts (the kernels atomicAdd above),
+// clear the memcpyed bitset + parse_err + totals, launch the two parse
+// kernels, D2H counters, record h2d_end. The kernels write into
+// d_memcpy_ops / zstd_fan / d_assemble_chunks in place; kick_compute
+// reads h_parse_counters after h2d_end fires.
 static enum damacy_status
 gpu_parse(struct wave_pool* wp, struct damacy_wave* wave)
 {
   damacy_nvtx_range_push("gpu_parse");
-  // Upload per-chunk parse inputs.
   CU(CudaFail,
      cuMemcpyHtoDAsync(CUDPTR(wave->d_parse_chunks),
                        wave->h_parse_chunks,
                        (size_t)wave->n_chunks * sizeof(struct gpu_parse_chunk),
                        wp->stream_h2d));
-  // Upload assemble_chunks (sample_idx / chunk_d / is_fill from
-  // build_assemble_meta). Kernel overwrites the shuffle fields in
-  // place; stream_h2d FIFO orders this H2D before the kernel.
+  // assemble_chunks: build_assemble_meta filled geometry; build_gpu_parse
+  // _chunks defaulted shuffle_* to NONE. Kernel A overrides for non-
+  // memcpyed BLOSC_ZSTD chunks.
   CU(CudaFail,
      cuMemcpyHtoDAsync(CUDPTR(wave->d_assemble_chunks),
                        wave->h_assemble_chunks,
                        (size_t)wave->n_chunks * sizeof(struct assemble_chunk),
                        wp->stream_h2d));
 
-  // Zero counters + parse_err scalar + d_blosc1_totals.
+  if (wave->n_blosc_zstd_chunks > 0)
+    CU(CudaFail,
+       cuMemcpyHtoDAsync(CUDPTR(wave->d_blosc_chunk_indices),
+                         wave->h_blosc_chunk_indices,
+                         (size_t)wave->n_blosc_zstd_chunks * sizeof(uint32_t),
+                         wp->stream_h2d));
+  if (wave->n_blosc_zstd_blocks > 0)
+    CU(CudaFail,
+       cuMemcpyHtoDAsync(CUDPTR(wave->d_block_chunk_map),
+                         wave->h_block_chunk_map,
+                         (size_t)wave->n_blosc_zstd_blocks * sizeof(uint32_t),
+                         wp->stream_h2d));
+
+  // Host-pre-filled SOA prefixes (FILL/NONE/ZSTD whole-chunk ops). The
+  // kernels' atomicAdd seeds skip past these slots.
+  if (wave->n_host_memcpy > 0)
+    CU(CudaFail,
+       cuMemcpyHtoDAsync(CUDPTR(wave->d_memcpy_ops),
+                         wave->h_memcpy_ops,
+                         (size_t)wave->n_host_memcpy *
+                           sizeof(struct gpu_memcpy_op),
+                         wp->stream_h2d));
+  if (wave->n_host_zstd > 0 && fanout_upload(wp->stream_h2d,
+                                             &wave->zstd_fan,
+                                             &wave->h_zstd_fan,
+                                             wave->n_host_zstd) != DAMACY_OK)
+    goto CudaFail;
+
+  // Seed counters with host-emitted counts so kernel atomicAdds claim
+  // slots after the prefix.
   CU(CudaFail,
-     cuMemsetD8Async(
-       CUDPTR(wave->d_n_zstd), 0, sizeof(uint32_t), wp->stream_h2d));
+     cuMemcpyHtoDAsync(CUDPTR(wave->d_n_zstd),
+                       &wave->n_host_zstd,
+                       sizeof(uint32_t),
+                       wp->stream_h2d));
   CU(CudaFail,
-     cuMemsetD8Async(
-       CUDPTR(wave->d_n_memcpy), 0, sizeof(uint32_t), wp->stream_h2d));
+     cuMemcpyHtoDAsync(CUDPTR(wave->d_n_memcpy),
+                       &wave->n_host_memcpy,
+                       sizeof(uint32_t),
+                       wp->stream_h2d));
   CU(CudaFail,
      cuMemsetD8Async(
        CUDPTR(wave->d_parse_err), 0, sizeof(uint32_t), wp->stream_h2d));
+  // Bitset: one bit per wave-local chunk_idx. Kernel A atomic-ors a 1 in
+  // for memcpyed chunks; Kernel B reads it and skips those chunks'
+  // blocks.
+  CU(CudaFail,
+     cuMemsetD8Async(CUDPTR(wave->d_is_memcpyed),
+                     0,
+                     (size_t)((wave->n_chunks + 31u) / 32u) * sizeof(uint32_t),
+                     wp->stream_h2d));
   CU(CudaFail,
      cuMemsetD8Async(CUDPTR(wave->d_blosc1_totals),
                      0,
@@ -420,7 +548,11 @@ gpu_parse(struct wave_pool* wp, struct damacy_wave* wave)
     .d_decompressed = (uint8_t*)wave->dev_decompressed,
     .d_chunks = wave->d_parse_chunks,
     .d_sample_plans = (const struct sample_plan*)slot->d_sample_plans,
-    .n_chunks = wave->n_chunks,
+    .d_blosc_chunk_indices = wave->d_blosc_chunk_indices,
+    .n_blosc_zstd_chunks = wave->n_blosc_zstd_chunks,
+    .d_block_chunk_map = wave->d_block_chunk_map,
+    .n_blosc_zstd_blocks = wave->n_blosc_zstd_blocks,
+    .d_is_memcpyed = wave->d_is_memcpyed,
     .zstd = wave->zstd_fan,
     .d_memcpy_ops = wave->d_memcpy_ops,
     .d_assemble_chunks = wave->d_assemble_chunks,
@@ -529,13 +661,23 @@ kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
   if (s != DAMACY_OK)
     goto Error;
 
-  if (wp->use_gpu_parse) {
+  int use_gpu_path = wp->use_gpu_parse && wave_can_use_gpu_parse(wp, wave);
+  if (use_gpu_path) {
     build_gpu_parse_chunks(wp, wave);
     needs_end_record = 0; // gpu_parse records h2d_end itself
     s = gpu_parse(wp, wave);
     if (s != DAMACY_OK)
       goto Error;
   } else {
+    // GPU path inapplicable (config off, or a BLOSC_ZSTD chunk lacks a
+    // probed/dont_split layout). Host parse needs the compressed bytes
+    // on host — only available on the host-staging path.
+    if (!wave->host_slab) {
+      log_error("blosc1: wave has chunks ineligible for GPU parse "
+                "and host parse is unavailable (GDS path)");
+      s = DAMACY_DECODE;
+      goto Error;
+    }
     build_blosc1_host_chunks(wp, wave);
     s = host_parse(wp, wave);
     if (s != DAMACY_OK)

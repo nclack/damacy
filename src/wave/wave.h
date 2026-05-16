@@ -69,12 +69,27 @@ struct damacy_wave
   // GPU-parse path: per-wave input + counter buffers. h_parse_chunks is
   // pinned host (cap DAMACY_MAX_CHUNKS_PER_WAVE); d_parse_chunks is the
   // device mirror H2D'd alongside the bulk slab. d_n_zstd / d_n_memcpy
-  // are device counters the kernel atomic-adds into; the 12-byte
-  // (n_zstd, n_memcpy, parse_err) result lands in h_parse_counters via
-  // D2H before h2d_end fires. NULL on waves that haven't been used on
-  // the GPU-parse path (allocated lazily on first use).
+  // are device counters initialized to the host-emitted slot counts;
+  // the kernels atomicAdd on top. The 12-byte (n_zstd, n_memcpy,
+  // parse_err) result lands in h_parse_counters via D2H before h2d_end
+  // fires.
+  //
+  // h_blosc_chunk_indices / d_block_chunk_map are inputs to the two
+  // parse kernels; built by build_gpu_parse_chunks. d_is_memcpyed is a
+  // per-chunk bitset Kernel A sets and Kernel B reads. n_blosc_zstd_*
+  // and n_host_* are transient per-wave counts owned by the GPU-parse
+  // path (live for the duration of one kick_h2d).
   struct gpu_parse_chunk* h_parse_chunks;
   struct gpu_parse_chunk* d_parse_chunks;
+  uint32_t* h_blosc_chunk_indices;
+  uint32_t* d_blosc_chunk_indices;
+  uint32_t* h_block_chunk_map;
+  uint32_t* d_block_chunk_map;
+  uint32_t* d_is_memcpyed;
+  uint32_t n_blosc_zstd_chunks;
+  uint32_t n_blosc_zstd_blocks;
+  uint32_t n_host_memcpy; // host-emitted memcpy ops (FILL/NONE/ZSTD pre-fill)
+  uint32_t n_host_zstd;   // host-emitted whole-chunk zstd entries
   uint32_t* d_n_zstd;
   uint32_t* d_n_memcpy;
   uint32_t* d_parse_err;

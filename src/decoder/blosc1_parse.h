@@ -1,12 +1,18 @@
-// GPU blosc1 chunk-header parse. Sibling of blosc1_host.* — replaces
-// the host parse + the H2D of fanout/memcpy_ops on the GPU-parse path.
-// Reads device-resident compressed bytes, walks each chunk's blosc1
-// header + bstarts + per-block 4B prefixes, and populates the existing
-// per-wave SOAs in place: d_zstd_fan, d_memcpy_ops, d_assemble_chunks.
+// GPU blosc1 chunk-header parse. Handles only what needs device-resident
+// bytes: the per-chunk memcpyed flag (varies per chunk) and the per-block
+// bstarts + 4B cb prefixes. FILL/NONE/ZSTD whole-chunk ops and the
+// array-invariant assemble shuffle fields are pre-filled on the host
+// from sample_plan.layout; the routing layer falls back to the host
+// parser if any BLOSC_ZSTD chunk's sample lacks a probed layout.
 //
-// Zstd-only by design (substreams-per-block ≡ 1, no chain walk). The
-// kernel handles CODEC_BLOSC_ZSTD, CODEC_ZSTD, CODEC_NONE, and
-// CODEC_FILL; mixed-codec waves are routed onto the host parse instead.
+// Two kernels run on the same stream:
+//   A (chunk_memcpyed_scan): one thread per BLOSC_ZSTD chunk. Reads the
+//     header flags, validates cbytes, emits a single memcpy op for
+//     memcpyed chunks, sets the d_is_memcpyed bitset and the chunk's
+//     assemble shuffle fields.
+//   B (block_fanout): one thread per blosc block across non-memcpyed
+//     BLOSC_ZSTD chunks. Walks bstart + cb prefix, classifies raw vs
+//     zstd, warp-aggregates slot reservations into the SOAs.
 #pragma once
 
 #include "decoder/blosc1.h"         // struct nvcomp_fanout
@@ -45,22 +51,39 @@ extern "C"
     uint8_t* d_decompressed;     // wave->dev_decompressed
     const struct gpu_parse_chunk* d_chunks;
     const struct sample_plan* d_sample_plans;
-    uint32_t n_chunks;
 
-    // Outputs (device-resident, sized for the wave's worst case).
+    // Subset of d_chunks that are BLOSC_ZSTD (indices into d_chunks).
+    const uint32_t* d_blosc_chunk_indices;
+    uint32_t n_blosc_zstd_chunks;
+
+    // Packed (chunk_idx << 16) | block_local_idx, length
+    // n_blosc_zstd_blocks. Built host-side from the per-sample
+    // layout.nblocks.
+    const uint32_t* d_block_chunk_map;
+    uint32_t n_blosc_zstd_blocks;
+
+    // Bitset cleared by caller before launch; Kernel A sets a bit for
+    // each chunk whose memcpyed flag is on. Kernel B reads it to skip
+    // those chunks' blocks. Sized for the wave's total chunk count.
+    uint32_t* d_is_memcpyed;
+
+    // Output SOAs (device-resident, sized for the wave's worst case).
+    // Counters must be pre-initialized by the caller to the count of
+    // already host-emitted slots (FILL/NONE/ZSTD whole-chunk ops); the
+    // kernels atomicAdd on top of that.
     struct nvcomp_fanout zstd;
     struct gpu_memcpy_op* d_memcpy_ops;
     struct assemble_chunk* d_assemble_chunks;
-    uint32_t* d_n_zstd;   // single-int counter, atomic-added
-    uint32_t* d_n_memcpy; // single-int counter, atomic-added
-    // Captures first parse error (1..) so the host can surface a clear
-    // DAMACY_DECODE. Atomic CAS-to-1, but only the FIRST chunk to fail
-    // writes anything meaningful; subsequent failures leave it as-is.
+    uint32_t* d_n_zstd;
+    uint32_t* d_n_memcpy;
+    // First parse error (1..). Codes emitted by these kernels: 4
+    // (cbytes mismatch), 9 (bstart range), 11 (cb overflow). Other
+    // historical codes are pre-empted by the host routing.
     uint32_t* d_parse_err;
   };
 
-  // One CUDA block per chunk; up to DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK
-  // threads per block. Returns 0 on launch success.
+  // Launches Kernel A then Kernel B on `stream`. No-op when
+  // n_blosc_zstd_chunks == 0. Returns 0 on launch success.
   int blosc1_parse_launch(CUstream stream,
                           const struct blosc1_parse_args* args);
 
