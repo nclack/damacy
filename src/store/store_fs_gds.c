@@ -34,12 +34,17 @@ typedef CUfileError_t (*pfn_cuFileReadAsync)(CUfileHandle_t,
 // the dlopen handle is leaked at process exit (mirrors src/numa/numa.c).
 static struct
 {
-  pfn_cuFileDriverOpen driver_open;
-  pfn_cuFileDriverClose driver_close;
-  pfn_cuFileHandleRegister handle_register;
-  pfn_cuFileHandleDeregister handle_deregister;
-  pfn_cuFileReadAsync read_async;
+  pfn_cuFileDriverOpen cuFileDriverOpen;
+  pfn_cuFileDriverClose cuFileDriverClose;
+  pfn_cuFileHandleRegister cuFileHandleRegister;
+  pfn_cuFileHandleDeregister cuFileHandleDeregister;
+  pfn_cuFileReadAsync cuFileReadAsync;
 } g_libcufile;
+
+// Field name MUST equal the symbol name; the stringified token is the
+// dlsym key. Compiles cleanly under -Wpedantic via the void** round-trip.
+#define DLSYM_BIND(handle, table, sym)                                         \
+  (*(void**)&(table).sym = dlsym((handle), #sym))
 
 static pthread_once_t g_libcufile_once = PTHREAD_ONCE_INIT;
 static int g_libcufile_ok;
@@ -55,17 +60,14 @@ libcufile_once_init(void)
       "loader path; GDS unavailable");
     return;
   }
-  g_libcufile.driver_open = (pfn_cuFileDriverOpen)dlsym(h, "cuFileDriverOpen");
-  g_libcufile.driver_close =
-    (pfn_cuFileDriverClose)dlsym(h, "cuFileDriverClose");
-  g_libcufile.handle_register =
-    (pfn_cuFileHandleRegister)dlsym(h, "cuFileHandleRegister");
-  g_libcufile.handle_deregister =
-    (pfn_cuFileHandleDeregister)dlsym(h, "cuFileHandleDeregister");
-  g_libcufile.read_async = (pfn_cuFileReadAsync)dlsym(h, "cuFileReadAsync");
-  if (!g_libcufile.driver_open || !g_libcufile.driver_close ||
-      !g_libcufile.handle_register || !g_libcufile.handle_deregister ||
-      !g_libcufile.read_async) {
+  DLSYM_BIND(h, g_libcufile, cuFileDriverOpen);
+  DLSYM_BIND(h, g_libcufile, cuFileDriverClose);
+  DLSYM_BIND(h, g_libcufile, cuFileHandleRegister);
+  DLSYM_BIND(h, g_libcufile, cuFileHandleDeregister);
+  DLSYM_BIND(h, g_libcufile, cuFileReadAsync);
+  if (!g_libcufile.cuFileDriverOpen || !g_libcufile.cuFileDriverClose ||
+      !g_libcufile.cuFileHandleRegister ||
+      !g_libcufile.cuFileHandleDeregister || !g_libcufile.cuFileReadAsync) {
     log_error("cuFile: missing required symbol in libcufile.so.0; GDS "
               "unavailable");
     dlclose(h);
@@ -98,7 +100,7 @@ fs_gds_get_handle_locked(struct store_fs* fs, const char* key)
       descr.type = CU_FILE_HANDLE_TYPE_OPAQUE_FD;
       descr.handle.fd = fd;
       CUfileHandle_t h = NULL;
-      CUfileError_t e = g_libcufile.handle_register(&h, &descr);
+      CUfileError_t e = g_libcufile.cuFileHandleRegister(&h, &descr);
       if (e.err != CU_FILE_SUCCESS) {
         log_error("cuFileHandleRegister(%s) failed: err=%d", key, (int)e.err);
         return NULL;
@@ -183,13 +185,13 @@ store_fs_gds_submit_dev(struct store* s,
     params[i].file_off = (off_t)reads[i].offset;
     params[i].buf_off = 0;
     params[i].bytes_read = 0;
-    CUfileError_t e = g_libcufile.read_async(h,
-                                             reads[i].dst,
-                                             &params[i].size,
-                                             &params[i].file_off,
-                                             &params[i].buf_off,
-                                             &params[i].bytes_read,
-                                             stream);
+    CUfileError_t e = g_libcufile.cuFileReadAsync(h,
+                                                  reads[i].dst,
+                                                  &params[i].size,
+                                                  &params[i].file_off,
+                                                  &params[i].buf_off,
+                                                  &params[i].bytes_read,
+                                                  stream);
     if (e.err != CU_FILE_SUCCESS) {
       log_error("cuFileReadAsync(%s,off=%llu,len=%zu) failed: err=%d",
                 reads[i].key,
@@ -236,7 +238,7 @@ store_fs_gds_init(struct store_fs* fs)
     return 1;
   if (!try_load_libcufile())
     return 1;
-  CUfileError_t e = g_libcufile.driver_open();
+  CUfileError_t e = g_libcufile.cuFileDriverOpen();
   if (e.err != CU_FILE_SUCCESS) {
     log_error("cuFileDriverOpen failed (err=%d); GDS unavailable", (int)e.err);
     return 1;
@@ -261,15 +263,16 @@ store_fs_gds_destroy(struct store_fs* fs)
   pthread_mutex_lock(&fs->cache_mu);
   for (size_t i = 0; i < fs->n_slots; ++i) {
     if (fs->slots[i].gds_handle) {
-      if (g_libcufile.handle_deregister)
-        g_libcufile.handle_deregister((CUfileHandle_t)fs->slots[i].gds_handle);
+      if (g_libcufile.cuFileHandleDeregister)
+        g_libcufile.cuFileHandleDeregister(
+          (CUfileHandle_t)fs->slots[i].gds_handle);
       fs->slots[i].gds_handle = NULL;
     }
   }
   pthread_mutex_unlock(&fs->cache_mu);
   if (fs->gds_driver_opened) {
-    if (g_libcufile.driver_close)
-      g_libcufile.driver_close();
+    if (g_libcufile.cuFileDriverClose)
+      g_libcufile.cuFileDriverClose();
     fs->gds_driver_opened = 0;
   }
 }
