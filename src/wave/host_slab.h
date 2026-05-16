@@ -5,10 +5,16 @@
 // stream_decode.
 //
 // Lifecycle:
-//   FREE  → peel writes bytes + submits IO → IO
-//   IO    → store_event_query succeeds     → READY
-//   READY → bind to a free wave            → BUSY
-//   BUSY  → bulk_h2d_end fires on stream_h2d → FREE
+//   FREE    → peel reserve packs chunks         → PEELING
+//   PEELING → peel commit records the io_event  → IO
+//   IO      → store_event_query succeeds        → READY
+//   READY   → bind to a free wave               → BUSY
+//   BUSY    → bulk_h2d_end fires on stream_h2d  → FREE
+//
+// PEELING is the window between phase 1 (chunks reserved, store_reads
+// built) and phase 3 (io_event committed) of the split peel API. The
+// async IO submit runs with scheduler_lock released, so PEELING marks
+// the slot as taken without yet being pollable for IO completion.
 #pragma once
 
 #include "store/store.h"
@@ -18,6 +24,7 @@
 enum slot_state
 {
   SLOT_FREE = 0,
+  SLOT_PEELING,
   SLOT_IO,
   SLOT_READY,
   SLOT_BUSY,

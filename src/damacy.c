@@ -289,12 +289,21 @@ kick_peel_into_free_slots(struct damacy* self)
       continue;
     }
 
-    enum damacy_status s =
-      wave_pool_peel(&self->wave_pool, (uint16_t)target_slot);
+    enum damacy_status err = DAMACY_OK;
+    struct wave_pool_peel_ticket t =
+      wave_pool_peel_reserve(&self->wave_pool, (uint16_t)target_slot, &err);
+    if (err != DAMACY_OK)
+      return err;
+    if (t.slot_idx < 0)
+      break;
+    damacy_nvtx_range_pushf("peel/slot%d", t.slot_idx);
+    scheduler_unlock(self->sched);
+    struct store_event ev = wave_pool_peel_submit(&self->wave_pool, t);
+    scheduler_lock(self->sched);
+    enum damacy_status s = wave_pool_peel_commit(&self->wave_pool, t, ev);
+    damacy_nvtx_range_pop();
     if (s != DAMACY_OK)
       return s;
-    // peel is a no-op if no host_slab_slot is free; bail to let
-    // wave_pool_advance drain a slot before retrying.
     if (!any_slot_free(&self->wave_pool))
       break;
   }
