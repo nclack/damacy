@@ -38,6 +38,11 @@
 // 8 GB-class GPU budget viable out of the box.
 #define DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES (512ull << 10) // 512 KB
 
+// Default cap on post-coalesce read_op size. Tunes request count vs
+// queue depth: bigger fuses more, smaller keeps more reads in flight.
+// 4 MB is a starting point; bench-tunable via cfg.max_read_op_bytes.
+#define DAMACY_DEFAULT_READ_OP_MAX_BYTES (4ull << 20) // 4 MB
+
 // Default for damacy_config.max_gpu_memory_bytes when the user leaves
 // it at 0. ~1 GB fits comfortably on consumer GPUs.
 #define DAMACY_DEFAULT_MAX_GPU_MEMORY_BYTES (1ull << 30) // 1 GB

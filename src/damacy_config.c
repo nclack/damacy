@@ -84,6 +84,15 @@ resolve_max_chunk_uncompressed(const struct damacy_config* cfg)
 }
 
 uint64_t
+resolve_max_read_op_bytes(const struct damacy_config* cfg)
+{
+  uint64_t v = cfg->max_read_op_bytes;
+  if (v == 0)
+    v = DAMACY_DEFAULT_READ_OP_MAX_BYTES;
+  return v;
+}
+
+uint64_t
 resolve_max_gpu_memory(const struct damacy_config* cfg)
 {
   uint64_t v = cfg->max_gpu_memory_bytes;

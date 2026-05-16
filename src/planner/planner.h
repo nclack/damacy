@@ -110,6 +110,11 @@ extern "C"
     // kernel's nblocks check, and surfaces sample.uri to the caller.
     // 0 means "no extra cap beyond DAMACY_MAX_CHUNK_BYTES".
     uint64_t max_chunk_uncompressed_bytes;
+    // Cap on the size of any post-coalesce read_op (bytes). Tunes the
+    // request-count vs queue-depth tradeoff: bigger = fewer IOs;
+    // smaller = more in-flight requests. 0 falls back to a built-in
+    // default.
+    uint64_t read_op_max_bytes;
   };
 
   struct planner;

@@ -176,7 +176,10 @@ add_src_lib(zarr_shard_cache SOURCES zarr/zarr_shard_cache.h zarr/zarr_shard_cac
 )
 
 # Planner: samples + cached metadata → page-aligned read_ops + chunk_plans.
-add_src_lib(planner SOURCES planner/planner.h planner/planner.c
+# coalesce: sort + fuse-with-cap step of the IO planning pipeline.
+add_src_lib(planner
+    SOURCES planner/planner.h planner/planner.c
+            planner/coalesce.h planner/coalesce.c
     LINKS zarr_meta_cache zarr_shard_cache zarr dtype platform strbuf log
 )
 

@@ -2,6 +2,7 @@
 
 #include "dtype/dtype.h"
 #include "log/log.h"
+#include "planner/coalesce.h"
 #include "util/prelude.h"
 #include "util/strbuf.h"
 #include "zarr/zarr_meta_cache.h"
@@ -125,112 +126,6 @@ static uint64_t
 align_up_u64(uint64_t value, uint64_t alignment)
 {
   return ((value + alignment - 1) / alignment) * alignment;
-}
-
-static int
-perm_lt(const struct read_op* ops, uint32_t a, uint32_t b)
-{
-  int cmp = strncmp(ops[a].shard_path, ops[b].shard_path, DAMACY_MAX_PATH);
-  if (cmp != 0)
-    return cmp < 0;
-  if (ops[a].file_offset != ops[b].file_offset)
-    return ops[a].file_offset < ops[b].file_offset;
-  return a < b;
-}
-
-static enum damacy_status
-coalesce_batch_read_ops(struct planner* self, struct planner_output* out)
-{
-  uint32_t n = out->n_read_ops;
-  if (n < 2)
-    return DAMACY_OK;
-
-  enum damacy_status s = planner_ensure_scratch(self, n);
-  if (s != DAMACY_OK)
-    return s;
-
-  uint32_t* perm = self->scratch_u32;
-  uint32_t* remap = self->scratch_u32 + n;
-  uint32_t* offset_shift = self->scratch_u32 + 2u * n;
-  struct read_op* tmp = self->scratch_ops;
-
-  for (uint32_t i = 0; i < n; ++i)
-    remap[i] = UINT32_MAX;
-
-  uint32_t n_io = 0;
-  for (uint32_t i = 0; i < n; ++i) {
-    struct read_op* r = &out->read_ops[i];
-    if (r->nbytes != 0 && r->shard_path[0] != '\0')
-      perm[n_io++] = i;
-  }
-
-  for (uint32_t i = 1; i < n_io; ++i) {
-    uint32_t key = perm[i];
-    uint32_t j = i;
-    while (j > 0 && !perm_lt(out->read_ops, perm[j - 1], key)) {
-      perm[j] = perm[j - 1];
-      j--;
-    }
-    perm[j] = key;
-  }
-
-  uint32_t write = 0;
-  uint32_t leader_old = UINT32_MAX;
-  uint64_t leader_end = 0;
-  for (uint32_t k = 0; k < n_io; ++k) {
-    uint32_t e = perm[k];
-    struct read_op* curr = &out->read_ops[e];
-    int fusable = 0;
-    uint64_t curr_end = (uint64_t)curr->file_offset + curr->nbytes;
-    if (leader_old != UINT32_MAX) {
-      struct read_op* leader = &out->read_ops[leader_old];
-      if (strncmp(curr->shard_path, leader->shard_path, DAMACY_MAX_PATH) == 0 &&
-          curr->file_offset >= leader->file_offset &&
-          curr->file_offset <= leader_end) {
-        uint64_t fused_end = curr_end > leader_end ? curr_end : leader_end;
-        if (fused_end - leader->file_offset <= UINT32_MAX)
-          fusable = 1;
-      }
-    }
-    if (fusable) {
-      uint32_t new_idx = remap[leader_old];
-      uint64_t fused_end = curr_end > leader_end ? curr_end : leader_end;
-      tmp[new_idx].nbytes = (uint32_t)(fused_end - tmp[new_idx].file_offset);
-      remap[e] = new_idx;
-      offset_shift[e] =
-        (uint32_t)(curr->file_offset - tmp[new_idx].file_offset);
-      leader_end = fused_end;
-    } else {
-      tmp[write] = *curr;
-      remap[e] = write;
-      offset_shift[e] = 0;
-      leader_old = e;
-      leader_end = curr_end;
-      write++;
-    }
-  }
-
-  for (uint32_t i = 0; i < n; ++i) {
-    if (remap[i] != UINT32_MAX)
-      continue;
-    tmp[write] = out->read_ops[i];
-    remap[i] = write;
-    offset_shift[i] = 0;
-    write++;
-  }
-
-  memcpy(out->read_ops, tmp, (size_t)write * sizeof(struct read_op));
-  out->n_read_ops = write;
-
-  for (uint32_t i = 0; i < out->n_chunk_plans; ++i) {
-    struct chunk_plan* cp = &out->chunk_plans[i];
-    uint32_t old = cp->read_op_idx;
-    cp->read_op_idx = remap[old];
-    if (!cp->is_fill)
-      cp->offset_in_read += offset_shift[old];
-  }
-
-  return DAMACY_OK;
 }
 
 // --- public API ----------------------------------------------------------
@@ -624,25 +519,17 @@ planner_plan(struct planner* self,
   }
 
   {
-    enum damacy_status s = coalesce_batch_read_ops(self, out);
+    uint64_t cap = self->cfg.read_op_max_bytes;
+    if (cap == 0)
+      cap = DAMACY_DEFAULT_READ_OP_MAX_BYTES;
+    enum damacy_status s = planner_ensure_scratch(self, out->n_read_ops);
+    if (s != DAMACY_OK)
+      return s;
+    s = coalesce_chunks(out, cap, self->scratch_u32, self->scratch_ops);
     if (s != DAMACY_OK)
       return s;
   }
 
-  {
-    uint32_t to_load = 0;
-    for (uint32_t i = 0; i < out->n_chunk_plans; ++i)
-      if (!out->chunk_plans[i].is_fill)
-        to_load++;
-    uint32_t loads = 0;
-    for (uint32_t i = 0; i < out->n_read_ops; ++i) {
-      const struct read_op* r = &out->read_ops[i];
-      if (r->nbytes != 0 && r->shard_path[0] != '\0')
-        loads++;
-    }
-    out->n_chunks_to_load = to_load;
-    out->n_loads_issued = loads;
-  }
   return DAMACY_OK;
 
 Invalid:

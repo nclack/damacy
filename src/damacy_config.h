@@ -22,6 +22,11 @@ validate_config(const struct damacy_config* cfg);
 uint64_t
 resolve_max_chunk_uncompressed(const struct damacy_config* cfg);
 
+// 0 → DAMACY_DEFAULT_READ_OP_MAX_BYTES (4 MB). Cap on post-coalesce
+// read_op size; tunes request count vs queue depth.
+uint64_t
+resolve_max_read_op_bytes(const struct damacy_config* cfg);
+
 // 0 → DAMACY_DEFAULT_MAX_GPU_MEMORY_BYTES (~1 GB). Primary GPU budget
 // knob — every other GPU-allocation sizing derives from this.
 uint64_t

@@ -116,6 +116,15 @@ extern "C"
     // ceiling, 2 MB) are rejected at create time.
     uint32_t max_chunk_uncompressed_bytes;
 
+    // Cap on the size of any single post-coalesce read_op (bytes).
+    // The planner fuses adjacent page-aligned chunk reads in the same
+    // shard up to this limit, then starts a new read_op. Tunes the
+    // request-count vs queue-depth tradeoff: bigger reduces request
+    // count and amortizes per-IO overhead; smaller keeps more reads
+    // in flight which helps NVMe queue depth. 0 selects
+    // DAMACY_DEFAULT_READ_OP_MAX_BYTES (4 MB).
+    uint64_t max_read_op_bytes;
+
     // Primary GPU memory budget. Hard cap on total GPU memory damacy
     // will allocate for wave-resident buffers, the shared decoder
     // scratch, per-wave fanout SOAs, and per-batch metadata. Internal

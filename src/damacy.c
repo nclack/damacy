@@ -554,6 +554,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     .shard_cache = self->shard_cache,
     .page_alignment = self->page_alignment,
     .max_chunk_uncompressed_bytes = runtime_chunk_cap,
+    .read_op_max_bytes = resolve_max_read_op_bytes(cfg),
   };
   CHECK(Fail, planner_create(&pcfg, &self->planner) == DAMACY_OK);
 
