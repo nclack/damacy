@@ -39,6 +39,7 @@ blosc1_chunk_scan_kernel(const uint8_t* __restrict__ d_compressed,
                          uint8_t* __restrict__ d_decompressed,
                          const struct gpu_parse_chunk* __restrict__ d_chunks,
                          const struct sample_plan* __restrict__ d_sample_plans,
+                         uint32_t n_sample_plans,
                          const uint32_t* __restrict__ d_blosc_chunk_indices,
                          struct gpu_memcpy_op* __restrict__ d_memcpy_ops,
                          struct assemble_chunk* __restrict__ d_assemble_chunks,
@@ -53,6 +54,10 @@ blosc1_chunk_scan_kernel(const uint8_t* __restrict__ d_compressed,
 
   const uint32_t chunk_idx = d_blosc_chunk_indices[tid];
   const struct gpu_parse_chunk chunk = d_chunks[chunk_idx];
+  if (chunk.sample_idx_in_batch >= n_sample_plans) {
+    record_parse_err(d_parse_err, 12u);
+    return;
+  }
   const struct sample_plan& sp = d_sample_plans[chunk.sample_idx_in_batch];
 
   const uint8_t* d_comp = d_compressed + chunk.compressed_offset;
@@ -107,6 +112,7 @@ blosc1_block_fanout_kernel(
   uint8_t* __restrict__ d_decompressed,
   const struct gpu_parse_chunk* __restrict__ d_chunks,
   const struct sample_plan* __restrict__ d_sample_plans,
+  uint32_t n_sample_plans,
   const uint32_t* __restrict__ d_block_chunk_map,
   const uint32_t* __restrict__ d_is_memcpyed,
   const void** __restrict__ zstd_comp_ptrs,
@@ -145,6 +151,10 @@ blosc1_block_fanout_kernel(
       (d_is_memcpyed[chunk_idx >> 5] >> (chunk_idx & 31u)) & 1u;
     if (mc_bit == 0u) {
       const struct gpu_parse_chunk chunk = d_chunks[chunk_idx];
+      if (chunk.sample_idx_in_batch >= n_sample_plans) {
+        record_parse_err(d_parse_err, 12u);
+        return;
+      }
       const struct sample_plan& sp = d_sample_plans[chunk.sample_idx_in_batch];
       const uint32_t nblocks = sp.layout.nblocks;
       blocksize = sp.layout.blocksize;
@@ -222,6 +232,7 @@ blosc1_parse_launch(CUstream stream, const struct blosc1_parse_args* args)
     args->d_decompressed,
     args->d_chunks,
     args->d_sample_plans,
+    args->n_sample_plans,
     args->d_blosc_chunk_indices,
     args->d_memcpy_ops,
     args->d_assemble_chunks,
@@ -247,6 +258,7 @@ blosc1_parse_launch(CUstream stream, const struct blosc1_parse_args* args)
     args->d_decompressed,
     args->d_chunks,
     args->d_sample_plans,
+    args->n_sample_plans,
     args->d_block_chunk_map,
     args->d_is_memcpyed,
     args->zstd.d_comp_ptrs,

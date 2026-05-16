@@ -48,13 +48,14 @@ extern "C"
   // Returns the cached chunk layout for `uri`, or NULL if no layout has
   // been probed yet (or the URI isn't cached). The cache must already
   // hold a meta entry for the URI — call zarr_meta_cache_get first.
+  // Thread-safe.
   const struct chunk_layout* zarr_meta_cache_layout_get(
     struct zarr_meta_cache* c,
     const char* uri);
 
   // Records a probed layout against the meta entry for `uri`. No-op if
   // a layout has already been set (the first probe wins). Returns 0 on
-  // success.
+  // success. Thread-safe.
   int zarr_meta_cache_layout_set(struct zarr_meta_cache* c,
                                  const char* uri,
                                  const struct chunk_layout* layout);
@@ -62,7 +63,9 @@ extern "C"
   // Cached probe: returns the cached layout if present, otherwise reads
   // 16 bytes at first_chunk_off in shard_path via the cache's store,
   // caches the result, and returns the cached pointer. Returns NULL on
-  // probe failure or if no meta entry exists for `uri`.
+  // probe failure or if no meta entry exists for `uri`. Thread-safe;
+  // the underlying I/O runs unlocked, so concurrent first-probes for
+  // the same URI may each issue a read.
   const struct chunk_layout* zarr_meta_cache_probe_layout(
     struct zarr_meta_cache* c,
     const char* uri,

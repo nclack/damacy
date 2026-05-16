@@ -51,6 +51,7 @@ extern "C"
     uint8_t* d_decompressed;     // wave->dev_decompressed
     const struct gpu_parse_chunk* d_chunks;
     const struct sample_plan* d_sample_plans;
+    uint32_t n_sample_plans; // bounds for d_sample_plans indexing
 
     // Subset of d_chunks that are BLOSC_ZSTD (indices into d_chunks).
     const uint32_t* d_blosc_chunk_indices;
@@ -77,8 +78,9 @@ extern "C"
     uint32_t* d_n_zstd;
     uint32_t* d_n_memcpy;
     // First parse error (1..). Codes emitted by these kernels: 4
-    // (cbytes mismatch), 9 (bstart range), 11 (cb overflow). Other
-    // historical codes are pre-empted by the host routing.
+    // (cbytes mismatch), 9 (bstart range), 11 (cb overflow),
+    // 12 (sample_idx_in_batch out of range). Other historical codes
+    // are pre-empted by the host routing.
     uint32_t* d_parse_err;
   };
 

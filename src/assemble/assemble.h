@@ -13,7 +13,6 @@
 #include "damacy.h" // enum damacy_dtype (destination)
 #include "damacy_limits.h"
 #include "planner/planner.h"
-#include "zarr/zarr_metadata.h" // DAMACY_MAX_DTYPE_BYTES
 
 #include <stddef.h>
 #include <stdint.h>

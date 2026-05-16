@@ -8,6 +8,7 @@
 #include "util/strbuf.h"
 #include "zarr/zarr_metadata.h"
 
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -23,6 +24,7 @@ struct zarr_meta_cache
 {
   struct store* store; // borrowed
   struct lru* lru;
+  pthread_mutex_t mu; // guards layout/layout_probed on cached entries
 };
 
 static int
@@ -56,6 +58,7 @@ zarr_meta_cache_create(struct store* store, uint32_t capacity)
   self = (struct zarr_meta_cache*)calloc(1, sizeof(*self));
   CHECK(Error, self);
   self->store = store;
+  pthread_mutex_init(&self->mu, NULL);
 
   struct lru_ops ops = {
     .eq = meta_eq,
@@ -79,6 +82,7 @@ zarr_meta_cache_destroy(struct zarr_meta_cache* self)
   if (!self)
     return;
   lru_destroy(self->lru);
+  pthread_mutex_destroy(&self->mu);
   free(self);
 }
 
@@ -143,6 +147,8 @@ Invalid:
   return DAMACY_INVAL;
 }
 
+// layout/layout_probed are guarded by self->mu; the entry pointer itself
+// is stable (LRU never reshuffles existing nodes).
 const struct chunk_layout*
 zarr_meta_cache_layout_get(struct zarr_meta_cache* self, const char* uri)
 {
@@ -152,11 +158,14 @@ zarr_meta_cache_layout_get(struct zarr_meta_cache* self, const char* uri)
   struct lru_entry* hit = lru_get(self->lru, hash, uri);
   if (!hit)
     return NULL;
-  const struct meta_entry* entry =
-    (const struct meta_entry*)lru_entry_value(hit);
-  return entry->layout_probed ? &entry->layout : NULL;
+  struct meta_entry* entry = (struct meta_entry*)lru_entry_value(hit);
+  pthread_mutex_lock(&self->mu);
+  const struct chunk_layout* out = entry->layout_probed ? &entry->layout : NULL;
+  pthread_mutex_unlock(&self->mu);
+  return out;
 }
 
+// First writer wins; redundant sets are dropped under the lock.
 int
 zarr_meta_cache_layout_set(struct zarr_meta_cache* self,
                            const char* uri,
@@ -169,13 +178,17 @@ zarr_meta_cache_layout_set(struct zarr_meta_cache* self,
   if (!hit)
     return 1;
   struct meta_entry* entry = (struct meta_entry*)lru_entry_value(hit);
-  if (entry->layout_probed)
-    return 0;
-  entry->layout = *layout;
-  entry->layout_probed = 1;
+  pthread_mutex_lock(&self->mu);
+  if (!entry->layout_probed) {
+    entry->layout = *layout;
+    entry->layout_probed = 1;
+  }
+  pthread_mutex_unlock(&self->mu);
   return 0;
 }
 
+// I/O runs unlocked; commit happens under self->mu. Concurrent probes for
+// the same URI read identical bytes, so last-writer-wins is value-safe.
 const struct chunk_layout*
 zarr_meta_cache_probe_layout(struct zarr_meta_cache* self,
                              const char* uri,
@@ -191,8 +204,13 @@ zarr_meta_cache_probe_layout(struct zarr_meta_cache* self,
   if (!hit)
     return NULL;
   struct meta_entry* entry = (struct meta_entry*)lru_entry_value(hit);
-  if (entry->layout_probed)
+
+  pthread_mutex_lock(&self->mu);
+  if (entry->layout_probed) {
+    pthread_mutex_unlock(&self->mu);
     return &entry->layout;
+  }
+  pthread_mutex_unlock(&self->mu);
 
   struct chunk_layout probed = { 0 };
   if (zarr_chunk_layout_probe(self->store,
@@ -202,8 +220,13 @@ zarr_meta_cache_probe_layout(struct zarr_meta_cache* self,
                               codec_id,
                               &probed))
     return NULL;
-  entry->layout = probed;
-  entry->layout_probed = 1;
+
+  pthread_mutex_lock(&self->mu);
+  if (!entry->layout_probed) {
+    entry->layout = probed;
+    entry->layout_probed = 1;
+  }
+  pthread_mutex_unlock(&self->mu);
   return &entry->layout;
 }
 

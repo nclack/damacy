@@ -42,9 +42,15 @@ option(
 # non-fuzz builds; src/CMakeLists.txt forces OFF under DAMACY_FUZZ.
 option(DAMACY_NVTX_ENABLED "Enable NVTX timeline instrumentation" ON)
 
+# DAMACY_ENABLE_GDS — gates the cuFile/GDS reader backend
+# (src/store/store_fs_gds.c). Defaults OFF so developers/CI without
+# cufile.h can still configure; flip ON to build the GDS path.
+option(DAMACY_ENABLE_GDS "Build cuFile/GDS reader backend" OFF)
+
 # cufile.h is needed at compile time for typedefs; libcufile.so.0 is
-# dlopen'd at runtime (see src/store/store_fs_gds.c), not linked.
-if(NOT DAMACY_FUZZ)
+# dlopen'd at runtime (see src/store/store_fs_gds.c), not linked. Gated
+# on DAMACY_ENABLE_GDS so non-GDS builds don't require cufile.h.
+if(NOT DAMACY_FUZZ AND DAMACY_ENABLE_GDS)
     find_package(CuFile REQUIRED)
 endif()
 

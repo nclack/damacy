@@ -183,8 +183,10 @@ any_slot_free(const struct wave_pool* wp)
 // blosc emit multiple substreams per block (out of scope for the
 // per-block fan-out kernel). dont_split is always 1 for blosc1-zstd in
 // practice; layout_probed is set on the first non-fill emit for any
-// sample touching the array. Anything that trips this check is a
-// malformed input and surfaces as DAMACY_DECODE.
+// sample touching the array. A missing probe is a configuration/probe
+// gap (all preceding waves were fill, so no non-fill emit ever fed the
+// cache) — surfaced as DAMACY_INVAL by the caller, distinct from
+// DAMACY_DECODE which signals malformed compressed bytes.
 static int
 wave_chunks_eligible(const struct wave_pool* wp, const struct damacy_wave* wave)
 {
@@ -277,6 +279,7 @@ build_gpu_parse_chunks(const struct wave_pool* wp, struct damacy_wave* wave)
     uint32_t nblocks = sp->layout.nblocks;
     wave->h_blosc_chunk_indices[n_blosc_chunks++] = i;
     for (uint32_t b = 0; b < nblocks; ++b)
+      // guarded by static_assert in damacy_limits.h
       wave->h_block_chunk_map[n_blosc_blocks++] = (i << 16) | b;
   }
 
@@ -466,6 +469,7 @@ gpu_parse(struct wave_pool* wp, struct damacy_wave* wave)
     .d_decompressed = (uint8_t*)wave->dev_decompressed,
     .d_chunks = wave->d_parse_chunks,
     .d_sample_plans = (const struct sample_plan*)slot->d_sample_plans,
+    .n_sample_plans = slot->n_sample_plans,
     .d_blosc_chunk_indices = wave->d_blosc_chunk_indices,
     .n_blosc_zstd_chunks = wave->n_blosc_zstd_chunks,
     .d_block_chunk_map = wave->d_block_chunk_map,
@@ -531,9 +535,12 @@ kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
     goto Error;
 
   if (!wave_chunks_eligible(wp, wave)) {
+    // Probe gap (e.g. all-fill preceding waves never seeded the layout
+    // cache) or unsupported dont_split=0 — not garbage in compressed
+    // bytes, so DAMACY_INVAL rather than DAMACY_DECODE.
     log_error("blosc1: wave has a BLOSC_ZSTD chunk with unprobed layout "
               "or dont_split=0; cannot parse on device");
-    s = DAMACY_DECODE;
+    s = DAMACY_INVAL;
     goto Error;
   }
   build_gpu_parse_chunks(wp, wave);
@@ -867,13 +874,18 @@ wave_pool_peel(struct wave_pool* wp, uint16_t batch_slot_idx)
     hs->io_event =
       wp->use_gds ? store_read_submit_dev(wp->store, hs->store_reads, n_reads)
                   : store_read_submit(wp->store, hs->store_reads, n_reads);
+    // seq==0 from the submit return path means "submit failed" (treat as
+    // DAMACY_IO). Distinct from the all-fill branch below, which also
+    // stores seq==0 but as the "no IO submitted" sentinel — gated by
+    // is_fill_wave so the SLOT_IO poll never queries the zero event.
     if (hs->io_event.seq == 0) {
       damacy_nvtx_range_pop();
       return DAMACY_IO;
     }
   } else {
     // All chunks in this wave are fill — no IO. The SLOT_IO poll keys
-    // on is_fill_wave; io_event stays zero as a safe fallback.
+    // on is_fill_wave; io_event stays zero as the all-fill sentinel
+    // (same value as the submit-failed sentinel above, different path).
     hs->io_event = (struct store_event){ .seq = 0 };
   }
 
