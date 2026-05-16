@@ -10,6 +10,7 @@
 #include "zarr/zarr_metadata.h"
 #include "zarr/zarr_shard_index.h"
 
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -33,6 +34,7 @@ struct zarr_shard_cache
 {
   struct store* store; // borrowed
   struct lru* lru;
+  pthread_mutex_t mu; // guards lru_get / lru_put / lru_stats_get
 };
 
 static uint64_t
@@ -90,6 +92,7 @@ zarr_shard_cache_create(struct store* store, uint32_t capacity)
   };
   self->lru = lru_create(capacity, 16, &ops);
   CHECK(Error, self->lru);
+  pthread_mutex_init(&self->mu, NULL);
 
   return self;
 
@@ -103,6 +106,7 @@ zarr_shard_cache_destroy(struct zarr_shard_cache* self)
 {
   if (!self)
     return;
+  pthread_mutex_destroy(&self->mu);
   lru_destroy(self->lru);
   free(self);
 }
@@ -136,7 +140,9 @@ zarr_shard_cache_get(struct zarr_shard_cache* self,
   };
   uint64_t hash = shard_hash(uri, shard_coord, meta->rank);
 
+  pthread_mutex_lock(&self->mu);
   struct lru_entry* hit = lru_get(self->lru, hash, &probe);
+  pthread_mutex_unlock(&self->mu);
   if (hit) {
     const struct shard_entry* entry =
       (const struct shard_entry*)lru_entry_value(hit);
@@ -235,7 +241,9 @@ zarr_shard_cache_get(struct zarr_shard_cache* self,
   entry->n_entries = n_inner_per_shard;
   entry->entries = entries;
 
+  pthread_mutex_lock(&self->mu);
   struct lru_entry* inserted = lru_put(self->lru, hash, &probe, entry);
+  pthread_mutex_unlock(&self->mu);
   if (!inserted) {
     // lru_put already destroyed entry via shard_destroy.
     return DAMACY_OOM;
@@ -261,7 +269,11 @@ zarr_shard_cache_stats_get(const struct zarr_shard_cache* self,
   if (!out)
     return;
   struct lru_stats stats;
+  if (self)
+    pthread_mutex_lock((pthread_mutex_t*)&self->mu);
   lru_stats_get(self ? self->lru : NULL, &stats);
+  if (self)
+    pthread_mutex_unlock((pthread_mutex_t*)&self->mu);
   *out = (struct zarr_shard_cache_stats){
     .counters = stats.counters,
     .size = stats.size,

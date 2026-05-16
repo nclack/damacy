@@ -97,7 +97,9 @@ zarr_meta_cache_get(struct zarr_meta_cache* self,
   *out = NULL;
 
   uint64_t hash = hash_fnv1a_str(uri);
+  pthread_mutex_lock(&self->mu);
   struct lru_entry* hit = lru_get(self->lru, hash, uri);
+  pthread_mutex_unlock(&self->mu);
   if (hit) {
     *out = &((const struct meta_entry*)lru_entry_value(hit))->meta;
     return DAMACY_OK;
@@ -133,7 +135,9 @@ zarr_meta_cache_get(struct zarr_meta_cache* self,
     return DAMACY_OOM;
   }
 
+  pthread_mutex_lock(&self->mu);
   struct lru_entry* inserted = lru_put(self->lru, hash, uri, entry);
+  pthread_mutex_unlock(&self->mu);
   if (!inserted) {
     // Cache full and all entries pinned; lru_put already destroyed entry.
     return DAMACY_OOM;
@@ -155,12 +159,14 @@ zarr_meta_cache_layout_get(struct zarr_meta_cache* self, const char* uri)
   if (!self || !uri)
     return NULL;
   uint64_t hash = hash_fnv1a_str(uri);
-  struct lru_entry* hit = lru_get(self->lru, hash, uri);
-  if (!hit)
-    return NULL;
-  struct meta_entry* entry = (struct meta_entry*)lru_entry_value(hit);
   pthread_mutex_lock(&self->mu);
-  const struct chunk_layout* out = entry->layout_probed ? &entry->layout : NULL;
+  struct lru_entry* hit = lru_get(self->lru, hash, uri);
+  const struct chunk_layout* out = NULL;
+  if (hit) {
+    struct meta_entry* entry = (struct meta_entry*)lru_entry_value(hit);
+    if (entry->layout_probed)
+      out = &entry->layout;
+  }
   pthread_mutex_unlock(&self->mu);
   return out;
 }
@@ -174,11 +180,13 @@ zarr_meta_cache_layout_set(struct zarr_meta_cache* self,
   if (!self || !uri || !layout)
     return 1;
   uint64_t hash = hash_fnv1a_str(uri);
-  struct lru_entry* hit = lru_get(self->lru, hash, uri);
-  if (!hit)
-    return 1;
-  struct meta_entry* entry = (struct meta_entry*)lru_entry_value(hit);
   pthread_mutex_lock(&self->mu);
+  struct lru_entry* hit = lru_get(self->lru, hash, uri);
+  if (!hit) {
+    pthread_mutex_unlock(&self->mu);
+    return 1;
+  }
+  struct meta_entry* entry = (struct meta_entry*)lru_entry_value(hit);
   if (!entry->layout_probed) {
     entry->layout = *layout;
     entry->layout_probed = 1;
@@ -200,15 +208,17 @@ zarr_meta_cache_probe_layout(struct zarr_meta_cache* self,
   if (!self || !uri || !shard_path)
     return NULL;
   uint64_t hash = hash_fnv1a_str(uri);
-  struct lru_entry* hit = lru_get(self->lru, hash, uri);
-  if (!hit)
-    return NULL;
-  struct meta_entry* entry = (struct meta_entry*)lru_entry_value(hit);
-
   pthread_mutex_lock(&self->mu);
-  if (entry->layout_probed) {
+  struct lru_entry* hit = lru_get(self->lru, hash, uri);
+  if (!hit) {
     pthread_mutex_unlock(&self->mu);
-    return &entry->layout;
+    return NULL;
+  }
+  struct meta_entry* entry = (struct meta_entry*)lru_entry_value(hit);
+  if (entry->layout_probed) {
+    const struct chunk_layout* out = &entry->layout;
+    pthread_mutex_unlock(&self->mu);
+    return out;
   }
   pthread_mutex_unlock(&self->mu);
 
@@ -237,7 +247,11 @@ zarr_meta_cache_stats_get(const struct zarr_meta_cache* self,
   if (!out)
     return;
   struct lru_stats stats;
+  if (self)
+    pthread_mutex_lock((pthread_mutex_t*)&self->mu);
   lru_stats_get(self ? self->lru : NULL, &stats);
+  if (self)
+    pthread_mutex_unlock((pthread_mutex_t*)&self->mu);
   *out = (struct zarr_meta_cache_stats){
     .counters = stats.counters,
     .size = stats.size,
