@@ -1,0 +1,22 @@
+# ThreadSanitizer suppressions for damacy's tsan CI job.
+#
+# Activated via TSAN_OPTIONS=suppressions=tests/tsan-suppressions.txt at
+# test runtime. See https://github.com/google/sanitizers/wiki/ThreadSanitizerSuppressions
+# for the syntax — each line is `category:pattern`, where pattern is
+# matched against the toplevel frame of the stack involved in the race.
+#
+# This file should stay short and only suppress noise from external
+# libraries we don't own. Anything matching one of our own source files
+# is a real bug and must be fixed, not suppressed.
+
+# libcuda / cuda runtime have internal pthread state that TSan can't
+# fully model (private ABI, no instrumented happens-before edges).
+# We see these only when the threading test happens to link against
+# CUDA via transitive deps; the cache code itself doesn't touch CUDA.
+called_from_lib:libcuda.so
+called_from_lib:libcudart.so
+
+# CUDA driver's own constructors (loaded via dlopen) bump internal
+# refcounts before any of our code runs.
+race:libcuda
+race:libcudart

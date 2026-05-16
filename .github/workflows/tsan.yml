@@ -1,0 +1,44 @@
+# ThreadSanitizer build + concurrent stress test. Runs the `tsan`-labeled
+# subset of ctest (currently just test_zarr_cache_threading) against a
+# build configured with -DDAMACY_TSAN=ON, so unsynchronized access to
+# shared state surfaces as a TSan report rather than a flaky hang.
+#
+# Builds a dedicated Debug+TSan Docker image (separate tag from
+# build.yml's release image) so the regular CI artifacts stay untouched.
+# Runs without --device=nvidia.com/gpu=all: the test is pure C and
+# doesn't touch CUDA. This also keeps the job off the GPU runner's
+# concurrency group, letting it run in parallel with bench/test.
+
+name: tsan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tsan:
+    runs-on: [self-hosted, gpu]
+
+    env:
+      IMAGE: damacy:${{ github.sha }}-tsan
+      CONTAINER: damacy-tsan-${{ github.run_id }}-${{ github.run_attempt }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build docker image (Debug + TSan)
+        run: |
+          docker build \
+            --build-arg CMAKE_BUILD_TYPE=Debug \
+            --build-arg DAMACY_TSAN=ON \
+            --tag "$IMAGE" .
+
+      - name: Run TSan-labeled tests
+        run: |
+          docker run --rm --name "$CONTAINER" \
+            -e TSAN_OPTIONS="suppressions=/workspace/damacy/tests/tsan-suppressions.txt halt_on_error=1 second_deadlock_stack=1" \
+            "$IMAGE" \
+            ctest --test-dir build -L tsan --output-on-failure
