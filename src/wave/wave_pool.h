@@ -134,36 +134,26 @@ any_slot_free(const struct wave_pool* wp);
 enum damacy_status
 wave_pool_advance(struct wave_pool* wp);
 
-// Split-phase peel API. Phase 1 (reserve) and phase 3 (commit) mutate
-// shared state and must run under scheduler_lock; phase 2 (submit)
-// performs the async IO submit and must NOT hold the lock — that's the
-// whole point of the split. The slot is reserved in SLOT_PEELING for
-// the duration of phase 2 so no other caller can claim it.
-//
-// Ticket carries the slot_idx between phases. slot_idx < 0 means
-// no-op (no chunks left or no free slab). n_reads == 0 means an
-// all-fill wave with no IO to submit.
+// wave_pool_peel runs as reserve [locked] → submit [unlocked] → commit
+// [locked]. submit issues async IO with scheduler_lock released; the
+// slot sits in SLOT_PEELING for the window. Ticket carries handoff
+// state. slot_idx < 0 = no-op (no work or no free slab).
 struct wave_pool_peel_ticket
 {
   int slot_idx;
   uint32_t n_reads;
 };
 
-// Phase 1 — locked. Returns a ticket; out *err set to DAMACY_OOM on
-// the single-chunk-too-large path, DAMACY_OK otherwise.
+// reserve: *err = DAMACY_OOM on the single-chunk-too-large path.
 struct wave_pool_peel_ticket
 wave_pool_peel_reserve(struct wave_pool* wp,
                        uint16_t batch_slot_idx,
                        enum damacy_status* err);
 
-// Phase 2 — unlocked. Submits the IO; returns the store_event. No-op
-// for tickets with n_reads == 0 (returns a zeroed event).
 struct store_event
 wave_pool_peel_submit(struct wave_pool* wp, struct wave_pool_peel_ticket t);
 
-// Phase 3 — locked. Commits the io_event into the slot. Rolls back the
-// phase-1 reservation on submit failure (n_reads > 0 && ev.seq == 0)
-// and returns DAMACY_IO.
+// commit: rolls back the reservation on submit failure → DAMACY_IO.
 enum damacy_status
 wave_pool_peel_commit(struct wave_pool* wp,
                       struct wave_pool_peel_ticket t,

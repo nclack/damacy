@@ -17,9 +17,10 @@
 enum batch_slot_state
 {
   BATCH_FREE = 0,
-  BATCH_FILLING, // planner has emitted; chunks may or may not be dispatched
-  BATCH_READY,   // chunks_remaining == 0; awaiting pop
-  BATCH_HELD,    // user holds the handle
+  BATCH_PLANNING, // reserve has drained samples; run/commit pending
+  BATCH_FILLING,  // planner has emitted; chunks may or may not be dispatched
+  BATCH_READY,    // chunks_remaining == 0; awaiting pop
+  BATCH_HELD,     // user holds the handle
 };
 
 // Forward decls; full types come from planner/planner.h. We reference
@@ -104,6 +105,11 @@ int
 find_filling_slot_with_work(const struct damacy_batch_pool* pool);
 int
 any_batch_in_flight(const struct damacy_batch_pool* pool);
+// True if any slot is BATCH_PLANNING. Used by damacy_flush to wait for
+// a plan that has reserved a slot (drained samples) but not yet
+// committed (so find_oldest_filling_slot doesn't yet see it).
+int
+any_batch_planning(const struct damacy_batch_pool* pool);
 
 // Subtract `n_consumed` chunks from the slot's outstanding work. If
 // the slot was FILLING and the count reaches 0, transitions it to

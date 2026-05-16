@@ -175,9 +175,13 @@ push_one(struct damacy* self, const struct damacy_sample* sample)
   return DAMACY_OK;
 }
 
-// Drains n_samples from the lookahead and transitions slot FREE→FILLING.
+// --- plan: reserve [locked] → run [unlocked] → commit [locked] -------------
+// run does the planner CPU work + sample_plans H2D off the
+// scheduler_lock. The slot sits in BATCH_PLANNING for the window so
+// pop (any_batch_in_flight) and flush (any_batch_planning) wait.
+
 static enum damacy_status
-plan_into_slot(struct damacy* self, uint16_t slot_idx, uint32_t n_samples)
+plan_reserve(struct damacy* self, uint16_t slot_idx, uint32_t n_samples)
 {
   if (n_samples == 0)
     return DAMACY_OK;
@@ -189,14 +193,25 @@ plan_into_slot(struct damacy* self, uint16_t slot_idx, uint32_t n_samples)
 
   enum damacy_status status =
     batch_pool_allocate(self, &self->batch_samples[0].aabb);
-  if (status != DAMACY_OK)
-    goto Cleanup;
-
+  if (status != DAMACY_OK) {
+    for (uint32_t i = 0; i < n_samples; ++i)
+      sample_slot_clear(&self->batch_samples[i]);
+    self->failed_status = status;
+    return status;
+  }
   for (uint32_t i = 0; i < n_samples; ++i) {
     self->batch_stage[i].uri = self->batch_samples[i].uri;
     self->batch_stage[i].aabb = self->batch_samples[i].aabb;
   }
+  slot->n_samples = n_samples;
+  slot->state = BATCH_PLANNING;
+  return DAMACY_OK;
+}
 
+static enum damacy_status
+plan_run(struct damacy* self, uint16_t slot_idx)
+{
+  struct damacy_batch_slot* slot = &self->batch_pool.slots[slot_idx];
   struct planner_output plan_out = {
     .read_ops = slot->read_ops,
     .read_ops_cap = DAMACY_MAX_CHUNKS_PER_BATCH,
@@ -206,65 +221,68 @@ plan_into_slot(struct damacy* self, uint16_t slot_idx, uint32_t n_samples)
     .sample_plans_cap = self->cfg.batch_size,
   };
   uint64_t plan_t0 = monotonic_ns();
-  status = planner_plan(self->planner,
-                        self->batch_stage,
-                        n_samples,
-                        slot_idx,
-                        self->batch_pool.strides,
-                        self->batch_pool.rank,
-                        &plan_out);
+  enum damacy_status status = planner_plan(self->planner,
+                                           self->batch_stage,
+                                           slot->n_samples,
+                                           slot_idx,
+                                           self->batch_pool.strides,
+                                           self->batch_pool.rank,
+                                           &plan_out);
   metric_record(
     &self->stats.plan, (float)((monotonic_ns() - plan_t0) / 1.0e6), 0, 0);
   if (status != DAMACY_OK)
-    goto Cleanup;
-
+    return status;
   slot->n_chunks = plan_out.n_chunk_plans;
-  slot->n_chunks_dispatched = 0;
-  slot->chunks_remaining = (int32_t)plan_out.n_chunk_plans;
   slot->n_sample_plans = plan_out.n_sample_plans;
-  slot->n_samples = n_samples;
-  slot->batch_id = self->next_batch_id++;
-  slot->state = BATCH_FILLING;
-
-  // Sample plans uploaded once per batch; waves consume them alongside
-  // their per-wave chunk records.
   if (plan_out.n_sample_plans > 0) {
     if (cuMemcpyHtoD(CUDPTR(slot->d_sample_plans),
                      slot->sample_plans,
                      (size_t)plan_out.n_sample_plans *
-                       sizeof(struct sample_plan)) != CUDA_SUCCESS) {
-      status = DAMACY_CUDA;
-      goto Cleanup;
-    }
+                       sizeof(struct sample_plan)) != CUDA_SUCCESS)
+      return DAMACY_CUDA;
   }
+  return DAMACY_OK;
+}
 
-  // Degenerate batch: no chunks → zero the output and skip to READY.
+static enum damacy_status
+plan_commit(struct damacy* self,
+            uint16_t slot_idx,
+            enum damacy_status run_status)
+{
+  struct damacy_batch_slot* slot = &self->batch_pool.slots[slot_idx];
+  for (uint32_t i = 0; i < slot->n_samples; ++i)
+    sample_slot_clear(&self->batch_samples[i]);
+  if (run_status != DAMACY_OK) {
+    slot->state = BATCH_FREE;
+    slot->n_samples = 0;
+    slot->deferred_release_pending = 0;
+    self->failed_status = run_status;
+    return run_status;
+  }
+  slot->n_chunks_dispatched = 0;
+  slot->chunks_remaining = (int32_t)slot->n_chunks;
+  slot->batch_id = self->next_batch_id++;
+  slot->state = BATCH_FILLING;
+
   if (slot->n_chunks == 0) {
-    // cuMemsetD8 runs on the legacy null stream, which doesn't serialize
-    // with damacy's non-blocking streams. If a deferred release queued a
-    // wait on stream_post, host-sync stream_post first so the memset
-    // can't race a still-in-flight consumer read.
+    // Degenerate batch: zero the output and skip to READY. cuMemsetD8
+    // runs on the legacy null stream; if a deferred release wait is
+    // pending on stream_post, sync it first so the memset can't race
+    // a still-in-flight consumer read.
     if (slot->deferred_release_pending) {
       cuStreamSynchronize(self->wave_pool.stream_post);
       slot->deferred_release_pending = 0;
     }
     if (cuMemsetD8(CUDPTR(slot->dev_ptr), 0, self->batch_pool.n_bytes) !=
         CUDA_SUCCESS) {
-      status = DAMACY_CUDA;
-      goto Cleanup;
+      slot->state = BATCH_FREE;
+      self->failed_status = DAMACY_CUDA;
+      return DAMACY_CUDA;
     }
     slot->state = BATCH_READY;
   }
-
-Cleanup:
-  for (uint32_t i = 0; i < n_samples; ++i)
-    sample_slot_clear(&self->batch_samples[i]);
-  // The normal reuse path is already gated by the stream_post wait
-  // recorded at release time; just clear the flag.
   slot->deferred_release_pending = 0;
-  if (status != DAMACY_OK)
-    self->failed_status = status;
-  return status;
+  return DAMACY_OK;
 }
 
 // Drains lookahead-planned batches into free host_slab_slots, planning
@@ -283,7 +301,11 @@ kick_peel_into_free_slots(struct damacy* self)
       if (self->lookahead.size < self->cfg.batch_size)
         break;
       enum damacy_status s =
-        plan_into_slot(self, (uint16_t)free_slot, self->cfg.batch_size);
+        plan_reserve(self, (uint16_t)free_slot, self->cfg.batch_size);
+      if (s != DAMACY_OK)
+        return s;
+      enum damacy_status rs = plan_run(self, (uint16_t)free_slot);
+      s = plan_commit(self, (uint16_t)free_slot, rs);
       if (s != DAMACY_OK)
         return s;
       continue;
@@ -730,6 +752,7 @@ damacy_pop(struct damacy* self, struct damacy_batch** out)
       goto Done;
     }
     if (!any_wave_in_flight(&self->wave_pool) &&
+        !any_slot_in_flight(&self->wave_pool) &&
         !any_batch_in_flight(&self->batch_pool) &&
         self->lookahead.size < self->cfg.batch_size) {
       r = DAMACY_AGAIN;
@@ -869,7 +892,11 @@ damacy_flush(struct damacy* self)
 
   // Worker only plans at full batch_size; flush emits the truncated tail.
   if (self->lookahead.size > 0 && self->lookahead.size < self->cfg.batch_size) {
-    while (find_free_batch_slot(&self->batch_pool) < 0 &&
+    // Wait until a slot is FREE *and* no other plan is in progress —
+    // plan_run releases the lock so another plan from the worker
+    // could be mid-flight.
+    while ((find_free_batch_slot(&self->batch_pool) < 0 ||
+            any_batch_planning(&self->batch_pool)) &&
            self->failed_status == DAMACY_OK)
       scheduler_wait(self->sched);
     if (self->failed_status != DAMACY_OK) {
@@ -878,7 +905,11 @@ damacy_flush(struct damacy* self)
     }
     int free_slot = find_free_batch_slot(&self->batch_pool);
     uint32_t n = self->lookahead.size;
-    r = plan_into_slot(self, (uint16_t)free_slot, n);
+    r = plan_reserve(self, (uint16_t)free_slot, n);
+    if (r != DAMACY_OK)
+      goto Done;
+    enum damacy_status rs = plan_run(self, (uint16_t)free_slot);
+    r = plan_commit(self, (uint16_t)free_slot, rs);
     if (r != DAMACY_OK)
       goto Done;
     self->stats.batches_truncated++;
@@ -886,7 +917,8 @@ damacy_flush(struct damacy* self)
 
   uint64_t flush_t0 = monotonic_ns();
   while ((any_wave_in_flight(&self->wave_pool) ||
-          find_oldest_filling_slot(&self->batch_pool) >= 0) &&
+          find_oldest_filling_slot(&self->batch_pool) >= 0 ||
+          any_batch_planning(&self->batch_pool)) &&
          self->failed_status == DAMACY_OK)
     scheduler_wait(self->sched);
   metric_record(&self->stats.flush_wait,

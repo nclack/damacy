@@ -800,9 +800,10 @@ finalize_wave(struct wave_pool* wp, struct damacy_wave* wave)
   return out;
 }
 
-// Phase 1: pick a free host_slab_slot, pack chunks, reserve them in
-// the batch (n_chunks_dispatched), and mark the slot SLOT_PEELING so
-// no one else can claim it while phase 2 runs unlocked.
+// --- peel: reserve [locked] → submit [unlocked] → commit [locked] -----------
+// submit does the async IO submit off the scheduler_lock. The slot
+// sits in SLOT_PEELING for the window so nothing else binds it.
+
 struct wave_pool_peel_ticket
 wave_pool_peel_reserve(struct wave_pool* wp,
                        uint16_t batch_slot_idx,
@@ -877,9 +878,6 @@ wave_pool_peel_reserve(struct wave_pool* wp,
   return t;
 }
 
-// Phase 2: async IO submit. Reads hs->store_reads (filled by reserve)
-// without touching shared-state fields, so it's safe to call with
-// scheduler_lock released.
 struct store_event
 wave_pool_peel_submit(struct wave_pool* wp, struct wave_pool_peel_ticket t)
 {
@@ -891,9 +889,6 @@ wave_pool_peel_submit(struct wave_pool* wp, struct wave_pool_peel_ticket t)
            : store_read_submit(wp->store, hs->store_reads, t.n_reads);
 }
 
-// Phase 3: write the io_event and transition SLOT_PEELING → SLOT_IO.
-// On submit failure (n_reads > 0 && ev.seq == 0), roll back the phase-1
-// reservation.
 enum damacy_status
 wave_pool_peel_commit(struct wave_pool* wp,
                       struct wave_pool_peel_ticket t,
