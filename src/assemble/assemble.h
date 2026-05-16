@@ -13,7 +13,6 @@
 #include "damacy.h" // enum damacy_dtype (destination)
 #include "damacy_limits.h"
 #include "planner/planner.h"
-#include "zarr/zarr_metadata.h" // DAMACY_MAX_DTYPE_BYTES
 
 #include <stddef.h>
 #include <stdint.h>
@@ -35,7 +34,7 @@ extern "C"
   };
 
   // Per-chunk record materialized at wave dispatch time. shuffle fields
-  // are filled by blosc1_host_parse (NONE for non-blosc codecs).
+  // are filled by the GPU parse (NONE for non-blosc codecs).
   // is_fill=1 marks an absent source chunk: the kernel broadcasts the
   // sample's fill_value across the chunk's region; src_base_byte_off and
   // shuffle_* are ignored.

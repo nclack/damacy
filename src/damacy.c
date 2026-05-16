@@ -1,8 +1,8 @@
 // damacy: streaming loader. Two batch slots and two wave slots in flight.
 // A worker thread (src/scheduler) drives the pipeline; the user-thread
 // API (push/pop/release/flush) coordinates via scheduler_lock + the
-// scheduler's condition variable. Background I/O on the io_queue and
-// host parse on compute_pool round out the threading model.
+// scheduler's condition variable. Background I/O on the io_queue rounds
+// out the threading model.
 
 #include "damacy.h"
 
@@ -18,7 +18,7 @@
 #include "platform/platform.h"
 #include "scheduler/scheduler.h"
 #include "store/store.h"
-#include "threadpool/threadpool.h"
+#include "store/store_fs_gds.h"
 #include "util/cuda_check.h"
 #include "util/prelude.h"
 #include "wave/wave_budget.h"
@@ -64,8 +64,6 @@ struct damacy
   struct zarr_meta_cache* meta_cache;
   struct zarr_shard_cache* shard_cache;
   struct planner* planner;
-
-  struct threadpool* compute_pool; // host blosc1 parse
 
   struct damacy_lookahead lookahead;
   struct damacy_batch_pool batch_pool;
@@ -346,9 +344,6 @@ destroy_inner(struct damacy* self, int cuda_skip)
 
   wave_pool_destroy(&self->wave_pool, cuda_skip);
 
-  threadpool_free(self->compute_pool);
-  self->compute_pool = NULL;
-
   free(self->batch_stage);
   self->batch_stage = NULL;
   free(self->batch_samples);
@@ -451,12 +446,6 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     }
   }
 
-  self->compute_pool = threadpool_new((int)cfg->n_compute_threads);
-  if (!self->compute_pool) {
-    s = DAMACY_OOM;
-    goto Fail;
-  }
-
   // max_gpu_memory_bytes is the primary knob. Apply the default
   // (~1 GB) if the user left it at 0.
   const uint64_t resolved_max_gpu = resolve_max_gpu_memory(cfg);
@@ -532,16 +521,22 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     }
   }
 
+  uint8_t want_gds = resolve_enable_gds(cfg);
+
   s = DAMACY_OOM;
-  // Sample.uri is absolute; the fs store joins root+key, so empty root
-  // turns join into a pass-through.
+
+  // Sample.uri is absolute; fs store joins root+key, so empty root is a
+  // pass-through.
   struct store_fs_config sc = {
     .root = "",
     .nthreads = (int)cfg->n_io_threads,
     .affinity = &self->numa,
   };
-  self->store = store_fs_create(&sc);
-  CHECK(Fail, self->store);
+  self->store = want_gds ? store_fs_gds_create(&sc) : store_fs_create(&sc);
+  if (!self->store) {
+    s = want_gds ? DAMACY_INVAL : DAMACY_OOM;
+    goto Fail;
+  }
 
   self->meta_cache =
     zarr_meta_cache_create(self->store, cfg->n_zarrs_meta_cache);
@@ -572,17 +567,19 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     int wp_rc = wave_pool_init(&self->wave_pool,
                                &self->batch_pool,
                                self->store,
-                               self->compute_pool,
                                &self->stats,
                                cfg->dtype,
                                resolve_host_buffer_waves(cfg),
                                sizing.host_slab_per_wave,
                                sizing.dev_decompressed_per_wave,
                                runtime_chunk_cap,
+                               (int)want_gds,
                                self->budget);
     numa_scope_exit(saved_aff);
     CHECK(Fail, wp_rc == 0);
   }
+  if (want_gds)
+    log_info("damacy: compressed reads via cuFile / GDS (skip bulk H2D)");
 
   CHECK(Fail,
         lookahead_init(&self->lookahead,

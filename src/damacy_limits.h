@@ -72,13 +72,6 @@
 // workload demonstrates need.
 #define DAMACY_MAX_IO_THREADS 32u
 
-// Upper bound on cfg.n_compute_threads. The compute pool fans the
-// blosc1 host parse out across CPU cores; 32 is well past the largest
-// EPYC/Threadripper core count typical in a host today, and rejecting
-// pathological configs early keeps threadpool_new from clamping or
-// failing later. 0 is allowed (synchronous parse on the caller).
-#define DAMACY_MAX_COMPUTE_THREADS 32u
-
 // Sized to absorb one full wave (DAMACY_MAX_CHUNKS_PER_WAVE) without
 // growing. Must be a power of two — io_queue indexes via bitmask.
 #define DAMACY_IO_QUEUE_INITIAL_CAP 512u
@@ -112,11 +105,21 @@ static_assert((uint64_t)DAMACY_MAX_CHUNKS_PER_WAVE *
                   DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK <=
                 DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE,
               "wave substream ceiling must cover peel cap");
+// d_block_chunk_map packs chunk_idx into the upper 16 bits; the GPU
+// kernel unpacks via `packed >> 16` and indexes d_chunks/d_sample_plans
+// directly. Raising the cap past 0xFFFFu silently truncates.
+static_assert(DAMACY_MAX_CHUNKS_PER_WAVE <= 0xFFFFu,
+              "DAMACY_MAX_CHUNKS_PER_WAVE must fit in 16 bits");
 #else
 _Static_assert(
   (uint64_t)DAMACY_MAX_CHUNKS_PER_WAVE* DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK <=
     DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE,
   "wave substream ceiling must cover peel cap");
+// d_block_chunk_map packs chunk_idx into the upper 16 bits; the GPU
+// kernel unpacks via `packed >> 16` and indexes d_chunks/d_sample_plans
+// directly. Raising the cap past 0xFFFFu silently truncates.
+_Static_assert(DAMACY_MAX_CHUNKS_PER_WAVE <= 0xFFFFu,
+               "DAMACY_MAX_CHUNKS_PER_WAVE must fit in 16 bits");
 #endif
 // Initial substream-batch cap for the pool-shared zstd decoder + per-wave
 // fanout SOAs. Sized off a typical wave (hundreds of substreams) rather

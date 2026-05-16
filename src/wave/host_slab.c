@@ -7,12 +7,21 @@
 #include <string.h>
 
 int
-slot_init(struct host_slab_slot* slot, uint64_t cap)
+slot_init(struct host_slab_slot* slot, uint64_t host_cap, uint64_t dev_cap)
 {
   memset(slot, 0, sizeof(*slot));
-  slot->cap = cap;
-  if (cuMemAllocHost(&slot->buf, cap) != CUDA_SUCCESS)
+  // Logical cap is the same regardless of where the bytes land.
+  slot->cap = host_cap > 0 ? host_cap : dev_cap;
+  if (slot->cap == 0)
+    return 1;
+  if (host_cap > 0 && cuMemAllocHost(&slot->buf, host_cap) != CUDA_SUCCESS)
     goto Error;
+  if (dev_cap > 0) {
+    CUdeviceptr dptr = 0;
+    if (cuMemAlloc(&dptr, dev_cap) != CUDA_SUCCESS)
+      goto Error;
+    slot->dev_buf = (void*)(uintptr_t)dptr;
+  }
   slot->store_reads = (struct store_read*)calloc(DAMACY_MAX_CHUNKS_PER_WAVE,
                                                  sizeof(struct store_read));
   if (!slot->store_reads)
@@ -22,6 +31,10 @@ Error:
   if (slot->buf) {
     cuMemFreeHost(slot->buf);
     slot->buf = NULL;
+  }
+  if (slot->dev_buf) {
+    cuMemFree((CUdeviceptr)(uintptr_t)slot->dev_buf);
+    slot->dev_buf = NULL;
   }
   free(slot->store_reads);
   slot->store_reads = NULL;
@@ -33,9 +46,14 @@ slot_destroy(struct host_slab_slot* slot, int cuda_skip)
 {
   if (!slot)
     return;
-  if (!cuda_skip && slot->buf)
-    cuMemFreeHost(slot->buf);
+  if (!cuda_skip) {
+    if (slot->buf)
+      cuMemFreeHost(slot->buf);
+    if (slot->dev_buf)
+      cuMemFree((CUdeviceptr)(uintptr_t)slot->dev_buf);
+  }
   slot->buf = NULL;
+  slot->dev_buf = NULL;
   free(slot->store_reads);
   slot->store_reads = NULL;
   slot->state = SLOT_FREE;

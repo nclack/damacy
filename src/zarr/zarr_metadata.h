@@ -14,7 +14,7 @@ enum compression_codec
   CODEC_BLOSC_ZSTD = 3,
   // Sentinel for absent chunks emitted as fill_value by the planner.
   // Never appears in zarr.json — the planner sets it on fill chunk_plans
-  // so the blosc1 host parse skips them (no substreams, no memcpy ops).
+  // so the GPU parse skips them (no substreams, no memcpy ops).
   CODEC_FILL = 4,
 };
 

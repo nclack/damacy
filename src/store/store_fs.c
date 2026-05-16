@@ -1,5 +1,6 @@
 #include "store/store_fs.h"
 
+#include "log/log.h"
 #include "store/store.h"
 #include "util/prelude.h"
 #include "util/strbuf.h"
@@ -62,6 +63,7 @@ Out:
     platform_file_close(f);
     return NULL;
   }
+  memset(&fs->slots[fs->n_slots], 0, sizeof(struct fs_cache_slot));
   fs->slots[fs->n_slots].key = dup;
   fs->slots[fs->n_slots].file = f;
   fs->n_slots++;
@@ -211,7 +213,6 @@ fs_destroy(struct store* s)
   struct store_fs* fs = (struct store_fs*)s;
   if (!fs)
     return;
-  // Drain pending I/O before tearing down file handles.
   if (fs->q) {
     io_event_wait(fs->q, io_queue_record(fs->q));
     io_queue_destroy(fs->q);
@@ -240,15 +241,22 @@ store_fs_free_partial(struct store_fs* fs)
   free(fs);
 }
 
-static const struct store_vtable fs_vtable = {
+static const struct store_vtable fs_vtable_host = {
   .destroy = fs_destroy,
   .stat = fs_stat,
   .submit = fs_submit,
+  .submit_dev = NULL,
   .event_wait = fs_event_wait,
   .event_query = fs_event_query,
   .map = fs_map,
   .unmap = fs_unmap,
 };
+
+platform_file*
+store_fs_get_file_external(struct store_fs* fs, const char* key)
+{
+  return fs_get_file(fs, key);
+}
 
 struct store*
 store_fs_create(const struct store_fs_config* cfg)
@@ -260,7 +268,7 @@ store_fs_create(const struct store_fs_config* cfg)
 
   fs = (struct store_fs*)calloc(1, sizeof(*fs));
   CHECK_SILENT(Fail, fs);
-  fs->base.vt = &fs_vtable;
+  fs->base.vt = &fs_vtable_host;
   // Init the mutex up front so store_fs_free_partial can always
   // unconditionally destroy it.
   pthread_mutex_init(&fs->cache_mu, NULL);
@@ -268,6 +276,7 @@ store_fs_create(const struct store_fs_config* cfg)
   CHECK_SILENT(Fail, fs->root);
   fs->q = io_queue_create(cfg->nthreads, cfg->affinity);
   CHECK_SILENT(Fail, fs->q);
+
   return &fs->base;
 
 Fail:

@@ -10,7 +10,7 @@
 #include <stdlib.h>
 
 int
-fanout_alloc_pinned(struct blosc1_host_fanout* h,
+fanout_alloc_pinned(struct nvcomp_fanout_host* h,
                     struct nvcomp_fanout* d,
                     size_t n)
 {
@@ -33,7 +33,7 @@ Fail:
 }
 
 void
-fanout_free_pinned(struct blosc1_host_fanout* h, struct nvcomp_fanout* d)
+fanout_free_pinned(struct nvcomp_fanout_host* h, struct nvcomp_fanout* d)
 {
   if (h) {
     void* host_ptrs[] = {
@@ -70,7 +70,7 @@ fanout_free_pinned(struct blosc1_host_fanout* h, struct nvcomp_fanout* d)
 enum damacy_status
 fanout_upload(CUstream s,
               const struct nvcomp_fanout* d,
-              const struct blosc1_host_fanout* h,
+              const struct nvcomp_fanout_host* h,
               size_t n)
 {
   CU(Fail,
@@ -119,7 +119,7 @@ fanout_dev_bytes_per_sub(void)
 }
 
 enum damacy_status
-fanout_grow(struct blosc1_host_fanout* h,
+fanout_grow(struct nvcomp_fanout_host* h,
             struct nvcomp_fanout* d,
             uint32_t* cap,
             size_t need,

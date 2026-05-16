@@ -24,7 +24,6 @@ struct damacy_stats;
 struct decoder_zstd;
 struct gpu_budget;
 struct store;
-struct threadpool;
 
 struct wave_pool
 {
@@ -72,9 +71,16 @@ struct wave_pool
   // and never updated.
   struct damacy_batch_pool* pool;
   struct store* store;
-  struct threadpool* compute_pool;
   struct damacy_stats* stats;
   enum damacy_dtype dtype;
+
+  // GDS opt-in: peel issues store_read_submit_dev into the slot's
+  // device staging buffer; bind aliases wave->dev_compressed to it;
+  // submit_bulk_h2d skips the H2D copy. Validated at damacy_create:
+  // requires the store to support submit_dev (libcufile.so.0 loadable
+  // + cuFileDriverOpen succeeded). Set by wave_pool_init from the
+  // enable_gds parameter.
+  uint8_t use_gds;
 };
 
 // Create the streams, initialize the wave array, and allocate
@@ -88,13 +94,13 @@ int
 wave_pool_init(struct wave_pool* wp,
                struct damacy_batch_pool* pool,
                struct store* store,
-               struct threadpool* compute_pool,
                struct damacy_stats* stats,
                enum damacy_dtype dtype,
                uint8_t host_buffer_waves,
                uint64_t host_slab_per_wave,
                uint64_t dev_decompressed_per_wave,
                uint64_t max_chunk_uncompressed_bytes,
+               int enable_gds,
                struct gpu_budget* budget);
 
 // Sync + destroy streams, free per-wave + per-slot pinned host, then

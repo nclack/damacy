@@ -49,12 +49,17 @@ static_assert(sizeof(cpu_set_t) <= 128,
 static struct
 {
   _Atomic(void*) handle;
-  pfn_numa_available available;
-  pfn_numa_max_node max_node;
-  pfn_numa_allocate_cpumask allocate_cpumask;
-  pfn_numa_free_cpumask free_cpumask;
-  pfn_numa_node_to_cpus node_to_cpus;
+  pfn_numa_available numa_available;
+  pfn_numa_max_node numa_max_node;
+  pfn_numa_allocate_cpumask numa_allocate_cpumask;
+  pfn_numa_free_cpumask numa_free_cpumask;
+  pfn_numa_node_to_cpus numa_node_to_cpus;
 } g_libnuma;
+
+// Field name MUST equal the symbol name; the stringified token is the
+// dlsym key. Compiles cleanly under -Wpedantic via the void** round-trip.
+#define DLSYM_BIND(handle, table, sym)                                         \
+  (*(void**)&(table).sym = dlsym((handle), #sym))
 
 // One-shot guard so we only log "libnuma unavailable" once across the
 // process lifetime — repeated damacy_create calls shouldn't spam.
@@ -84,16 +89,15 @@ try_load_libnuma(void)
     return 0;
   }
 
-  g_libnuma.available = (pfn_numa_available)dlsym(h, "numa_available");
-  g_libnuma.max_node = (pfn_numa_max_node)dlsym(h, "numa_max_node");
-  g_libnuma.allocate_cpumask =
-    (pfn_numa_allocate_cpumask)dlsym(h, "numa_allocate_cpumask");
-  g_libnuma.free_cpumask = (pfn_numa_free_cpumask)dlsym(h, "numa_free_cpumask");
-  g_libnuma.node_to_cpus = (pfn_numa_node_to_cpus)dlsym(h, "numa_node_to_cpus");
+  DLSYM_BIND(h, g_libnuma, numa_available);
+  DLSYM_BIND(h, g_libnuma, numa_max_node);
+  DLSYM_BIND(h, g_libnuma, numa_allocate_cpumask);
+  DLSYM_BIND(h, g_libnuma, numa_free_cpumask);
+  DLSYM_BIND(h, g_libnuma, numa_node_to_cpus);
 
-  if (!g_libnuma.available || !g_libnuma.max_node ||
-      !g_libnuma.allocate_cpumask || !g_libnuma.free_cpumask ||
-      !g_libnuma.node_to_cpus) {
+  if (!g_libnuma.numa_available || !g_libnuma.numa_max_node ||
+      !g_libnuma.numa_allocate_cpumask || !g_libnuma.numa_free_cpumask ||
+      !g_libnuma.numa_node_to_cpus) {
     dlclose(h);
     atomic_store_explicit(
       &g_libnuma.handle, LIBNUMA_FAILED, memory_order_release);
@@ -126,7 +130,7 @@ runtime_numa_ok(void)
       log_info("numa: libnuma.so.1 not loadable — NUMA placement disabled");
     return 0;
   }
-  if (g_libnuma.available() < 0) {
+  if (g_libnuma.numa_available() < 0) {
     int expected = 0;
     if (atomic_compare_exchange_strong(
           &g_numa_unavailable_logged, &expected, 1))
@@ -177,7 +181,7 @@ resolve_from_driver(CUdevice cu_dev)
   if (cuDeviceGetAttribute(&node, CU_DEVICE_ATTRIBUTE_HOST_NUMA_ID, cu_dev) !=
       CUDA_SUCCESS)
     return -1;
-  if (node >= 0 && node > g_libnuma.max_node())
+  if (node >= 0 && node > g_libnuma.numa_max_node())
     return -1;
 #else
   (void)cu_dev;
@@ -191,11 +195,11 @@ resolve_from_driver(CUdevice cu_dev)
 static int
 build_node_cpu_mask(int node, uint8_t out[128])
 {
-  struct numa_bitmask* bm = g_libnuma.allocate_cpumask();
+  struct numa_bitmask* bm = g_libnuma.numa_allocate_cpumask();
   if (!bm)
     return 1;
-  if (g_libnuma.node_to_cpus(node, bm) != 0) {
-    g_libnuma.free_cpumask(bm);
+  if (g_libnuma.numa_node_to_cpus(node, bm) != 0) {
+    g_libnuma.numa_free_cpumask(bm);
     return 1;
   }
   cpu_set_t cs;
@@ -210,7 +214,7 @@ build_node_cpu_mask(int node, uint8_t out[128])
       ++popcnt;
     }
   }
-  g_libnuma.free_cpumask(bm);
+  g_libnuma.numa_free_cpumask(bm);
   if (popcnt == 0)
     return 1;
   memcpy(out, &cs, sizeof(cs) < 128 ? sizeof(cs) : 128);
@@ -241,19 +245,19 @@ numa_init(enum damacy_numa_strategy strategy,
     // falls through to the no-op path with a clear warning.
     node = override_node;
     source = "override";
-    if (node < 0 || node > g_libnuma.max_node()) {
+    if (node < 0 || node > g_libnuma.numa_max_node()) {
       log_warn("numa: pin_to node=%d out of range [0..%d] — no pinning",
                node,
-               g_libnuma.max_node());
+               g_libnuma.numa_max_node());
       return;
     }
   } else {
     // AUTO path: nothing useful to pin against on a single-node box.
     // numa_max_node() returns the highest configured node id; 0 means
     // just node 0 exists.
-    if (g_libnuma.max_node() <= 0) {
+    if (g_libnuma.numa_max_node() <= 0) {
       log_info("numa: max_node=%d — single-node host, no pinning",
-               g_libnuma.max_node());
+               g_libnuma.numa_max_node());
       return;
     }
     node = resolve_from_driver(cu_device);

@@ -153,6 +153,10 @@ struct emit_ctx
   uint8_t codec_id;
   uint32_t decompressed_n_bytes; // == inner_chunk_bytes(meta) (validated)
   uint64_t page_alignment_bytes;
+  // Mutable handle to this sample's plan entry. emit_chunk lazily
+  // populates ->layout / ->layout_probed on the first non-fill emit.
+  struct sample_plan* sp;
+  struct zarr_meta_cache* meta_cache;
   // per-shard
   const struct zarr_shard_entry* shard_entries;
   uint64_t n_shard_entries;
@@ -233,6 +237,24 @@ emit_chunk(const struct emit_ctx* ctx,
 
   if (entry->nbytes > DAMACY_MAX_CHUNK_BYTES)
     return DAMACY_DECODE;
+
+  // First non-fill chunk for this sample: probe (or fetch cached) the
+  // blosc1 chunk layout and stash it on the sample_plan. Probe failure
+  // is non-fatal — downstream falls back to MAX_BLOCKS_PER_CHUNK in
+  // cap calculations.
+  if (ctx->sp && !ctx->sp->layout_probed) {
+    const struct chunk_layout* cl =
+      zarr_meta_cache_probe_layout(ctx->meta_cache,
+                                   ctx->sample->uri,
+                                   ctx->interned_path,
+                                   entry->offset,
+                                   (uint32_t)entry->nbytes,
+                                   ctx->codec_id);
+    if (cl) {
+      ctx->sp->layout = *cl;
+      ctx->sp->layout_probed = 1;
+    }
+  }
 
   // Page-aligned read window enclosing [offset, offset + nbytes).
   uint64_t page_alignment_bytes = ctx->page_alignment_bytes;
@@ -385,6 +407,8 @@ planner_plan(struct planner* self,
       .codec_id = (uint8_t)meta->inner_codec.id,
       .decompressed_n_bytes = (uint32_t)decompressed_n_bytes,
       .page_alignment_bytes = self->cfg.page_alignment,
+      .sp = sp,
+      .meta_cache = self->cfg.meta_cache,
     };
 
     // Iterate chunks in [chunk_lo, chunk_hi) row-major.

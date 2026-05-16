@@ -104,7 +104,7 @@ add_cuda_lib(host_slab SOURCES wave/host_slab.h wave/host_slab.c
 # Pinned-host + device SOA fanout used by the zstd decoder batch path.
 # Pure: no streams, no scheduler — alloc/free/upload/grow primitives.
 add_cuda_lib(fanout SOURCES wave/fanout.h wave/fanout.c
-    LINKS blosc1_host decoder gpu_budget log CUDA::cuda_driver
+    LINKS decoder gpu_budget log CUDA::cuda_driver
 )
 
 # GPU memory geometry for a wave: per-wave byte predictions, the
@@ -122,7 +122,7 @@ add_cuda_lib(wave_budget SOURCES wave/wave_budget.h wave/wave_budget.c
 # per-stage CUevents. No streams, no scheduler — that lives in
 # wave_pool.
 add_cuda_lib(wave SOURCES wave/wave.h wave/wave.c
-    LINKS decoder assemble blosc1_host fanout log CUDA::cuda_driver
+    LINKS decoder assemble fanout log CUDA::cuda_driver
 )
 
 # wave_pool: the conductor the scheduler drives. Owns both waves + the
@@ -132,14 +132,23 @@ add_cuda_lib(wave SOURCES wave/wave.h wave/wave.c
 # state machine.
 add_cuda_lib(wave_pool SOURCES wave/wave_pool.h wave/wave_pool.c
     LINKS wave host_slab fanout wave_budget gpu_budget batch_pool decoder
-          assemble planner blosc1_host store damacy_stats damacy_config
-          damacy_nvtx strbuf log CUDA::cuda_driver
+          assemble planner store damacy_stats damacy_config
+          damacy_nvtx log CUDA::cuda_driver
 )
 
-# Read-side store
+# Read-side store. store_fs.c is the host impl; store_fs_gds.c is an
+# independent cuFile-backed store. DAMACY_ENABLE_GDS=OFF links the stub
+# (store_fs_gds_create returns NULL); runtime GDS opt-in then fails INVAL.
 add_src_lib(store SOURCES store/store.h store/store.c store/store_fs.h store/store_fs.c
     LINKS io_queue platform_io strbuf log
 )
+if(NOT DAMACY_FUZZ AND DAMACY_ENABLE_GDS)
+    target_sources(store PRIVATE store/store_fs_gds.h store/store_fs_gds.c)
+    target_include_directories(store PRIVATE ${CuFile_INCLUDE_DIR})
+    target_link_libraries(store PRIVATE CUDA::cuda_driver ${CMAKE_DL_LIBS})
+else()
+    target_sources(store PRIVATE store/store_fs_gds.h store/store_fs_gds_stub.c)
+endif()
 
 # Zarr v3 metadata + shard-index parsers (cache-layer building blocks).
 add_src_lib(zarr SOURCES zarr/zarr_metadata.h zarr/zarr_metadata.c
@@ -147,11 +156,18 @@ add_src_lib(zarr SOURCES zarr/zarr_metadata.h zarr/zarr_metadata.c
     LINKS dtype json strbuf crc32c log
 )
 
+# Per-array blosc1 chunk-layout probe (16-byte header read via store).
+# Used by the planner to pre-size decoder/fanout caps and to feed the
+# GPU parse kernels their per-chunk blocksize / nblocks / shuffle bits.
+add_src_lib(zarr_chunk_layout SOURCES zarr/zarr_chunk_layout.h zarr/zarr_chunk_layout.c
+    LINKS zarr store log
+)
+
 # damacy-side metadata cache (LRU around zarr_metadata_parse).
 # damacy.h is header-included for the damacy_status enum; no link needed
 # (no symbols referenced).
 add_src_lib(zarr_meta_cache SOURCES zarr/zarr_meta_cache.h zarr/zarr_meta_cache.c
-    LINKS zarr lru store strbuf hash log
+    LINKS zarr zarr_chunk_layout lru store strbuf hash log
 )
 
 # damacy-side shard index cache (LRU around zarr_shard_index_parse).
@@ -171,16 +187,10 @@ add_cuda_lib(decoder
             decoder/decoder_zstd.h decoder/decoder_zstd.c
             decoder/decoder_memcpy.h decoder/decoder_memcpy.cu
             decoder/blosc1.h
+            decoder/blosc1_parse.h decoder/blosc1_parse.cu
             decoder/status_reduce.h decoder/status_reduce.cu
     LINKS CUDA::cudart_static CUDA::cuda_driver nvcomp::nvcomp log zarr
-)
-
-# Host-side blosc1 chunk-header parse. Pure C; no CUDA. Consumes the
-# struct definitions in decoder/blosc1.h (unmodified) and writes into
-# pinned-host fanout / op arrays the caller subsequently H2D's.
-add_src_lib(blosc1_host
-    SOURCES decoder/blosc1_host.h decoder/blosc1_host.c
-    LINKS threadpool zarr log
+          planner assemble zarr_chunk_layout
 )
 
 # Bytewise gather kernel: chunk windows → output batch tensor.
@@ -197,7 +207,7 @@ add_cuda_lib(assemble SOURCES assemble/assemble.h assemble/assemble.cu
 # launch in assemble.cu).
 add_cuda_lib(damacy SOURCES damacy.h damacy.c damacy_status.c
     LINKS platform planner zarr_meta_cache zarr_shard_cache zarr store
-          decoder blosc1_host assemble dtype log lookahead gpu_budget
+          decoder assemble dtype log lookahead gpu_budget
           batch_pool wave_pool wave_budget damacy_stats damacy_config
-          damacy_nvtx strbuf threadpool scheduler CUDA::cuda_driver
+          damacy_nvtx strbuf scheduler CUDA::cuda_driver
 )

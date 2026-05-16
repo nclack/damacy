@@ -20,7 +20,7 @@
 #  * nvcomp is the standalone NVIDIA distribution (not the pip wheel) extracted
 #    to /opt/nvcomp; CMake locates it via -DNvcomp_ROOT.
 
-ARG CUDA_IMAGE=nvidia/cuda:13.0.1-devel-ubuntu24.04
+ARG CUDA_IMAGE=nvidia/cuda:13.2.1-devel-ubuntu24.04
 FROM ${CUDA_IMAGE}
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -31,10 +31,10 @@ ARG NVCOMP_URL=https://developer.download.nvidia.com/compute/nvcomp/redist/nvcom
 
 # ----- system toolchain via apt ----------------------------------------------
 # Just enough to drive cmake + ninja + python; gcc/g++/nvcc come from the
-# cuda devel base image. libnuma is loaded at runtime via dlopen (see
-# src/numa/numa.c) so libnuma-dev isn't needed to build; we install the
-# runtime package so NUMA pinning actually does something on multi-
-# socket cluster nodes.
+# cuda devel base image. libnuma + libcufile are dlopen'd at runtime
+# (src/numa/numa.c, src/store/store_fs_gds.c); -dev packages aren't
+# needed to build. libmount1 + libudev1 are transitive dlopens from
+# libcufile at driver init even in compat mode.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -45,7 +45,14 @@ RUN apt-get update \
         python3 \
         python3-dev \
         libnuma1 \
+        libmount1 \
+        libudev1 \
  && rm -rf /var/lib/apt/lists/*
+
+# Default /etc/cufile.json from the CUDA toolkit already enables
+# allow_compat_mode and ships the posix_pool / posix_gds_min_kb /
+# posix_unaligned_writes settings that compat-mode cuFileHandleRegister
+# needs on tmpfs. Don't replace it.
 
 # ----- uv (static binary) + venv ---------------------------------------------
 # Official installer drops uv at /root/.local/bin/uv; relocate to /usr/local/bin
@@ -99,7 +106,6 @@ WORKDIR /workspace/damacy
 COPY . /workspace/damacy
 
 # Configure + build the C library, damacy_bench, and the Python extension.
-# CMAKE_BUILD_TYPE and DAMACY_COVERAGE come from --build-arg above.
 RUN cmake -S . -B build -G Ninja \
         -DDAMACY_PYTHON=ON \
         -DDAMACY_COVERAGE=${DAMACY_COVERAGE} \
