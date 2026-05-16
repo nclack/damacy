@@ -315,17 +315,25 @@ test_multi_chunk_partial(void)
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_chunk_plans == 4);
-  EXPECT(out.n_read_ops == 4);
+  // All four chunks page-align to [0, PAGE) and coalesce to one read.
+  EXPECT(out.n_read_ops == 1);
   EXPECT(out.n_sample_plans == 1);
 
-  // Chunks emitted in row-major chunk_d order: (0,0), (0,1), (1,0), (1,1).
+  EXPECT(reads[0].file_offset == 0);
+  EXPECT(reads[0].nbytes == PAGE);
+
   EXPECT(chunks[0].chunk_d[0] == 0 && chunks[0].chunk_d[1] == 0);
   EXPECT(chunks[1].chunk_d[0] == 0 && chunks[1].chunk_d[1] == 1);
   EXPECT(chunks[2].chunk_d[0] == 1 && chunks[2].chunk_d[1] == 0);
   EXPECT(chunks[3].chunk_d[0] == 1 && chunks[3].chunk_d[1] == 1);
-  for (uint32_t i = 0; i < 4; ++i) {
-    EXPECT(chunks[i].batch_pool_slot == 0);
-    EXPECT(chunks[i].sample_idx_in_batch == 0);
+  {
+    const uint64_t expected_in_read[4] = { 0, 100, 200, 300 };
+    for (uint32_t i = 0; i < 4; ++i) {
+      EXPECT(chunks[i].batch_pool_slot == 0);
+      EXPECT(chunks[i].sample_idx_in_batch == 0);
+      EXPECT(chunks[i].read_op_idx == 0);
+      EXPECT(chunks[i].offset_in_read == expected_in_read[i]);
+    }
   }
 
   struct sample_plan* sp = &samples[0];
@@ -600,15 +608,19 @@ test_page_alignment(void)
     EXPECT(reads[i].nbytes % PAGE == 0);
   }
 
-  // Chunk (0,0): offset 4090 → file_offset 0, nbytes 8192 (covers [4090,4122))
+  // Page-aligned windows for the four chunks are
+  //   [0, 8192), [4096, 8192), [8192, 12288), [12288, 20480)
+  // which all touch each other → fuse into one read.
+  EXPECT(out.n_read_ops == 1);
   EXPECT(reads[0].file_offset == 0);
-  EXPECT(reads[0].nbytes == 2 * PAGE);
-  EXPECT(chunks[0].offset_in_read == 4090);
-
-  // Chunk (0,1): offset 4146 → file_offset 4096, nbytes 4096
-  EXPECT(reads[1].file_offset == 4096);
-  EXPECT(reads[1].nbytes == PAGE);
-  EXPECT(chunks[1].offset_in_read == 50);
+  EXPECT(reads[0].nbytes == 5 * PAGE);
+  {
+    const uint64_t expected_in_read[4] = { 4090, 4146, 8392, 16378 };
+    for (uint32_t i = 0; i < 4; ++i) {
+      EXPECT(chunks[i].read_op_idx == 0);
+      EXPECT(chunks[i].offset_in_read == expected_in_read[i]);
+    }
+  }
 
   fixture_destroy(&f);
   return 0;
@@ -1005,18 +1017,145 @@ test_sharded_index_start(void)
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_chunk_plans == 4);
-  EXPECT(out.n_read_ops == 4);
-
-  // All 4 chunks live inside the first PAGE, so each read_op page-aligns
-  // to the same {file_offset=0, nbytes=PAGE}. The interesting per-chunk
-  // values are offset_in_read (= absolute file offset, since page is 0)
-  // and compressed_nbytes.
+  // All 4 chunks live inside the first PAGE; coalescing fuses them.
+  EXPECT(out.n_read_ops == 1);
+  EXPECT(reads[0].file_offset == 0);
+  EXPECT(reads[0].nbytes == PAGE);
   for (uint32_t i = 0; i < 4; ++i) {
-    EXPECT(reads[i].file_offset == 0);
-    EXPECT(reads[i].nbytes == PAGE);
+    EXPECT(chunks[i].read_op_idx == 0);
     EXPECT(chunks[i].offset_in_read == offsets[i]);
     EXPECT(chunks[i].compressed_nbytes == nbytes[i]);
   }
+
+  fixture_destroy(&f);
+  return 0;
+}
+
+// Two chunks each in their own page, back-to-back → one fused read.
+static int
+test_coalesce_adjacent_pages(void)
+{
+  const uint64_t offsets[4] = { 0, PAGE, 2 * PAGE, 3 * PAGE };
+  const uint64_t nbytes[4] = { 32, 32, 32, 32 };
+  struct fixture f = { 0 };
+  if (fixture_init(&f, offsets, nbytes))
+    return 1;
+
+  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  int64_t dst_strides[3];
+  mk_dst_strides_2d(1, 4, 8, dst_strides);
+
+  struct read_op reads[8] = { 0 };
+  struct chunk_plan chunks[8] = { 0 };
+  struct sample_plan samples[4] = { 0 };
+  struct planner_output out = {
+    .read_ops = reads,
+    .read_ops_cap = 8,
+    .chunk_plans = chunks,
+    .chunk_plans_cap = 8,
+    .sample_plans = samples,
+    .sample_plans_cap = 4,
+  };
+  EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
+  EXPECT(out.n_chunk_plans == 4);
+  EXPECT(out.n_read_ops == 1);
+  EXPECT(reads[0].file_offset == 0);
+  EXPECT(reads[0].nbytes == 4 * PAGE);
+  for (uint32_t i = 0; i < 4; ++i) {
+    EXPECT(chunks[i].read_op_idx == 0);
+    EXPECT(chunks[i].offset_in_read == i * PAGE);
+  }
+
+  fixture_destroy(&f);
+  return 0;
+}
+
+// A one-page gap must block fusion; back-to-back pages must fuse.
+static int
+test_coalesce_gap_blocks_fusion(void)
+{
+  // chunk(0,0) at 0      → read [0, PAGE)        — leader 0
+  // chunk(0,1) at 4*PAGE → read [4*PAGE, 5*PAGE) — gap, new leader
+  // chunk(1,0) at 5*PAGE → read [5*PAGE, 6*PAGE) — adjacent to (0,1), fuses
+  // chunk(1,1) at 8*PAGE → read [8*PAGE, 9*PAGE) — gap, new leader
+  const uint64_t offsets[4] = { 0, 4 * PAGE, 5 * PAGE, 8 * PAGE };
+  const uint64_t nbytes[4] = { 32, 32, 32, 32 };
+  struct fixture f = { 0 };
+  if (fixture_init(&f, offsets, nbytes))
+    return 1;
+
+  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  int64_t dst_strides[3];
+  mk_dst_strides_2d(1, 4, 8, dst_strides);
+
+  struct read_op reads[8] = { 0 };
+  struct chunk_plan chunks[8] = { 0 };
+  struct sample_plan samples[4] = { 0 };
+  struct planner_output out = {
+    .read_ops = reads,
+    .read_ops_cap = 8,
+    .chunk_plans = chunks,
+    .chunk_plans_cap = 8,
+    .sample_plans = samples,
+    .sample_plans_cap = 4,
+  };
+  EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
+  EXPECT(out.n_chunk_plans == 4);
+  EXPECT(out.n_read_ops == 3);
+  EXPECT(chunks[0].read_op_idx == 0);
+  EXPECT(chunks[1].read_op_idx == 1);
+  EXPECT(chunks[2].read_op_idx == 1);
+  EXPECT(chunks[3].read_op_idx == 2);
+  EXPECT(reads[1].file_offset == 4 * PAGE);
+  EXPECT(reads[1].nbytes == 2 * PAGE);
+  EXPECT(chunks[1].offset_in_read == 0);
+  EXPECT(chunks[2].offset_in_read == PAGE);
+  EXPECT(reads[2].file_offset == 8 * PAGE);
+  EXPECT(reads[2].nbytes == PAGE);
+
+  fixture_destroy(&f);
+  return 0;
+}
+
+// A fill chunk between two page-adjacent regular chunks resets the
+// coalesce leader, so the regulars don't fuse across the fill.
+static int
+test_coalesce_fill_breaks_run(void)
+{
+  // (0,1) is fill. (0,0) and (1,0) would otherwise be page-adjacent
+  // (their reads are [0, PAGE) and [PAGE, 2*PAGE)) but the intervening
+  // fill chunk_plan blocks fusion.
+  const uint64_t offsets[4] = { 0, ZARR_SHARD_EMPTY_OFFSET, PAGE, 2 * PAGE };
+  const uint64_t nbytes[4] = { 32, ZARR_SHARD_EMPTY_NBYTES, 32, 32 };
+  struct fixture f = { 0 };
+  if (fixture_init(&f, offsets, nbytes))
+    return 1;
+
+  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  int64_t dst_strides[3];
+  mk_dst_strides_2d(1, 4, 8, dst_strides);
+
+  struct read_op reads[8] = { 0 };
+  struct chunk_plan chunks[8] = { 0 };
+  struct sample_plan samples[4] = { 0 };
+  struct planner_output out = {
+    .read_ops = reads,
+    .read_ops_cap = 8,
+    .chunk_plans = chunks,
+    .chunk_plans_cap = 8,
+    .sample_plans = samples,
+    .sample_plans_cap = 4,
+  };
+  EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
+  EXPECT(out.n_chunk_plans == 4);
+  // (0,0) alone, (0,1) fill standalone, (1,0)+(1,1) fuse.
+  EXPECT(out.n_read_ops == 3);
+  EXPECT(chunks[0].is_fill == 0 && chunks[0].read_op_idx == 0);
+  EXPECT(chunks[1].is_fill == 1 && chunks[1].read_op_idx == 1);
+  EXPECT(chunks[2].is_fill == 0 && chunks[2].read_op_idx == 2);
+  EXPECT(chunks[3].is_fill == 0 && chunks[3].read_op_idx == 2);
+  EXPECT(reads[2].file_offset == PAGE);
+  EXPECT(reads[2].nbytes == 2 * PAGE);
 
   fixture_destroy(&f);
   return 0;
@@ -1041,6 +1180,9 @@ main(void)
   RUN(test_unsharded_single_chunk);
   RUN(test_unsharded_multi_chunk);
   RUN(test_sharded_index_start);
+  RUN(test_coalesce_adjacent_pages);
+  RUN(test_coalesce_gap_blocks_fusion);
+  RUN(test_coalesce_fill_breaks_run);
   log_info("all tests passed");
   return 0;
 }

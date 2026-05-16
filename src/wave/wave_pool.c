@@ -234,7 +234,7 @@ build_gpu_parse_chunks(const struct wave_pool* wp, struct damacy_wave* wave)
 
   for (uint32_t i = 0; i < wave->n_chunks; ++i) {
     struct chunk_plan* c = &slot->chunk_plans[wave->batch_chunk_offset + i];
-    struct read_op* r = &slot->read_ops[wave->batch_chunk_offset + i];
+    struct read_op* r = &slot->read_ops[c->read_op_idx];
     struct gpu_parse_chunk* gc = &wave->h_parse_chunks[i];
     uint32_t comp_off =
       (uint32_t)(r->dst_buf_offset + (uint64_t)c->offset_in_read);
@@ -824,21 +824,43 @@ wave_pool_peel(struct wave_pool* wp, uint16_t batch_slot_idx)
   // share the same size by resolver construction. Read the first wave's
   // cap as the runtime value.
   const uint64_t dev_cap = wp->waves[0].dev_decompressed_cap;
+  // Only the first chunk of a coalesced read consumes host bytes; the
+  // rest share the read's host region via r->dst_buf_offset.
+  uint32_t prev_read_op = UINT32_MAX;
   for (; take < remaining && take < DAMACY_MAX_CHUNKS_PER_WAVE; ++take) {
-    struct read_op* r = &batch->read_ops[base + take];
     struct chunk_plan* c = &batch->chunk_plans[base + take];
-    if (host_cursor + r->nbytes > hs->cap)
+    struct read_op* r = &batch->read_ops[c->read_op_idx];
+    int new_read = (c->read_op_idx != prev_read_op);
+    uint64_t host_add = new_read ? r->nbytes : 0;
+    if (host_cursor + host_add > hs->cap)
       break;
     if (dev_cursor + c->decompressed_nbytes > dev_cap)
       break;
-    r->dst_buf_offset = host_cursor;
+    if (new_read) {
+      r->dst_buf_offset = host_cursor;
+      host_cursor += host_add;
+    }
     c->dev_decompressed_offset = dev_cursor;
-    host_cursor += r->nbytes;
     dev_cursor += c->decompressed_nbytes;
+    prev_read_op = c->read_op_idx;
+  }
+  // Don't split a coalesced read across waves.
+  if (take < remaining && take > 0 &&
+      batch->chunk_plans[base + take - 1].read_op_idx ==
+        batch->chunk_plans[base + take].read_op_idx) {
+    uint32_t boundary_op = batch->chunk_plans[base + take - 1].read_op_idx;
+    while (take > 0) {
+      struct chunk_plan* prev_cp = &batch->chunk_plans[base + take - 1];
+      if (prev_cp->read_op_idx != boundary_op)
+        break;
+      dev_cursor -= prev_cp->decompressed_nbytes;
+      take--;
+    }
+    host_cursor -= batch->read_ops[boundary_op].nbytes;
   }
   if (take == 0) {
-    // Single chunk doesn't fit. Per-wave caps too tight for this workload;
-    // surface it loudly rather than livelocking. Slot stays FREE.
+    // Single chunk (or coalesced read) doesn't fit; surface rather
+    // than livelock. Slot stays FREE.
     log_error("wave: chunk too large for slot "
               "(slot_cap=%llu dev_cap=%llu)",
               (unsigned long long)hs->cap,
@@ -847,16 +869,17 @@ wave_pool_peel(struct wave_pool* wp, uint16_t batch_slot_idx)
     return DAMACY_OOM;
   }
 
-  // Only emit store_read entries for chunks that actually touch the
-  // store (skip fill chunks). chunk_plan.is_fill is the source of
-  // truth; read_op.nbytes happens to be 0 for fills today but the flag
-  // decouples this peel from that representation.
+  // One store_read per distinct read_op (skipping fills). Planner emits
+  // shared-read chunk_plans contiguously, so previous-idx dedup suffices.
   uint32_t n_reads = 0;
+  uint32_t prev_op = UINT32_MAX;
   for (uint32_t i = 0; i < take; ++i) {
-    struct read_op* r = &batch->read_ops[base + i];
     struct chunk_plan* c = &batch->chunk_plans[base + i];
     if (c->is_fill)
       continue;
+    if (c->read_op_idx == prev_op)
+      continue;
+    struct read_op* r = &batch->read_ops[c->read_op_idx];
     // GDS path writes directly into the slot's device staging buffer;
     // non-GDS path stages through the pinned host buffer.
     void* dst = wp->use_gds ? (void*)((uint8_t*)hs->dev_buf + r->dst_buf_offset)
@@ -867,6 +890,7 @@ wave_pool_peel(struct wave_pool* wp, uint16_t batch_slot_idx)
       .offset = r->file_offset,
       .len = r->nbytes,
     };
+    prev_op = c->read_op_idx;
   }
   hs->io_t_start_ns = monotonic_ns();
   hs->is_fill_wave = (n_reads == 0);
