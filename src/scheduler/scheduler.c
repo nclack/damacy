@@ -116,6 +116,13 @@ scheduler_wait(struct scheduler* s)
 }
 
 void
+scheduler_wait_diag(struct scheduler* s, const char* site, int timeout_ms)
+{
+  if (platform_cond_timedwait_ms(s->cv, s->m, timeout_ms))
+    log_warn("scheduler_wait_diag: %d ms timeout at %s", timeout_ms, site);
+}
+
+void
 scheduler_broadcast(struct scheduler* s)
 {
   platform_cond_broadcast(s->cv);

@@ -34,6 +34,17 @@ extern "C"
   // before return. Spurious wakeups possible.
   void scheduler_wait(struct scheduler* s);
 
+  // Timed variant. Logs a warning with `site` and the elapsed time on
+  // timeout, then re-waits. Use a macro at call sites to capture
+  // __FILE__:__LINE__ as `site`.
+  void scheduler_wait_diag(struct scheduler* s,
+                           const char* site,
+                           int timeout_ms);
+#define SCHEDULER_WAIT_DIAG(s, ms)                                             \
+  scheduler_wait_diag((s), __FILE__ ":" SCHED_STR(__LINE__), (ms))
+#define SCHED_STR(x) SCHED_STR2(x)
+#define SCHED_STR2(x) #x
+
   // Caller must hold the lock.
   void scheduler_broadcast(struct scheduler* s);
 

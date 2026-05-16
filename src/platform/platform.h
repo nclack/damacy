@@ -50,6 +50,10 @@ typedef pthread_once_t platform_once;
   struct platform_cond* platform_cond_new(void);
   void platform_cond_free(struct platform_cond* c);
   void platform_cond_wait(struct platform_cond* c, struct platform_mutex* m);
+  // Returns 1 on timeout, 0 on signal/spurious-wake.
+  int platform_cond_timedwait_ms(struct platform_cond* c,
+                                 struct platform_mutex* m,
+                                 int timeout_ms);
   void platform_cond_broadcast(struct platform_cond* c);
 
   void platform_cpu_pause(void);

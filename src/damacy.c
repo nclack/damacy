@@ -304,7 +304,9 @@ kick_peel_into_free_slots(struct damacy* self)
         plan_reserve(self, (uint16_t)free_slot, self->cfg.batch_size);
       if (s != DAMACY_OK)
         return s;
+      scheduler_unlock(self->sched);
       enum damacy_status rs = plan_run(self, (uint16_t)free_slot);
+      scheduler_lock(self->sched);
       s = plan_commit(self, (uint16_t)free_slot, rs);
       if (s != DAMACY_OK)
         return s;
@@ -759,7 +761,7 @@ damacy_pop(struct damacy* self, struct damacy_batch** out)
       goto Done;
     }
     uint64_t wait_t0 = monotonic_ns();
-    scheduler_wait(self->sched);
+    SCHEDULER_WAIT_DIAG(self->sched, 5000);
     metric_record(
       &self->stats.pop_wait, (float)((monotonic_ns() - wait_t0) / 1.0e6), 0, 0);
   }
@@ -898,7 +900,7 @@ damacy_flush(struct damacy* self)
     while ((find_free_batch_slot(&self->batch_pool) < 0 ||
             any_batch_planning(&self->batch_pool)) &&
            self->failed_status == DAMACY_OK)
-      scheduler_wait(self->sched);
+      SCHEDULER_WAIT_DIAG(self->sched, 5000);
     if (self->failed_status != DAMACY_OK) {
       r = self->failed_status;
       goto Done;
@@ -908,7 +910,9 @@ damacy_flush(struct damacy* self)
     r = plan_reserve(self, (uint16_t)free_slot, n);
     if (r != DAMACY_OK)
       goto Done;
+    scheduler_unlock(self->sched);
     enum damacy_status rs = plan_run(self, (uint16_t)free_slot);
+    scheduler_lock(self->sched);
     r = plan_commit(self, (uint16_t)free_slot, rs);
     if (r != DAMACY_OK)
       goto Done;
@@ -920,7 +924,7 @@ damacy_flush(struct damacy* self)
           find_oldest_filling_slot(&self->batch_pool) >= 0 ||
           any_batch_planning(&self->batch_pool)) &&
          self->failed_status == DAMACY_OK)
-    scheduler_wait(self->sched);
+    SCHEDULER_WAIT_DIAG(self->sched, 5000);
   metric_record(&self->stats.flush_wait,
                 (float)((monotonic_ns() - flush_t0) / 1.0e6),
                 0,
