@@ -63,4 +63,10 @@ struct store_fs
   // "is GDS enabled?" question is answered by base.vt: store_supports_gds
   // returns true iff vt->submit_dev is non-NULL.
   uint8_t gds_driver_opened;
+
+  // CUstream (as void* to keep this header CUDA-free) that cuFileReadAsync
+  // submissions ride on. Set by wave_pool_init via store_fs_gds_set_stream
+  // after the wave pool creates its stream_h2d; submit_dev returns
+  // seq=0 if a caller racing init invokes it before the stream is set.
+  void* gds_stream;
 };

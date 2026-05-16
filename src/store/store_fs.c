@@ -144,9 +144,15 @@ Drain:
   return ev; // ev.seq == 0 signals failure
 }
 
+// GDS submits return STORE_FS_GDS_SENTINEL_SEQ instead of an io_queue
+// seq — cuFileReadAsync is stream-ordered with the parse + decode work
+// that follows, so the SLOT_IO → SLOT_READY transition is bookkeeping
+// and the real wait is the cuEventQuery(bulk_h2d_end) gate downstream.
 static void
 fs_event_wait(struct store* s, struct store_event ev)
 {
+  if (ev.seq == STORE_FS_GDS_SENTINEL_SEQ)
+    return;
   struct store_fs* fs = (struct store_fs*)s;
   io_event_wait(fs->q, (struct io_event){ .seq = ev.seq });
 }
@@ -154,6 +160,8 @@ fs_event_wait(struct store* s, struct store_event ev)
 static int
 fs_event_query(struct store* s, struct store_event ev)
 {
+  if (ev.seq == STORE_FS_GDS_SENTINEL_SEQ)
+    return 1;
   struct store_fs* fs = (struct store_fs*)s;
   return io_event_query(fs->q, (struct io_event){ .seq = ev.seq });
 }

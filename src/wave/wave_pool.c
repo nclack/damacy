@@ -12,6 +12,7 @@
 #include "nvtx/nvtx.h"
 #include "planner/planner.h"
 #include "store/store.h"
+#include "store/store_fs_gds.h" // store_fs_gds_set_stream (GDS-only)
 #include "util/cuda_check.h"
 #include "util/prelude.h"
 #include "util/strbuf.h"
@@ -69,6 +70,11 @@ wave_pool_init(struct wave_pool* wp,
   CU(Fail, cuStreamCreate(&wp->stream_h2d, CU_STREAM_NON_BLOCKING));
   CU(Fail, cuStreamCreate(&wp->stream_decode, CU_STREAM_NON_BLOCKING));
   CU(Fail, cuStreamCreate(&wp->stream_post, CU_STREAM_NON_BLOCKING));
+  // GDS path: cuFileReadAsync rides on stream_h2d. Set this before the
+  // first peel so submit_dev has a valid stream to schedule against.
+  // No-op (and harmless) when the store isn't a GDS-enabled store_fs.
+  if (wp->use_gds)
+    store_fs_gds_set_stream(store, wp->stream_h2d);
   for (size_t i = 0; i < countof(wp->decode_done_ring); ++i)
     CU(Fail, cuEventCreate(&wp->decode_done_ring[i], CU_EVENT_DEFAULT));
   damacy_nvtx_stream_name(wp->stream_h2d, "damacy:h2d");
@@ -260,11 +266,11 @@ record_io_metric(const struct wave_pool* wp, const struct damacy_wave* wave)
 }
 
 // Phase 1: record h2d_start, queue the slab memcpy, record bulk_h2d_end.
-// On the GDS path the cuFile read already landed bytes on the device
-// (synchronously from the io_queue worker before slot transitioned
-// SLOT_IO → SLOT_READY), so the memcpy is skipped — the bulk_h2d_end
-// event still fires immediately on stream_h2d to keep the slot-release
-// poll in wave_pool_advance shape-compatible across both paths.
+// On the GDS path the cuFileReadAsync calls submitted in peel were
+// queued on this same stream_h2d, so the memcpy is skipped — stream
+// FIFO orders the parse kernel after the reads. bulk_h2d_end still
+// records on stream_h2d, now measuring the read time itself rather
+// than a separate H2D copy.
 static enum damacy_status
 submit_bulk_h2d(struct wave_pool* wp, struct damacy_wave* wave)
 {

@@ -4,7 +4,6 @@
 
 #include "store/store_fs_gds.h"
 
-#include "io_queue/io_queue.h"
 #include "log/log.h"
 #include "platform/platform_io.h"
 #include "store/store.h"
@@ -13,7 +12,6 @@
 #include <cufile.h>
 #include <dlfcn.h>
 #include <pthread.h>
-#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -22,39 +20,41 @@ typedef CUfileError_t (*pfn_cuFileDriverClose)(void);
 typedef CUfileError_t (*pfn_cuFileHandleRegister)(CUfileHandle_t*,
                                                   CUfileDescr_t*);
 typedef void (*pfn_cuFileHandleDeregister)(CUfileHandle_t);
-typedef ssize_t (*pfn_cuFileRead)(CUfileHandle_t, void*, size_t, off_t, off_t);
+typedef CUfileError_t (*pfn_cuFileReadAsync)(CUfileHandle_t,
+                                             void*,
+                                             size_t*,
+                                             off_t*,
+                                             off_t*,
+                                             ssize_t*,
+                                             CUstream);
 
-// `handle` doubles as a lazy-load state machine: NULL = unattempted,
-// LIBCUFILE_FAILED = previously failed (don't retry), else live handle.
-#define LIBCUFILE_FAILED ((void*)-1)
+// One-time init via pthread_once. After pthread_once returns, readers
+// can use g_libcufile.* unsynchronized: the once_init body happens-before
+// every subsequent caller. g_libcufile_ok is the sole readiness flag;
+// the dlopen handle is leaked at process exit (mirrors src/numa/numa.c).
 static struct
 {
-  _Atomic(void*) handle;
   pfn_cuFileDriverOpen driver_open;
   pfn_cuFileDriverClose driver_close;
   pfn_cuFileHandleRegister handle_register;
   pfn_cuFileHandleDeregister handle_deregister;
-  pfn_cuFileRead read;
+  pfn_cuFileReadAsync read_async;
 } g_libcufile;
 
-static _Atomic int g_libcufile_unavailable_logged = 0;
+static pthread_once_t g_libcufile_once = PTHREAD_ONCE_INIT;
+static int g_libcufile_ok;
 
-static int
-try_load_libcufile(void)
+static void
+libcufile_once_init(void)
 {
-  void* cur = atomic_load_explicit(&g_libcufile.handle, memory_order_acquire);
-  if (cur == LIBCUFILE_FAILED)
-    return 0;
-  if (cur != NULL)
-    return 1;
-
   void* h = dlopen("libcufile.so.0", RTLD_LAZY | RTLD_LOCAL);
   if (!h) {
-    atomic_store_explicit(
-      &g_libcufile.handle, LIBCUFILE_FAILED, memory_order_release);
-    return 0;
+    log_error(
+      "cuFile: libcufile.so.0 not loadable — install the cuFile runtime "
+      "(part of CUDA toolkit / nvidia-fs) and ensure it is on the dynamic "
+      "loader path; GDS unavailable");
+    return;
   }
-
   g_libcufile.driver_open = (pfn_cuFileDriverOpen)dlsym(h, "cuFileDriverOpen");
   g_libcufile.driver_close =
     (pfn_cuFileDriverClose)dlsym(h, "cuFileDriverClose");
@@ -62,27 +62,24 @@ try_load_libcufile(void)
     (pfn_cuFileHandleRegister)dlsym(h, "cuFileHandleRegister");
   g_libcufile.handle_deregister =
     (pfn_cuFileHandleDeregister)dlsym(h, "cuFileHandleDeregister");
-  g_libcufile.read = (pfn_cuFileRead)dlsym(h, "cuFileRead");
-
+  g_libcufile.read_async = (pfn_cuFileReadAsync)dlsym(h, "cuFileReadAsync");
   if (!g_libcufile.driver_open || !g_libcufile.driver_close ||
       !g_libcufile.handle_register || !g_libcufile.handle_deregister ||
-      !g_libcufile.read) {
+      !g_libcufile.read_async) {
+    log_error("cuFile: missing required symbol in libcufile.so.0; GDS "
+              "unavailable");
     dlclose(h);
-    atomic_store_explicit(
-      &g_libcufile.handle, LIBCUFILE_FAILED, memory_order_release);
-    return 0;
+    memset(&g_libcufile, 0, sizeof(g_libcufile));
+    return;
   }
+  g_libcufile_ok = 1;
+}
 
-  void* expected = NULL;
-  if (!atomic_compare_exchange_strong_explicit(&g_libcufile.handle,
-                                               &expected,
-                                               h,
-                                               memory_order_acq_rel,
-                                               memory_order_acquire)) {
-    // Lost the race; both racers resolved the same SO, so close ours.
-    dlclose(h);
-  }
-  return 1;
+static int
+try_load_libcufile(void)
+{
+  pthread_once(&g_libcufile_once, libcufile_once_init);
+  return g_libcufile_ok;
 }
 
 // Caller holds fs->cache_mu.
@@ -128,37 +125,24 @@ fs_gds_get_handle(struct store_fs* fs, const char* key)
   return h;
 }
 
-struct fs_gds_read_job
+// Per-read scratch for cuFileReadAsync. The API stashes pointers to
+// these fields and dereferences them when the stream reaches the read,
+// so the storage must outlive submit_dev's return. We malloc one array
+// per submit_dev call and free it via cuLaunchHostFunc on the same
+// stream — that callback fires after every read in the batch has
+// retired, so the malloc lifetime is exactly bounded by the IO.
+struct fs_gds_async_params
 {
-  CUfileHandle_t handle;
-  void* dst;       // device pointer
-  uint64_t offset; // file offset
-  size_t len;
-  const char* key_for_log; // borrowed pointer into a heap copy held by the job
-  char* key_owned;
+  size_t size;
+  off_t file_off;
+  off_t buf_off;
+  ssize_t bytes_read;
 };
 
-static void
-fs_gds_read_job_fn(void* vctx)
+static void CUDA_CB
+fs_gds_free_params_cb(void* userdata)
 {
-  struct fs_gds_read_job* j = (struct fs_gds_read_job*)vctx;
-  ssize_t got =
-    g_libcufile.read(j->handle, j->dst, j->len, (off_t)j->offset, 0);
-  if (got < 0) {
-    log_error("cuFileRead(%s,off=%llu,len=%zu) failed: ret=%lld",
-              j->key_for_log ? j->key_for_log : "?",
-              (unsigned long long)j->offset,
-              j->len,
-              (long long)got);
-  }
-}
-
-static void
-fs_gds_read_job_free(void* vctx)
-{
-  struct fs_gds_read_job* j = (struct fs_gds_read_job*)vctx;
-  free(j->key_owned);
-  free(j);
+  free(userdata);
 }
 
 struct store_event
@@ -168,38 +152,81 @@ store_fs_gds_submit_dev(struct store* s,
 {
   struct store_fs* fs = (struct store_fs*)s;
   struct store_event ev = { 0 };
-  if (n == 0) {
-    struct io_event ioev = io_queue_record(fs->q);
-    ev.seq = ioev.seq;
+
+  CUstream stream = (CUstream)fs->gds_stream;
+  if (!stream) {
+    log_error("store_fs_gds: submit_dev called before stream was set");
     return ev;
   }
+
+  if (n == 0) {
+    ev.seq = STORE_FS_GDS_SENTINEL_SEQ;
+    return ev;
+  }
+
+  struct fs_gds_async_params* params =
+    (struct fs_gds_async_params*)calloc(n, sizeof(*params));
+  if (!params)
+    return ev;
+
+  // Two-pass: resolve every handle first so we never half-submit. The
+  // GDS handle table grows under fs->cache_mu inside fs_gds_get_handle;
+  // pulling it out of the submit loop keeps the lock-acquire cost off
+  // the IO submission path.
   for (size_t i = 0; i < n; ++i) {
     CUfileHandle_t h = fs_gds_get_handle(fs, reads[i].key);
-    if (!h)
-      goto Drain;
-    struct fs_gds_read_job* j =
-      (struct fs_gds_read_job*)calloc(1, sizeof(struct fs_gds_read_job));
-    if (!j)
-      goto Drain;
-    j->handle = h;
-    j->dst = reads[i].dst;
-    j->offset = reads[i].offset;
-    j->len = reads[i].len;
-    j->key_owned = strdup(reads[i].key);
-    j->key_for_log = j->key_owned;
-    if (!j->key_owned) {
-      free(j);
-      goto Drain;
+    if (!h) {
+      free(params);
+      return ev;
     }
-    if (io_queue_post(fs->q, fs_gds_read_job_fn, j, fs_gds_read_job_free))
-      goto Drain;
+    params[i].size = reads[i].len;
+    params[i].file_off = (off_t)reads[i].offset;
+    params[i].buf_off = 0;
+    params[i].bytes_read = 0;
+    CUfileError_t e = g_libcufile.read_async(h,
+                                             reads[i].dst,
+                                             &params[i].size,
+                                             &params[i].file_off,
+                                             &params[i].buf_off,
+                                             &params[i].bytes_read,
+                                             stream);
+    if (e.err != CU_FILE_SUCCESS) {
+      log_error("cuFileReadAsync(%s,off=%llu,len=%zu) failed: err=%d",
+                reads[i].key,
+                (unsigned long long)reads[i].offset,
+                reads[i].len,
+                (int)e.err);
+      // Already-submitted reads will still execute against `params`.
+      // Sync the stream to drain them before freeing the storage; the
+      // caller treats seq=0 as fatal and will tear down.
+      cuStreamSynchronize(stream);
+      free(params);
+      return ev;
+    }
   }
-  struct io_event ioev = io_queue_record(fs->q);
-  ev.seq = ioev.seq;
+
+  // Release the params array after every read in this batch retires.
+  // On scheduler failure we fall back to a synchronous drain — slow,
+  // but only reachable on resource exhaustion.
+  CUresult cr = cuLaunchHostFunc(stream, fs_gds_free_params_cb, params);
+  if (cr != CUDA_SUCCESS) {
+    log_error("cuLaunchHostFunc(free params) failed: %d", (int)cr);
+    cuStreamSynchronize(stream);
+    free(params);
+    return ev;
+  }
+
+  ev.seq = STORE_FS_GDS_SENTINEL_SEQ;
   return ev;
-Drain:
-  io_event_wait(fs->q, io_queue_record(fs->q));
-  return ev; // ev.seq == 0 → failure
+}
+
+void
+store_fs_gds_set_stream(struct store* s, void* stream)
+{
+  if (!s)
+    return;
+  struct store_fs* fs = (struct store_fs*)s;
+  fs->gds_stream = stream;
 }
 
 int
@@ -207,16 +234,8 @@ store_fs_gds_init(struct store_fs* fs)
 {
   if (!fs)
     return 1;
-  if (!try_load_libcufile()) {
-    int expected = 0;
-    if (atomic_compare_exchange_strong(
-          &g_libcufile_unavailable_logged, &expected, 1))
-      log_error(
-        "cuFile: libcufile.so.0 not loadable — install the cuFile runtime "
-        "(part of CUDA toolkit / nvidia-fs) and ensure it is on the dynamic "
-        "loader path; GDS unavailable");
+  if (!try_load_libcufile())
     return 1;
-  }
   CUfileError_t e = g_libcufile.driver_open();
   if (e.err != CU_FILE_SUCCESS) {
     log_error("cuFileDriverOpen failed (err=%d); GDS unavailable", (int)e.err);
@@ -231,6 +250,12 @@ store_fs_gds_destroy(struct store_fs* fs)
 {
   if (!fs)
     return;
+  // Drain any in-flight cuFileReadAsync + their free callbacks before
+  // tearing handles down. The store's stream is owned by wave_pool and
+  // is already synced by the time fs_destroy runs, but sync defensively
+  // in case a future caller invokes destroy out of order.
+  if (fs->gds_stream)
+    cuStreamSynchronize((CUstream)fs->gds_stream);
   // Be defensive: a store_fs that never went through init has a NULL
   // function-pointer table.
   pthread_mutex_lock(&fs->cache_mu);
