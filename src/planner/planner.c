@@ -3,6 +3,7 @@
 #include "dtype/dtype.h"
 #include "log/log.h"
 #include "planner/coalesce.h"
+#include "planner/group_chunks.h"
 #include "util/prelude.h"
 #include "util/strbuf.h"
 #include "zarr/zarr_meta_cache.h"
@@ -21,8 +22,14 @@ struct planner
   uint32_t scratch_u32_cap;
   struct read_op* scratch_ops;
   uint32_t scratch_ops_cap;
+  struct chunk_plan* scratch_chunk_plans;
+  uint32_t scratch_chunk_plans_cap;
 };
 
+// Sizes all post-emit scratch to `need` (== pre-coalesce n_read_ops ==
+// n_chunk_plans, since emission is 1:1). coalesce_chunks needs
+// 3 * need uint32s + need read_ops; group_chunks_by_read needs
+// n_read_ops + 1 uint32s + need chunk_plans (n_read_ops <= need).
 static enum damacy_status
 planner_ensure_scratch(struct planner* self, uint32_t need)
 {
@@ -46,6 +53,17 @@ planner_ensure_scratch(struct planner* self, uint32_t need)
       return DAMACY_OOM;
     self->scratch_ops = mem;
     self->scratch_ops_cap = need;
+  }
+  if (need > self->scratch_chunk_plans_cap) {
+    free(self->scratch_chunk_plans);
+    self->scratch_chunk_plans = NULL;
+    self->scratch_chunk_plans_cap = 0;
+    struct chunk_plan* mem =
+      (struct chunk_plan*)malloc((size_t)need * sizeof(struct chunk_plan));
+    if (!mem)
+      return DAMACY_OOM;
+    self->scratch_chunk_plans = mem;
+    self->scratch_chunk_plans_cap = need;
   }
   return DAMACY_OK;
 }
@@ -166,6 +184,7 @@ planner_destroy(struct planner* self)
   strbuf_free(&self->path_sb);
   free(self->scratch_u32);
   free(self->scratch_ops);
+  free(self->scratch_chunk_plans);
   free(self);
 }
 
@@ -405,7 +424,6 @@ planner_plan(struct planner* self,
       .rank = meta->rank,
       .src_dtype = (uint8_t)meta->dtype,
       .sample_dst_off_elems = (int64_t)sample_idx * dst_strides[0],
-      .chunk_offset = out->n_chunk_plans,
       .chunk_count = 0, // filled after the chunk emit loop
     };
     memcpy(sp->fill_value, meta->fill_value, sizeof sp->fill_value);
@@ -526,6 +544,10 @@ planner_plan(struct planner* self,
     if (s != DAMACY_OK)
       return s;
     s = coalesce_chunks(out, cap, self->scratch_u32, self->scratch_ops);
+    if (s != DAMACY_OK)
+      return s;
+    s = group_chunks_by_read(
+      out, self->scratch_u32, self->scratch_chunk_plans);
     if (s != DAMACY_OK)
       return s;
   }

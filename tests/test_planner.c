@@ -201,6 +201,18 @@ mk_sample(const char* uri, int64_t y0, int64_t y1, int64_t x0, int64_t x1)
   return s;
 }
 
+// Find the chunk_plan whose 2D grid coordinate matches (y, x), or NULL.
+// Post-group_chunks_by_read, chunk_plans are ordered by read_op_idx, so
+// positional indexing is brittle — callers look up by chunk_d instead.
+static const struct chunk_plan*
+find_chunk_2d(const struct chunk_plan* chunks, uint32_t n, uint32_t y, uint32_t x)
+{
+  for (uint32_t i = 0; i < n; ++i)
+    if (chunks[i].chunk_d[0] == y && chunks[i].chunk_d[1] == x)
+      return &chunks[i];
+  return NULL;
+}
+
 // Row-major dst strides for output shape [N, H, W].
 static void
 mk_dst_strides_2d(int64_t n, int64_t h, int64_t w, int64_t* out)
@@ -266,7 +278,6 @@ test_single_chunk_aligned(void)
   EXPECT(sp->rank == 2);
   EXPECT(sp->batch_pool_slot == 0);
   EXPECT(sp->sample_idx_in_batch == 0);
-  EXPECT(sp->chunk_offset == 0);
   EXPECT(sp->chunk_count == 1);
   EXPECT(sp->dims[0].chunk_shape == 2 && sp->dims[1].chunk_shape == 4);
   EXPECT(sp->dims[0].chunk_grid_extent == 1 &&
@@ -338,7 +349,6 @@ test_multi_chunk_partial(void)
 
   struct sample_plan* sp = &samples[0];
   EXPECT(sp->rank == 2);
-  EXPECT(sp->chunk_offset == 0);
   EXPECT(sp->chunk_count == 4);
   EXPECT(sp->dims[0].chunk_grid_extent == 2 &&
          sp->dims[1].chunk_grid_extent == 2);
@@ -390,8 +400,6 @@ test_two_samples_indices(void)
 
   EXPECT(samples[0].sample_dst_off_elems == 0);
   EXPECT(samples[1].sample_dst_off_elems == 8); // sample_idx=1 * stride[0]=8
-  EXPECT(samples[0].chunk_offset == 0);
-  EXPECT(samples[1].chunk_offset == 1);
   EXPECT(samples[0].chunk_count == 1 && samples[1].chunk_count == 1);
 
   fixture_destroy(&f);
@@ -427,13 +435,16 @@ test_empty_chunk_becomes_fill(void)
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_chunk_plans == 4);
-  // Row-major (0,0), (0,1), (1,0)*, (1,1) — the third is fill.
-  EXPECT(chunks[0].is_fill == 0);
-  EXPECT(chunks[1].is_fill == 0);
-  EXPECT(chunks[2].is_fill == 1);
-  EXPECT(chunks[3].is_fill == 0);
-  EXPECT(chunks[2].codec_id == CODEC_FILL);
-  EXPECT(chunks[2].compressed_nbytes == 0);
+  // Chunk (1,0) is the fill; (0,0), (0,1), (1,1) are real.
+  const struct chunk_plan* fill = find_chunk_2d(chunks, 4, 1, 0);
+  EXPECT(fill);
+  EXPECT(fill->is_fill == 1);
+  EXPECT(fill->codec_id == CODEC_FILL);
+  EXPECT(fill->compressed_nbytes == 0);
+  for (uint32_t i = 0; i < 4; ++i) {
+    int is_target = (chunks[i].chunk_d[0] == 1 && chunks[i].chunk_d[1] == 0);
+    EXPECT(chunks[i].is_fill == (is_target ? 1 : 0));
+  }
   // fill_value parsed from "fill_value":0 in the JSON → all zero bytes,
   // on the sample plan now (array-level property).
   EXPECT(out.n_sample_plans == 1);
@@ -472,9 +483,12 @@ test_fill_value_int16_neg1(void)
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_chunk_plans == 4);
-  // chunk index 1 = (0,1) is empty → fill. fill_value bytes live on the
-  // sample plan (LE-packed for i16).
-  EXPECT(chunks[1].is_fill == 1);
+  // Chunk (0,1) is empty → fill. fill_value bytes live on the sample
+  // plan (LE-packed for i16).
+  {
+    const struct chunk_plan* fill = find_chunk_2d(chunks, 4, 0, 1);
+    EXPECT(fill && fill->is_fill == 1);
+  }
   EXPECT(out.n_sample_plans == 1);
   EXPECT(samples[0].fill_value[0] == 0xFF);
   EXPECT(samples[0].fill_value[1] == 0xFF);
@@ -507,7 +521,10 @@ test_fill_value_f32_nan(void)
     .sample_plans_cap = 4,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
-  EXPECT(chunks[1].is_fill == 1);
+  {
+    const struct chunk_plan* fill = find_chunk_2d(chunks, 4, 0, 1);
+    EXPECT(fill && fill->is_fill == 1);
+  }
   EXPECT(out.n_sample_plans == 1);
   float fill_f;
   memcpy(&fill_f, samples[0].fill_value, sizeof fill_f);
@@ -1148,15 +1165,26 @@ test_coalesce_fill_does_not_block_fusion(void)
   // One fused read [0, 3*PAGE) covering chunks 0/2/3, plus one fill
   // placeholder for chunk 1.
   EXPECT(out.n_read_ops == 2);
-  EXPECT(chunks[0].is_fill == 0 && chunks[0].read_op_idx == 0);
-  EXPECT(chunks[1].is_fill == 1);
-  EXPECT(chunks[2].is_fill == 0 && chunks[2].read_op_idx == 0);
-  EXPECT(chunks[3].is_fill == 0 && chunks[3].read_op_idx == 0);
   EXPECT(reads[0].file_offset == 0);
   EXPECT(reads[0].nbytes == 3 * PAGE);
-  EXPECT(chunks[0].offset_in_read == 0);
-  EXPECT(chunks[2].offset_in_read == PAGE);
-  EXPECT(chunks[3].offset_in_read == 2 * PAGE);
+  // Real chunks (0,0)(1,0)(1,1) share the fused read; (0,1) is fill.
+  // After group_chunks_by_read, fills land at the end; the three reals
+  // are contiguous up front, each pointing at read_op 0 with offsets
+  // 0 / PAGE / 2*PAGE in emit order.
+  {
+    const struct chunk_plan* c00 = find_chunk_2d(chunks, 4, 0, 0);
+    const struct chunk_plan* c01 = find_chunk_2d(chunks, 4, 0, 1);
+    const struct chunk_plan* c10 = find_chunk_2d(chunks, 4, 1, 0);
+    const struct chunk_plan* c11 = find_chunk_2d(chunks, 4, 1, 1);
+    EXPECT(c00 && c01 && c10 && c11);
+    EXPECT(c00->is_fill == 0 && c00->read_op_idx == 0);
+    EXPECT(c01->is_fill == 1);
+    EXPECT(c10->is_fill == 0 && c10->read_op_idx == 0);
+    EXPECT(c11->is_fill == 0 && c11->read_op_idx == 0);
+    EXPECT(c00->offset_in_read == 0);
+    EXPECT(c10->offset_in_read == PAGE);
+    EXPECT(c11->offset_in_read == 2 * PAGE);
+  }
 
   fixture_destroy(&f);
   return 0;

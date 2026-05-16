@@ -61,8 +61,9 @@ extern "C"
     struct sample_dim dims[DAMACY_MAX_RANK]; // dims[0..rank)
     int64_t sample_dst_off_elems; // sample slot start (elements; * dst bpe at
                                   // runtime)
-    uint32_t chunk_offset;        // first chunk in chunk_plans
-    uint32_t chunk_count;         // ∏ dims[d].chunk_grid_extent
+    uint32_t chunk_count;         // ∏ dims[d].chunk_grid_extent (informational;
+                                  // chunk_plans are not contiguous per-sample
+                                  // after group_chunks_by_read)
     // Array-level fill_value (zarr v3 metadata). Chunks tagged is_fill
     // broadcast these bytes; bytes are interpreted under src_dtype.
     uint8_t fill_value[DAMACY_MAX_DTYPE_BYTES];
