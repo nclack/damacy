@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778911223333,
+  "lastUpdate": 1778940928852,
   "repoUrl": "https://github.com/nclack/damacy",
   "entries": {
     "damacy throughput": [
@@ -447,6 +447,38 @@ window.BENCHMARK_DATA = {
           {
             "name": "damacy/mixed/throughput",
             "value": 5964.07,
+            "unit": "MB/s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Nathan Clack",
+            "username": "nclack",
+            "email": "nclack@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "e121786b67472c91426bb2cebe1ce01353b753ad",
+          "message": "README: GDS build flag, drop use_gpu_blosc_parse (#60)\n\nREADME still referenced `use_gpu_blosc_parse = 1` (removed when the host\nparser was dropped) and didn't mention the new `-DDAMACY_ENABLE_GDS=ON`\nbuild-time requirement.",
+          "timestamp": "2026-05-16T06:06:49Z",
+          "url": "https://github.com/nclack/damacy/commit/e121786b67472c91426bb2cebe1ce01353b753ad"
+        },
+        "date": 1778940928118,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "damacy/default/throughput",
+            "value": 5773.05,
+            "unit": "MB/s"
+          },
+          {
+            "name": "damacy/mixed/throughput",
+            "value": 5686.39,
             "unit": "MB/s"
           }
         ]
