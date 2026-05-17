@@ -71,6 +71,12 @@ slot_release(struct host_slab_slot* slot);
 
 // Linear scans across `slots[0..n)`. find_* returns the index of the
 // first matching slot, or -1 if none. any_* returns 1/0.
+//
+// host_slab_any_in_flight returns 1 for any non-FREE state, including
+// the transient SLOT_PEELING window (peel reserve → peel commit). This
+// is intentional: damacy_pop relies on it to know a peel may produce
+// future ready batches even when no wave has actually launched yet.
+// Any new non-FREE state added later must keep this property.
 int
 host_slab_find_free(const struct host_slab_slot* slots, uint8_t n);
 int
