@@ -96,14 +96,19 @@ zarr_meta_cache_get(struct zarr_meta_cache* self,
   CHECK_SILENT(Invalid, out);
   *out = NULL;
 
+  // Lock is held across the *out assignment so the deref of the returned
+  // entry can't race a concurrent lru_put eviction. After return, the
+  // pointer is valid only while no other thread can mutate this cache;
+  // see the header for the lifetime contract.
   uint64_t hash = hash_fnv1a_str(uri);
   pthread_mutex_lock(&self->mu);
   struct lru_entry* hit = lru_get(self->lru, hash, uri);
-  pthread_mutex_unlock(&self->mu);
   if (hit) {
     *out = &((const struct meta_entry*)lru_entry_value(hit))->meta;
+    pthread_mutex_unlock(&self->mu);
     return DAMACY_OK;
   }
+  pthread_mutex_unlock(&self->mu);
 
   struct strbuf key = { 0 };
   if (strbuf_join_path(&key, uri, "zarr.json")) {
@@ -136,13 +141,25 @@ zarr_meta_cache_get(struct zarr_meta_cache* self,
   }
 
   pthread_mutex_lock(&self->mu);
+  // Re-check under the lock: another thread may have raced us on the
+  // same URI while we were parsing. If so, drop our duplicate and
+  // return the winner. lru_peek doesn't count as a miss/hit and doesn't
+  // promote.
+  struct lru_entry* existing = lru_peek(self->lru, hash, uri);
+  if (existing) {
+    meta_destroy(entry, NULL);
+    *out = &((const struct meta_entry*)lru_entry_value(existing))->meta;
+    pthread_mutex_unlock(&self->mu);
+    return DAMACY_OK;
+  }
   struct lru_entry* inserted = lru_put(self->lru, hash, uri, entry);
-  pthread_mutex_unlock(&self->mu);
   if (!inserted) {
     // Cache full and all entries pinned; lru_put already destroyed entry.
+    pthread_mutex_unlock(&self->mu);
     return DAMACY_OOM;
   }
   *out = &((const struct meta_entry*)lru_entry_value(inserted))->meta;
+  pthread_mutex_unlock(&self->mu);
   return DAMACY_OK;
 
 Invalid:
@@ -197,6 +214,8 @@ zarr_meta_cache_layout_set(struct zarr_meta_cache* self,
 
 // I/O runs unlocked; commit happens under self->mu. Concurrent probes for
 // the same URI read identical bytes, so last-writer-wins is value-safe.
+// The entry pointer is re-fetched after the unlocked probe — between the
+// initial lookup and the commit another thread may have evicted the URI.
 const struct chunk_layout*
 zarr_meta_cache_probe_layout(struct zarr_meta_cache* self,
                              const char* uri,
@@ -214,7 +233,8 @@ zarr_meta_cache_probe_layout(struct zarr_meta_cache* self,
     pthread_mutex_unlock(&self->mu);
     return NULL;
   }
-  struct meta_entry* entry = (struct meta_entry*)lru_entry_value(hit);
+  const struct meta_entry* entry =
+    (const struct meta_entry*)lru_entry_value(hit);
   if (entry->layout_probed) {
     const struct chunk_layout* out = &entry->layout;
     pthread_mutex_unlock(&self->mu);
@@ -232,12 +252,19 @@ zarr_meta_cache_probe_layout(struct zarr_meta_cache* self,
     return NULL;
 
   pthread_mutex_lock(&self->mu);
-  if (!entry->layout_probed) {
-    entry->layout = probed;
-    entry->layout_probed = 1;
+  hit = lru_get(self->lru, hash, uri);
+  if (!hit) {
+    pthread_mutex_unlock(&self->mu);
+    return NULL;
   }
+  struct meta_entry* fresh = (struct meta_entry*)lru_entry_value(hit);
+  if (!fresh->layout_probed) {
+    fresh->layout = probed;
+    fresh->layout_probed = 1;
+  }
+  const struct chunk_layout* out = &fresh->layout;
   pthread_mutex_unlock(&self->mu);
-  return &entry->layout;
+  return out;
 }
 
 void

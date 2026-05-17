@@ -140,16 +140,22 @@ zarr_shard_cache_get(struct zarr_shard_cache* self,
   };
   uint64_t hash = shard_hash(uri, shard_coord, meta->rank);
 
+  // Lock is held across the *out_* assignment so the deref of the
+  // returned entry can't race a concurrent lru_put eviction. After
+  // return, the (entries, n_entries) pair is valid only while no other
+  // thread can mutate this cache; see the header for the lifetime
+  // contract.
   pthread_mutex_lock(&self->mu);
   struct lru_entry* hit = lru_get(self->lru, hash, &probe);
-  pthread_mutex_unlock(&self->mu);
   if (hit) {
     const struct shard_entry* entry =
       (const struct shard_entry*)lru_entry_value(hit);
     *out_entries = entry->entries;
     *out_n_entries = entry->n_entries;
+    pthread_mutex_unlock(&self->mu);
     return DAMACY_OK;
   }
+  pthread_mutex_unlock(&self->mu);
 
   uint64_t n_inner_per_shard = 0;
   if (zarr_metadata_inner_per_shard(meta, NULL, &n_inner_per_shard))
@@ -242,16 +248,31 @@ zarr_shard_cache_get(struct zarr_shard_cache* self,
   entry->entries = entries;
 
   pthread_mutex_lock(&self->mu);
+  // Re-check under the lock: another thread may have raced us on the
+  // same probe key while we were doing the unlocked I/O. If so, drop
+  // our duplicate and return the winner. lru_peek doesn't count as a
+  // miss/hit and doesn't promote.
+  struct lru_entry* existing = lru_peek(self->lru, hash, &probe);
+  if (existing) {
+    shard_destroy(entry, NULL);
+    const struct shard_entry* held =
+      (const struct shard_entry*)lru_entry_value(existing);
+    *out_entries = held->entries;
+    *out_n_entries = held->n_entries;
+    pthread_mutex_unlock(&self->mu);
+    return DAMACY_OK;
+  }
   struct lru_entry* inserted = lru_put(self->lru, hash, &probe, entry);
-  pthread_mutex_unlock(&self->mu);
   if (!inserted) {
     // lru_put already destroyed entry via shard_destroy.
+    pthread_mutex_unlock(&self->mu);
     return DAMACY_OOM;
   }
   const struct shard_entry* held =
     (const struct shard_entry*)lru_entry_value(inserted);
   *out_entries = held->entries;
   *out_n_entries = held->n_entries;
+  pthread_mutex_unlock(&self->mu);
   return DAMACY_OK;
 
 Invalid:

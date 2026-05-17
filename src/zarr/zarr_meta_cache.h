@@ -32,10 +32,13 @@ extern "C"
   // hit returns the cached pointer; on miss, fetches and parses
   // <uri>/zarr.json from the store, caches the result, and returns it.
   //
-  // The returned pointer is owned by the cache; valid until the entry
-  // is evicted (which can happen on a subsequent get). v1: no
-  // pinning — callers should not retain the pointer across other cache
-  // operations.
+  // Thread-safe. The internal mutex protects the *return path* from
+  // racing a concurrent lru_put eviction. After the call returns, the
+  // pointer is owned by the cache and valid only while no other thread
+  // can mutate the cache (i.e. while no concurrent _get can trigger an
+  // eviction). v1: no pinning API — callers either externally
+  // serialize use against other writers or keep capacity above the
+  // working set so eviction can't fire.
   //
   // Returns DAMACY_OK on success; DAMACY_INVAL on bad args;
   // DAMACY_NOTFOUND if zarr.json could not be opened; DAMACY_DECODE if
