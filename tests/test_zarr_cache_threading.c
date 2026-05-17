@@ -159,10 +159,18 @@ shard_worker(void* arg)
   for (int i = 0; i < N_ITERATIONS; ++i) {
     const struct zarr_shard_entry* entries = NULL;
     uint64_t n_entries = 0;
+    struct zarr_shard_pin pin = { 0 };
     if (zarr_shard_cache_get(
-          w->shard_cache, w->uri, w->meta, coord, &entries, &n_entries) ==
-        DAMACY_OK)
+          w->shard_cache, w->uri, w->meta, coord, &pin, &entries, &n_entries) ==
+        DAMACY_OK) {
+      // Touch the pinned entries — the pin must protect against
+      // concurrent eviction here. Result is discarded; the read just
+      // needs to happen so TSan sees the access.
+      volatile uint64_t sink = (n_entries && entries) ? entries[0].offset : 0;
+      (void)sink;
       atomic_fetch_add(&w->ok_count, 1);
+      zarr_shard_cache_release(w->shard_cache, pin);
+    }
   }
   return NULL;
 }
@@ -220,8 +228,11 @@ test_shard_cache_concurrent(void)
   uint64_t coord[2] = { 0, 0 };
   const struct zarr_shard_entry* entries = NULL;
   uint64_t n_entries = 0;
+  struct zarr_shard_pin pin = { 0 };
   EXPECT(zarr_shard_cache_get(
-           sc_cache, "zarr_a", meta, coord, &entries, &n_entries) == DAMACY_OK);
+           sc_cache, "zarr_a", meta, coord, &pin, &entries, &n_entries) ==
+         DAMACY_OK);
+  zarr_shard_cache_release(sc_cache, pin);
 
   struct shard_worker_args w = { .shard_cache = sc_cache,
                                  .meta = meta,
@@ -245,11 +256,143 @@ test_shard_cache_concurrent(void)
   return 0;
 }
 
+// Eviction-stress JSON: shape [64, 4096], outer shard [64, 512] →
+// 8 outer shards along axis 1. With cache capacity > N_THREADS but
+// less than the working set, eviction fires every miss while leaving
+// non-pinned slots so put never starves. Without pin/release the
+// post-get deref races eviction; with pinning, TSan should be clean.
+static const char* EVICT_ZARR_JSON =
+  "{"
+  "\"zarr_format\":3,"
+  "\"node_type\":\"array\","
+  "\"shape\":[64,4096],"
+  "\"data_type\":\"uint16\","
+  "\"chunk_grid\":{\"name\":\"regular\",\"configuration\":{"
+  "\"chunk_shape\":[64,512]}},"
+  "\"chunk_key_encoding\":{\"name\":\"default\",\"configuration\":{"
+  "\"separator\":\"/\"}},"
+  "\"fill_value\":0,"
+  "\"codecs\":[{\"name\":\"sharding_indexed\",\"configuration\":{"
+  "\"chunk_shape\":[32,128],"
+  "\"codecs\":[{\"name\":\"bytes\",\"configuration\":{\"endian\":\"little\"}},"
+  "{\"name\":\"zstd\",\"configuration\":{\"level\":3,\"checksum\":false}}],"
+  "\"index_codecs\":[{\"name\":\"bytes\",\"configuration\":{"
+  "\"endian\":\"little\"}},{\"name\":\"crc32c\"}],"
+  "\"index_location\":\"end\"}}]"
+  "}";
+
+#define EVICT_N_SHARDS 8
+#define EVICT_CAPACITY (N_THREADS + 1) // < EVICT_N_SHARDS, > max in-flight pins
+
+struct evict_worker_args
+{
+  struct zarr_shard_cache* shard_cache;
+  const struct zarr_metadata* meta;
+  const char* uri;
+  atomic_int ok_count;
+};
+
+static void*
+evict_worker(void* arg)
+{
+  struct evict_worker_args* w = (struct evict_worker_args*)arg;
+  for (int i = 0; i < N_ITERATIONS; ++i) {
+    // Cycle through EVICT_N_SHARDS coords; cache holds EVICT_CAPACITY
+    // so most misses force eviction of an unpinned slot.
+    uint64_t coord[2] = { 0, (uint64_t)(i % EVICT_N_SHARDS) };
+    const struct zarr_shard_entry* entries = NULL;
+    uint64_t n_entries = 0;
+    struct zarr_shard_pin pin = { 0 };
+    if (zarr_shard_cache_get(w->shard_cache,
+                             w->uri,
+                             w->meta,
+                             coord,
+                             &pin,
+                             &entries,
+                             &n_entries) == DAMACY_OK) {
+      // Read every entry under the pin. Without pinning a concurrent
+      // miss could evict this slot and reuse the entries allocation,
+      // racing this loop. TSan flags any such race.
+      volatile uint64_t sink = 0;
+      for (uint64_t j = 0; j < n_entries; ++j)
+        sink += entries[j].offset + entries[j].nbytes;
+      (void)sink;
+      atomic_fetch_add(&w->ok_count, 1);
+      zarr_shard_cache_release(w->shard_cache, pin);
+    }
+  }
+  return NULL;
+}
+
+static int
+test_shard_cache_pin_under_eviction(void)
+{
+  char tmpl[] = "/tmp/damacy_shard_evict_tsan_XXXXXX";
+  char* root = mkdtemp(tmpl);
+  EXPECT(root);
+
+  char path[512];
+  snprintf(path, sizeof path, "%s/zarr_a", root);
+  EXPECT(mkdir(path, 0755) == 0);
+  snprintf(path, sizeof path, "%s/zarr_a/zarr.json", root);
+  EXPECT(fixture_write_file(path, EVICT_ZARR_JSON) == 0);
+  snprintf(path, sizeof path, "%s/zarr_a/c", root);
+  EXPECT(mkdir(path, 0755) == 0);
+  snprintf(path, sizeof path, "%s/zarr_a/c/0", root);
+  EXPECT(mkdir(path, 0755) == 0);
+  uint64_t offsets[8] = { 0, 16, 32, 48, 64, 80, 96, 112 };
+  uint64_t nbytes[8] = { 16, 16, 16, 16, 16, 16, 16, 16 };
+  for (int k = 0; k < EVICT_N_SHARDS; ++k) {
+    snprintf(path, sizeof path, "%s/zarr_a/c/0/%d", root, k);
+    EXPECT(fixture_write_synthetic_shard(path, 128, offsets, nbytes, 8) == 0);
+  }
+
+  struct store_fs_config sc = { .root = root, .nthreads = 1 };
+  struct store* store = store_fs_create(&sc);
+  EXPECT(store);
+
+  struct zarr_meta_cache* mc = zarr_meta_cache_create(store, 16);
+  EXPECT(mc);
+  const struct zarr_metadata* meta = NULL;
+  EXPECT(zarr_meta_cache_get(mc, "zarr_a", &meta) == DAMACY_OK);
+
+  // capacity > N_THREADS so there's always a non-pinned slot to evict;
+  // capacity < working set so eviction fires on every cold rotation.
+  struct zarr_shard_cache* sc_cache =
+    zarr_shard_cache_create(store, EVICT_CAPACITY);
+  EXPECT(sc_cache);
+
+  struct evict_worker_args w = { .shard_cache = sc_cache,
+                                 .meta = meta,
+                                 .uri = "zarr_a" };
+  atomic_init(&w.ok_count, 0);
+
+  pthread_t threads[N_THREADS];
+  for (int t = 0; t < N_THREADS; ++t)
+    EXPECT(pthread_create(&threads[t], NULL, evict_worker, &w) == 0);
+  for (int t = 0; t < N_THREADS; ++t)
+    EXPECT(pthread_join(threads[t], NULL) == 0);
+
+  EXPECT(atomic_load(&w.ok_count) == N_THREADS * N_ITERATIONS);
+
+  // Sanity: evictions actually fired.
+  struct zarr_shard_cache_stats st;
+  zarr_shard_cache_stats_get(sc_cache, &st);
+  EXPECT(st.counters.evictions > 0);
+
+  zarr_shard_cache_destroy(sc_cache);
+  zarr_meta_cache_destroy(mc);
+  store_destroy(store);
+  fixture_rm_tree(root);
+  return 0;
+}
+
 int
 main(void)
 {
   RUN(test_meta_cache_concurrent);
   RUN(test_shard_cache_concurrent);
+  RUN(test_shard_cache_pin_under_eviction);
   log_info("all tests passed");
   return 0;
 }

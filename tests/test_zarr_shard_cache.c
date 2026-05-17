@@ -60,9 +60,10 @@ test_shard_cache(void)
   const uint64_t coord00[2] = { 0, 0 };
   const struct zarr_shard_entry* entries = NULL;
   uint64_t n = 0;
+  struct zarr_shard_pin pin = { 0 };
 
   // Miss → load → return.
-  EXPECT(zarr_shard_cache_get(c, "foo", &meta, coord00, &entries, &n) ==
+  EXPECT(zarr_shard_cache_get(c, "foo", &meta, coord00, &pin, &entries, &n) ==
          DAMACY_OK);
   EXPECT(n == 4);
   EXPECT(entries != NULL);
@@ -72,8 +73,9 @@ test_shard_cache(void)
   // Same coord → hit.
   const struct zarr_shard_entry* entries_b = NULL;
   uint64_t nb = 0;
-  EXPECT(zarr_shard_cache_get(c, "foo", &meta, coord00, &entries_b, &nb) ==
-         DAMACY_OK);
+  struct zarr_shard_pin pin_b = { 0 };
+  EXPECT(zarr_shard_cache_get(
+           c, "foo", &meta, coord00, &pin_b, &entries_b, &nb) == DAMACY_OK);
   EXPECT(entries_b == entries);
 
   struct zarr_shard_cache_stats st;
@@ -81,19 +83,25 @@ test_shard_cache(void)
   EXPECT(st.counters.hits == 1);
   EXPECT(st.counters.misses == 1);
   EXPECT(st.size == 1);
+  zarr_shard_cache_release(c, pin_b);
+  zarr_shard_cache_release(c, pin);
 
   // Different shard coord → another miss; both cached.
   const uint64_t coord01[2] = { 0, 1 };
-  EXPECT(zarr_shard_cache_get(c, "foo", &meta, coord01, &entries_b, &nb) ==
-         DAMACY_OK);
+  EXPECT(zarr_shard_cache_get(
+           c, "foo", &meta, coord01, &pin_b, &entries_b, &nb) == DAMACY_OK);
   EXPECT(entries_b != entries);
   zarr_shard_cache_stats_get(c, &st);
   EXPECT(st.size == 2);
+  zarr_shard_cache_release(c, pin_b);
 
-  // Missing shard → NOTFOUND.
+  // Missing shard → NOTFOUND. pin must remain unpinned on non-OK.
   const uint64_t coordbad[2] = { 99, 99 };
-  EXPECT(zarr_shard_cache_get(c, "foo", &meta, coordbad, &entries_b, &nb) ==
+  struct zarr_shard_pin pin_bad = { (void*)0xdeadbeef };
+  EXPECT(zarr_shard_cache_get(
+           c, "foo", &meta, coordbad, &pin_bad, &entries_b, &nb) ==
          DAMACY_NOTFOUND);
+  EXPECT(pin_bad.opaque == NULL);
 
   zarr_shard_cache_destroy(c);
   store_destroy(store);
@@ -145,11 +153,13 @@ test_shard_cache_index_start(void)
   const uint64_t coord00[2] = { 0, 0 };
   const struct zarr_shard_entry* entries = NULL;
   uint64_t n = 0;
-  EXPECT(zarr_shard_cache_get(c, "foo", &meta, coord00, &entries, &n) ==
+  struct zarr_shard_pin pin = { 0 };
+  EXPECT(zarr_shard_cache_get(c, "foo", &meta, coord00, &pin, &entries, &n) ==
          DAMACY_OK);
   EXPECT(n == 4);
   EXPECT(entries[0].offset == 128 && entries[0].nbytes == 64);
   EXPECT(entries[3].offset == 512 && entries[3].nbytes == 64);
+  zarr_shard_cache_release(c, pin);
 
   zarr_shard_cache_destroy(c);
   store_destroy(store);
@@ -201,22 +211,25 @@ test_shard_cache_unsharded(void)
   const uint64_t coord00[2] = { 0, 0 };
   const struct zarr_shard_entry* entries = NULL;
   uint64_t n = 0;
-  EXPECT(zarr_shard_cache_get(c, "foo", &meta, coord00, &entries, &n) ==
+  struct zarr_shard_pin pin = { 0 };
+  EXPECT(zarr_shard_cache_get(c, "foo", &meta, coord00, &pin, &entries, &n) ==
          DAMACY_OK);
   EXPECT(n == 1);
   EXPECT(entries[0].offset == 0);
   EXPECT(entries[0].nbytes == 123);
+  zarr_shard_cache_release(c, pin);
 
   const uint64_t coord12[2] = { 1, 2 };
-  EXPECT(zarr_shard_cache_get(c, "foo", &meta, coord12, &entries, &n) ==
+  EXPECT(zarr_shard_cache_get(c, "foo", &meta, coord12, &pin, &entries, &n) ==
          DAMACY_OK);
   EXPECT(n == 1);
   EXPECT(entries[0].offset == 0);
   EXPECT(entries[0].nbytes == 456);
+  zarr_shard_cache_release(c, pin);
 
   // Missing chunk file → NOTFOUND.
   const uint64_t coordbad[2] = { 9, 9 };
-  EXPECT(zarr_shard_cache_get(c, "foo", &meta, coordbad, &entries, &n) ==
+  EXPECT(zarr_shard_cache_get(c, "foo", &meta, coordbad, &pin, &entries, &n) ==
          DAMACY_NOTFOUND);
 
   zarr_shard_cache_destroy(c);
