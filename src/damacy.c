@@ -298,7 +298,6 @@ plan_commit(struct damacy* self,
   }
   slot->n_chunks_dispatched = 0;
   slot->n_groups_dispatched = 0;
-  slot->group_chunk_offset = 0;
   slot->chunks_remaining = (int32_t)slot->n_chunks;
   slot->batch_id = self->next_batch_id++;
   slot->state = BATCH_FILLING;
@@ -855,7 +854,6 @@ damacy_release(struct damacy* self, struct damacy_batch* b)
   self->batch_pool.slots[s].n_chunks = 0;
   self->batch_pool.slots[s].n_chunks_dispatched = 0;
   self->batch_pool.slots[s].n_groups_dispatched = 0;
-  self->batch_pool.slots[s].group_chunk_offset = 0;
   self->batch_pool.slots[s].deferred_release_pending = 0;
   scheduler_unlock(self->sched);
 }
@@ -911,7 +909,6 @@ damacy_release_event(struct damacy* self, struct damacy_batch* b, void* event)
     slot->n_chunks = 0;
     slot->n_chunks_dispatched = 0;
     slot->n_groups_dispatched = 0;
-  slot->group_chunk_offset = 0;
     slot->deferred_release_pending = 0;
     r = DAMACY_CUDA;
     goto Done;
@@ -922,7 +919,6 @@ damacy_release_event(struct damacy* self, struct damacy_batch* b, void* event)
   slot->n_chunks = 0;
   slot->n_chunks_dispatched = 0;
   slot->n_groups_dispatched = 0;
-  slot->group_chunk_offset = 0;
   r = DAMACY_OK;
 
 Done:

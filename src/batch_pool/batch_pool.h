@@ -52,8 +52,7 @@ struct damacy_batch_slot
   uint32_t n_chunks_to_load;    // non-fill chunks (filter survivors)
   uint32_t n_loads_issued;      // real read_ops after coalesce
   uint32_t n_chunks_dispatched; // 0 .. n_chunks; chunks given to a wave
-  uint32_t n_groups_dispatched; // 0 .. n_read_op_groups; fully-dispatched groups
-  uint32_t group_chunk_offset;  // chunks consumed from group[n_groups_dispatched] (0 if not partial)
+  uint32_t n_groups_dispatched; // 0 .. n_read_op_groups; groups handed to waves
   int32_t chunks_remaining;     // n_chunks - chunks completed via waves
 
   // Set by damacy_release_event when a deferred-release wait has been

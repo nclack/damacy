@@ -3,8 +3,8 @@
 // / assemble pipeline.
 //
 // Build-order step 3: page-aligned reads from day 1, one read_op per
-// chunk (no coalescing, no waves). Wave-scheduler fields
-// (host_buf_offset, dev_decompressed_offset) are filled in later by the
+// chunk (no coalescing, no waves). chunk_plan wave-scheduler fields
+// (host_buf_offset, dev_decompressed_offset) are filled in by the
 // scheduler; the planner zeroes them.
 #pragma once
 

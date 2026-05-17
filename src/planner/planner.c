@@ -328,7 +328,6 @@ emit_chunk(const struct emit_ctx* ctx,
   r->shard_path = ctx->interned_path;
   r->file_offset = aligned_file_offset;
   r->nbytes = (uint32_t)read_n_bytes;
-  r->host_buf_offset = 0;
   out->n_read_ops++;
 
   struct chunk_plan* cp = &out->chunk_plans[out->n_chunk_plans];
