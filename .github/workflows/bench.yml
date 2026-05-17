@@ -26,12 +26,9 @@ permissions:
   pull-requests: write  # comment-on-alert
   deployments: write    # gh-pages deployment status
 
-# Serialize against build / test as well — they share the self-hosted
-# GPU runner, and a CUDA test running concurrently with the bench would
-# contaminate the throughput measurements. All three workflows use the
-# same `gpu-runner` group.
+# Per-workflow group keyed by ref (see #66).
 concurrency:
-  group: gpu-runner
+  group: gpu-runner-bench-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
