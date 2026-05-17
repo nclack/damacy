@@ -31,6 +31,7 @@ add_src_lib(json_writer SOURCES util/json_writer.c util/json_writer.h LINKS strb
 add_src_lib(crc32c SOURCES util/crc32c.c util/crc32c.h LINKS platform)
 add_src_lib(hash   SOURCES util/hash.c   util/hash.h)
 add_src_lib(lru    SOURCES util/lru.c    util/lru.h LINKS log)
+add_src_lib(path_intern SOURCES util/path_intern.c util/path_intern.h LINKS hash)
 
 # NUMA-aware pinned-host placement + thread affinity. libnuma is loaded
 # via dlopen at runtime (see numa/numa.c) so a single binary works on
@@ -72,10 +73,10 @@ add_src_lib(damacy_config SOURCES damacy_config.h damacy_config.c
     LINKS dtype log
 )
 
-# Push-side ring of pending samples. Owns uri-string copies; drain
-# transfers ownership to the planner's sample-slot array.
+# Push-side ring of pending samples. Holds interned URI refs; drain
+# transfers each ref to the planner's sample-slot array.
 add_src_lib(lookahead SOURCES lookahead/lookahead.h lookahead/lookahead.c
-    LINKS log
+    LINKS path_intern log
 )
 
 # Runtime GPU-memory committer: tracks bytes committed against a
@@ -91,7 +92,7 @@ add_cuda_lib(gpu_budget SOURCES gpu_budget/gpu_budget.h gpu_budget/gpu_budget.c
 # Two-slot batch state machine + lazy device-tensor pool. Owns planner
 # scratch (read_ops, chunk_plans, sample_plans + device mirror).
 add_cuda_lib(batch_pool SOURCES batch_pool/batch_pool.h batch_pool/batch_pool.c
-    LINKS planner log CUDA::cuda_driver
+    LINKS planner path_intern log CUDA::cuda_driver
 )
 
 # Pinned-host slab slot pool: one slot per wave's worth of compressed
@@ -183,7 +184,8 @@ add_src_lib(planner
             planner/coalesce.h planner/coalesce.c
             planner/group_chunks.h planner/group_chunks.c
             planner/read_op_sort.h planner/read_op_sort.c
-    LINKS zarr_meta_cache zarr_shard_cache zarr dtype platform strbuf log
+    LINKS zarr_meta_cache zarr_shard_cache zarr dtype platform strbuf
+          path_intern log
 )
 
 # GPU pieces — add_cuda_lib is a no-op under DAMACY_FUZZ.

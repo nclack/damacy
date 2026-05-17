@@ -6,6 +6,7 @@
 #include "expect.h"
 #include "planner/coalesce.h"
 #include "planner/planner.h"
+#include "util/path_intern.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -14,9 +15,10 @@
 
 #define CAP_UNCAPPED UINT64_MAX
 
-// Build a real read_op + a chunk_plan that lives in this read_op,
-// starting at offset_in_read within it. read_op_idx in the chunk_plan
-// matches the slot the read_op is being written into.
+// Per-test intern table so equal path literals share a pointer — same
+// invariant the production planner provides. Reset per test via free.
+static struct path_intern g_paths;
+
 static void
 mk(struct read_op* r,
    struct chunk_plan* cp,
@@ -27,7 +29,7 @@ mk(struct read_op* r,
    uint32_t offset_in_read)
 {
   memset(r, 0, sizeof *r);
-  strncpy(r->shard_path, path, sizeof r->shard_path - 1);
+  r->shard_path = path_intern_acquire(&g_paths, path);
   r->file_offset = file_offset;
   r->nbytes = nbytes;
   memset(cp, 0, sizeof *cp);
@@ -38,12 +40,11 @@ mk(struct read_op* r,
   cp->is_fill = 0;
 }
 
-// Fill placeholder (no IO): nbytes=0, empty path; chunk_plan.is_fill=1.
 static void
 mk_fill(struct read_op* r, struct chunk_plan* cp, uint32_t read_op_idx)
 {
   memset(r, 0, sizeof *r);
-  r->shard_path[0] = '\0';
+  r->shard_path = NULL;
   r->file_offset = 0;
   r->nbytes = 0;
   memset(cp, 0, sizeof *cp);

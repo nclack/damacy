@@ -9,9 +9,13 @@
 static int
 perm_lt(const struct read_op* ops, uint32_t a, uint32_t b)
 {
-  int cmp = strcmp(ops[a].shard_path, ops[b].shard_path);
-  if (cmp != 0)
-    return cmp < 0;
+  const char* pa = ops[a].shard_path;
+  const char* pb = ops[b].shard_path;
+  if (pa != pb) {
+    int cmp = strcmp(pa, pb);
+    if (cmp != 0)
+      return cmp < 0;
+  }
   if (ops[a].file_offset != ops[b].file_offset)
     return ops[a].file_offset < ops[b].file_offset;
   return a < b;

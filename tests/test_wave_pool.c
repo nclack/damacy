@@ -185,9 +185,9 @@ test_peel_reserve_defers_oversize_group(void)
   struct reserve_fixture f;
   init_reserve_fixture(&f, 4096, 200);
 
-  strcpy(f.read_ops[0].shard_path, "a");
+  f.read_ops[0].shard_path = "a";
   f.read_ops[0].nbytes = 64;
-  strcpy(f.read_ops[1].shard_path, "b");
+  f.read_ops[1].shard_path = "b";
   f.read_ops[1].nbytes = 64;
   f.chunk_plans[0].read_op_idx = 0;
   f.chunk_plans[0].decompressed_nbytes = 100;
@@ -223,7 +223,7 @@ test_peel_reserve_errors_when_first_group_too_big(void)
   struct reserve_fixture f;
   init_reserve_fixture(&f, 4096, 50);
 
-  strcpy(f.read_ops[0].shard_path, "a");
+  f.read_ops[0].shard_path = "a";
   f.read_ops[0].nbytes = 64;
   f.chunk_plans[0].read_op_idx = 0;
   f.chunk_plans[0].decompressed_nbytes = 100;

@@ -11,6 +11,7 @@
 
 #include "damacy.h"
 #include "damacy_limits.h"
+#include "util/path_intern.h"
 
 #include <stdint.h>
 
@@ -42,7 +43,10 @@ struct damacy_batch_slot
   struct read_op_group* read_op_groups; // size DAMACY_MAX_CHUNKS_PER_BATCH
   uint32_t n_read_op_groups;
   struct sample_plan* sample_plans; // size cfg.batch_size
-  void* d_sample_plans;             // device mirror, uploaded once per batch
+  // Reset before each plan into the slot; bounds the working set to
+  // distinct shard paths in one batch.
+  struct path_intern paths;
+  void* d_sample_plans; // device mirror, uploaded once per batch
   uint32_t n_sample_plans;          // == n_samples on success
   uint32_t n_chunks;
   uint32_t n_chunks_to_load;    // non-fill chunks (filter survivors)

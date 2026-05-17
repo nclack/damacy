@@ -4,6 +4,7 @@
 #include "log/log.h"
 #include "planner/coalesce.h"
 #include "planner/group_chunks.h"
+#include "util/path_intern.h"
 #include "util/prelude.h"
 #include "util/strbuf.h"
 #include "zarr/zarr_meta_cache.h"
@@ -232,8 +233,6 @@ emit_fill_chunk(const struct emit_ctx* ctx,
   uint32_t read_op_idx = out->n_read_ops;
   struct read_op* r = &out->read_ops[read_op_idx];
   *r = (struct read_op){ 0 };
-  // Empty key is fine: peel skips IO submission for nbytes == 0 chunks.
-  r->shard_path[0] = '\0';
   out->n_read_ops++;
 
   struct chunk_plan* cp = &out->chunk_plans[out->n_chunk_plans];
@@ -326,10 +325,7 @@ emit_chunk(const struct emit_ctx* ctx,
 
   uint32_t read_op_idx = out->n_read_ops;
   struct read_op* r = &out->read_ops[read_op_idx];
-  size_t path_len = strlen(ctx->interned_path);
-  if (path_len + 1 > sizeof r->shard_path)
-    return DAMACY_OOM;
-  memcpy(r->shard_path, ctx->interned_path, path_len + 1);
+  r->shard_path = ctx->interned_path;
   r->file_offset = aligned_file_offset;
   r->nbytes = (uint32_t)read_n_bytes;
   out->n_read_ops++;
@@ -374,8 +370,10 @@ planner_plan(struct planner* self,
   CHECK_SILENT(Invalid, out->read_ops);
   CHECK_SILENT(Invalid, out->chunk_plans);
   CHECK_SILENT(Invalid, out->sample_plans);
+  CHECK_SILENT(Invalid, out->paths);
   CHECK_SILENT(Invalid, dst_strides);
   CHECK_SILENT(Invalid, dst_full_rank >= 1);
+  path_intern_reset(out->paths);
   out->n_read_ops = 0;
   out->n_chunk_plans = 0;
   out->n_sample_plans = 0;
@@ -541,9 +539,14 @@ planner_plan(struct planner* self,
             status = DAMACY_OOM;
             goto Cleanup;
           }
-          // emit_chunk copies path bytes into each read_op; path_sb is
-          // overwritten next iteration but each read_op carries its own.
-          ctx.interned_path = strbuf_cstr(&self->path_sb);
+          // path_sb is reused across iterations; intern produces a
+          // stable pointer shared by every read_op into this shard.
+          ctx.interned_path =
+            path_intern_acquire(out->paths, strbuf_cstr(&self->path_sb));
+          if (!ctx.interned_path) {
+            status = DAMACY_OOM;
+            goto Cleanup;
+          }
         }
         for (uint8_t d = 0; d < meta.rank; ++d)
           cached_shard_coord[d] = shard_coord[d];

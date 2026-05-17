@@ -450,23 +450,24 @@ parse_scenario(struct cslice src, struct scenario* sc)
 
 // ---- sample generation ------------------------------------------------------
 
-// One owned URI string per zarr (DAMACY_MAX_PATH cap each).
+// One owned URI string per zarr, fixed-size for the bench harness.
+#define BENCH_MAX_URI 256
 struct uri_table
 {
-  char* mem; // n_zarrs * DAMACY_MAX_PATH
+  char* mem; // n_zarrs * BENCH_MAX_URI
   uint32_t n;
 };
 
 static int
 uri_table_init(struct uri_table* t, const char* fmt, uint32_t n_zarrs)
 {
-  t->mem = (char*)calloc((size_t)n_zarrs, DAMACY_MAX_PATH);
+  t->mem = (char*)calloc((size_t)n_zarrs, BENCH_MAX_URI);
   t->n = n_zarrs;
   if (!t->mem)
     return 1;
   for (uint32_t i = 0; i < n_zarrs; ++i) {
-    int w = snprintf(&t->mem[i * DAMACY_MAX_PATH], DAMACY_MAX_PATH, fmt, i);
-    if (w < 0 || w >= DAMACY_MAX_PATH)
+    int w = snprintf(&t->mem[i * BENCH_MAX_URI], BENCH_MAX_URI, fmt, i);
+    if (w < 0 || w >= BENCH_MAX_URI)
       return 1;
   }
   return 0;
@@ -482,7 +483,7 @@ uri_table_free(struct uri_table* t)
 static const char*
 uri_table_get(const struct uri_table* t, uint32_t i)
 {
-  return &t->mem[(i % t->n) * DAMACY_MAX_PATH];
+  return &t->mem[(i % t->n) * BENCH_MAX_URI];
 }
 
 static void
@@ -798,10 +799,10 @@ main(int argc, char** argv)
   }
 
   // damacy now wants absolute uris; prepend the scenario's store_root.
-  char abs_fmt[DAMACY_MAX_PATH];
+  char abs_fmt[BENCH_MAX_URI];
   if (snprintf(abs_fmt, sizeof abs_fmt, "%s/%s", sc.store_root, sc.uri_fmt) >=
       (int)sizeof abs_fmt) {
-    fprintf(stderr, "bench: store_root + uri_fmt exceeds DAMACY_MAX_PATH\n");
+    fprintf(stderr, "bench: store_root + uri_fmt exceeds BENCH_MAX_URI\n");
     free(json_buf);
     return 1;
   }
