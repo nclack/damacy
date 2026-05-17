@@ -552,11 +552,6 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   }
   const uint64_t resolver_budget = max_gpu - pool_reserve;
 
-  // Resolve per-wave geometry from the resolver budget; rejects with
-  // OOM if even the minimum (one chunk per wave) doesn't fit. Then
-  // call gpu_budget_predict against the resolved geometry to seed the
-  // budget's committed counter — the grow paths read it back when
-  // checking whether a new allocation would breach the cap.
   struct wave_pool_sizing sizing = { 0 };
   s = wave_pool_resolve_sizing(
     resolver_budget, runtime_chunk_cap, cfg->batch_size, &sizing);
