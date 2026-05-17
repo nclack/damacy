@@ -22,9 +22,8 @@ extern "C"
 {
 #endif
 
-  // Scratch requirements:
-  //   u32_scratch:        >= out->n_read_ops + 1 uint32_t slots
-  //   chunk_plan_scratch: >= out->n_chunk_plans slots
+  // Scratch: u32_scratch >= n_read_ops+1, chunk_plan_scratch >= n_chunk_plans.
+  // out->read_op_groups must be sized >= out->n_read_ops.
   enum damacy_status group_chunks_by_read(
     struct planner_output* out,
     uint32_t* u32_scratch,

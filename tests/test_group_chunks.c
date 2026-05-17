@@ -31,7 +31,12 @@ run_group(struct planner_output* out)
   uint32_t* u32 = (uint32_t*)calloc((size_t)out->n_read_ops + 1u,
                                     sizeof(uint32_t));
   struct chunk_plan* tmp = (struct chunk_plan*)calloc(
-    out->n_chunk_plans, sizeof(struct chunk_plan));
+    out->n_chunk_plans ? out->n_chunk_plans : 1, sizeof(struct chunk_plan));
+  if (!out->read_op_groups && out->n_read_ops > 0) {
+    out->read_op_groups = (struct read_op_group*)calloc(
+      out->n_read_ops, sizeof(struct read_op_group));
+    out->read_op_groups_cap = out->n_read_ops;
+  }
   enum damacy_status s = group_chunks_by_read(out, u32, tmp);
   free(u32);
   free(tmp);
@@ -197,6 +202,97 @@ test_sample_distribution_preserved(void)
   return 0;
 }
 
+// read_op_groups[] matches the post-sort layout: one entry per
+// referenced read_op (sparse buckets skipped), with correct
+// first_chunk / n_chunks / total_decompressed.
+static int
+test_groups_emitted(void)
+{
+  struct chunk_plan chunks[6];
+  mk_cp(&chunks[0], 0, 0, 0, 100);
+  mk_cp(&chunks[1], 1, 0, 1, 200);
+  mk_cp(&chunks[2], 0, 100, 0, 101);
+  mk_cp(&chunks[3], 2, 0, 2, 300);
+  mk_cp(&chunks[4], 1, 100, 1, 201);
+  mk_cp(&chunks[5], 0, 200, 0, 102);
+  chunks[0].decompressed_nbytes = 10;
+  chunks[1].decompressed_nbytes = 20;
+  chunks[2].decompressed_nbytes = 30;
+  chunks[3].decompressed_nbytes = 40;
+  chunks[4].decompressed_nbytes = 50;
+  chunks[5].decompressed_nbytes = 60;
+  struct planner_output out = {
+    .chunk_plans = chunks,
+    .chunk_plans_cap = 6,
+    .n_chunk_plans = 6,
+    .n_read_ops = 3,
+  };
+  EXPECT(run_group(&out) == DAMACY_OK);
+  EXPECT(out.n_read_op_groups == 3);
+  EXPECT(out.read_op_groups[0].read_op_idx == 0);
+  EXPECT(out.read_op_groups[0].first_chunk == 0);
+  EXPECT(out.read_op_groups[0].n_chunks == 3);
+  EXPECT(out.read_op_groups[0].total_decompressed == 100);
+  EXPECT(out.read_op_groups[1].read_op_idx == 1);
+  EXPECT(out.read_op_groups[1].first_chunk == 3);
+  EXPECT(out.read_op_groups[1].n_chunks == 2);
+  EXPECT(out.read_op_groups[1].total_decompressed == 70);
+  EXPECT(out.read_op_groups[2].read_op_idx == 2);
+  EXPECT(out.read_op_groups[2].first_chunk == 5);
+  EXPECT(out.read_op_groups[2].n_chunks == 1);
+  EXPECT(out.read_op_groups[2].total_decompressed == 40);
+  free(out.read_op_groups);
+  return 0;
+}
+
+// Sparse buckets (read_op with no chunk_plans) are skipped — groups[]
+// length equals the number of *referenced* read_ops.
+static int
+test_groups_skip_sparse(void)
+{
+  struct chunk_plan chunks[3];
+  mk_cp(&chunks[0], 2, 0, 0, 1);
+  mk_cp(&chunks[1], 2, 100, 0, 2);
+  mk_cp(&chunks[2], 2, 200, 0, 3);
+  chunks[0].decompressed_nbytes = 7;
+  chunks[1].decompressed_nbytes = 7;
+  chunks[2].decompressed_nbytes = 7;
+  struct planner_output out = {
+    .chunk_plans = chunks,
+    .chunk_plans_cap = 3,
+    .n_chunk_plans = 3,
+    .n_read_ops = 3,
+  };
+  EXPECT(run_group(&out) == DAMACY_OK);
+  EXPECT(out.n_read_op_groups == 1);
+  EXPECT(out.read_op_groups[0].read_op_idx == 2);
+  EXPECT(out.read_op_groups[0].first_chunk == 0);
+  EXPECT(out.read_op_groups[0].n_chunks == 3);
+  EXPECT(out.read_op_groups[0].total_decompressed == 21);
+  free(out.read_op_groups);
+  return 0;
+}
+
+// Iterator yields groups in order, stops cleanly at end.
+static int
+test_iterator_walk(void)
+{
+  struct read_op_group groups[3] = {
+    { .read_op_idx = 0, .first_chunk = 0, .n_chunks = 2, .total_decompressed = 10 },
+    { .read_op_idx = 1, .first_chunk = 2, .n_chunks = 1, .total_decompressed = 20 },
+    { .read_op_idx = 2, .first_chunk = 3, .n_chunks = 4, .total_decompressed = 30 },
+  };
+  struct read_op_group_iterator it;
+  read_op_group_iterator_init(&it, groups, 3, 1);
+  struct read_op_group got;
+  EXPECT(read_op_group_iterator_next(&it, &got) == 1);
+  EXPECT(got.read_op_idx == 1);
+  EXPECT(read_op_group_iterator_next(&it, &got) == 1);
+  EXPECT(got.read_op_idx == 2);
+  EXPECT(read_op_group_iterator_next(&it, &got) == 0);
+  return 0;
+}
+
 int
 main(void)
 {
@@ -207,5 +303,8 @@ main(void)
   RUN(test_sparse_read_op);
   RUN(test_invalid_read_op_idx);
   RUN(test_sample_distribution_preserved);
+  RUN(test_groups_emitted);
+  RUN(test_groups_skip_sparse);
+  RUN(test_iterator_walk);
   return 0;
 }

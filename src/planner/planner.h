@@ -102,6 +102,28 @@ extern "C"
     uint32_t chunk_d[DAMACY_MAX_RANK]; // grid position within sample (0..N)
   };
 
+  struct read_op_group
+  {
+    uint32_t read_op_idx;
+    uint32_t first_chunk;
+    uint32_t n_chunks;
+    uint64_t total_decompressed;
+  };
+
+  struct read_op_group_iterator
+  {
+    const struct read_op_group* groups;
+    uint32_t n_groups;
+    uint32_t cursor;
+  };
+
+  void read_op_group_iterator_init(struct read_op_group_iterator* it,
+                                   const struct read_op_group* groups,
+                                   uint32_t n_groups,
+                                   uint32_t start_group);
+  int read_op_group_iterator_next(struct read_op_group_iterator* it,
+                                  struct read_op_group* out);
+
   struct planner_config
   {
     struct zarr_meta_cache* meta_cache;
@@ -143,6 +165,9 @@ extern "C"
     struct sample_plan* sample_plans;
     uint32_t sample_plans_cap;
     uint32_t n_sample_plans;
+    struct read_op_group* read_op_groups;
+    uint32_t read_op_groups_cap;
+    uint32_t n_read_op_groups;
     struct path_intern* paths;
     uint32_t n_chunks_to_load; // non-fill chunks (= IO requests pre-coalesce)
     uint32_t n_loads_issued;   // real (non-fill) read_ops after coalesce

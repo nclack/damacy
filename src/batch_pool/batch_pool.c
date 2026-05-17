@@ -18,6 +18,9 @@ batch_slot_init(struct damacy_batch_slot* slot, uint32_t batch_size_cap)
   slot->chunk_plans = (struct chunk_plan*)calloc(DAMACY_MAX_CHUNKS_PER_BATCH,
                                                  sizeof(struct chunk_plan));
   CHECK(Error, slot->chunk_plans);
+  slot->read_op_groups = (struct read_op_group*)calloc(
+    DAMACY_MAX_CHUNKS_PER_BATCH, sizeof(struct read_op_group));
+  CHECK(Error, slot->read_op_groups);
   slot->sample_plans =
     (struct sample_plan*)calloc(batch_size_cap, sizeof(struct sample_plan));
   CHECK(Error, slot->sample_plans);
@@ -40,6 +43,7 @@ batch_slot_destroy(struct damacy_batch_slot* slot, int cuda_skip)
   // and freed in batch_pool_destroy — leave it alone here.
   free(slot->read_ops);
   free(slot->chunk_plans);
+  free(slot->read_op_groups);
   free(slot->sample_plans);
   path_intern_free(&slot->paths);
   if (!cuda_skip && slot->d_sample_plans)

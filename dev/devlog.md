@@ -1,5 +1,31 @@
 # dev log
 
+## 2026-05-16
+
+Looking to measure backpressure, so added a hold time to the benchmark.
+Should simulate training holding on to the batch. Some results:
+
+```
+hold(ms) block(total ms, 50 batches)
+200      403
+300      355
+400      350
+500      329
+````
+
+I'd really like that block time to go to zero.
+
+Also looking into chunk coalescing. Folks reported some high variance in nfs
+latencies, so this might help. It would also help with resilience in the face
+of small chunk sizes. May think about coalescing at page granularity.
+
+- [ ] bench with a store with some noisy latency
+
+decomp masks the upstream pipeline so it's hard to get a read on performance
+at some point. Added a flag to treat chunks as "fill chunks" post io. These
+use the fill value to populate the batch, so I don't need to decomrpess but
+the pipeline still runs.
+
 ## 2026-05-15
 
 I've been using a more github based workflow, so not using this doc as much.
@@ -21,7 +47,7 @@ being robust to that.
 
 Found a better design for the parsing kernel. Adding that now.
 
-- [~] remove the cpu parsing once it looks like gpu is better.
+- [x] remove the cpu parsing once it looks like gpu is better.
 
 decompress and assemble are not overlapping
       

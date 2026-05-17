@@ -12,7 +12,7 @@ authors = [{ name = "Nathan Clack", email = "nclack@gmail.com" }]
 requires-python = ">=3.11"
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.6", "pyright>=1.1"]
+dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.6", "pyright>=1.1", "torch"]
 # mkdocstrings reads damacy via griffe's static analysis (AST parse), so the
 # docs build does not import the package — no CUDA / nvcomp needed at build.
 # ruff is here so mkdocstrings can format rendered signatures (it imports

@@ -29,6 +29,7 @@ enum batch_slot_state
 struct read_op;
 struct chunk_plan;
 struct sample_plan;
+struct read_op_group;
 
 struct damacy_batch_slot
 {
@@ -37,10 +38,12 @@ struct damacy_batch_slot
   uint32_t n_samples; // shape[0]: number of complete samples
   void* dev_ptr;      // device output tensor (allocated lazily)
 
-  struct read_op* read_ops;         // size DAMACY_MAX_CHUNKS_PER_BATCH
-  struct chunk_plan* chunk_plans;   // size DAMACY_MAX_CHUNKS_PER_BATCH
+  struct read_op* read_ops;             // size DAMACY_MAX_CHUNKS_PER_BATCH
+  struct chunk_plan* chunk_plans;       // size DAMACY_MAX_CHUNKS_PER_BATCH
+  struct read_op_group* read_op_groups; // size DAMACY_MAX_CHUNKS_PER_BATCH
+  uint32_t n_read_op_groups;
   struct sample_plan* sample_plans; // size cfg.batch_size
-  // Reset before each plan into the slot, bounding the working set to
+  // Reset before each plan into the slot; bounds the working set to
   // distinct shard paths in one batch.
   struct path_intern paths;
   void* d_sample_plans; // device mirror, uploaded once per batch
@@ -49,6 +52,8 @@ struct damacy_batch_slot
   uint32_t n_chunks_to_load;    // non-fill chunks (filter survivors)
   uint32_t n_loads_issued;      // real read_ops after coalesce
   uint32_t n_chunks_dispatched; // 0 .. n_chunks; chunks given to a wave
+  uint32_t n_groups_dispatched; // 0 .. n_read_op_groups; fully-dispatched groups
+  uint32_t group_chunk_offset;  // chunks consumed from group[n_groups_dispatched] (0 if not partial)
   int32_t chunks_remaining;     // n_chunks - chunks completed via waves
 
   // Set by damacy_release_event when a deferred-release wait has been

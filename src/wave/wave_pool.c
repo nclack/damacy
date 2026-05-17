@@ -825,72 +825,84 @@ wave_pool_peel_reserve(struct wave_pool* wp,
                        enum damacy_status* err)
 {
   *err = DAMACY_OK;
-  struct wave_pool_peel_ticket t = { .slot_idx = -1,
-                                     .n_reads = 0,
-                                     .consumed = 0 };
+  struct wave_pool_peel_ticket t = { .slot_idx = -1, .n_reads = 0, .consumed = 0 };
   struct damacy_batch_slot* batch = &wp->pool->slots[batch_slot_idx];
   uint32_t base = batch->n_chunks_dispatched;
-  uint32_t remaining = batch->n_chunks - base;
-  if (remaining == 0)
+  if (base >= batch->n_chunks)
     return t;
   int slot_idx = host_slab_find_free(wp->slots, wp->n_slots);
   if (slot_idx < 0)
     return t;
   struct host_slab_slot* hs = &wp->slots[slot_idx];
 
-  for (uint32_t i = 0; i < remaining; ++i)
-    batch->read_ops[batch->chunk_plans[base + i].read_op_idx].host_buf_offset =
-      UINT64_MAX;
-
   uint64_t host_cursor = 0;
   uint64_t dev_cursor = 0;
   uint32_t take = 0;
   uint32_t n_reads = 0;
+  uint32_t group_chunk_off = batch->group_chunk_offset;
+  uint32_t completed_groups = batch->n_groups_dispatched;
   const uint64_t dev_cap = wp->waves[0].dev_decompressed_cap;
-  for (; take < remaining && take < DAMACY_MAX_CHUNKS_PER_WAVE; ++take) {
-    struct chunk_plan* c = &batch->chunk_plans[base + take];
-    struct read_op* r = &batch->read_ops[c->read_op_idx];
-    int new_read = (r->host_buf_offset == UINT64_MAX);
-    // group_chunks_by_read invariant: !new_read implies the previous
-    // chunk shares this read_op (chunks of one read_op are contiguous).
-    CHECK(Invariant,
-          new_read ||
-            batch->chunk_plans[base + take - 1].read_op_idx == c->read_op_idx);
-    uint64_t host_add = (new_read && !c->is_fill) ? r->nbytes : 0;
-    if (host_cursor + host_add > hs->cap ||
-        dev_cursor + c->decompressed_nbytes > dev_cap) {
-      // group_chunks_by_read keeps same-read-op chunks contiguous, so
-      // the broken read_op's chunks are at the tail; rewind them.
-      if (!new_read) {
-        uint32_t broken_op = c->read_op_idx;
-        while (take > 0 &&
-               batch->chunk_plans[base + take - 1].read_op_idx == broken_op) {
-          dev_cursor -= batch->chunk_plans[base + take - 1].decompressed_nbytes;
-          take--;
+
+  // A group whose chunk count exceeds DAMACY_MAX_CHUNKS_PER_WAVE is
+  // split across waves: each wave re-issues the read_op and consumes a
+  // slice of its chunks. group_chunk_offset persists across peels.
+  {
+    struct read_op_group_iterator it;
+    read_op_group_iterator_init(&it,
+                                batch->read_op_groups,
+                                batch->n_read_op_groups,
+                                batch->n_groups_dispatched);
+    struct read_op_group g;
+    while (read_op_group_iterator_next(&it, &g)) {
+      struct read_op* r = &batch->read_ops[g.read_op_idx];
+      int is_fill_group = batch->chunk_plans[g.first_chunk].is_fill;
+      uint64_t host_add = is_fill_group ? 0 : r->nbytes;
+      if (host_cursor + host_add > hs->cap)
+        break;
+
+      int opened = 0;
+      uint64_t reserved_host_off = host_cursor;
+      uint32_t i = group_chunk_off;
+      for (; i < g.n_chunks; ++i) {
+        if (take >= DAMACY_MAX_CHUNKS_PER_WAVE)
+          break;
+        struct chunk_plan* c = &batch->chunk_plans[g.first_chunk + i];
+        if (dev_cursor + c->decompressed_nbytes > dev_cap)
+          break;
+        if (!opened) {
+          if (!is_fill_group) {
+            void* dst = wp->use_gds
+                          ? (void*)((uint8_t*)hs->dev_buf + host_cursor)
+                          : (void*)((uint8_t*)hs->buf + host_cursor);
+            hs->store_reads[n_reads++] = (struct store_read){
+              .key = r->shard_path,
+              .dst = dst,
+              .offset = r->file_offset,
+              .len = r->nbytes,
+            };
+            r->host_buf_offset = host_cursor;
+            host_cursor += host_add;
+          }
+          opened = 1;
         }
-        host_cursor -= r->nbytes;
-        n_reads--;
+        c->host_buf_offset = is_fill_group ? 0 : reserved_host_off;
+        c->dev_decompressed_offset = dev_cursor;
+        dev_cursor += c->decompressed_nbytes;
+        take++;
       }
-      break;
+
+      if (i == g.n_chunks) {
+        completed_groups++;
+        group_chunk_off = 0;
+      } else {
+        group_chunk_off = i;
+        break;
+      }
     }
-    if (new_read && !c->is_fill) {
-      void* dst = wp->use_gds ? (void*)((uint8_t*)hs->dev_buf + host_cursor)
-                              : (void*)((uint8_t*)hs->buf + host_cursor);
-      hs->store_reads[n_reads++] = (struct store_read){
-        .key = r->shard_path,
-        .dst = dst,
-        .offset = r->file_offset,
-        .len = r->nbytes,
-      };
-      r->host_buf_offset = host_cursor;
-      host_cursor += host_add;
-    }
-    c->host_buf_offset = c->is_fill ? 0 : r->host_buf_offset;
-    c->dev_decompressed_offset = dev_cursor;
-    dev_cursor += c->decompressed_nbytes;
   }
+
   if (take == 0) {
-    log_error("wave: chunk too large for slot "
+    log_error("wave: group too large for slot "
               "(slot_cap=%llu dev_cap=%llu)",
               (unsigned long long)hs->cap,
               (unsigned long long)dev_cap);
@@ -905,18 +917,17 @@ wave_pool_peel_reserve(struct wave_pool* wp,
   hs->used_bytes = host_cursor;
   hs->io_bytes = host_cursor;
   hs->state = SLOT_PEELING;
+  t.prev_n_groups_dispatched = batch->n_groups_dispatched;
+  t.prev_group_chunk_offset = batch->group_chunk_offset;
   batch->n_chunks_dispatched += take;
+  batch->n_groups_dispatched = completed_groups;
+  batch->group_chunk_offset = group_chunk_off;
   wp->stats->waves_emitted++;
   wp->stats->chunks_dispatched += take;
 
   t.slot_idx = slot_idx;
   t.n_reads = n_reads;
   return t;
-Invariant:
-  *err = DAMACY_INVAL;
-  return (struct wave_pool_peel_ticket){ .slot_idx = -1,
-                                         .n_reads = 0,
-                                         .consumed = 0 };
 }
 
 struct store_event
@@ -947,6 +958,8 @@ wave_pool_peel_commit(struct wave_pool* wp,
   if (t->n_reads > 0 && ev.seq == 0) {
     struct damacy_batch_slot* batch = &wp->pool->slots[hs->batch_pool_slot];
     batch->n_chunks_dispatched -= hs->n_chunks;
+    batch->n_groups_dispatched = t->prev_n_groups_dispatched;
+    batch->group_chunk_offset = t->prev_group_chunk_offset;
     wp->stats->waves_emitted--;
     wp->stats->chunks_dispatched -= hs->n_chunks;
     slot_release(hs);
