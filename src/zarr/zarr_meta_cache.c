@@ -168,8 +168,12 @@ Invalid:
   return DAMACY_INVAL;
 }
 
-// layout/layout_probed are guarded by self->mu; the entry pointer itself
-// is stable (LRU never reshuffles existing nodes).
+// layout/layout_probed are guarded by self->mu. The lru slot array
+// pointers are stable, but the value (struct meta_entry*) inside a slot
+// is destroyed on eviction — so the returned pointer must not be held
+// past the unlock if any other thread can call lru_put. Used only by
+// tests today; production code reads layout via probe_layout (which
+// returns by value).
 const struct chunk_layout*
 zarr_meta_cache_layout_get(struct zarr_meta_cache* self, const char* uri)
 {
@@ -216,29 +220,32 @@ zarr_meta_cache_layout_set(struct zarr_meta_cache* self,
 // the same URI read identical bytes, so last-writer-wins is value-safe.
 // The entry pointer is re-fetched after the unlocked probe — between the
 // initial lookup and the commit another thread may have evicted the URI.
-const struct chunk_layout*
+// The result is copied into *out under the lock so the caller's value
+// can't be invalidated by a subsequent eviction.
+int
 zarr_meta_cache_probe_layout(struct zarr_meta_cache* self,
                              const char* uri,
                              const char* shard_path,
                              uint64_t first_chunk_off,
                              uint32_t first_chunk_cbytes,
-                             uint8_t codec_id)
+                             uint8_t codec_id,
+                             struct chunk_layout* out)
 {
-  if (!self || !uri || !shard_path)
-    return NULL;
+  if (!self || !uri || !shard_path || !out)
+    return 1;
   uint64_t hash = hash_fnv1a_str(uri);
   pthread_mutex_lock(&self->mu);
   struct lru_entry* hit = lru_get(self->lru, hash, uri);
   if (!hit) {
     pthread_mutex_unlock(&self->mu);
-    return NULL;
+    return 1;
   }
   const struct meta_entry* entry =
     (const struct meta_entry*)lru_entry_value(hit);
   if (entry->layout_probed) {
-    const struct chunk_layout* out = &entry->layout;
+    *out = entry->layout;
     pthread_mutex_unlock(&self->mu);
-    return out;
+    return 0;
   }
   pthread_mutex_unlock(&self->mu);
 
@@ -249,7 +256,7 @@ zarr_meta_cache_probe_layout(struct zarr_meta_cache* self,
                               first_chunk_cbytes,
                               codec_id,
                               &probed))
-    return NULL;
+    return 1;
 
   pthread_mutex_lock(&self->mu);
   // Re-fetch via lru_peek (the lookup is an internal re-check, not a
@@ -257,16 +264,16 @@ zarr_meta_cache_probe_layout(struct zarr_meta_cache* self,
   hit = lru_peek(self->lru, hash, uri);
   if (!hit) {
     pthread_mutex_unlock(&self->mu);
-    return NULL;
+    return 1;
   }
   struct meta_entry* fresh = (struct meta_entry*)lru_entry_value(hit);
   if (!fresh->layout_probed) {
     fresh->layout = probed;
     fresh->layout_probed = 1;
   }
-  const struct chunk_layout* out = &fresh->layout;
+  *out = fresh->layout;
   pthread_mutex_unlock(&self->mu);
-  return out;
+  return 0;
 }
 
 void

@@ -53,7 +53,12 @@ extern "C"
   // Returns the cached chunk layout for `uri`, or NULL if no layout has
   // been probed yet (or the URI isn't cached). The cache must already
   // hold a meta entry for the URI — call zarr_meta_cache_get first.
-  // Thread-safe.
+  // Thread-safe for the lookup itself; the returned pointer has the
+  // same eviction-vs-concurrent-writer hazard as _get's metadata, and
+  // is intended for tests / single-writer contexts. Use
+  // zarr_meta_cache_probe_layout when correctness across concurrent
+  // writers matters — that variant copies into a caller buffer under
+  // the lock.
   const struct chunk_layout* zarr_meta_cache_layout_get(
     struct zarr_meta_cache* c,
     const char* uri);
@@ -65,19 +70,21 @@ extern "C"
                                  const char* uri,
                                  const struct chunk_layout* layout);
 
-  // Cached probe: returns the cached layout if present, otherwise reads
-  // 16 bytes at first_chunk_off in shard_path via the cache's store,
-  // caches the result, and returns the cached pointer. Returns NULL on
-  // probe failure or if no meta entry exists for `uri`. Thread-safe;
-  // the underlying I/O runs unlocked, so concurrent first-probes for
-  // the same URI may each issue a read.
-  const struct chunk_layout* zarr_meta_cache_probe_layout(
-    struct zarr_meta_cache* c,
-    const char* uri,
-    const char* shard_path,
-    uint64_t first_chunk_off,
-    uint32_t first_chunk_cbytes,
-    uint8_t codec_id);
+  // Cached probe: copies the cached layout into *out if present,
+  // otherwise reads 16 bytes at first_chunk_off in shard_path via the
+  // cache's store, caches the result, and copies it into *out. The
+  // copy happens under the cache mutex, so the caller's *out is
+  // independent of subsequent cache mutations. Returns 0 on success,
+  // non-zero on probe failure or if no meta entry exists for `uri`.
+  // Thread-safe; the underlying I/O runs unlocked, so concurrent
+  // first-probes for the same URI may each issue a read.
+  int zarr_meta_cache_probe_layout(struct zarr_meta_cache* c,
+                                   const char* uri,
+                                   const char* shard_path,
+                                   uint64_t first_chunk_off,
+                                   uint32_t first_chunk_cbytes,
+                                   uint8_t codec_id,
+                                   struct chunk_layout* out);
 
   struct zarr_meta_cache_stats
   {
