@@ -252,7 +252,9 @@ zarr_meta_cache_probe_layout(struct zarr_meta_cache* self,
     return NULL;
 
   pthread_mutex_lock(&self->mu);
-  hit = lru_get(self->lru, hash, uri);
+  // Re-fetch via lru_peek (the lookup is an internal re-check, not a
+  // user-visible hit, and shouldn't promote or bump counters).
+  hit = lru_peek(self->lru, hash, uri);
   if (!hit) {
     pthread_mutex_unlock(&self->mu);
     return NULL;

@@ -34,12 +34,13 @@ extern "C"
   // before return. Spurious wakeups possible.
   void scheduler_wait(struct scheduler* s);
 
-  // Timed variant. On timeout, the supplied counter is incremented and
-  // logged on the 1st, then every Nth occurrence (see DIAG_LOG_EVERY in
-  // scheduler.c) — so a real hang is visible without flooding. Counter
-  // is reset to zero on a successful (non-timeout) wake. Use the
-  // SCHEDULER_WAIT_DIAG macro to allocate a per-call-site static counter
-  // and pass __FILE__:__LINE__ as `site` automatically.
+  // Timed variant. Caller must hold the lock (same as scheduler_wait).
+  // On timeout, the supplied counter is incremented and logged on the
+  // 1st, then every Nth occurrence (see DIAG_LOG_EVERY in scheduler.c)
+  // — so a real hang is visible without flooding. Counter is reset to
+  // zero on a successful (non-timeout) wake. Use the SCHEDULER_WAIT_DIAG
+  // macro: it allocates a per-call-site static counter, which is safe
+  // to share across threads only because the lock serializes access.
   void scheduler_wait_diag(struct scheduler* s,
                            const char* site,
                            int timeout_ms,
