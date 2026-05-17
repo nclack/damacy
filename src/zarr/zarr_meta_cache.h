@@ -32,10 +32,15 @@ extern "C"
   // hit returns the cached pointer; on miss, fetches and parses
   // <uri>/zarr.json from the store, caches the result, and returns it.
   //
-  // The returned pointer is owned by the cache; valid until the entry
-  // is evicted (which can happen on a subsequent get). v1: no
-  // pinning — callers should not retain the pointer across other cache
-  // operations.
+  // Thread-safe. The internal mutex covers the lookup, the *out store
+  // and (on cold miss) a re-check before inserting, so racing _get
+  // calls on the same URI converge on a single entry. After the call
+  // returns, the returned pointer is owned by the cache and remains
+  // valid until the entry is evicted. Eviction fires only when
+  // `capacity` is exceeded — to keep returned pointers usable across
+  // long operations, size the cache above the working set. v1 has no
+  // pin/release API; pinning is a follow-up if a working set ever
+  // overflows capacity.
   //
   // Returns DAMACY_OK on success; DAMACY_INVAL on bad args;
   // DAMACY_NOTFOUND if zarr.json could not be opened; DAMACY_DECODE if
@@ -48,7 +53,12 @@ extern "C"
   // Returns the cached chunk layout for `uri`, or NULL if no layout has
   // been probed yet (or the URI isn't cached). The cache must already
   // hold a meta entry for the URI — call zarr_meta_cache_get first.
-  // Thread-safe.
+  // Thread-safe for the lookup itself; the returned pointer has the
+  // same eviction-vs-concurrent-writer hazard as _get's metadata, and
+  // is intended for tests / single-writer contexts. Use
+  // zarr_meta_cache_probe_layout when correctness across concurrent
+  // writers matters — that variant copies into a caller buffer under
+  // the lock.
   const struct chunk_layout* zarr_meta_cache_layout_get(
     struct zarr_meta_cache* c,
     const char* uri);
@@ -60,19 +70,21 @@ extern "C"
                                  const char* uri,
                                  const struct chunk_layout* layout);
 
-  // Cached probe: returns the cached layout if present, otherwise reads
-  // 16 bytes at first_chunk_off in shard_path via the cache's store,
-  // caches the result, and returns the cached pointer. Returns NULL on
-  // probe failure or if no meta entry exists for `uri`. Thread-safe;
-  // the underlying I/O runs unlocked, so concurrent first-probes for
-  // the same URI may each issue a read.
-  const struct chunk_layout* zarr_meta_cache_probe_layout(
-    struct zarr_meta_cache* c,
-    const char* uri,
-    const char* shard_path,
-    uint64_t first_chunk_off,
-    uint32_t first_chunk_cbytes,
-    uint8_t codec_id);
+  // Cached probe: copies the cached layout into *out if present,
+  // otherwise reads 16 bytes at first_chunk_off in shard_path via the
+  // cache's store, caches the result, and copies it into *out. The
+  // copy happens under the cache mutex, so the caller's *out is
+  // independent of subsequent cache mutations. Returns 0 on success,
+  // non-zero on probe failure or if no meta entry exists for `uri`.
+  // Thread-safe; the underlying I/O runs unlocked, so concurrent
+  // first-probes for the same URI may each issue a read.
+  int zarr_meta_cache_probe_layout(struct zarr_meta_cache* c,
+                                   const char* uri,
+                                   const char* shard_path,
+                                   uint64_t first_chunk_off,
+                                   uint32_t first_chunk_cbytes,
+                                   uint8_t codec_id,
+                                   struct chunk_layout* out);
 
   struct zarr_meta_cache_stats
   {

@@ -66,6 +66,20 @@ if(DAMACY_COVERAGE AND NOT DAMACY_FUZZ)
     target_link_options(warnings INTERFACE --coverage)
 endif()
 
+# DAMACY_TSAN — ThreadSanitizer instrumentation, applied to C/CXX TUs
+# (CUDA TUs skipped: nvcc rejects -fsanitize=thread). CUDA-linked tests
+# may surface false positives from libcuda; the CI tsan job runs only
+# the threading test (tsan-tagged via add_test LABELS). Not compatible
+# with DAMACY_FUZZ or DAMACY_COVERAGE.
+option(DAMACY_TSAN "Build with ThreadSanitizer (-fsanitize=thread)" OFF)
+if(DAMACY_TSAN AND NOT DAMACY_FUZZ)
+    target_compile_options(
+        warnings
+        INTERFACE $<$<COMPILE_LANGUAGE:C,CXX>:-fsanitize=thread;-g;-O1>
+    )
+    target_link_options(warnings INTERFACE -fsanitize=thread)
+endif()
+
 add_subdirectory(src)
 add_subdirectory(bench)
 

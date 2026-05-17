@@ -31,9 +31,11 @@ extern "C"
   // the index from the shard file (location per meta->index_location_end)
   // via the store and caches it. shard_coord has meta->rank entries.
   //
-  // On success, *out_entries points to an array of *out_n_entries
-  // elements, owned by the cache (stable until the entry is evicted).
-  // v1: no pinning.
+  // Thread-safe; lifetime contract matches zarr_meta_cache_get — the
+  // returned (entries, n_entries) is owned by the cache and remains
+  // valid until the entry is evicted. Size `capacity` above the
+  // working set to keep returned pointers usable across long
+  // operations. v1 has no pin/release API.
   enum damacy_status zarr_shard_cache_get(
     struct zarr_shard_cache* c,
     const char* uri,

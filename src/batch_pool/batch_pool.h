@@ -17,9 +17,10 @@
 enum batch_slot_state
 {
   BATCH_FREE = 0,
-  BATCH_FILLING, // planner has emitted; chunks may or may not be dispatched
-  BATCH_READY,   // chunks_remaining == 0; awaiting pop
-  BATCH_HELD,    // user holds the handle
+  BATCH_PLANNING, // reserve has drained samples; run/commit pending
+  BATCH_FILLING,  // planner has emitted; chunks may or may not be dispatched
+  BATCH_READY,    // chunks_remaining == 0; awaiting pop
+  BATCH_HELD,     // user holds the handle
 };
 
 // Forward decls; full types come from planner/planner.h. We reference
@@ -41,6 +42,8 @@ struct damacy_batch_slot
   void* d_sample_plans;             // device mirror, uploaded once per batch
   uint32_t n_sample_plans;          // == n_samples on success
   uint32_t n_chunks;
+  uint32_t n_chunks_to_load;    // non-fill chunks (filter survivors)
+  uint32_t n_loads_issued;      // real read_ops after coalesce
   uint32_t n_chunks_dispatched; // 0 .. n_chunks; chunks given to a wave
   int32_t chunks_remaining;     // n_chunks - chunks completed via waves
 
@@ -104,6 +107,11 @@ int
 find_filling_slot_with_work(const struct damacy_batch_pool* pool);
 int
 any_batch_in_flight(const struct damacy_batch_pool* pool);
+// True if any slot is BATCH_PLANNING. Used by damacy_flush to wait for
+// a plan that has reserved a slot (drained samples) but not yet
+// committed (so find_oldest_filling_slot doesn't yet see it).
+int
+any_batch_planning(const struct damacy_batch_pool* pool);
 
 // Subtract `n_consumed` chunks from the slot's outstanding work. If
 // the slot was FILLING and the count reaches 0, transitions it to

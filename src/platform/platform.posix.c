@@ -1,5 +1,6 @@
 #include "platform/platform.h"
 
+#include <errno.h>
 #include <pthread.h>
 #include <sched.h>
 #include <stdlib.h>
@@ -187,6 +188,22 @@ void
 platform_cond_wait(struct platform_cond* c, struct platform_mutex* m)
 {
   pthread_cond_wait(&c->c, &m->m);
+}
+
+int
+platform_cond_timedwait_ms(struct platform_cond* c,
+                           struct platform_mutex* m,
+                           int timeout_ms)
+{
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);
+  ts.tv_sec += timeout_ms / 1000;
+  ts.tv_nsec += (long)(timeout_ms % 1000) * 1000000L;
+  if (ts.tv_nsec >= 1000000000L) {
+    ts.tv_sec += 1;
+    ts.tv_nsec -= 1000000000L;
+  }
+  return pthread_cond_timedwait(&c->c, &m->m, &ts) == ETIMEDOUT ? 1 : 0;
 }
 
 void

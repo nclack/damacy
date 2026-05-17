@@ -295,15 +295,15 @@ emit_chunk(const struct emit_ctx* ctx,
   // is non-fatal — downstream falls back to MAX_BLOCKS_PER_CHUNK in
   // cap calculations.
   if (ctx->sp && !ctx->sp->layout_probed) {
-    const struct chunk_layout* cl =
-      zarr_meta_cache_probe_layout(ctx->meta_cache,
-                                   ctx->sample->uri,
-                                   ctx->interned_path,
-                                   entry->offset,
-                                   (uint32_t)entry->nbytes,
-                                   ctx->codec_id);
-    if (cl) {
-      ctx->sp->layout = *cl;
+    struct chunk_layout cl = { 0 };
+    if (zarr_meta_cache_probe_layout(ctx->meta_cache,
+                                     ctx->sample->uri,
+                                     ctx->interned_path,
+                                     entry->offset,
+                                     (uint32_t)entry->nbytes,
+                                     ctx->codec_id,
+                                     &cl) == 0) {
+      ctx->sp->layout = cl;
       ctx->sp->layout_probed = 1;
     }
   }

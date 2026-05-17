@@ -1,0 +1,34 @@
+{
+  "name": "mixed-hold500",
+  "dataset": {
+    "store_root": "bench/data/mixed",
+    "n_zarrs": 8,
+    "uri_fmt": "z%03u/scale0/image",
+    "zarr_shape": [512, 512, 512],
+    "chunk_shape": [32, 64, 64],
+    "shard_shape": [256, 256, 512],
+    "dtypes": ["u16"],
+    "codecs": ["zstd", "blosc-zstd"],
+    "clevel": 3,
+    "entropy": 0.5,
+    "seed": 42
+  },
+  "sampling": {
+    "sample_shape": [128, 128, 128],
+    "n_batches": 50,
+    "n_warmup_batches": 5,
+    "batch_size": 128,
+    "seed": 1234
+  },
+  "pipeline": {
+    "dtype": "f32",
+    "lookahead_batches": 4,
+    "n_io_threads": 8,
+    "max_gpu_memory_mb": 6144,
+    "n_zarrs_meta_cache": 4096,
+    "n_shards_meta_cache": 16384
+  },
+  "consumer": {
+    "hold_ms": 500
+  }
+}

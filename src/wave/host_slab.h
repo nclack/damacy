@@ -5,10 +5,9 @@
 // stream_decode.
 //
 // Lifecycle:
-//   FREE  → peel writes bytes + submits IO → IO
-//   IO    → store_event_query succeeds     → READY
-//   READY → bind to a free wave            → BUSY
-//   BUSY  → bulk_h2d_end fires on stream_h2d → FREE
+//   FREE → PEELING (peel reserve) → IO (peel commit, after async submit)
+//        → READY (store_event_query) → BUSY (bind to wave)
+//        → FREE (bulk_h2d_end on stream_h2d)
 #pragma once
 
 #include "store/store.h"
@@ -18,6 +17,7 @@
 enum slot_state
 {
   SLOT_FREE = 0,
+  SLOT_PEELING,
   SLOT_IO,
   SLOT_READY,
   SLOT_BUSY,
@@ -71,6 +71,12 @@ slot_release(struct host_slab_slot* slot);
 
 // Linear scans across `slots[0..n)`. find_* returns the index of the
 // first matching slot, or -1 if none. any_* returns 1/0.
+//
+// host_slab_any_in_flight returns 1 for any non-FREE state, including
+// the transient SLOT_PEELING window (peel reserve → peel commit). This
+// is intentional: damacy_pop relies on it to know a peel may produce
+// future ready batches even when no wave has actually launched yet.
+// Any new non-FREE state added later must keep this property.
 int
 host_slab_find_free(const struct host_slab_slot* slots, uint8_t n);
 int

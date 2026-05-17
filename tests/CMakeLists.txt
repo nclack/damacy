@@ -27,6 +27,21 @@ add_damacy_test(test_lru lru hash)
 add_damacy_test(test_io_queue io_queue log)
 add_damacy_test(test_zarr_meta_cache zarr_meta_cache zarr store test_fixture)
 add_damacy_test(test_zarr_shard_cache zarr_shard_cache zarr store test_fixture)
+
+# Concurrent stress test for the LRU caches. Designed to surface
+# unsynchronized access to lru_get / lru_put / lru_stats_get; under
+# DAMACY_TSAN=ON, ThreadSanitizer reports the race directly. Labeled
+# `tsan` so CI can run only this test under the tsan build.
+add_damacy_test(
+    test_zarr_cache_threading
+    zarr_meta_cache
+    zarr_shard_cache
+    zarr
+    store
+    test_fixture
+)
+target_link_libraries(test_zarr_cache_threading PRIVATE Threads::Threads)
+set_tests_properties(test_zarr_cache_threading PROPERTIES LABELS tsan)
 add_damacy_test(test_planner planner zarr_meta_cache zarr_shard_cache zarr store test_fixture)
 add_damacy_test(test_coalesce planner log)
 add_damacy_test(test_group_chunks planner log)

@@ -90,11 +90,16 @@ class Pipeline(BaseModel):
     bypass_decode: bool = False
 
 
+class Consumer(BaseModel):
+    hold_ms: float = 0.0
+
+
 class Scenario(BaseModel):
     name: str = "scenario"
     dataset: Dataset
     sampling: Sampling
     pipeline: Pipeline
+    consumer: Consumer = Field(default_factory=Consumer)
 
 
 # --- results -----------------------------------------------------------------
@@ -115,6 +120,9 @@ class Timings(BaseModel):
     init: float
     time_to_first_batch: float
     wall: float
+    consumer_block: float = 0.0
+    consumer_push: float = 0.0
+    consumer_pop_wait: float = 0.0
 
 
 class Counters(BaseModel):

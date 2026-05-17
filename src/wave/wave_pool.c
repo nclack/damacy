@@ -815,22 +815,26 @@ finalize_wave(struct wave_pool* wp, struct damacy_wave* wave)
   return out;
 }
 
-// Pack chunks from `batch_slot`'s remaining work into a free
-// host_slab_slot. Submits IO and transitions the slot to SLOT_IO.
-// No-op if no slot is free or the batch has nothing left.
-enum damacy_status
-wave_pool_peel(struct wave_pool* wp, uint16_t batch_slot_idx)
+// --- peel: reserve [locked] → submit [unlocked] → commit [locked] -----------
+// submit does the async IO submit off the scheduler_lock. The slot
+// sits in SLOT_PEELING for the window so nothing else binds it.
+
+struct wave_pool_peel_ticket
+wave_pool_peel_reserve(struct wave_pool* wp,
+                       uint16_t batch_slot_idx,
+                       enum damacy_status* err)
 {
+  *err = DAMACY_OK;
+  struct wave_pool_peel_ticket t = { .slot_idx = -1, .n_reads = 0 };
   struct damacy_batch_slot* batch = &wp->pool->slots[batch_slot_idx];
   uint32_t base = batch->n_chunks_dispatched;
   uint32_t remaining = batch->n_chunks - base;
   if (remaining == 0)
-    return DAMACY_OK;
+    return t;
   int slot_idx = host_slab_find_free(wp->slots, wp->n_slots);
   if (slot_idx < 0)
-    return DAMACY_OK;
+    return t;
   struct host_slab_slot* hs = &wp->slots[slot_idx];
-  damacy_nvtx_range_pushf("peel/slot%d", slot_idx);
 
   for (uint32_t i = 0; i < remaining; ++i)
     batch->read_ops[batch->chunk_plans[base + i].read_op_idx].dst_buf_offset =
@@ -885,40 +889,55 @@ wave_pool_peel(struct wave_pool* wp, uint16_t batch_slot_idx)
               "(slot_cap=%llu dev_cap=%llu)",
               (unsigned long long)hs->cap,
               (unsigned long long)dev_cap);
-    damacy_nvtx_range_pop();
-    return DAMACY_OOM;
+    *err = DAMACY_OOM;
+    return t;
   }
   hs->io_t_start_ns = monotonic_ns();
   hs->is_fill_wave = (n_reads == 0);
-  if (n_reads > 0) {
-    hs->io_event =
-      wp->use_gds ? store_read_submit_dev(wp->store, hs->store_reads, n_reads)
-                  : store_read_submit(wp->store, hs->store_reads, n_reads);
-    // seq==0 from the submit return path means "submit failed" (treat as
-    // DAMACY_IO). Distinct from the all-fill branch below, which also
-    // stores seq==0 but as the "no IO submitted" sentinel — gated by
-    // is_fill_wave so the SLOT_IO poll never queries the zero event.
-    if (hs->io_event.seq == 0) {
-      damacy_nvtx_range_pop();
-      return DAMACY_IO;
-    }
-  } else {
-    // All chunks in this wave are fill — no IO. The SLOT_IO poll keys
-    // on is_fill_wave; io_event stays zero as the all-fill sentinel
-    // (same value as the submit-failed sentinel above, different path).
-    hs->io_event = (struct store_event){ .seq = 0 };
-  }
-
   hs->batch_pool_slot = batch_slot_idx;
   hs->batch_chunk_offset = base;
   hs->n_chunks = take;
   hs->used_bytes = host_cursor;
   hs->io_bytes = host_cursor;
-  hs->state = SLOT_IO;
+  hs->state = SLOT_PEELING;
   batch->n_chunks_dispatched += take;
   wp->stats->waves_emitted++;
   wp->stats->chunks_dispatched += take;
-  damacy_nvtx_range_pop();
+
+  t.slot_idx = slot_idx;
+  t.n_reads = n_reads;
+  return t;
+}
+
+struct store_event
+wave_pool_peel_submit(struct wave_pool* wp, struct wave_pool_peel_ticket t)
+{
+  if (t.slot_idx < 0 || t.n_reads == 0)
+    return (struct store_event){ .seq = 0 };
+  struct host_slab_slot* hs = &wp->slots[t.slot_idx];
+  return wp->use_gds
+           ? store_read_submit_dev(wp->store, hs->store_reads, t.n_reads)
+           : store_read_submit(wp->store, hs->store_reads, t.n_reads);
+}
+
+enum damacy_status
+wave_pool_peel_commit(struct wave_pool* wp,
+                      struct wave_pool_peel_ticket t,
+                      struct store_event ev)
+{
+  if (t.slot_idx < 0)
+    return DAMACY_OK;
+  struct host_slab_slot* hs = &wp->slots[t.slot_idx];
+  if (t.n_reads > 0 && ev.seq == 0) {
+    struct damacy_batch_slot* batch = &wp->pool->slots[hs->batch_pool_slot];
+    batch->n_chunks_dispatched -= hs->n_chunks;
+    wp->stats->waves_emitted--;
+    wp->stats->chunks_dispatched -= hs->n_chunks;
+    slot_release(hs);
+    return DAMACY_IO;
+  }
+  hs->io_event = ev;
+  hs->state = SLOT_IO;
   return DAMACY_OK;
 }
 
