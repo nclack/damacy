@@ -332,7 +332,7 @@ kick_peel_into_free_slots(struct damacy* self)
       break;
     damacy_nvtx_range_pushf("peel/slot%d", t.slot_idx);
     scheduler_unlock(self->sched);
-    struct store_event ev = wave_pool_peel_submit(&self->wave_pool, t);
+    struct store_event ev = wave_pool_peel_submit(&self->wave_pool, &t);
     scheduler_lock(self->sched);
     enum damacy_status s = wave_pool_peel_commit(&self->wave_pool, &t, ev);
     damacy_nvtx_range_pop();

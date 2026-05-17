@@ -161,7 +161,8 @@ wave_pool_peel_reserve(struct wave_pool* wp,
                        enum damacy_status* err);
 
 struct store_event
-wave_pool_peel_submit(struct wave_pool* wp, struct wave_pool_peel_ticket t);
+wave_pool_peel_submit(struct wave_pool* wp,
+                      const struct wave_pool_peel_ticket* t);
 
 // commit: rolls back the reservation on submit failure → DAMACY_IO. The
 // ticket is consumed on first call; a second call is a no-op returning

@@ -920,14 +920,15 @@ Invariant:
 }
 
 struct store_event
-wave_pool_peel_submit(struct wave_pool* wp, struct wave_pool_peel_ticket t)
+wave_pool_peel_submit(struct wave_pool* wp,
+                      const struct wave_pool_peel_ticket* t)
 {
-  if (t.slot_idx < 0 || t.n_reads == 0)
+  if (t->slot_idx < 0 || t->n_reads == 0)
     return (struct store_event){ .seq = 0 };
-  struct host_slab_slot* hs = &wp->slots[t.slot_idx];
+  struct host_slab_slot* hs = &wp->slots[t->slot_idx];
   return wp->use_gds
-           ? store_read_submit_dev(wp->store, hs->store_reads, t.n_reads)
-           : store_read_submit(wp->store, hs->store_reads, t.n_reads);
+           ? store_read_submit_dev(wp->store, hs->store_reads, t->n_reads)
+           : store_read_submit(wp->store, hs->store_reads, t->n_reads);
 }
 
 enum damacy_status
@@ -935,15 +936,13 @@ wave_pool_peel_commit(struct wave_pool* wp,
                       struct wave_pool_peel_ticket* t,
                       struct store_event ev)
 {
-  if (t->slot_idx < 0)
-    return DAMACY_OK;
-  // One-shot guard: re-entry would underflow waves_emitted /
-  // chunks_dispatched via the rollback path. No-op on re-commit.
   if (t->consumed) {
     log_error("wave: peel_commit called twice on slot %d", t->slot_idx);
     return DAMACY_OK;
   }
   t->consumed = 1;
+  if (t->slot_idx < 0)
+    return DAMACY_OK;
   struct host_slab_slot* hs = &wp->slots[t->slot_idx];
   if (t->n_reads > 0 && ev.seq == 0) {
     struct damacy_batch_slot* batch = &wp->pool->slots[hs->batch_pool_slot];

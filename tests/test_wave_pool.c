@@ -12,6 +12,7 @@
 
 #include "batch_pool/batch_pool.h"
 #include "damacy.h"
+#include "damacy_log.h"
 #include "expect.h"
 #include "store/store.h"
 #include "wave/host_slab.h"
@@ -75,7 +76,10 @@ test_peel_commit_rollback_once(void)
   EXPECT(wp.slots[0].state == SLOT_FREE);
 
   // Second call must NOT decrement again — that would underflow.
+  // Re-entry intentionally trips a log_error; quiet the sink across it.
+  damacy_log_set_quiet(1);
   EXPECT(wave_pool_peel_commit(&wp, &t, ev) == DAMACY_OK);
+  damacy_log_set_quiet(0);
   EXPECT(stats.waves_emitted == 0);
   EXPECT(stats.chunks_dispatched == 0);
   EXPECT(batch_pool.slots[0].n_chunks_dispatched == 0);
@@ -107,8 +111,11 @@ test_peel_commit_success_then_recommit(void)
   EXPECT(stats.chunks_dispatched == n_chunks);
 
   // Second call: a stray re-commit (e.g. error retry) must not touch state.
+  // Re-entry intentionally trips a log_error; quiet the sink across it.
   struct store_event ev2 = { .seq = 0 };
+  damacy_log_set_quiet(1);
   EXPECT(wave_pool_peel_commit(&wp, &t, ev2) == DAMACY_OK);
+  damacy_log_set_quiet(0);
   EXPECT(wp.slots[0].state == SLOT_IO);
   EXPECT(stats.waves_emitted == 1);
   EXPECT(stats.chunks_dispatched == n_chunks);
