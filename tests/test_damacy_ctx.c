@@ -32,13 +32,14 @@ mkdtemp_root(char* root, size_t cap)
 }
 
 static struct damacy_config
-mk_cfg(const char* root)
+mk_cfg(const char* root, int64_t sy, int64_t sx)
 {
   (void)root;
-  return (struct damacy_config){
+  struct damacy_config c = {
     .batch_size = 1,
     .lookahead_batches = 2,
     .dtype = DAMACY_F32,
+    .sample_rank = 2,
     .device = -1,
     .tuning = {
       .n_io_threads = 1,
@@ -46,6 +47,9 @@ mk_cfg(const char* root)
       .n_shards_meta_cache = 4,
     },
   };
+  c.sample_shape[0] = sy;
+  c.sample_shape[1] = sx;
+  return c;
 }
 
 // Caller has a non-primary CUcontext current. damacy_create captures
@@ -77,7 +81,7 @@ test_create_preserves_caller_ctx(void)
   EXPECT(fixture_write_zarr_codec(
            p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
 
-  struct damacy_config cfg = mk_cfg(root);
+  struct damacy_config cfg = mk_cfg(root, 8, 16);
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
@@ -110,7 +114,7 @@ test_create_no_ctx_returns_inval(void)
 
   char root[64];
   EXPECT(mkdtemp_root(root, sizeof root) == 0);
-  struct damacy_config cfg = mk_cfg(root);
+  struct damacy_config cfg = mk_cfg(root, 1, 1);
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_INVAL);
   EXPECT(d == NULL);
@@ -133,7 +137,7 @@ test_create_explicit_device_no_ctx(void)
   EXPECT(fixture_write_zarr_codec(
            p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
 
-  struct damacy_config cfg = mk_cfg(root);
+  struct damacy_config cfg = mk_cfg(root, 8, 16);
   cfg.device = 0;
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
@@ -162,7 +166,7 @@ test_create_explicit_device_mismatch(void)
 
   char root[64];
   EXPECT(mkdtemp_root(root, sizeof root) == 0);
-  struct damacy_config cfg = mk_cfg(root);
+  struct damacy_config cfg = mk_cfg(root, 1, 1);
   cfg.device = 1;
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_INVAL);
@@ -192,7 +196,7 @@ test_explicit_device_does_not_leak_ctx_between_calls(void)
   EXPECT(fixture_write_zarr_codec(
            p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
 
-  struct damacy_config cfg = mk_cfg(root);
+  struct damacy_config cfg = mk_cfg(root, 4, 8);
   cfg.device = 0;
   cfg.batch_size = 1;
   struct damacy* d = NULL;
@@ -253,7 +257,10 @@ test_pop_error_path_restores_caller_ctx(void)
   EXPECT(fixture_write_zarr_codec(
            p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
 
-  struct damacy_config cfg = mk_cfg(root);
+  // sample_shape matches the OOB AABB extents so push validates the
+  // sample through; the planner is the one that rejects the AABB for
+  // extending past the zarr's actual shape.
+  struct damacy_config cfg = mk_cfg(root, 4, 9999);
   cfg.device = 0;
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
@@ -262,8 +269,8 @@ test_pop_error_path_restores_caller_ctx(void)
   EXPECT(cuCtxGetCurrent(&cur) == CUDA_SUCCESS);
   EXPECT(cur == caller);
 
-  // Push succeeds (push_one doesn't bounds-check), pop's planner
-  // rejects the AABB with DAMACY_INVAL after ctx_guard_enter.
+  // Push succeeds (shape matches cfg), pop's planner rejects the AABB
+  // with DAMACY_INVAL after ctx_guard_enter.
   struct damacy_sample oob = { .uri = p, .aabb = { .rank = 2 } };
   oob.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 4 };
   oob.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 9999 };

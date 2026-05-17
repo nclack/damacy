@@ -43,13 +43,14 @@ expected_f32_from_u16_2d(int64_t y, int64_t x, int64_t cols, int64_t off)
 }
 
 static struct damacy_config
-mk_cfg(const char* root, uint32_t batch_size)
+mk_cfg(const char* root, uint32_t batch_size, int64_t sy, int64_t sx)
 {
   (void)root;
-  return (struct damacy_config){
+  struct damacy_config c = {
     .batch_size = batch_size,
     .lookahead_batches = 2,
     .dtype = DAMACY_F32,
+    .sample_rank = 2,
     .device = -1,
     .tuning = {
       .n_io_threads = 1,
@@ -57,6 +58,9 @@ mk_cfg(const char* root, uint32_t batch_size)
       .n_shards_meta_cache = 4,
     },
   };
+  c.sample_shape[0] = sy;
+  c.sample_shape[1] = sx;
+  return c;
 }
 
 static struct damacy_sample
@@ -122,7 +126,7 @@ test_full_array(void)
   int64_t shape[2] = { 4, 8 }, inner[2] = { 2, 4 }, shard[2] = { 4, 8 };
   EXPECT(fixture_write_zarr(p, shape, inner, shard, 2, "uint16", 0) == 0);
 
-  struct damacy_config cfg = mk_cfg(root, 1);
+  struct damacy_config cfg = mk_cfg(root, 1, 4, 8);
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
@@ -152,7 +156,7 @@ test_partial_crossing_chunks(void)
   int64_t shape[2] = { 4, 8 }, inner[2] = { 2, 4 }, shard[2] = { 4, 8 };
   EXPECT(fixture_write_zarr(p, shape, inner, shard, 2, "uint16", 0) == 0);
 
-  struct damacy_config cfg = mk_cfg(root, 1);
+  struct damacy_config cfg = mk_cfg(root, 1, 2, 5);
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
@@ -183,7 +187,7 @@ test_multi_batch(void)
   int64_t shape[2] = { 8, 16 }, inner[2] = { 2, 4 }, shard[2] = { 8, 16 };
   EXPECT(fixture_write_zarr(p, shape, inner, shard, 2, "uint16", 0) == 0);
 
-  struct damacy_config cfg = mk_cfg(root, 2);
+  struct damacy_config cfg = mk_cfg(root, 2, 4, 8);
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
@@ -263,7 +267,7 @@ test_multi_zarr(void)
   EXPECT(fixture_write_zarr(pa, shape, inner, shard, 2, "uint16", 0) == 0);
   EXPECT(fixture_write_zarr(pb, shape, inner, shard, 2, "uint16", 1000) == 0);
 
-  struct damacy_config cfg = mk_cfg(root, 2);
+  struct damacy_config cfg = mk_cfg(root, 2, 4, 8);
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
@@ -315,7 +319,7 @@ test_heterogeneous_dtype(void)
   EXPECT(fixture_write_zarr(pa, shape, inner, shard, 2, "uint8", 0) == 0);
   EXPECT(fixture_write_zarr(pb, shape, inner, shard, 2, "uint16", 1000) == 0);
 
-  struct damacy_config cfg = mk_cfg(root, 2);
+  struct damacy_config cfg = mk_cfg(root, 2, 4, 8);
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
@@ -370,7 +374,7 @@ test_pipelined(void)
   int64_t shape[2] = { 8, 16 }, inner[2] = { 2, 4 }, shard[2] = { 8, 16 };
   EXPECT(fixture_write_zarr(p, shape, inner, shard, 2, "uint16", 0) == 0);
 
-  struct damacy_config cfg = mk_cfg(root, 2);
+  struct damacy_config cfg = mk_cfg(root, 2, 4, 8);
   // Bump lookahead so we can hold 4 batches' worth of samples up front
   // (4 batches * 2 samples = 8 = lookahead_batches=4 * batch_size=2).
   cfg.lookahead_batches = 4;
@@ -446,7 +450,7 @@ test_lookahead_backpressure(void)
   EXPECT(fixture_write_zarr(p, shape, inner, shard, 2, "uint16", 0) == 0);
 
   // batch_size=1, lookahead_batches=2 → lookahead cap of 2 samples.
-  struct damacy_config cfg = mk_cfg(root, 1);
+  struct damacy_config cfg = mk_cfg(root, 1, 4, 8);
   cfg.lookahead_batches = 2;
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
@@ -502,7 +506,7 @@ test_missing_shard_fills(void)
   snprintf(shard_path, sizeof shard_path, "%s/foo/c/0/0", root);
   EXPECT(unlink(shard_path) == 0);
 
-  struct damacy_config cfg = mk_cfg(root, 1);
+  struct damacy_config cfg = mk_cfg(root, 1, 4, 8);
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
@@ -566,7 +570,7 @@ test_missing_shard_fills_nonzero(void)
   snprintf(shard_path, sizeof shard_path, "%s/foo/c/0/0", root);
   EXPECT(unlink(shard_path) == 0);
 
-  struct damacy_config cfg = mk_cfg(root, 1);
+  struct damacy_config cfg = mk_cfg(root, 1, 4, 8);
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
@@ -604,7 +608,7 @@ test_release_event_blocks_assemble(void)
   int64_t shape[2] = { 4, 8 }, inner[2] = { 4, 8 }, shard[2] = { 4, 8 };
   EXPECT(fixture_write_zarr(p, shape, inner, shard, 2, "uint16", 0) == 0);
 
-  struct damacy_config cfg = mk_cfg(root, 1);
+  struct damacy_config cfg = mk_cfg(root, 1, 4, 8);
   cfg.lookahead_batches = 3; // pool has 2 slots; 3 pops forces reuse.
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
@@ -674,7 +678,7 @@ test_release_event_null_falls_back(void)
   int64_t shape[2] = { 4, 8 }, inner[2] = { 4, 8 }, shard[2] = { 4, 8 };
   EXPECT(fixture_write_zarr(p, shape, inner, shard, 2, "uint16", 0) == 0);
 
-  struct damacy_config cfg = mk_cfg(root, 1);
+  struct damacy_config cfg = mk_cfg(root, 1, 4, 8);
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 

@@ -59,6 +59,10 @@ validate_config(const struct damacy_config* cfg)
   CHECK_SILENT(Invalid,
                cfg->tuning.max_chunk_uncompressed_bytes <=
                  DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES);
+  CHECK_SILENT(Invalid, cfg->sample_rank > 0);
+  CHECK_SILENT(Invalid, cfg->sample_rank <= DAMACY_MAX_RANK);
+  for (uint8_t d = 0; d < cfg->sample_rank; ++d)
+    CHECK_SILENT(Invalid, cfg->sample_shape[d] > 0);
   // AUTO=0 so designated-init callers get the default. PIN_TO requires
   // a non-negative node; AUTO and DISABLED ignore numa_node.
   CHECK_SILENT(Invalid,
@@ -123,4 +127,41 @@ resolve_enable_gds(const struct damacy_config* cfg)
   if (e && strcmp(e, "1") == 0)
     return 1;
   return 0;
+}
+
+enum damacy_status
+resolve_sample_shape(const struct damacy_config* cfg,
+                     int64_t* out_shape,
+                     uint8_t* out_rank)
+{
+  if (!cfg || !out_shape || !out_rank)
+    return DAMACY_INVAL;
+  if (cfg->sample_rank == 0 || cfg->sample_rank > DAMACY_MAX_RANK)
+    return DAMACY_INVAL;
+  for (uint8_t d = 0; d < cfg->sample_rank; ++d) {
+    if (cfg->sample_shape[d] <= 0)
+      return DAMACY_INVAL;
+    out_shape[d] = cfg->sample_shape[d];
+  }
+  *out_rank = cfg->sample_rank;
+  return DAMACY_OK;
+}
+
+enum damacy_status
+resolve_sample_volume_bytes(const struct damacy_config* cfg,
+                            uint64_t* out_bytes)
+{
+  if (!cfg || !out_bytes)
+    return DAMACY_INVAL;
+  int64_t shape[DAMACY_MAX_RANK];
+  uint8_t rank = 0;
+  enum damacy_status s = resolve_sample_shape(cfg, shape, &rank);
+  if (s != DAMACY_OK)
+    return s;
+  uint64_t volume = 1;
+  for (uint8_t d = 0; d < rank; ++d)
+    volume *= (uint64_t)shape[d];
+  *out_bytes =
+    volume * (uint64_t)cfg->batch_size * damacy_dtype_bpe(cfg->dtype);
+  return DAMACY_OK;
 }

@@ -39,7 +39,7 @@ import os
 import threading
 import warnings
 from collections import deque
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from enum import IntEnum
 from types import TracebackType
@@ -332,7 +332,8 @@ class Config:
 
     ```pycon
     >>> import dataclasses
-    >>> base = Config(batch_size=8, max_gpu_memory_bytes=1 << 30)
+    >>> base = Config(batch_size=8, sample_shape=(8, 16),
+    ...               max_gpu_memory_bytes=1 << 30)
     >>> base.dtype is Dtype.F32
     True
     >>> dataclasses.replace(base, batch_size=64).batch_size
@@ -346,7 +347,7 @@ class Config:
     ``dtype`` argument; the stored field is always a :class:`Dtype`.
 
     ```pycon
-    >>> Config(batch_size=0)
+    >>> Config(batch_size=0, sample_shape=(8, 16))
     Traceback (most recent call last):
         ...
     ValueError: batch_size must be >= 1 (got 0)
@@ -387,12 +388,14 @@ class Config:
     max_chunk_uncompressed_bytes: int
     max_gpu_memory_bytes: int
     host_buffer_waves: int
+    sample_shape: tuple[int, ...]
     device: int | None
 
     def __init__(
         self,
         *,
         batch_size: int,
+        sample_shape: Sequence[int],
         max_gpu_memory_bytes: int = 0,
         dtype: Dtype | str | int = Dtype.F32,
         lookahead_batches: int = 2,
@@ -421,6 +424,11 @@ class Config:
             raise ValueError("max_gpu_memory_bytes must be >= 0")
         if host_buffer_waves < 0:
             raise ValueError("host_buffer_waves must be >= 0")
+        shape_t = tuple(int(x) for x in sample_shape)
+        if not shape_t:
+            raise ValueError("sample_shape must be non-empty")
+        if any(d <= 0 for d in shape_t):
+            raise ValueError(f"sample_shape entries must be > 0 (got {shape_t})")
         set_ = object.__setattr__  # frozen=True forbids `self.x = ...`
         set_(self, "batch_size", batch_size)
         set_(self, "dtype", Dtype.coerce(dtype))
@@ -431,6 +439,7 @@ class Config:
         set_(self, "max_chunk_uncompressed_bytes", max_chunk_uncompressed_bytes)
         set_(self, "max_gpu_memory_bytes", max_gpu_memory_bytes)
         set_(self, "host_buffer_waves", host_buffer_waves)
+        set_(self, "sample_shape", shape_t)
         set_(self, "device", device)
 
 
@@ -790,6 +799,7 @@ class Pipeline:
                 max_chunk_uncompressed_bytes=config.max_chunk_uncompressed_bytes,
                 max_gpu_memory_bytes=config.max_gpu_memory_bytes,
                 host_buffer_waves=config.host_buffer_waves,
+                sample_shape=tuple(config.sample_shape),
                 device=-1 if config.device is None else int(config.device),
             )
         except _native.DamacyError as exc:

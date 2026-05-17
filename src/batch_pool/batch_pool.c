@@ -61,24 +61,25 @@ batch_pool_destroy(struct damacy_batch_pool* pool, int cuda_skip)
 
 enum damacy_status
 batch_pool_compute_layout(struct damacy_batch_pool* pool,
-                          const struct damacy_aabb* sample_aabb,
+                          const int64_t* sample_shape,
+                          uint8_t sample_rank,
                           uint32_t batch_size,
                           uint32_t bpe)
 {
   if (pool->layout_set)
     return DAMACY_OK;
 
-  uint8_t spatial_rank = sample_aabb->rank;
-  uint8_t full_rank = (uint8_t)(spatial_rank + 1);
+  CHECK_SILENT(Invalid, sample_shape);
+  CHECK_SILENT(Invalid, sample_rank > 0);
+  uint8_t full_rank = (uint8_t)(sample_rank + 1);
   CHECK_SILENT(Rank, full_rank <= DAMACY_MAX_RANK + 1);
 
   int64_t spatial_volume = 1;
   pool->shape[0] = (int64_t)batch_size;
-  for (uint8_t d = 0; d < spatial_rank; ++d) {
-    int64_t extent = sample_aabb->dims[d].end - sample_aabb->dims[d].beg;
-    CHECK_SILENT(Invalid, extent > 0);
-    pool->shape[d + 1] = extent;
-    spatial_volume *= extent;
+  for (uint8_t d = 0; d < sample_rank; ++d) {
+    CHECK_SILENT(Invalid, sample_shape[d] > 0);
+    pool->shape[d + 1] = sample_shape[d];
+    spatial_volume *= sample_shape[d];
   }
   pool->rank = full_rank;
   pool->strides[full_rank - 1] = 1;
@@ -112,21 +113,6 @@ batch_pool_alloc_dev(struct damacy_batch_pool* pool)
   }
   pool->allocated = 1;
   return DAMACY_OK;
-}
-
-int
-sample_shape_matches_pool(const struct damacy_batch_pool* pool,
-                          const struct damacy_aabb* aabb)
-{
-  uint8_t spatial_rank = (uint8_t)(pool->rank - 1);
-  if (aabb->rank != spatial_rank)
-    return 0;
-  for (uint8_t d = 0; d < spatial_rank; ++d) {
-    int64_t extent = aabb->dims[d].end - aabb->dims[d].beg;
-    if (extent != pool->shape[d + 1])
-      return 0;
-  }
-  return 1;
 }
 
 int

@@ -48,13 +48,14 @@ expected_f32_from_u16_2d(int64_t y, int64_t x, int64_t cols, int64_t off)
 }
 
 static struct damacy_config
-mk_cfg(const char* root, uint32_t batch_size)
+mk_cfg(const char* root, uint32_t batch_size, int64_t sy, int64_t sx)
 {
   (void)root;
-  return (struct damacy_config){
+  struct damacy_config c = {
     .batch_size = batch_size,
     .lookahead_batches = 2,
     .dtype = DAMACY_F32,
+    .sample_rank = 2,
     .device = -1,
     .tuning = {
       .n_io_threads = 1,
@@ -62,6 +63,9 @@ mk_cfg(const char* root, uint32_t batch_size)
       .n_shards_meta_cache = 4,
     },
   };
+  c.sample_shape[0] = sy;
+  c.sample_shape[1] = sx;
+  return c;
 }
 
 static struct damacy_sample
@@ -128,7 +132,7 @@ run_full_array(const char* codec)
   EXPECT(fixture_write_zarr_codec(
            p, shape, inner, shard, 2, "uint16", 0, codec) == 0);
 
-  struct damacy_config cfg = mk_cfg(root, 1);
+  struct damacy_config cfg = mk_cfg(root, 1, 16, 32);
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
@@ -165,7 +169,7 @@ test_partial_crossing_chunks_blosc(void)
   EXPECT(fixture_write_zarr_codec(
            p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
 
-  struct damacy_config cfg = mk_cfg(root, 1);
+  struct damacy_config cfg = mk_cfg(root, 1, 8, 22);
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
@@ -205,7 +209,7 @@ test_three_codecs_mixed_batch(void)
       0);
   }
 
-  struct damacy_config cfg = mk_cfg(root, 4);
+  struct damacy_config cfg = mk_cfg(root, 4, 16, 32);
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
@@ -284,6 +288,8 @@ test_multi_wave_per_batch(void)
     .batch_size = 4,
     .lookahead_batches = 2,
     .dtype = DAMACY_F32,
+    .sample_shape = { 16, 32 },
+    .sample_rank = 2,
     .device = -1,
     .tuning = {
       .n_io_threads = 1,
@@ -366,6 +372,8 @@ test_wave_grows_substream_cap(void)
     .batch_size = 1,
     .lookahead_batches = 2,
     .dtype = DAMACY_F32,
+    .sample_shape = { 256, 32 },
+    .sample_rank = 2,
     .device = -1,
     .tuning = {
       .n_io_threads = 1,
@@ -443,6 +451,8 @@ test_grow_inside_tight_budget(void)
     .batch_size = 1,
     .lookahead_batches = 2,
     .dtype = DAMACY_F32,
+    .sample_shape = { 256, 32 },
+    .sample_rank = 2,
     .device = -1,
     .tuning = {
       .n_io_threads = 1,
@@ -499,6 +509,8 @@ test_layout_probe_avoids_decoder_grow(void)
     .batch_size = 1,
     .lookahead_batches = 2,
     .dtype = DAMACY_F32,
+    .sample_shape = { 256, 32 },
+    .sample_rank = 2,
     .device = -1,
     .tuning = {
       .n_io_threads = 1,
@@ -547,7 +559,7 @@ test_batch_pool_rejected_at_inflated_committed(void)
   EXPECT(fixture_write_zarr_codec(
            p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
 
-  struct damacy_config cfg = mk_cfg(root, 1);
+  struct damacy_config cfg = mk_cfg(root, 1, 8, 16);
   cfg.tuning.max_gpu_memory_bytes = 120ull << 20;
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
@@ -611,7 +623,7 @@ test_gds_parity_blosc_zstd(void)
 
   // Host-staging path.
   {
-    struct damacy_config cfg = mk_cfg(root, 1);
+    struct damacy_config cfg = mk_cfg(root, 1, 64, 32);
     struct damacy* d = NULL;
     EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
     size_t got = 0;
@@ -622,7 +634,7 @@ test_gds_parity_blosc_zstd(void)
   }
   // GDS path.
   {
-    struct damacy_config cfg = mk_cfg(root, 1);
+    struct damacy_config cfg = mk_cfg(root, 1, 64, 32);
     cfg.tuning.enable_gds = 1;
     struct damacy* d = NULL;
     EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);

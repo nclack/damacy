@@ -74,13 +74,16 @@ batch_slot_destroy(struct damacy_batch_slot* slot, int cuda_skip);
 void
 batch_pool_destroy(struct damacy_batch_pool* pool, int cuda_skip);
 
-// Establishes shape/strides/n_bytes from the first sample's AABB. No
-// GPU touch. Idempotent on the same input — sets pool->layout_set on
-// first success and short-circuits subsequent calls. The caller checks
-// the budget against pool->n_bytes and then calls batch_pool_alloc_dev.
+// Establishes shape/strides/n_bytes from cfg->sample_shape. No GPU
+// touch. Idempotent on the same input — sets pool->layout_set on first
+// success and short-circuits subsequent calls. sample_rank must be in
+// [1, DAMACY_MAX_RANK] and every sample_shape[d] must be > 0; otherwise
+// DAMACY_INVAL. The caller checks the budget against pool->n_bytes and
+// then calls batch_pool_alloc_dev.
 enum damacy_status
 batch_pool_compute_layout(struct damacy_batch_pool* pool,
-                          const struct damacy_aabb* sample_aabb,
+                          const int64_t* sample_shape,
+                          uint8_t sample_rank,
                           uint32_t batch_size,
                           uint32_t bpe);
 
@@ -89,10 +92,6 @@ batch_pool_compute_layout(struct damacy_batch_pool* pool,
 // Caller bumps gpu_bytes_committed by 2 × pool->n_bytes on success.
 enum damacy_status
 batch_pool_alloc_dev(struct damacy_batch_pool* pool);
-
-int
-sample_shape_matches_pool(const struct damacy_batch_pool* pool,
-                          const struct damacy_aabb* aabb);
 
 // All return -1 / 0 if the predicate is unmet. find_oldest_*
 // scans by lowest batch_id. find_filling_slot_with_work additionally
