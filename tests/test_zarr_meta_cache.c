@@ -99,14 +99,13 @@ test_meta_cache(void)
   EXPECT(c);
 
   // First get: miss → load → return.
-  const struct zarr_metadata* m1 = NULL;
+  struct zarr_metadata m1 = { 0 };
   EXPECT(zarr_meta_cache_get(c, "foo", &m1) == DAMACY_OK);
-  EXPECT(m1);
-  EXPECT(m1->rank == 2);
-  EXPECT(m1->shape[0] == 64 && m1->shape[1] == 1024);
-  EXPECT(m1->inner_chunk_shape[0] == 32 && m1->inner_chunk_shape[1] == 128);
-  EXPECT(m1->shard_shape[0] == 64 && m1->shard_shape[1] == 512);
-  EXPECT(m1->sharded == 1);
+  EXPECT(m1.rank == 2);
+  EXPECT(m1.shape[0] == 64 && m1.shape[1] == 1024);
+  EXPECT(m1.inner_chunk_shape[0] == 32 && m1.inner_chunk_shape[1] == 128);
+  EXPECT(m1.shard_shape[0] == 64 && m1.shard_shape[1] == 512);
+  EXPECT(m1.sharded == 1);
 
   struct zarr_meta_cache_stats st;
   zarr_meta_cache_stats_get(c, &st);
@@ -114,25 +113,23 @@ test_meta_cache(void)
   EXPECT(st.counters.misses == 1);
   EXPECT(st.size == 1);
 
-  // Second get same uri: hit. Returned pointer must be the same.
-  const struct zarr_metadata* m1b = NULL;
+  // Second get same uri: hit. Returned bytes must match.
+  struct zarr_metadata m1b = { 0 };
   EXPECT(zarr_meta_cache_get(c, "foo", &m1b) == DAMACY_OK);
-  EXPECT(m1b == m1);
+  EXPECT(memcmp(&m1b, &m1, sizeof m1) == 0);
   zarr_meta_cache_stats_get(c, &st);
   EXPECT(st.counters.hits == 1);
   EXPECT(st.counters.misses == 1);
 
   // Different uri: another miss; both entries cached.
-  const struct zarr_metadata* m2 = NULL;
+  struct zarr_metadata m2 = { 0 };
   EXPECT(zarr_meta_cache_get(c, "bar", &m2) == DAMACY_OK);
-  EXPECT(m2 && m2 != m1);
   zarr_meta_cache_stats_get(c, &st);
   EXPECT(st.size == 2);
 
   // Missing uri: NOTFOUND.
-  const struct zarr_metadata* mx = NULL;
+  struct zarr_metadata mx = { 0 };
   EXPECT(zarr_meta_cache_get(c, "doesnotexist", &mx) == DAMACY_NOTFOUND);
-  EXPECT(mx == NULL);
 
   zarr_meta_cache_destroy(c);
   store_destroy(store);
@@ -162,15 +159,14 @@ test_meta_cache_unsharded(void)
   struct zarr_meta_cache* c = zarr_meta_cache_create(store, 4);
   EXPECT(c);
 
-  const struct zarr_metadata* m = NULL;
+  struct zarr_metadata m = { 0 };
   EXPECT(zarr_meta_cache_get(c, "foo", &m) == DAMACY_OK);
-  EXPECT(m);
-  EXPECT(m->rank == 2);
-  EXPECT(m->shape[0] == 64 && m->shape[1] == 1024);
-  EXPECT(m->shard_shape[0] == 32 && m->shard_shape[1] == 128);
-  EXPECT(m->inner_chunk_shape[0] == 32 && m->inner_chunk_shape[1] == 128);
-  EXPECT(m->sharded == 0);
-  EXPECT(m->inner_codec.id == CODEC_ZSTD);
+  EXPECT(m.rank == 2);
+  EXPECT(m.shape[0] == 64 && m.shape[1] == 1024);
+  EXPECT(m.shard_shape[0] == 32 && m.shard_shape[1] == 128);
+  EXPECT(m.inner_chunk_shape[0] == 32 && m.inner_chunk_shape[1] == 128);
+  EXPECT(m.sharded == 0);
+  EXPECT(m.inner_codec.id == CODEC_ZSTD);
 
   zarr_meta_cache_destroy(c);
   store_destroy(store);
@@ -200,11 +196,10 @@ test_meta_cache_index_start(void)
   struct zarr_meta_cache* c = zarr_meta_cache_create(store, 4);
   EXPECT(c);
 
-  const struct zarr_metadata* m = NULL;
+  struct zarr_metadata m = { 0 };
   EXPECT(zarr_meta_cache_get(c, "foo", &m) == DAMACY_OK);
-  EXPECT(m);
-  EXPECT(m->sharded == 1);
-  EXPECT(m->index_location_end == 0);
+  EXPECT(m.sharded == 1);
+  EXPECT(m.index_location_end == 0);
 
   zarr_meta_cache_destroy(c);
   store_destroy(store);

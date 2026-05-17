@@ -89,22 +89,19 @@ zarr_meta_cache_destroy(struct zarr_meta_cache* self)
 enum damacy_status
 zarr_meta_cache_get(struct zarr_meta_cache* self,
                     const char* uri,
-                    const struct zarr_metadata** out)
+                    struct zarr_metadata* out)
 {
   CHECK_SILENT(Invalid, self);
   CHECK_SILENT(Invalid, uri);
   CHECK_SILENT(Invalid, out);
-  *out = NULL;
+  memset(out, 0, sizeof *out);
 
-  // Lock is held across the *out assignment so the deref of the returned
-  // entry can't race a concurrent lru_put eviction. After return, the
-  // pointer is valid only while no other thread can mutate this cache;
-  // see the header for the lifetime contract.
+  // Copy under the lock so *out is independent of any later eviction.
   uint64_t hash = hash_fnv1a_str(uri);
   pthread_mutex_lock(&self->mu);
   struct lru_entry* hit = lru_get(self->lru, hash, uri);
   if (hit) {
-    *out = &((const struct meta_entry*)lru_entry_value(hit))->meta;
+    *out = ((const struct meta_entry*)lru_entry_value(hit))->meta;
     pthread_mutex_unlock(&self->mu);
     return DAMACY_OK;
   }
@@ -143,13 +140,13 @@ zarr_meta_cache_get(struct zarr_meta_cache* self,
   pthread_mutex_lock(&self->mu);
   // Re-check under the lock: another thread may have raced us on the
   // same URI while we were parsing. If so, drop our duplicate and
-  // return the winner. lru_peek doesn't count as a miss/hit and doesn't
-  // promote.
+  // copy from the winner. lru_peek doesn't count as a miss/hit and
+  // doesn't promote.
   struct lru_entry* existing = lru_peek(self->lru, hash, uri);
   if (existing) {
-    meta_destroy(entry, NULL);
-    *out = &((const struct meta_entry*)lru_entry_value(existing))->meta;
+    *out = ((const struct meta_entry*)lru_entry_value(existing))->meta;
     pthread_mutex_unlock(&self->mu);
+    meta_destroy(entry, NULL);
     return DAMACY_OK;
   }
   struct lru_entry* inserted = lru_put(self->lru, hash, uri, entry);
@@ -158,38 +155,39 @@ zarr_meta_cache_get(struct zarr_meta_cache* self,
     pthread_mutex_unlock(&self->mu);
     return DAMACY_OOM;
   }
-  *out = &((const struct meta_entry*)lru_entry_value(inserted))->meta;
+  *out = ((const struct meta_entry*)lru_entry_value(inserted))->meta;
   pthread_mutex_unlock(&self->mu);
   return DAMACY_OK;
 
 Invalid:
   if (out)
-    *out = NULL;
+    memset(out, 0, sizeof *out);
   return DAMACY_INVAL;
 }
 
-// layout/layout_probed are guarded by self->mu. The lru slot array
-// pointers are stable, but the value (struct meta_entry*) inside a slot
-// is destroyed on eviction — so the returned pointer must not be held
-// past the unlock if any other thread can call lru_put. Used only by
-// tests today; production code reads layout via probe_layout (which
-// returns by value).
-const struct chunk_layout*
-zarr_meta_cache_layout_get(struct zarr_meta_cache* self, const char* uri)
+// Copies the cached layout into *out under self->mu so the caller's
+// value is independent of subsequent evictions.
+int
+zarr_meta_cache_layout_get(struct zarr_meta_cache* self,
+                           const char* uri,
+                           struct chunk_layout* out)
 {
-  if (!self || !uri)
-    return NULL;
+  if (!self || !uri || !out)
+    return 1;
+  memset(out, 0, sizeof *out);
   uint64_t hash = hash_fnv1a_str(uri);
   pthread_mutex_lock(&self->mu);
   struct lru_entry* hit = lru_get(self->lru, hash, uri);
-  const struct chunk_layout* out = NULL;
+  int rc = 1;
   if (hit) {
     struct meta_entry* entry = (struct meta_entry*)lru_entry_value(hit);
-    if (entry->layout_probed)
-      out = &entry->layout;
+    if (entry->layout_probed) {
+      *out = entry->layout;
+      rc = 0;
+    }
   }
   pthread_mutex_unlock(&self->mu);
-  return out;
+  return rc;
 }
 
 // First writer wins; redundant sets are dropped under the lock.

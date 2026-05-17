@@ -29,18 +29,12 @@ extern "C"
   void zarr_meta_cache_destroy(struct zarr_meta_cache* c);
 
   // Look up metadata for the array at `uri` (path within the store). On
-  // hit returns the cached pointer; on miss, fetches and parses
-  // <uri>/zarr.json from the store, caches the result, and returns it.
+  // hit copies the cached metadata into *out; on miss, fetches and parses
+  // <uri>/zarr.json from the store, caches the result, and copies it.
   //
-  // Thread-safe. The internal mutex covers the lookup, the *out store
-  // and (on cold miss) a re-check before inserting, so racing _get
-  // calls on the same URI converge on a single entry. After the call
-  // returns, the returned pointer is owned by the cache and remains
-  // valid until the entry is evicted. Eviction fires only when
-  // `capacity` is exceeded — to keep returned pointers usable across
-  // long operations, size the cache above the working set. v1 has no
-  // pin/release API; pinning is a follow-up if a working set ever
-  // overflows capacity.
+  // Thread-safe. The copy happens under the internal mutex so *out is
+  // independent of any subsequent eviction — the caller owns the bytes
+  // and the cache's entry may be evicted at any time after return.
   //
   // Returns DAMACY_OK on success; DAMACY_INVAL on bad args;
   // DAMACY_NOTFOUND if zarr.json could not be opened; DAMACY_DECODE if
@@ -48,20 +42,17 @@ extern "C"
   // cache with all entries pinned.
   enum damacy_status zarr_meta_cache_get(struct zarr_meta_cache* c,
                                          const char* uri,
-                                         const struct zarr_metadata** out);
+                                         struct zarr_metadata* out);
 
-  // Returns the cached chunk layout for `uri`, or NULL if no layout has
-  // been probed yet (or the URI isn't cached). The cache must already
-  // hold a meta entry for the URI — call zarr_meta_cache_get first.
-  // Thread-safe for the lookup itself; the returned pointer has the
-  // same eviction-vs-concurrent-writer hazard as _get's metadata, and
-  // is intended for tests / single-writer contexts. Use
-  // zarr_meta_cache_probe_layout when correctness across concurrent
-  // writers matters — that variant copies into a caller buffer under
-  // the lock.
-  const struct chunk_layout* zarr_meta_cache_layout_get(
-    struct zarr_meta_cache* c,
-    const char* uri);
+  // Copies the cached chunk layout for `uri` into *out. Returns 0 on
+  // success, non-zero if the URI isn't cached or no layout has been
+  // probed yet. The cache must already hold a meta entry for the URI
+  // — call zarr_meta_cache_get first. Thread-safe; the copy happens
+  // under the cache mutex, so *out is independent of subsequent
+  // evictions.
+  int zarr_meta_cache_layout_get(struct zarr_meta_cache* c,
+                                 const char* uri,
+                                 struct chunk_layout* out);
 
   // Records a probed layout against the meta entry for `uri`. No-op if
   // a layout has already been set (the first probe wins). Returns 0 on
