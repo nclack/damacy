@@ -122,6 +122,32 @@ test_peel_commit_success_then_recommit(void)
   return 0;
 }
 
+// Submit-failure rollback must restore n_groups_dispatched from the
+// snapshot the ticket captured at reserve time — without it the next
+// peel would skip past the groups this wave never actually issued.
+static int
+test_peel_commit_rolls_back_groups(void)
+{
+  struct wave_pool wp;
+  struct damacy_batch_pool batch_pool;
+  struct damacy_stats stats;
+  struct host_slab_slot slot;
+  const uint32_t n_chunks = 5;
+  setup_post_reserve(&wp, &batch_pool, &stats, &slot, n_chunks);
+
+  // Simulate reserve having advanced from group 7 to group 9.
+  batch_pool.slots[0].n_groups_dispatched = 9;
+
+  struct wave_pool_peel_ticket t = {
+    .slot_idx = 0, .n_reads = 1, .prev_n_groups_dispatched = 7, .consumed = 0
+  };
+  struct store_event ev = { .seq = 0 };
+
+  EXPECT(wave_pool_peel_commit(&wp, &t, ev) == DAMACY_IO);
+  EXPECT(batch_pool.slots[0].n_groups_dispatched == 7);
+  return 0;
+}
+
 static int
 test_peel_commit_noop_ticket(void)
 {
@@ -151,6 +177,7 @@ main(void)
 {
   RUN(test_peel_commit_rollback_once);
   RUN(test_peel_commit_success_then_recommit);
+  RUN(test_peel_commit_rolls_back_groups);
   RUN(test_peel_commit_noop_ticket);
   printf("all wave_pool tests passed\n");
   return 0;

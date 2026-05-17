@@ -891,8 +891,15 @@ wave_pool_peel_reserve(struct wave_pool* wp,
   }
 
   if (take == 0) {
+    const struct read_op_group* g0 =
+      (batch->n_groups_dispatched < batch->n_read_op_groups)
+        ? &batch->read_op_groups[batch->n_groups_dispatched]
+        : NULL;
     log_error("wave: group too large for slot "
-              "(slot_cap=%llu dev_cap=%llu)",
+              "(group n_chunks=%u total_decompressed=%llu; "
+              "slot_cap=%llu dev_cap=%llu)",
+              g0 ? g0->n_chunks : 0u,
+              g0 ? (unsigned long long)g0->total_decompressed : 0ull,
               (unsigned long long)hs->cap,
               (unsigned long long)dev_cap);
     *err = DAMACY_OOM;

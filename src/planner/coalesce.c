@@ -39,9 +39,8 @@ coalesce_chunks(struct planner_output* out,
 
   read_op_perm_sort(out->read_ops, perm, n_io);
 
-  // leader_chunks == chunk_plans sharing the surviving read_op
-  // (planner emits 1:1 read_op-per-chunk_plan pre-coalesce); cap keeps
-  // wave peel from receiving a read_op wider than one wave can intake.
+  // leader_chunks = post-coalesce group size; capped so each group
+  // fits one wave's chunk intake (planner is 1 read_op per chunk).
   uint32_t write = 0;
   uint32_t leader_old = UINT32_MAX;
   uint64_t leader_end = 0;
