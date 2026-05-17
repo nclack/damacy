@@ -156,15 +156,15 @@ push_one(struct damacy* self, const struct damacy_sample* sample)
   if (sample->aabb.rank == 0 || sample->aabb.rank > DAMACY_MAX_RANK)
     return DAMACY_RANK;
 
-  const struct zarr_metadata* meta = NULL;
+  struct zarr_metadata meta;
   enum damacy_status ms =
     zarr_meta_cache_get(self->meta_cache, sample->uri, &meta);
   if (ms != DAMACY_OK)
     return ms;
 
-  if (!cast_path_supported(self->cfg.dtype, meta->dtype))
+  if (!cast_path_supported(self->cfg.dtype, meta.dtype))
     return DAMACY_DTYPE;
-  if (sample->aabb.rank != meta->rank)
+  if (sample->aabb.rank != meta.rank)
     return DAMACY_RANK;
   if (self->batch_pool.allocated &&
       !sample_shape_matches_pool(&self->batch_pool, &sample->aabb))
@@ -332,9 +332,9 @@ kick_peel_into_free_slots(struct damacy* self)
       break;
     damacy_nvtx_range_pushf("peel/slot%d", t.slot_idx);
     scheduler_unlock(self->sched);
-    struct store_event ev = wave_pool_peel_submit(&self->wave_pool, t);
+    struct store_event ev = wave_pool_peel_submit(&self->wave_pool, &t);
     scheduler_lock(self->sched);
-    enum damacy_status s = wave_pool_peel_commit(&self->wave_pool, t, ev);
+    enum damacy_status s = wave_pool_peel_commit(&self->wave_pool, &t, ev);
     damacy_nvtx_range_pop();
     if (s != DAMACY_OK)
       return s;

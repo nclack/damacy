@@ -178,10 +178,13 @@ test_meta_cache_layout_roundtrip(void)
   EXPECT(store);
   struct zarr_meta_cache* c = zarr_meta_cache_create(store, 4);
   EXPECT(c);
-  const struct zarr_metadata* m = NULL;
+  struct zarr_metadata m = { 0 };
   EXPECT(zarr_meta_cache_get(c, "foo", &m) == DAMACY_OK);
 
-  EXPECT(zarr_meta_cache_layout_get(c, "foo") == NULL);
+  {
+    struct chunk_layout probe = { 0 };
+    EXPECT(zarr_meta_cache_layout_get(c, "foo", &probe) != 0);
+  }
 
   struct chunk_layout cl = { .codec_id = (uint8_t)CODEC_BLOSC_ZSTD,
                              .typesize = 4,
@@ -190,16 +193,22 @@ test_meta_cache_layout_roundtrip(void)
                              .nblocks = 4,
                              .shuffle = 1 };
   EXPECT(zarr_meta_cache_layout_set(c, "foo", &cl) == 0);
-  const struct chunk_layout* got = zarr_meta_cache_layout_get(c, "foo");
-  EXPECT(got);
-  EXPECT(got->typesize == 4);
-  EXPECT(got->blocksize == 256);
-  EXPECT(got->nblocks == 4);
+  {
+    struct chunk_layout got = { 0 };
+    EXPECT(zarr_meta_cache_layout_get(c, "foo", &got) == 0);
+    EXPECT(got.typesize == 4);
+    EXPECT(got.blocksize == 256);
+    EXPECT(got.nblocks == 4);
+  }
 
   // Second set is a no-op: first probe wins.
   struct chunk_layout cl2 = { .typesize = 1 };
   EXPECT(zarr_meta_cache_layout_set(c, "foo", &cl2) == 0);
-  EXPECT(zarr_meta_cache_layout_get(c, "foo")->typesize == 4);
+  {
+    struct chunk_layout got = { 0 };
+    EXPECT(zarr_meta_cache_layout_get(c, "foo", &got) == 0);
+    EXPECT(got.typesize == 4);
+  }
 
   zarr_meta_cache_destroy(c);
   store_destroy(store);
