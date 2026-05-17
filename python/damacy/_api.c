@@ -704,8 +704,11 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                          "dtype",
                          "max_chunk_uncompressed_bytes",
                          "max_gpu_memory_bytes",
+                         "sample_shape",
                          "device",
                          "host_buffer_waves",
+                         "max_read_op_bytes",
+                         "bypass_decode",
                          NULL };
   unsigned int batch_size = 0;
   unsigned int lookahead = 2;
@@ -715,11 +718,14 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   PyObject* dtype_obj = NULL;
   unsigned int max_chunk_uncompressed = 0;
   unsigned long long max_gpu_bytes = 0;
+  PyObject* sample_shape_obj = NULL;
   int device = -1;
   unsigned int host_buffer_waves = 0;
+  unsigned long long max_read_op_bytes = 0;
+  int bypass_decode = 0;
   if (!PyArg_ParseTupleAndKeywords(args,
                                    kw,
-                                   "IIIIIOI|KiI",
+                                   "IIIIIOIKO|iIKp",
                                    kws,
                                    &batch_size,
                                    &lookahead,
@@ -729,8 +735,11 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                                    &dtype_obj,
                                    &max_chunk_uncompressed,
                                    &max_gpu_bytes,
+                                   &sample_shape_obj,
                                    &device,
-                                   &host_buffer_waves))
+                                   &host_buffer_waves,
+                                   &max_read_op_bytes,
+                                   &bypass_decode))
     return -1;
 
   enum damacy_dtype dt;
@@ -740,15 +749,53 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   struct damacy_config cfg = {
     .batch_size = batch_size,
     .lookahead_batches = lookahead,
-    .n_io_threads = n_io,
-    .n_zarrs_meta_cache = n_zarrs_meta,
-    .n_shards_meta_cache = n_shards_meta,
     .dtype = dt,
-    .max_chunk_uncompressed_bytes = max_chunk_uncompressed,
-    .max_gpu_memory_bytes = (uint64_t)max_gpu_bytes,
     .device = device,
-    .host_buffer_waves = (uint8_t)host_buffer_waves,
+    .tuning = {
+      .n_io_threads = n_io,
+      .n_zarrs_meta_cache = n_zarrs_meta,
+      .n_shards_meta_cache = n_shards_meta,
+      .max_chunk_uncompressed_bytes = max_chunk_uncompressed,
+      .max_read_op_bytes = (uint64_t)max_read_op_bytes,
+      .max_gpu_memory_bytes = (uint64_t)max_gpu_bytes,
+      .host_buffer_waves = (uint8_t)host_buffer_waves,
+    },
+    .debug = { .bypass_decode = (uint8_t)(bypass_decode ? 1 : 0) },
   };
+
+  // sample_shape: a sequence of ints; copies into cfg.sample_shape[].
+  {
+    PyObject* seq = PySequence_Fast(sample_shape_obj,
+                                    "sample_shape must be a sequence of ints");
+    if (!seq)
+      return -1;
+    Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
+    if (n <= 0 || n > DAMACY_MAX_RANK) {
+      Py_DECREF(seq);
+      PyErr_Format(PyExc_ValueError,
+                   "sample_shape rank must be in [1, %d] (got %zd)",
+                   DAMACY_MAX_RANK,
+                   (Py_ssize_t)n);
+      return -1;
+    }
+    for (Py_ssize_t i = 0; i < n; ++i) {
+      PyObject* item = PySequence_Fast_GET_ITEM(seq, i);
+      long long v = PyLong_AsLongLong(item);
+      if (v == -1 && PyErr_Occurred()) {
+        Py_DECREF(seq);
+        return -1;
+      }
+      if (v <= 0) {
+        Py_DECREF(seq);
+        PyErr_Format(
+          PyExc_ValueError, "sample_shape[%zd] must be > 0 (got %lld)", i, v);
+        return -1;
+      }
+      cfg.sample_shape[i] = (int64_t)v;
+    }
+    cfg.sample_rank = (uint8_t)n;
+    Py_DECREF(seq);
+  }
 
   struct damacy* d = NULL;
   enum damacy_status s;

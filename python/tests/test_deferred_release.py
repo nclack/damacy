@@ -51,6 +51,7 @@ def _mk_cfg() -> Config:
         n_io_threads=1,
         n_zarrs_meta_cache=4,
         n_shards_meta_cache=4,
+        sample_shape=(8, 16),
     )
 
 

@@ -49,12 +49,14 @@ mk_cfg(const char* root, uint32_t batch_size, int64_t sy, int64_t sx)
   struct damacy_config c = {
     .batch_size = batch_size,
     .lookahead_batches = 2,
-    .n_io_threads = 1,
-    .n_zarrs_meta_cache = 4,
-    .n_shards_meta_cache = 4,
     .dtype = DAMACY_F32,
     .sample_rank = 2,
     .device = -1,
+    .tuning = {
+      .n_io_threads = 1,
+      .n_zarrs_meta_cache = 4,
+      .n_shards_meta_cache = 4,
+    },
   };
   c.sample_shape[0] = sy;
   c.sample_shape[1] = sx;

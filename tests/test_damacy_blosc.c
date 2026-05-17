@@ -54,12 +54,14 @@ mk_cfg(const char* root, uint32_t batch_size, int64_t sy, int64_t sx)
   struct damacy_config c = {
     .batch_size = batch_size,
     .lookahead_batches = 2,
-    .n_io_threads = 1,
-    .n_zarrs_meta_cache = 4,
-    .n_shards_meta_cache = 4,
     .dtype = DAMACY_F32,
     .sample_rank = 2,
     .device = -1,
+    .tuning = {
+      .n_io_threads = 1,
+      .n_zarrs_meta_cache = 4,
+      .n_shards_meta_cache = 4,
+    },
   };
   c.sample_shape[0] = sy;
   c.sample_shape[1] = sx;
@@ -285,18 +287,18 @@ test_multi_wave_per_batch(void)
   struct damacy_config cfg = {
     .batch_size = 4,
     .lookahead_batches = 2,
-    .n_io_threads = 1,
-    .n_zarrs_meta_cache = 4,
-    .n_shards_meta_cache = 4,
     .dtype = DAMACY_F32,
-    .max_chunk_uncompressed_bytes = 4ull << 10,
-    // Just enough to fit the resolver minimum (one chunk per wave at
-    // worst-case-grow accounting); per_wave lands near the floor so
-    // the 16-chunk batch spills into ≥2 waves of the same batch slot.
-    .max_gpu_memory_bytes = 116ull << 20,
     .sample_shape = { 16, 32 },
     .sample_rank = 2,
     .device = -1,
+    .tuning = {
+      .n_io_threads = 1,
+      .n_zarrs_meta_cache = 4,
+      .n_shards_meta_cache = 4,
+      .max_chunk_uncompressed_bytes = 4ull << 10,
+      // Resolver minimum so the 16-chunk batch spills into ≥2 waves.
+      .max_gpu_memory_bytes = 116ull << 20,
+    },
   };
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
@@ -369,13 +371,15 @@ test_wave_grows_substream_cap(void)
   struct damacy_config cfg = {
     .batch_size = 1,
     .lookahead_batches = 2,
-    .n_io_threads = 1,
-    .n_zarrs_meta_cache = 4,
-    .n_shards_meta_cache = 4,
     .dtype = DAMACY_F32,
     .sample_shape = { 256, 32 },
     .sample_rank = 2,
     .device = -1,
+    .tuning = {
+      .n_io_threads = 1,
+      .n_zarrs_meta_cache = 4,
+      .n_shards_meta_cache = 4,
+    },
   };
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
@@ -446,15 +450,17 @@ test_grow_inside_tight_budget(void)
   struct damacy_config cfg = {
     .batch_size = 1,
     .lookahead_batches = 2,
-    .n_io_threads = 1,
-    .n_zarrs_meta_cache = 4,
-    .n_shards_meta_cache = 4,
     .dtype = DAMACY_F32,
-    .max_chunk_uncompressed_bytes = 4ull << 10,
-    .max_gpu_memory_bytes = 120ull << 20,
     .sample_shape = { 256, 32 },
     .sample_rank = 2,
     .device = -1,
+    .tuning = {
+      .n_io_threads = 1,
+      .n_zarrs_meta_cache = 4,
+      .n_shards_meta_cache = 4,
+      .max_chunk_uncompressed_bytes = 4ull << 10,
+      .max_gpu_memory_bytes = 120ull << 20,
+    },
   };
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
@@ -502,15 +508,17 @@ test_layout_probe_avoids_decoder_grow(void)
   struct damacy_config cfg = {
     .batch_size = 1,
     .lookahead_batches = 2,
-    .n_io_threads = 1,
-    .n_zarrs_meta_cache = 4,
-    .n_shards_meta_cache = 4,
     .dtype = DAMACY_F32,
-    .max_chunk_uncompressed_bytes = 4ull << 10,
-    .max_gpu_memory_bytes = 120ull << 20,
     .sample_shape = { 256, 32 },
     .sample_rank = 2,
     .device = -1,
+    .tuning = {
+      .n_io_threads = 1,
+      .n_zarrs_meta_cache = 4,
+      .n_shards_meta_cache = 4,
+      .max_chunk_uncompressed_bytes = 4ull << 10,
+      .max_gpu_memory_bytes = 120ull << 20,
+    },
   };
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
@@ -520,7 +528,7 @@ test_layout_probe_avoids_decoder_grow(void)
   // OOM here. Post-fix: probed nblocks = 1, need_zsubs = 64, no grow.
   const uint64_t headroom = 1ull << 20;
   (void)damacy_set_gpu_bytes_committed_for_test(
-    d, cfg.max_gpu_memory_bytes - headroom);
+    d, cfg.tuning.max_gpu_memory_bytes - headroom);
 
   struct damacy_sample s = mk_sample(p, 0, 256, 0, 32);
   struct damacy_sample_slice slice = { .beg = &s, .end = &s + 1 };
@@ -552,12 +560,13 @@ test_batch_pool_rejected_at_inflated_committed(void)
            p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
 
   struct damacy_config cfg = mk_cfg(root, 1, 8, 16);
-  cfg.max_gpu_memory_bytes = 120ull << 20;
+  cfg.tuning.max_gpu_memory_bytes = 120ull << 20;
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
   // No headroom at all — any byte added is over the cap.
-  (void)damacy_set_gpu_bytes_committed_for_test(d, cfg.max_gpu_memory_bytes);
+  (void)damacy_set_gpu_bytes_committed_for_test(
+    d, cfg.tuning.max_gpu_memory_bytes);
 
   struct damacy_sample s = mk_sample(p, 0, 8, 0, 16);
   struct damacy_sample_slice slice = { .beg = &s, .end = &s + 1 };
@@ -626,7 +635,7 @@ test_gds_parity_blosc_zstd(void)
   // GDS path.
   {
     struct damacy_config cfg = mk_cfg(root, 1, 64, 32);
-    cfg.enable_gds = 1;
+    cfg.tuning.enable_gds = 1;
     struct damacy* d = NULL;
     EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
     size_t got = 0;

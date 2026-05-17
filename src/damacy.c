@@ -254,6 +254,8 @@ plan_run(struct damacy* self, uint16_t slot_idx, float* out_elapsed_ms)
   if (status != DAMACY_OK)
     return status;
   slot->n_chunks = plan_out.n_chunk_plans;
+  slot->n_chunks_to_load = plan_out.n_chunks_to_load;
+  slot->n_loads_issued = plan_out.n_loads_issued;
   slot->n_sample_plans = plan_out.n_sample_plans;
   if (plan_out.n_sample_plans > 0) {
     if (cuMemcpyHtoD(CUDPTR(slot->d_sample_plans),
@@ -286,6 +288,9 @@ plan_commit(struct damacy* self,
   slot->chunks_remaining = (int32_t)slot->n_chunks;
   slot->batch_id = self->next_batch_id++;
   slot->state = BATCH_FILLING;
+  self->stats.chunks_planned += slot->n_chunks;
+  self->stats.chunks_to_load += slot->n_chunks_to_load;
+  self->stats.reads_issued += slot->n_loads_issued;
 
   if (slot->n_chunks == 0) {
     // Degenerate batch: zero the output and skip to READY. cuMemsetD8
@@ -495,7 +500,8 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   {
     CUdevice cu_dev;
     if (cuCtxGetDevice(&cu_dev) == CUDA_SUCCESS) {
-      numa_init(cfg->numa_strategy, cfg->numa_node, cu_dev, &self->numa);
+      numa_init(
+        cfg->tuning.numa_strategy, cfg->tuning.numa_node, cu_dev, &self->numa);
     } else {
       // Should never happen — ctx_guard_enter just pushed our ctx, or
       // the caller's ctx is live. Be safe; treat as disabled.
@@ -593,7 +599,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   // pass-through.
   struct store_fs_config sc = {
     .root = "",
-    .nthreads = (int)cfg->n_io_threads,
+    .nthreads = (int)cfg->tuning.n_io_threads,
     .affinity = &self->numa,
   };
   self->store = want_gds ? store_fs_gds_create(&sc) : store_fs_create(&sc);
@@ -603,10 +609,10 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   }
 
   self->meta_cache =
-    zarr_meta_cache_create(self->store, cfg->n_zarrs_meta_cache);
+    zarr_meta_cache_create(self->store, cfg->tuning.n_zarrs_meta_cache);
   CHECK(Fail, self->meta_cache);
   self->shard_cache =
-    zarr_shard_cache_create(self->store, cfg->n_shards_meta_cache);
+    zarr_shard_cache_create(self->store, cfg->tuning.n_shards_meta_cache);
   CHECK(Fail, self->shard_cache);
 
   struct planner_config pcfg = {
@@ -614,6 +620,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     .shard_cache = self->shard_cache,
     .page_alignment = self->page_alignment,
     .max_chunk_uncompressed_bytes = runtime_chunk_cap,
+    .read_op_max_bytes = resolve_max_read_op_bytes(cfg),
   };
   CHECK(Fail, planner_create(&pcfg, &self->planner) == DAMACY_OK);
 
@@ -638,6 +645,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
                                sizing.dev_decompressed_per_wave,
                                runtime_chunk_cap,
                                (int)want_gds,
+                               cfg->debug.bypass_decode,
                                self->budget);
     numa_scope_exit(saved_aff);
     CHECK(Fail, wp_rc == 0);
@@ -1079,7 +1087,7 @@ damacy_config_describe(const struct damacy_config* cfg)
   log_info("damacy_config_describe: input max_gpu_memory_bytes=%llu "
            "(resolved=%llu, pool_reserve=%llu, resolver_budget=%llu, "
            "max_chunk_uncompressed_bytes=%llu, batch_size=%u)",
-           (unsigned long long)cfg->max_gpu_memory_bytes,
+           (unsigned long long)cfg->tuning.max_gpu_memory_bytes,
            (unsigned long long)resolved_max_gpu,
            (unsigned long long)pool_reserve,
            (unsigned long long)resolver_budget,

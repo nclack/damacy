@@ -56,12 +56,14 @@ mk_cfg(const char* root, uint32_t batch_size, int64_t sy, int64_t sx)
   struct damacy_config c = {
     .batch_size = batch_size,
     .lookahead_batches = 2,
-    .n_io_threads = 1,
-    .n_zarrs_meta_cache = 4,
-    .n_shards_meta_cache = 4,
     .dtype = DAMACY_F32,
     .sample_rank = 2,
     .device = -1,
+    .tuning = {
+      .n_io_threads = 1,
+      .n_zarrs_meta_cache = 4,
+      .n_shards_meta_cache = 4,
+    },
   };
   c.sample_shape[0] = sy;
   c.sample_shape[1] = sx;
@@ -93,8 +95,8 @@ test_create_default_caps(void)
 
   struct damacy_config cfg = mk_cfg(root, 1, 8, 16);
   // Both runtime knobs at 0 — defaults: 512 KB chunk cap, no GPU cap.
-  cfg.max_chunk_uncompressed_bytes = 0;
-  cfg.max_gpu_memory_bytes = 0;
+  cfg.tuning.max_chunk_uncompressed_bytes = 0;
+  cfg.tuning.max_gpu_memory_bytes = 0;
 
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
@@ -126,7 +128,7 @@ test_oversize_chunk_rejected(void)
            p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
 
   struct damacy_config cfg = mk_cfg(root, 1, 8, 16);
-  cfg.max_chunk_uncompressed_bytes = 128; // 8x16 u16 = 256 B → over
+  cfg.tuning.max_chunk_uncompressed_bytes = 128; // 8x16 u16 = 256 B → over
 
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
@@ -152,7 +154,7 @@ test_chunk_cap_too_high(void)
   char root[64];
   EXPECT(mkdtemp_root(root, sizeof root) == 0);
   struct damacy_config cfg = mk_cfg(root, 1, 8, 16);
-  cfg.max_chunk_uncompressed_bytes =
+  cfg.tuning.max_chunk_uncompressed_bytes =
     (uint32_t)DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES + 1u;
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_INVAL);
@@ -169,7 +171,7 @@ test_gpu_budget_too_small(void)
   char root[64];
   EXPECT(mkdtemp_root(root, sizeof root) == 0);
   struct damacy_config cfg = mk_cfg(root, 1, 8, 16);
-  cfg.max_gpu_memory_bytes = 64;
+  cfg.tuning.max_gpu_memory_bytes = 64;
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OOM);
   EXPECT(d == NULL);
@@ -217,9 +219,9 @@ test_config_describe(void)
   char root[64];
   EXPECT(mkdtemp_root(root, sizeof root) == 0);
   struct damacy_config cfg = mk_cfg(root, 1, 8, 16);
-  cfg.max_gpu_memory_bytes = 0;
+  cfg.tuning.max_gpu_memory_bytes = 0;
   damacy_config_describe(&cfg);
-  cfg.max_gpu_memory_bytes = 256ull << 20;
+  cfg.tuning.max_gpu_memory_bytes = 256ull << 20;
   damacy_config_describe(&cfg);
   // NULL-safe sanity: must not crash.
   damacy_config_describe(NULL);
@@ -255,13 +257,15 @@ test_pool_reserve_fits_default_budget(void)
   struct damacy_config cfg = {
     .batch_size = 20,
     .lookahead_batches = 2,
-    .n_io_threads = 1,
-    .n_zarrs_meta_cache = 4,
-    .n_shards_meta_cache = 4,
     .dtype = DAMACY_F32,
     .sample_shape = { 16, 1, 256, 256 },
     .sample_rank = 4,
     .device = -1,
+    .tuning = {
+      .n_io_threads = 1,
+      .n_zarrs_meta_cache = 4,
+      .n_shards_meta_cache = 4,
+    },
   };
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
@@ -305,16 +309,18 @@ test_pool_exceeds_budget_rejected_at_create(void)
   struct damacy_config cfg = {
     .batch_size = 20,
     .lookahead_batches = 2,
-    .n_io_threads = 1,
-    .n_zarrs_meta_cache = 4,
-    .n_shards_meta_cache = 4,
     .dtype = DAMACY_F32,
     .sample_shape = { 16, 1, 256, 256 },
     .sample_rank = 4,
-    // pool_reserve = 2 × 20 × 16 × 256 × 256 × 4 ≈ 160 MB, well above
-    // the 32 MB cap below — create fails before sizing.
-    .max_gpu_memory_bytes = 32ull << 20,
     .device = -1,
+    .tuning = {
+      .n_io_threads = 1,
+      .n_zarrs_meta_cache = 4,
+      .n_shards_meta_cache = 4,
+      // pool_reserve = 2 × 20 × 16 × 256 × 256 × 4 ≈ 160 MB, well above
+      // the 32 MB cap below — create fails before sizing.
+      .max_gpu_memory_bytes = 32ull << 20,
+    },
   };
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OOM);
@@ -370,8 +376,8 @@ test_resolver_minimum_one_chunk(void)
 
   struct damacy_config cfg = mk_cfg(root, 1, 8, 16);
   // Very small per-chunk cap + budget close to the resolved minimum.
-  cfg.max_chunk_uncompressed_bytes = 4ull << 10;
-  cfg.max_gpu_memory_bytes = 120ull << 20;
+  cfg.tuning.max_chunk_uncompressed_bytes = 4ull << 10;
+  cfg.tuning.max_gpu_memory_bytes = 120ull << 20;
 
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
@@ -381,7 +387,7 @@ test_resolver_minimum_one_chunk(void)
   // gpu_bytes_committed reflects the initial alloc and must be > 0
   // (waves are up). It's <= the configured cap by construction.
   EXPECT(st.gpu_bytes_committed > 0);
-  EXPECT(st.gpu_bytes_committed <= cfg.max_gpu_memory_bytes);
+  EXPECT(st.gpu_bytes_committed <= cfg.tuning.max_gpu_memory_bytes);
 
   damacy_destroy(d);
   fixture_rm_tree(root);

@@ -66,6 +66,8 @@ def test_native_damacy_error_carries_status_and_what():
             n_shards_meta_cache=4,
             dtype="f32",
             max_chunk_uncompressed_bytes=_native.MAX_CHUNK_UNCOMPRESSED_BYTES + 1,
+            max_gpu_memory_bytes=0,
+            sample_shape=(8, 16),
         )
     assert excinfo.value.status == _native.STATUS_INVAL
     assert excinfo.value.what == "create"

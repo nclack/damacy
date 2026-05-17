@@ -42,6 +42,8 @@ struct damacy_batch_slot
   void* d_sample_plans;             // device mirror, uploaded once per batch
   uint32_t n_sample_plans;          // == n_samples on success
   uint32_t n_chunks;
+  uint32_t n_chunks_to_load;    // non-fill chunks (filter survivors)
+  uint32_t n_loads_issued;      // real read_ops after coalesce
   uint32_t n_chunks_dispatched; // 0 .. n_chunks; chunks given to a wave
   int32_t chunks_remaining;     // n_chunks - chunks completed via waves
 
