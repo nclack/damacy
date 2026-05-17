@@ -82,6 +82,7 @@ RUN uv pip install scikit-build-core pytest pytest-cov
 # cluster runs of damacy_bench.
 ARG CMAKE_BUILD_TYPE=RelWithDebInfo
 ARG DAMACY_COVERAGE=OFF
+ARG DAMACY_TSAN=OFF
 
 # gcovr + codecov-cli are only needed when DAMACY_COVERAGE=ON; install
 # them into the project venv so they're on PATH for the test workflow.
@@ -106,9 +107,14 @@ WORKDIR /workspace/damacy
 COPY . /workspace/damacy
 
 # Configure + build the C library, damacy_bench, and the Python extension.
+# DAMACY_PYTHON is disabled under TSan: scikit-build-core's editable
+# install would load a TSan-instrumented .so into the system Python
+# (which isn't linked against libtsan), and the regular ctest below
+# would also drag in the python extension via pyproject's tests.
 RUN cmake -S . -B build -G Ninja \
-        -DDAMACY_PYTHON=ON \
+        -DDAMACY_PYTHON=$(if [ "${DAMACY_TSAN}" = "ON" ]; then echo OFF; else echo ON; fi) \
         -DDAMACY_COVERAGE=${DAMACY_COVERAGE} \
+        -DDAMACY_TSAN=${DAMACY_TSAN} \
         -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
 RUN cmake --build build
 
@@ -122,8 +128,11 @@ RUN ctest --test-dir build --output-on-failure -E "test_damacy|test_assemble|pyt
 # Editable install of the Python package. The .so was just built by cmake
 # above and lives at build/python/_native*.so; copy it next to __init__.py
 # so the editable install resolves `damacy._native` without rebuilding.
-RUN cp build/python/_native*.so python/damacy/
-RUN uv pip install --no-deps --no-build-isolation -e .
+# Skipped under TSan (the .so isn't built; the install would 404).
+RUN if [ "${DAMACY_TSAN}" != "ON" ]; then \
+        cp build/python/_native*.so python/damacy/ && \
+        uv pip install --no-deps --no-build-isolation -e .; \
+    fi
 
 # ----- runtime defaults ------------------------------------------------------
 ENV PYTHONDONTWRITEBYTECODE=1 \

@@ -59,6 +59,13 @@ extern "C"
                             uint64_t hash,
                             const void* probe_key);
 
+  // Like lru_get but does not promote the entry to MRU and does not
+  // update hit/miss counters. Intended for race-recheck paths where
+  // counting the probe as a real lookup would skew stats.
+  struct lru_entry* lru_peek(struct lru* l,
+                             uint64_t hash,
+                             const void* probe_key);
+
   // Insert. Takes ownership of `value`: it will be passed to
   // ops.destroy on eviction, replacement (matching key), or
   // lru_destroy. `probe_key` is used to detect a matching existing

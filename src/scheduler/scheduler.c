@@ -115,6 +115,29 @@ scheduler_wait(struct scheduler* s)
   platform_cond_wait(s->cv, s->m);
 }
 
+// Log on the 1st timeout per site, then every DIAG_LOG_EVERY-th — under
+// continuous deadlock with a 5s timeout that's ~once per minute, enough
+// to confirm "still stuck" without flooding.
+#define DIAG_LOG_EVERY 12
+
+void
+scheduler_wait_diag(struct scheduler* s,
+                    const char* site,
+                    int timeout_ms,
+                    _Atomic int* count)
+{
+  if (platform_cond_timedwait_ms(s->cv, s->m, timeout_ms)) {
+    int n = atomic_fetch_add(count, 1) + 1;
+    if (n == 1 || (n % DIAG_LOG_EVERY) == 0)
+      log_warn("scheduler_wait_diag: %d ms timeout at %s (count=%d)",
+               timeout_ms,
+               site,
+               n);
+  } else {
+    atomic_store(count, 0);
+  }
+}
+
 void
 scheduler_broadcast(struct scheduler* s)
 {

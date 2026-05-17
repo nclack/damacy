@@ -190,9 +190,19 @@ any_batch_in_flight(const struct damacy_batch_pool* pool)
 {
   for (int s = 0; s < 2; ++s) {
     enum batch_slot_state st = pool->slots[s].state;
-    if (st == BATCH_FILLING || st == BATCH_READY || st == BATCH_HELD)
+    if (st == BATCH_PLANNING || st == BATCH_FILLING || st == BATCH_READY ||
+        st == BATCH_HELD)
       return 1;
   }
+  return 0;
+}
+
+int
+any_batch_planning(const struct damacy_batch_pool* pool)
+{
+  for (int s = 0; s < 2; ++s)
+    if (pool->slots[s].state == BATCH_PLANNING)
+      return 1;
   return 0;
 }
 

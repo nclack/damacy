@@ -134,9 +134,27 @@ any_slot_free(const struct wave_pool* wp);
 enum damacy_status
 wave_pool_advance(struct wave_pool* wp);
 
-// Pack chunks from `batch_slot_idx`'s remaining work into a free
-// host_slab_slot and submit IO. Returns DAMACY_OK with no-op if no
-// host_slab_slot is free or the batch slot has nothing left.
-// DAMACY_OOM if a single chunk is larger than the slot capacity.
+// wave_pool_peel runs as reserve [locked] → submit [unlocked] → commit
+// [locked]. submit issues async IO with scheduler_lock released; the
+// slot sits in SLOT_PEELING for the window. Ticket carries handoff
+// state. slot_idx < 0 = no-op (no work or no free slab).
+struct wave_pool_peel_ticket
+{
+  int slot_idx;
+  uint32_t n_reads;
+};
+
+// reserve: *err = DAMACY_OOM on the single-chunk-too-large path.
+struct wave_pool_peel_ticket
+wave_pool_peel_reserve(struct wave_pool* wp,
+                       uint16_t batch_slot_idx,
+                       enum damacy_status* err);
+
+struct store_event
+wave_pool_peel_submit(struct wave_pool* wp, struct wave_pool_peel_ticket t);
+
+// commit: rolls back the reservation on submit failure → DAMACY_IO.
 enum damacy_status
-wave_pool_peel(struct wave_pool* wp, uint16_t batch_slot_idx);
+wave_pool_peel_commit(struct wave_pool* wp,
+                      struct wave_pool_peel_ticket t,
+                      struct store_event ev);
