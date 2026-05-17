@@ -120,16 +120,22 @@ ctx_guard_exit(struct ctx_guard* g)
   }
 }
 
-// Lazy batch-output pool sizing + GPU-budget enforcement. Idempotent.
+// Lazy batch-output pool sizing + GPU-budget enforcement. Geometry is
+// fixed by cfg->sample_shape at create-time; this only allocates the
+// device buffers on first push. Idempotent.
 static enum damacy_status
-batch_pool_allocate(struct damacy* self, const struct damacy_aabb* sample_aabb)
+batch_pool_allocate(struct damacy* self)
 {
   struct damacy_batch_pool* pool = &self->batch_pool;
   if (pool->allocated)
     return DAMACY_OK;
 
-  enum damacy_status s = batch_pool_compute_layout(
-    pool, sample_aabb, self->cfg.batch_size, damacy_dtype_bpe(self->cfg.dtype));
+  enum damacy_status s =
+    batch_pool_compute_layout(pool,
+                              self->cfg.sample_shape,
+                              self->cfg.sample_rank,
+                              self->cfg.batch_size,
+                              damacy_dtype_bpe(self->cfg.dtype));
   if (s != DAMACY_OK)
     return s;
 
@@ -144,6 +150,21 @@ batch_pool_allocate(struct damacy* self, const struct damacy_aabb* sample_aabb)
     return s;
   }
   return DAMACY_OK;
+}
+
+// True if `aabb`'s extents match cfg->sample_shape exactly.
+static int
+sample_aabb_matches_cfg(const struct damacy_config* cfg,
+                        const struct damacy_aabb* aabb)
+{
+  if (aabb->rank != cfg->sample_rank)
+    return 0;
+  for (uint8_t d = 0; d < cfg->sample_rank; ++d) {
+    int64_t extent = aabb->dims[d].end - aabb->dims[d].beg;
+    if (extent != cfg->sample_shape[d])
+      return 0;
+  }
+  return 1;
 }
 
 // --- planning -------------------------------------------------------------
@@ -166,8 +187,7 @@ push_one(struct damacy* self, const struct damacy_sample* sample)
     return DAMACY_DTYPE;
   if (sample->aabb.rank != meta->rank)
     return DAMACY_RANK;
-  if (self->batch_pool.allocated &&
-      !sample_shape_matches_pool(&self->batch_pool, &sample->aabb))
+  if (!sample_aabb_matches_cfg(&self->cfg, &sample->aabb))
     return DAMACY_INVAL;
 
   if (lookahead_push(&self->lookahead, sample))
@@ -191,8 +211,7 @@ plan_reserve(struct damacy* self, uint16_t slot_idx, uint32_t n_samples)
 
   lookahead_drain(&self->lookahead, self->batch_samples, n_samples);
 
-  enum damacy_status status =
-    batch_pool_allocate(self, &self->batch_samples[0].aabb);
+  enum damacy_status status = batch_pool_allocate(self);
   if (status != DAMACY_OK) {
     for (uint32_t i = 0; i < n_samples; ++i)
       sample_slot_clear(&self->batch_samples[i]);
@@ -494,17 +513,24 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     goto Fail;
   }
 
-  // Subtract the batch-output reserve before sizing wave-resident
-  // buffers; the resolver is greedy, so without this carve-out the
-  // lazy pool has no room at first push.
-  const uint64_t pool_reserve = cfg->batch_output_reserve_bytes;
+  // Carve out the double-buffered batch-output pool before sizing
+  // wave-resident buffers; the resolver is greedy, so without this
+  // reservation the lazy pool has no room at first push.
+  uint64_t pool_reserve = 0;
+  {
+    uint64_t pool_bytes = 0;
+    s = resolve_sample_volume_bytes(cfg, &pool_bytes);
+    if (s != DAMACY_OK)
+      goto Fail;
+    pool_reserve = 2ull * pool_bytes;
+  }
   if (pool_reserve >= resolved_max_gpu) {
-    log_error("damacy: batch_output_reserve_bytes=%llu >= "
+    log_error("damacy: batch-output pool reserve=%llu >= "
               "max_gpu_memory_bytes=%llu; nothing left for wave-resident "
-              "buffers",
+              "buffers (sample_shape × batch_size × dtype_bpe × 2 exceeds cap)",
               (unsigned long long)pool_reserve,
               (unsigned long long)resolved_max_gpu);
-    s = DAMACY_INVAL;
+    s = DAMACY_OOM;
     goto Fail;
   }
   const uint64_t resolver_budget = resolved_max_gpu - pool_reserve;
@@ -1039,11 +1065,19 @@ damacy_config_describe(const struct damacy_config* cfg)
   }
   const uint64_t resolved_max_gpu = resolve_max_gpu_memory(cfg);
   const uint64_t runtime_chunk_cap = resolve_max_chunk_uncompressed(cfg);
-  const uint64_t pool_reserve = cfg->batch_output_reserve_bytes;
+  uint64_t pool_reserve = 0;
+  {
+    uint64_t pool_bytes = 0;
+    // resolve_sample_volume_bytes rejects rank=0 / non-positive dims; on
+    // those, leave pool_reserve at 0 so describe still prints useful
+    // info for the rest of the geometry.
+    if (resolve_sample_volume_bytes(cfg, &pool_bytes) == DAMACY_OK)
+      pool_reserve = 2ull * pool_bytes;
+  }
   const uint64_t resolver_budget =
     pool_reserve < resolved_max_gpu ? resolved_max_gpu - pool_reserve : 0;
   log_info("damacy_config_describe: input max_gpu_memory_bytes=%llu "
-           "(resolved=%llu, batch_output_reserve=%llu, resolver_budget=%llu, "
+           "(resolved=%llu, pool_reserve=%llu, resolver_budget=%llu, "
            "max_chunk_uncompressed_bytes=%llu, batch_size=%u)",
            (unsigned long long)cfg->max_gpu_memory_bytes,
            (unsigned long long)resolved_max_gpu,

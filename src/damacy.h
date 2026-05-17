@@ -123,19 +123,23 @@ extern "C"
     // derived from this value. 0 selects
     // DAMACY_DEFAULT_MAX_GPU_MEMORY_BYTES. damacy_create returns
     // DAMACY_OOM (with a log_error breakdown) if even the smallest
-    // viable wave geometry would exceed this. damacy_push returns
-    // DAMACY_OOM if the lazily-sized batch-output pool, computed from
-    // the first sample's AABB, would push past it. Observe-and-grow
-    // paths (zstd decoder scratch, per-wave fanout) also enforce this
-    // cap at grow time and return DAMACY_OOM if the new size would
-    // exceed it.
+    // viable wave geometry would exceed this — including the
+    // double-buffered batch-output pool the resolver carves out from
+    // sample_shape × batch_size × dtype_bpe. Observe-and-grow paths
+    // (zstd decoder scratch, per-wave fanout) also enforce this cap at
+    // grow time and return DAMACY_OOM if the new size would exceed it.
     uint64_t max_gpu_memory_bytes;
 
-    // Subtracted from max_gpu_memory_bytes before sizing wave-resident
-    // buffers, so the lazy batch-output pool fits at first push.
-    // Set to the expected pool size: 2 * batch_size * sample_volume *
-    // dtype_bpe. 0 = no reservation.
-    uint64_t batch_output_reserve_bytes;
+    // Per-sample output extents (in dst voxels) along the zarr's axis
+    // order — same layout damacy_sample.aabb uses. The resolver carves
+    // out 2 × batch_size × product(sample_shape) × dtype_bpe from
+    // max_gpu_memory_bytes before sizing wave-resident buffers, so the
+    // batch-output pool is guaranteed to fit. damacy_push validates each
+    // sample's aabb extent against this shape and rejects mismatches
+    // with DAMACY_INVAL. sample_rank must be in [1, DAMACY_MAX_RANK];
+    // every sample_shape[d] must be > 0.
+    int64_t sample_shape[DAMACY_MAX_RANK];
+    uint8_t sample_rank;
 
     // Pinned-host slab pool depth, in waves. Each slot holds one wave's
     // compressed bytes; extra slots let IO for upcoming waves complete

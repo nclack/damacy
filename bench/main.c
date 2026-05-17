@@ -775,14 +775,6 @@ main(int argc, char** argv)
           sc.n_batches,
           sc.n_warmup_batches);
 
-  // Reserve worst-case batch-output pool (double-buffered) so the
-  // resolver leaves room for it.
-  uint64_t sample_volume = 1;
-  for (uint8_t d = 0; d < sc.rank; ++d)
-    sample_volume *= (uint64_t)sc.sample_shape[d];
-  const uint64_t pool_reserve =
-    2ull * (uint64_t)sc.batch_size * sample_volume * dtype_bpe(sc.dtype);
-
   struct damacy_config cfg = {
     .batch_size = sc.batch_size,
     .lookahead_batches = sc.lookahead_batches,
@@ -790,12 +782,14 @@ main(int argc, char** argv)
     .max_gpu_memory_bytes = sc.max_gpu_memory_bytes,
     .max_chunk_uncompressed_bytes = sc.max_chunk_uncompressed_bytes,
     .host_buffer_waves = sc.host_buffer_waves,
-    .batch_output_reserve_bytes = pool_reserve,
     .n_zarrs_meta_cache = sc.n_zarrs_meta_cache,
     .n_shards_meta_cache = sc.n_shards_meta_cache,
     .dtype = sc.dtype,
+    .sample_rank = sc.rank,
     .device = -1,
   };
+  for (uint8_t d = 0; d < sc.rank; ++d)
+    cfg.sample_shape[d] = sc.sample_shape[d];
 
   struct rng rng = { .s = sc.sampling_seed ? sc.sampling_seed : 0xdeadbeefULL };
 

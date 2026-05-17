@@ -39,3 +39,18 @@ resolve_host_buffer_waves(const struct damacy_config* cfg);
 // fails inside store_fs_create.
 uint8_t
 resolve_enable_gds(const struct damacy_config* cfg);
+
+// Copies cfg->sample_shape[0..rank) into *out_shape and writes the
+// rank into *out_rank. Returns DAMACY_INVAL if sample_rank is 0 or
+// exceeds DAMACY_MAX_RANK, or if any dim is <= 0.
+enum damacy_status
+resolve_sample_shape(const struct damacy_config* cfg,
+                     int64_t* out_shape,
+                     uint8_t* out_rank);
+
+// product(sample_shape) × batch_size × dtype_bpe(dtype). Writes the
+// value into *out_bytes. Returns DAMACY_INVAL on a bad sample_shape /
+// rank (same conditions as resolve_sample_shape).
+enum damacy_status
+resolve_sample_volume_bytes(const struct damacy_config* cfg,
+                            uint64_t* out_bytes);
