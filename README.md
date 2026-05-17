@@ -6,7 +6,7 @@
 [![bench](https://github.com/nclack/damacy/actions/workflows/bench.yml/badge.svg)](https://nclack.github.io/damacy/throughput/)
 [![docs](https://github.com/nclack/damacy/actions/workflows/docs.yml/badge.svg)](https://nclack.github.io/damacy/)
 
-High-speed streamed assembly of tensors from zarr sources to GPU.
+High-speed streamed assembly of nD tensors from zarr sources to GPU.
 
 Damacy reads sharded [NGFF](https://ngff.openmicroscopy.org/) [zarr
 v3](https://zarr-specs.readthedocs.io/en/latest/v3/core/index.html) stores
