@@ -980,20 +980,27 @@ damacy_stats_get(const struct damacy* self, struct damacy_stats* out)
     memset(out, 0, sizeof(*out));
     return;
   }
-  *out = self->stats;
-  if (self->meta_cache) {
+  // scheduler_lock guards every metric_record write; without it the
+  // struct copy below races every plan/pop_wait/flush_wait update. The
+  // mutex doesn't change observable state, so the const cast is safe.
+  struct damacy* m = (struct damacy*)self;
+  scheduler_lock(m->sched);
+  *out = m->stats;
+  out->gpu_bytes_committed = gpu_budget_committed(m->budget);
+  scheduler_unlock(m->sched);
+  // Cache stats have their own internal mutex; safe outside scheduler_lock.
+  if (m->meta_cache) {
     struct zarr_meta_cache_stats ms;
-    zarr_meta_cache_stats_get(self->meta_cache, &ms);
+    zarr_meta_cache_stats_get(m->meta_cache, &ms);
     out->zarr_meta_hits = ms.counters.hits;
     out->zarr_meta_misses = ms.counters.misses;
   }
-  if (self->shard_cache) {
+  if (m->shard_cache) {
     struct zarr_shard_cache_stats ss;
-    zarr_shard_cache_stats_get(self->shard_cache, &ss);
+    zarr_shard_cache_stats_get(m->shard_cache, &ss);
     out->shard_idx_hits = ss.counters.hits;
     out->shard_idx_misses = ss.counters.misses;
   }
-  out->gpu_bytes_committed = gpu_budget_committed(self->budget);
 }
 
 void
