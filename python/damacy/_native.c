@@ -118,6 +118,22 @@ py_log_emit_from_thread(PyObject* self, PyObject* args)
   Py_RETURN_NONE;
 }
 
+// Returns 0 on any driver failure — callers use this from warning paths
+// that must not raise.
+static PyObject*
+py_cuda_device_count(PyObject* self, PyObject* args)
+{
+  (void)self;
+  (void)args;
+  CUresult r;
+  int count = 0;
+  if ((r = cuInit(0)) != CUDA_SUCCESS)
+    return PyLong_FromLong(0);
+  if ((r = cuDeviceGetCount(&count)) != CUDA_SUCCESS)
+    return PyLong_FromLong(0);
+  return PyLong_FromLong((long)count);
+}
+
 // cuda_init_primary(device=0) — make device's primary CUcontext current
 // on the calling thread. damacy_create requires a current CUcontext;
 // PyTorch sets one up implicitly, but bare-Python callers (and pytest)
@@ -181,6 +197,11 @@ static PyMethodDef methods[] = {
     "cuda_init_primary(device=0): make device's primary CUcontext current "
     "on the calling thread. Required before damacy._native.Pipeline(...) when "
     "the caller (e.g. pytest) hasn't already set up a context." },
+  { "cuda_device_count",
+    py_cuda_device_count,
+    METH_NOARGS,
+    "cuda_device_count(): report cuDeviceGetCount(). Returns 0 when the "
+    "driver cannot be initialized; never raises." },
   { NULL, NULL, 0, NULL },
 };
 

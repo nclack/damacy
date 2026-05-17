@@ -848,3 +848,60 @@ def test_local_rank_non_int_is_quiet(tiny_zarr, monkeypatch, recwarn):
     Pipeline(_base_config()).close()
     ours = [w for w in recwarn.list if "LOCAL_RANK" in str(w.message)]
     assert ours == []
+
+
+def test_multi_gpu_implicit_warns(tiny_zarr, monkeypatch):
+    _ = tiny_zarr
+    monkeypatch.delenv("LOCAL_RANK", raising=False)
+    # Force the multi-GPU branch even on single-GPU CI by faking the
+    # device-count probe; the heuristic should fire on any (count > 1).
+    monkeypatch.setattr(_native, "cuda_device_count", lambda: 4)
+    damacy._warned_multi_gpu_pairs.clear()
+    with pytest.warns(UserWarning, match=r"device 0 of 4"):
+        Pipeline(_base_config()).close()
+
+
+def test_multi_gpu_warning_dedupes(tiny_zarr, monkeypatch):
+    _ = tiny_zarr
+    monkeypatch.delenv("LOCAL_RANK", raising=False)
+    monkeypatch.setattr(_native, "cuda_device_count", lambda: 4)
+    damacy._warned_multi_gpu_pairs.clear()
+    with pytest.warns(UserWarning, match=r"device 0 of 4"):
+        Pipeline(_base_config()).close()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        Pipeline(_base_config()).close()
+    assert not any("of 4" in str(w.message) for w in caught)
+
+
+def test_multi_gpu_quiet_on_single_gpu(tiny_zarr, monkeypatch, recwarn):
+    _ = tiny_zarr
+    monkeypatch.delenv("LOCAL_RANK", raising=False)
+    monkeypatch.setattr(_native, "cuda_device_count", lambda: 1)
+    Pipeline(_base_config()).close()
+    ours = [w for w in recwarn.list if "of 1" in str(w.message)]
+    assert ours == []
+
+
+def test_multi_gpu_quiet_when_explicit_device(tiny_zarr, monkeypatch, recwarn):
+    _ = tiny_zarr
+    monkeypatch.delenv("LOCAL_RANK", raising=False)
+    monkeypatch.setattr(_native, "cuda_device_count", lambda: 4)
+    damacy._warned_multi_gpu_pairs.clear()
+    cfg = dataclasses.replace(_base_config(), device=0)
+    Pipeline(cfg).close()
+    ours = [w for w in recwarn.list if "of 4" in str(w.message)]
+    assert ours == []
+
+
+def test_multi_gpu_suppressed_when_local_rank_fires(tiny_zarr, monkeypatch):
+    _ = tiny_zarr
+    monkeypatch.setenv("LOCAL_RANK", "3")
+    monkeypatch.setattr(_native, "cuda_device_count", lambda: 4)
+    damacy._warned_local_rank_pairs.clear()
+    damacy._warned_multi_gpu_pairs.clear()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        Pipeline(_base_config()).close()
+    assert any("LOCAL_RANK=3" in str(w.message) for w in caught)
+    assert not any("of 4" in str(w.message) for w in caught)
