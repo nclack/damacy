@@ -2,6 +2,8 @@
 
 #include "dtype/dtype.h"
 #include "log/log.h"
+#include "planner/coalesce.h"
+#include "planner/group_chunks.h"
 #include "util/prelude.h"
 #include "util/strbuf.h"
 #include "zarr/zarr_meta_cache.h"
@@ -16,7 +18,54 @@ struct planner
 {
   struct planner_config cfg;
   struct strbuf path_sb;
+  uint32_t* scratch_u32;
+  uint32_t scratch_u32_cap;
+  struct read_op* scratch_ops;
+  uint32_t scratch_ops_cap;
+  struct chunk_plan* scratch_chunk_plans;
+  uint32_t scratch_chunk_plans_cap;
 };
+
+// `need` = pre-coalesce n_read_ops (== n_chunk_plans). The uint32
+// buffer is sized to 3*need; post-coalesce n_read_ops <= need so
+// group_chunks_by_read's n_read_ops+1 slots fit in the same buffer.
+static enum damacy_status
+planner_ensure_scratch(struct planner* self, uint32_t need)
+{
+  if (need > self->scratch_u32_cap) {
+    free(self->scratch_u32);
+    self->scratch_u32 = NULL;
+    self->scratch_u32_cap = 0;
+    uint32_t* mem = (uint32_t*)malloc((size_t)need * 3u * sizeof(uint32_t));
+    if (!mem)
+      return DAMACY_OOM;
+    self->scratch_u32 = mem;
+    self->scratch_u32_cap = need;
+  }
+  if (need > self->scratch_ops_cap) {
+    free(self->scratch_ops);
+    self->scratch_ops = NULL;
+    self->scratch_ops_cap = 0;
+    struct read_op* mem =
+      (struct read_op*)malloc((size_t)need * sizeof(struct read_op));
+    if (!mem)
+      return DAMACY_OOM;
+    self->scratch_ops = mem;
+    self->scratch_ops_cap = need;
+  }
+  if (need > self->scratch_chunk_plans_cap) {
+    free(self->scratch_chunk_plans);
+    self->scratch_chunk_plans = NULL;
+    self->scratch_chunk_plans_cap = 0;
+    struct chunk_plan* mem =
+      (struct chunk_plan*)malloc((size_t)need * sizeof(struct chunk_plan));
+    if (!mem)
+      return DAMACY_OOM;
+    self->scratch_chunk_plans = mem;
+    self->scratch_chunk_plans_cap = need;
+  }
+  return DAMACY_OK;
+}
 
 // --- math helpers --------------------------------------------------------
 
@@ -132,6 +181,9 @@ planner_destroy(struct planner* self)
   if (!self)
     return;
   strbuf_free(&self->path_sb);
+  free(self->scratch_u32);
+  free(self->scratch_ops);
+  free(self->scratch_chunk_plans);
   free(self);
 }
 
@@ -280,7 +332,7 @@ emit_chunk(const struct emit_ctx* ctx,
   memcpy(r->shard_path, ctx->interned_path, path_len + 1);
   r->file_offset = aligned_file_offset;
   r->nbytes = (uint32_t)read_n_bytes;
-  r->dst_buf_offset = 0;
+  r->host_buf_offset = 0;
   out->n_read_ops++;
 
   struct chunk_plan* cp = &out->chunk_plans[out->n_chunk_plans];
@@ -362,8 +414,6 @@ planner_plan(struct planner* self,
     if (chunk_range(&sample->aabb, &meta, chunk_lo, chunk_hi))
       return DAMACY_INVAL;
 
-    // Emit the per-sample header before chunks. chunk_offset records
-    // where this sample's chunks start in the chunk_plans stream.
     if (out->n_sample_plans >= out->sample_plans_cap)
       return DAMACY_OOM;
     struct sample_plan* sp = &out->sample_plans[out->n_sample_plans];
@@ -373,7 +423,6 @@ planner_plan(struct planner* self,
       .rank = meta.rank,
       .src_dtype = (uint8_t)meta.dtype,
       .sample_dst_off_elems = (int64_t)sample_idx * dst_strides[0],
-      .chunk_offset = out->n_chunk_plans,
       .chunk_count = 0, // filled after the chunk emit loop
     };
     memcpy(sp->fill_value, meta.fill_value, sizeof sp->fill_value);
@@ -484,6 +533,21 @@ planner_plan(struct planner* self,
       if (finished)
         break;
     }
+  }
+
+  {
+    enum damacy_status s = planner_ensure_scratch(self, out->n_read_ops);
+    if (s != DAMACY_OK)
+      return s;
+    s = coalesce_chunks(
+      out, self->cfg.read_op_max_bytes, self->scratch_u32, self->scratch_ops);
+    if (s != DAMACY_OK)
+      return s;
+    if (out->n_read_ops + 1u > 3u * self->scratch_u32_cap)
+      return DAMACY_OOM;
+    s = group_chunks_by_read(out, self->scratch_u32, self->scratch_chunk_plans);
+    if (s != DAMACY_OK)
+      return s;
   }
 
   return DAMACY_OK;

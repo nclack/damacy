@@ -81,8 +81,13 @@ class Pipeline(BaseModel):
     n_io_threads: int = Field(gt=0)
     max_gpu_memory_mb: int = 0  # 0 → library default
     max_chunk_uncompressed_mb: int = 0  # 0 → library default
+    max_read_op_kb: int = 0  # cap on coalesced read_op size; 0 → library default
     n_zarrs_meta_cache: int = 4096
     n_shards_meta_cache: int = 16384
+    # Bench bypass: skip decode by flipping chunks to fill at parse +
+    # assemble time. IO and H2D still run; assemble broadcasts the
+    # array's fill_value. Useful for isolating decode cost.
+    bypass_decode: bool = False
 
 
 class Consumer(BaseModel):
@@ -126,6 +131,9 @@ class Counters(BaseModel):
     batches_truncated: int
     waves_emitted: int
     chunks_dispatched: int
+    chunks_planned: int = 0
+    chunks_to_load: int = 0
+    reads_issued: int = 0
     distinct_zarrs: int
     distinct_shards: int
     zarr_meta_hits: int

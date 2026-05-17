@@ -38,11 +38,13 @@ mk_cfg(const char* root)
   return (struct damacy_config){
     .batch_size = 1,
     .lookahead_batches = 2,
-    .n_io_threads = 1,
-    .n_zarrs_meta_cache = 4,
-    .n_shards_meta_cache = 4,
     .dtype = DAMACY_F32,
     .device = -1,
+    .tuning = {
+      .n_io_threads = 1,
+      .n_zarrs_meta_cache = 4,
+      .n_shards_meta_cache = 4,
+    },
   };
 }
 
