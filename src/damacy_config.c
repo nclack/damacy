@@ -1,9 +1,9 @@
 #include "damacy_config.h"
 
 #include "damacy_limits.h"
+#include "platform/platform.h"
 #include "util/prelude.h"
 
-#include <stdlib.h>
 #include <string.h>
 
 uint32_t
@@ -115,7 +115,7 @@ resolve_enable_gds(const struct damacy_config* cfg)
 {
   if (cfg && cfg->tuning.enable_gds)
     return 1;
-  const char* e = getenv("DAMACY_GDS_ENABLE");
+  const char* e = platform_getenv("DAMACY_GDS_ENABLE");
   if (e && strcmp(e, "1") == 0)
     return 1;
   return 0;

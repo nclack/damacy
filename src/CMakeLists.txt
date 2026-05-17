@@ -74,7 +74,7 @@ add_src_lib(damacy_stats SOURCES damacy_stats.h damacy_stats.c)
 # "0 means use the ceiling" knob resolvers. Shared between damacy.c,
 # gpu_budget/, and wave/.
 add_src_lib(damacy_config SOURCES damacy_config.h damacy_config.c
-    LINKS dtype log
+    LINKS dtype log platform
 )
 
 # Push-side ring of pending samples. Holds interned URI refs; drain

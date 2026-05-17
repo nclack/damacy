@@ -61,6 +61,8 @@ extern "C"
   void platform_dlclose(void* handle);
   const char* platform_dlerror(void);
 
+  const char* platform_getenv(const char* name);
+
 #ifdef __cplusplus
 }
 #endif
