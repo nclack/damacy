@@ -26,12 +26,7 @@ permissions:
   pull-requests: write  # comment-on-alert
   deployments: write    # gh-pages deployment status
 
-# Per-workflow concurrency group (keyed by ref) so back-to-back bench
-# triggers collapse cleanly. bench previously shared `gpu-runner` with
-# build/test/tsan, which caused GitHub to auto-cancel one of them on
-# PR pushes (see issue #66). bench is schedule-only + manual, so it
-# rarely overlaps with PR-triggered workflows; if it does, the
-# self-hosted runner's single slot already serializes execution.
+# Per-workflow group keyed by ref (see #66).
 concurrency:
   group: gpu-runner-bench-${{ github.ref }}
   cancel-in-progress: false

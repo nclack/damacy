@@ -6,9 +6,7 @@
 # The test itself is pure C, but the test binary links transitively
 # against libcuda via the shared test fixture / zarr / store libs, so
 # it needs the NVIDIA driver visible at load time. Uses
-# --device=nvidia.com/gpu=all and shares the GPU-runner concurrency
-# group with bench/test (the test runs in <1s, so the serialization
-# cost is negligible).
+# --device=nvidia.com/gpu=all.
 
 name: tsan
 
@@ -18,12 +16,7 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Per-workflow concurrency group (keyed by ref) so two pushes to the
-# same branch collapse to one run, but tsan doesn't share a group
-# with build/test/bench. A shared group across distinct workflows on
-# identical triggers was causing GitHub to auto-cancel one of them
-# (see issue #66). tsan doesn't measure GPU perf, so it doesn't need
-# exclusivity against bench.
+# Per-workflow group keyed by ref (see #66).
 concurrency:
   group: gpu-runner-tsan-${{ github.ref }}
   cancel-in-progress: false
