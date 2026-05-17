@@ -65,6 +65,7 @@ __all__ = [
     "NotFound",
     "OutOfMemory",
     "Pipeline",
+    "PoolStarved",
     "RankMismatch",
     "Sample",
     "ShutdownError",
@@ -196,6 +197,19 @@ class BudgetExceeded(DamacyError):
 
 class ShutdownError(DamacyError):
     """Pipeline destroyed or in failed state."""
+
+
+class PoolStarved(DamacyError):
+    """Raised when :meth:`Pipeline.pop` waits longer than
+    ``Config.pop_timeout_s`` for the next batch.
+
+    The usual cause is your loop holding on to tensors from previous
+    batches — for example by stashing them in a list — which keeps
+    damacy from reusing that memory. Drop those references before
+    the next ``pop()``, or call ``.clone()`` if you need to keep
+    them."""
+
+    status = Status.SHUTDOWN
 
 
 # Status -> exception class. Picked up by _wrap_native_error; OK is absent
@@ -392,6 +406,9 @@ class Config:
             the current ``CUcontext`` on the calling thread; pass an
             int (e.g. ``local_rank``) to retain that device's primary
             context internally — recommended under torchrun / MPI.
+        pop_timeout_s: How long :meth:`Pipeline.pop` waits for the
+            next batch before raising :class:`PoolStarved`. Defaults
+            to 30 seconds; pass ``None`` to wait forever.
     """
 
     batch_size: int
@@ -405,6 +422,7 @@ class Config:
     host_buffer_waves: int
     sample_shape: tuple[int, ...]
     device: int | None
+    pop_timeout_s: float | None
 
     def __init__(
         self,
@@ -420,6 +438,7 @@ class Config:
         max_chunk_uncompressed_bytes: int = 0,
         host_buffer_waves: int = 0,
         device: int | None = None,
+        pop_timeout_s: float | None = 30.0,
     ) -> None:
         # Custom __init__ rather than __post_init__ so the constructor
         # signature accepts the polymorphic dtype input while reads of
@@ -441,6 +460,10 @@ class Config:
             )
         if host_buffer_waves < 0:
             raise ValueError("host_buffer_waves must be >= 0")
+        if pop_timeout_s is not None and pop_timeout_s <= 0:
+            raise ValueError(
+                f"pop_timeout_s must be > 0 or None (got {pop_timeout_s})"
+            )
         shape_t = tuple(int(x) for x in sample_shape)
         if not shape_t:
             raise ValueError("sample_shape must be non-empty")
@@ -458,6 +481,7 @@ class Config:
         set_(self, "host_buffer_waves", host_buffer_waves)
         set_(self, "sample_shape", shape_t)
         set_(self, "device", device)
+        set_(self, "pop_timeout_s", pop_timeout_s)
 
 
 @dataclass(frozen=True, slots=True)
@@ -802,7 +826,18 @@ class Pipeline:
     Resource caps are fixed at construction; nothing grows after that.
     """
 
-    __slots__ = ("_closed", "_config", "_native", "_pending", "_pending_buf")
+    __slots__ = (
+        "_closed",
+        "_config",
+        "_native",
+        "_pending",
+        "_pending_buf",
+        "_pop_done",
+        "_pop_err",
+        "_pop_lock",
+        "_pop_result",
+        "_pop_thread",
+    )
 
     def __init__(self, config: Config) -> None:
         try:
@@ -832,6 +867,13 @@ class Pipeline:
         # itertools.chain() layers under sustained backpressure.
         self._pending: deque[Iterator[Sample]] = deque()
         self._pending_buf: list[Sample] = []
+        # damacy_pop has no timed variant; on timeout the worker stays
+        # parked inside it and the next pop() adopts the same thread.
+        self._pop_lock = threading.Lock()
+        self._pop_done = threading.Event()
+        self._pop_thread: threading.Thread | None = None
+        self._pop_result: _native.Batch | None = None
+        self._pop_err: BaseException | None = None
         _warn_if_local_rank_disagrees(config.device, self._native.device)
 
     @property
@@ -862,6 +904,10 @@ class Pipeline:
         if not self._closed:
             self._closed = True
             del self._native
+            t = self._pop_thread
+            if t is not None:
+                t.join()  # damacy_destroy already woke it with SHUTDOWN
+                self._pop_thread = None
 
     def __enter__(self) -> Self:
         return self
@@ -947,14 +993,63 @@ class Pipeline:
     def pop(self) -> Batch:
         """Block until the next batch is on-device-ready. Returns a
         :class:`Batch` you can hand to ``torch.from_dlpack`` (or any
-        DLPack consumer) — preferably inside a ``with`` block."""
+        DLPack consumer) — preferably inside a ``with`` block.
+
+        Raises :class:`PoolStarved` if no batch arrives within
+        ``Config.pop_timeout_s`` seconds (default 30). Usually that
+        means tensors from previous batches are still being held —
+        drop them, or ``.clone()`` if you need to keep them."""
         self._check_open()
-        # Top up native from the pending queue so the planner has work.
         self._drain_pending()
+        timeout = self._config.pop_timeout_s
+        if timeout is None:
+            try:
+                return Batch(self._native.pop())
+            except _native.DamacyError as exc:
+                _reraise_typed(exc)
+        return self._pop_with_timeout(timeout)
+
+    def _pop_with_timeout(self, timeout: float) -> Batch:
+        with self._pop_lock:
+            if self._pop_thread is None:
+                self._pop_done.clear()
+                self._pop_result = None
+                self._pop_err = None
+                t = threading.Thread(
+                    target=self._pop_worker,
+                    name="damacy-pop",
+                    daemon=True,
+                )
+                self._pop_thread = t
+                t.start()
+        if not self._pop_done.wait(timeout):
+            raise PoolStarved(
+                "Pipeline.pop() timed out waiting for the next batch. "
+                "This usually means tensors from previous batches are "
+                "still being held — drop those references before the "
+                "next pop(), or .clone() if you need to keep them."
+            )
+        with self._pop_lock:
+            err = self._pop_err
+            result = self._pop_result
+            self._pop_thread = None
+            self._pop_result = None
+            self._pop_err = None
+            self._pop_done.clear()
+        if err is not None:
+            if isinstance(err, _native.DamacyError):
+                _reraise_typed(err)
+            raise err
+        assert result is not None
+        return Batch(result)
+
+    def _pop_worker(self) -> None:
         try:
-            return Batch(self._native.pop())
-        except _native.DamacyError as exc:
-            _reraise_typed(exc)
+            self._pop_result = self._native.pop()
+        except BaseException as exc:  # noqa: BLE001 - re-raised on consumer thread
+            self._pop_err = exc
+        finally:
+            self._pop_done.set()
 
     def flush(self) -> None:
         """Drain pending samples into the pipeline (best-effort) and
