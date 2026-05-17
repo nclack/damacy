@@ -38,8 +38,7 @@ extern "C"
   //
   // Returns DAMACY_OK on success; DAMACY_INVAL on bad args;
   // DAMACY_NOTFOUND if zarr.json could not be opened; DAMACY_DECODE if
-  // the metadata is malformed; DAMACY_OOM on alloc failure or full
-  // cache with all entries pinned.
+  // the metadata is malformed; DAMACY_OOM on alloc failure.
   enum damacy_status zarr_meta_cache_get(struct zarr_meta_cache* c,
                                          const char* uri,
                                          struct zarr_metadata* out);

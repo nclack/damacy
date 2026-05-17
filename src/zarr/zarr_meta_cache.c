@@ -94,7 +94,6 @@ zarr_meta_cache_get(struct zarr_meta_cache* self,
   CHECK_SILENT(Invalid, self);
   CHECK_SILENT(Invalid, uri);
   CHECK_SILENT(Invalid, out);
-  memset(out, 0, sizeof *out);
 
   // Copy under the lock so *out is independent of any later eviction.
   uint64_t hash = hash_fnv1a_str(uri);
@@ -151,7 +150,7 @@ zarr_meta_cache_get(struct zarr_meta_cache* self,
   }
   struct lru_entry* inserted = lru_put(self->lru, hash, uri, entry);
   if (!inserted) {
-    // Cache full and all entries pinned; lru_put already destroyed entry.
+    // lru_put already destroyed entry on failure.
     pthread_mutex_unlock(&self->mu);
     return DAMACY_OOM;
   }
