@@ -60,10 +60,10 @@ def main() -> None:
 
     cfg = damacy.Config(
         batch_size=8,
-        host_buffer_bytes=1 << 30,    # per-rank; see "Sizing per rank"
-        device_buffer_bytes=1 << 30,  # per-rank
+        sample_shape=(64, 256, 256),
+        max_gpu_memory_bytes=1 << 30,   # per-rank GPU budget
         dtype="bf16",
-        n_io_threads=4,                # per-rank
+        n_io_threads=4,                 # per-rank
         device=local_rank,
     )
 
@@ -116,18 +116,15 @@ Most `Config` knobs apply per rank. Aggregate cost on a node is
 
 | knob | per-rank cost |
 |---|---|
-| `host_buffer_bytes` | pinned RAM staging pool |
-| `device_buffer_bytes` | device decompress scratch |
+| `max_gpu_memory_bytes` | GPU budget: wave buffers, decoder scratch, batch-output pool |
+| `host_buffer_waves` | pinned-host slab pool, in waves |
 | `n_io_threads` | I/O worker threads |
-| `n_compute_threads` | host blosc1 parse workers |
+| `n_zarrs_meta_cache`, `n_shards_meta_cache` | LRU caps for parsed metadata |
 
 Tune `n_io_threads` to your storage tier (NVMe pool, parallel
-filesystem, object store). `n_compute_threads` defaults to `0`
-(parse runs serially on the calling thread, which is fine when waves
-are small); raise it when chunks-per-wave is large enough that the
-parse shows up in `stats.decompress_parse`. When stacking multiple
-ranks on one GPU (uncommon, but valid), divide the device-side
-budgets so the per-GPU total fits below `max_gpu_memory_bytes`.
+filesystem, object store). When stacking multiple ranks on one GPU
+(uncommon, but valid), divide `max_gpu_memory_bytes` so the per-GPU
+total fits within the device.
 
 ## CUDA streams
 
