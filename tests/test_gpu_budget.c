@@ -20,13 +20,15 @@ mk_cfg(uint32_t chunk_cap)
   return (struct damacy_config){
     .batch_size = 4,
     .lookahead_batches = 2,
-    .n_io_threads = 1,
-    .n_zarrs_meta_cache = 4,
-    .n_shards_meta_cache = 4,
     .dtype = DAMACY_F32,
-    .max_chunk_uncompressed_bytes = chunk_cap,
-    .max_gpu_memory_bytes = 0,
     .device = -1,
+    .tuning = {
+      .n_io_threads = 1,
+      .n_zarrs_meta_cache = 4,
+      .n_shards_meta_cache = 4,
+      .max_chunk_uncompressed_bytes = chunk_cap,
+      .max_gpu_memory_bytes = 0,
+    },
   };
 }
 

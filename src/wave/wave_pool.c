@@ -52,6 +52,7 @@ wave_pool_init(struct wave_pool* wp,
                uint64_t dev_decompressed_per_wave,
                uint64_t max_chunk_uncompressed_bytes,
                int enable_gds,
+               int bypass_decode,
                struct gpu_budget* budget)
 {
   memset(wp, 0, sizeof(*wp));
@@ -62,6 +63,7 @@ wave_pool_init(struct wave_pool* wp,
   wp->budget = budget;
   wp->n_slots = host_buffer_waves;
   wp->use_gds = (uint8_t)(enable_gds != 0);
+  wp->bypass_decode = (uint8_t)(bypass_decode != 0);
 
   // NON_BLOCKING so we don't serialize against the legacy default stream.
   CU(Fail, cuStreamCreate(&wp->stream_h2d, CU_STREAM_NON_BLOCKING));
@@ -190,6 +192,10 @@ any_slot_free(const struct wave_pool* wp)
 static int
 wave_chunks_eligible(const struct wave_pool* wp, const struct damacy_wave* wave)
 {
+  // bypass_decode: parse/assemble flip every chunk to is_fill, so the
+  // BLOSC_ZSTD layout-probe preconditions don't apply.
+  if (wp->bypass_decode)
+    return 1;
   struct damacy_batch_slot* slot = &wp->pool->slots[wave->batch_pool_slot];
   for (uint32_t i = 0; i < wave->n_chunks; ++i) {
     const struct chunk_plan* c =
@@ -232,26 +238,30 @@ build_gpu_parse_chunks(const struct wave_pool* wp, struct damacy_wave* wave)
   uint32_t n_blosc_chunks = 0;
   uint32_t n_blosc_blocks = 0;
 
+  // bypass_decode flips every chunk to fill; kick_decode still records
+  // its events on stream_decode, but decode + decode_gap metrics are
+  // meaningless under bypass.
+  uint8_t effective_fill_force = wp->bypass_decode;
   for (uint32_t i = 0; i < wave->n_chunks; ++i) {
     struct chunk_plan* c = &slot->chunk_plans[wave->batch_chunk_offset + i];
-    struct read_op* r = &slot->read_ops[wave->batch_chunk_offset + i];
     struct gpu_parse_chunk* gc = &wave->h_parse_chunks[i];
     uint32_t comp_off =
-      (uint32_t)(r->dst_buf_offset + (uint64_t)c->offset_in_read);
+      (uint32_t)(c->host_buf_offset + (uint64_t)c->offset_in_read);
     gc->compressed_offset = comp_off;
     gc->compressed_nbytes = c->compressed_nbytes;
     gc->decompressed_offset = c->dev_decompressed_offset;
     gc->decompressed_nbytes = c->decompressed_nbytes;
     gc->sample_idx_in_batch = c->sample_idx_in_batch;
     gc->codec_id = c->codec_id;
-    gc->is_fill = c->is_fill;
+    gc->is_fill = c->is_fill | effective_fill_force;
 
     struct assemble_chunk* a = &wave->h_assemble_chunks[i];
     a->shuffle_mode = (uint8_t)ASSEMBLE_SHUFFLE_NONE;
     a->shuffle_typesize = 0;
     a->shuffle_blocksize = 0;
 
-    if (c->is_fill || c->codec_id == (uint8_t)CODEC_FILL)
+    if (c->is_fill || c->codec_id == (uint8_t)CODEC_FILL ||
+        effective_fill_force)
       continue;
 
     if (c->codec_id == (uint8_t)CODEC_NONE) {
@@ -360,11 +370,16 @@ prepare_decode_caps(struct wave_pool* wp, struct damacy_wave* wave)
 {
   struct damacy_batch_slot* slot = &wp->pool->slots[wave->batch_pool_slot];
   size_t need_zsubs = 0;
-  for (uint32_t i = 0; i < wave->n_chunks; ++i) {
-    const struct chunk_plan* c =
-      &slot->chunk_plans[wave->batch_chunk_offset + i];
-    const struct sample_plan* sp = &slot->sample_plans[c->sample_idx_in_batch];
-    need_zsubs += chunk_zsubs_upper_bound(c, sp);
+  // bypass_decode flips every chunk to is_fill at build time, so the
+  // wave needs zero zstd substream scratch.
+  if (!wp->bypass_decode) {
+    for (uint32_t i = 0; i < wave->n_chunks; ++i) {
+      const struct chunk_plan* c =
+        &slot->chunk_plans[wave->batch_chunk_offset + i];
+      const struct sample_plan* sp =
+        &slot->sample_plans[c->sample_idx_in_batch];
+      need_zsubs += chunk_zsubs_upper_bound(c, sp);
+    }
   }
   enum damacy_status gs = fanout_grow(&wave->h_zstd_fan,
                                       &wave->zstd_fan,
@@ -580,7 +595,7 @@ build_assemble_meta(const struct wave_pool* wp, struct damacy_wave* wave)
     struct assemble_chunk* a = &wave->h_assemble_chunks[i];
     a->src_base_byte_off = (uint64_t)c->dev_decompressed_offset;
     a->sample_idx_in_batch = c->sample_idx_in_batch;
-    a->is_fill = c->is_fill;
+    a->is_fill = c->is_fill | wp->bypass_decode;
     for (uint8_t d = 0; d < spatial_rank; ++d)
       a->chunk_d[d] = c->chunk_d[d];
 
@@ -823,20 +838,55 @@ wave_pool_peel_reserve(struct wave_pool* wp,
     return t;
   struct host_slab_slot* hs = &wp->slots[slot_idx];
 
+  for (uint32_t i = 0; i < remaining; ++i)
+    batch->read_ops[batch->chunk_plans[base + i].read_op_idx].host_buf_offset =
+      UINT64_MAX;
+
   uint64_t host_cursor = 0;
   uint64_t dev_cursor = 0;
   uint32_t take = 0;
+  uint32_t n_reads = 0;
   const uint64_t dev_cap = wp->waves[0].dev_decompressed_cap;
   for (; take < remaining && take < DAMACY_MAX_CHUNKS_PER_WAVE; ++take) {
-    struct read_op* r = &batch->read_ops[base + take];
     struct chunk_plan* c = &batch->chunk_plans[base + take];
-    if (host_cursor + r->nbytes > hs->cap)
+    struct read_op* r = &batch->read_ops[c->read_op_idx];
+    int new_read = (r->host_buf_offset == UINT64_MAX);
+    // group_chunks_by_read invariant: !new_read implies the previous
+    // chunk shares this read_op (chunks of one read_op are contiguous).
+    CHECK(Invariant,
+          new_read ||
+            batch->chunk_plans[base + take - 1].read_op_idx == c->read_op_idx);
+    uint64_t host_add = (new_read && !c->is_fill) ? r->nbytes : 0;
+    if (host_cursor + host_add > hs->cap ||
+        dev_cursor + c->decompressed_nbytes > dev_cap) {
+      // group_chunks_by_read keeps same-read-op chunks contiguous, so
+      // the broken read_op's chunks are at the tail; rewind them.
+      if (!new_read) {
+        uint32_t broken_op = c->read_op_idx;
+        while (take > 0 &&
+               batch->chunk_plans[base + take - 1].read_op_idx == broken_op) {
+          dev_cursor -= batch->chunk_plans[base + take - 1].decompressed_nbytes;
+          take--;
+        }
+        host_cursor -= r->nbytes;
+        n_reads--;
+      }
       break;
-    if (dev_cursor + c->decompressed_nbytes > dev_cap)
-      break;
-    r->dst_buf_offset = host_cursor;
+    }
+    if (new_read && !c->is_fill) {
+      void* dst = wp->use_gds ? (void*)((uint8_t*)hs->dev_buf + host_cursor)
+                              : (void*)((uint8_t*)hs->buf + host_cursor);
+      hs->store_reads[n_reads++] = (struct store_read){
+        .key = r->shard_path,
+        .dst = dst,
+        .offset = r->file_offset,
+        .len = r->nbytes,
+      };
+      r->host_buf_offset = host_cursor;
+      host_cursor += host_add;
+    }
+    c->host_buf_offset = c->is_fill ? 0 : r->host_buf_offset;
     c->dev_decompressed_offset = dev_cursor;
-    host_cursor += r->nbytes;
     dev_cursor += c->decompressed_nbytes;
   }
   if (take == 0) {
@@ -846,22 +896,6 @@ wave_pool_peel_reserve(struct wave_pool* wp,
               (unsigned long long)dev_cap);
     *err = DAMACY_OOM;
     return t;
-  }
-
-  uint32_t n_reads = 0;
-  for (uint32_t i = 0; i < take; ++i) {
-    struct read_op* r = &batch->read_ops[base + i];
-    struct chunk_plan* c = &batch->chunk_plans[base + i];
-    if (c->is_fill)
-      continue;
-    void* dst = wp->use_gds ? (void*)((uint8_t*)hs->dev_buf + r->dst_buf_offset)
-                            : (void*)((uint8_t*)hs->buf + r->dst_buf_offset);
-    hs->store_reads[n_reads++] = (struct store_read){
-      .key = r->shard_path,
-      .dst = dst,
-      .offset = r->file_offset,
-      .len = r->nbytes,
-    };
   }
   hs->io_t_start_ns = monotonic_ns();
   hs->is_fill_wave = (n_reads == 0);
@@ -878,6 +912,11 @@ wave_pool_peel_reserve(struct wave_pool* wp,
   t.slot_idx = slot_idx;
   t.n_reads = n_reads;
   return t;
+Invariant:
+  *err = DAMACY_INVAL;
+  return (struct wave_pool_peel_ticket){ .slot_idx = -1,
+                                         .n_reads = 0,
+                                         .consumed = 0 };
 }
 
 struct store_event
