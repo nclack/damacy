@@ -442,7 +442,8 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   {
     CUdevice cu_dev;
     if (cuCtxGetDevice(&cu_dev) == CUDA_SUCCESS) {
-      numa_init(cfg->numa_strategy, cfg->numa_node, cu_dev, &self->numa);
+      numa_init(
+        cfg->tuning.numa_strategy, cfg->tuning.numa_node, cu_dev, &self->numa);
     } else {
       // Should never happen — ctx_guard_enter just pushed our ctx, or
       // the caller's ctx is live. Be safe; treat as disabled.
@@ -463,7 +464,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   // Subtract the batch-output reserve before sizing wave-resident
   // buffers; the resolver is greedy, so without this carve-out the
   // lazy pool has no room at first push.
-  const uint64_t pool_reserve = cfg->batch_output_reserve_bytes;
+  const uint64_t pool_reserve = cfg->tuning.batch_output_reserve_bytes;
   if (pool_reserve >= resolved_max_gpu) {
     log_error("damacy: batch_output_reserve_bytes=%llu >= "
               "max_gpu_memory_bytes=%llu; nothing left for wave-resident "
@@ -533,7 +534,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   // pass-through.
   struct store_fs_config sc = {
     .root = "",
-    .nthreads = (int)cfg->n_io_threads,
+    .nthreads = (int)cfg->tuning.n_io_threads,
     .affinity = &self->numa,
   };
   self->store = want_gds ? store_fs_gds_create(&sc) : store_fs_create(&sc);
@@ -543,10 +544,10 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   }
 
   self->meta_cache =
-    zarr_meta_cache_create(self->store, cfg->n_zarrs_meta_cache);
+    zarr_meta_cache_create(self->store, cfg->tuning.n_zarrs_meta_cache);
   CHECK(Fail, self->meta_cache);
   self->shard_cache =
-    zarr_shard_cache_create(self->store, cfg->n_shards_meta_cache);
+    zarr_shard_cache_create(self->store, cfg->tuning.n_shards_meta_cache);
   CHECK(Fail, self->shard_cache);
 
   struct planner_config pcfg = {
@@ -579,6 +580,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
                                sizing.dev_decompressed_per_wave,
                                runtime_chunk_cap,
                                (int)want_gds,
+                               cfg->debug.bypass_decode,
                                self->budget);
     numa_scope_exit(saved_aff);
     CHECK(Fail, wp_rc == 0);
@@ -977,13 +979,13 @@ damacy_config_describe(const struct damacy_config* cfg)
   }
   const uint64_t resolved_max_gpu = resolve_max_gpu_memory(cfg);
   const uint64_t runtime_chunk_cap = resolve_max_chunk_uncompressed(cfg);
-  const uint64_t pool_reserve = cfg->batch_output_reserve_bytes;
+  const uint64_t pool_reserve = cfg->tuning.batch_output_reserve_bytes;
   const uint64_t resolver_budget =
     pool_reserve < resolved_max_gpu ? resolved_max_gpu - pool_reserve : 0;
   log_info("damacy_config_describe: input max_gpu_memory_bytes=%llu "
            "(resolved=%llu, batch_output_reserve=%llu, resolver_budget=%llu, "
            "max_chunk_uncompressed_bytes=%llu, batch_size=%u)",
-           (unsigned long long)cfg->max_gpu_memory_bytes,
+           (unsigned long long)cfg->tuning.max_gpu_memory_bytes,
            (unsigned long long)resolved_max_gpu,
            (unsigned long long)pool_reserve,
            (unsigned long long)resolver_budget,

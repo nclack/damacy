@@ -52,6 +52,7 @@ wave_pool_init(struct wave_pool* wp,
                uint64_t dev_decompressed_per_wave,
                uint64_t max_chunk_uncompressed_bytes,
                int enable_gds,
+               int bypass_decode,
                struct gpu_budget* budget)
 {
   memset(wp, 0, sizeof(*wp));
@@ -62,6 +63,7 @@ wave_pool_init(struct wave_pool* wp,
   wp->budget = budget;
   wp->n_slots = host_buffer_waves;
   wp->use_gds = (uint8_t)(enable_gds != 0);
+  wp->bypass_decode = (uint8_t)(bypass_decode != 0);
 
   // NON_BLOCKING so we don't serialize against the legacy default stream.
   CU(Fail, cuStreamCreate(&wp->stream_h2d, CU_STREAM_NON_BLOCKING));
@@ -190,6 +192,10 @@ any_slot_free(const struct wave_pool* wp)
 static int
 wave_chunks_eligible(const struct wave_pool* wp, const struct damacy_wave* wave)
 {
+  // bypass_decode: parse/assemble flip every chunk to is_fill, so the
+  // BLOSC_ZSTD layout-probe preconditions don't apply.
+  if (wp->bypass_decode)
+    return 1;
   struct damacy_batch_slot* slot = &wp->pool->slots[wave->batch_pool_slot];
   for (uint32_t i = 0; i < wave->n_chunks; ++i) {
     const struct chunk_plan* c =
@@ -232,6 +238,10 @@ build_gpu_parse_chunks(const struct wave_pool* wp, struct damacy_wave* wave)
   uint32_t n_blosc_chunks = 0;
   uint32_t n_blosc_blocks = 0;
 
+  // bypass_decode: every chunk acts as fill — decode kernels skip, no
+  // memcpy/zstd/blosc op is emitted. assemble's build_assemble_meta
+  // mirrors this on the assemble_chunk side.
+  uint8_t effective_fill_force = wp->bypass_decode;
   for (uint32_t i = 0; i < wave->n_chunks; ++i) {
     struct chunk_plan* c = &slot->chunk_plans[wave->batch_chunk_offset + i];
     struct gpu_parse_chunk* gc = &wave->h_parse_chunks[i];
@@ -243,14 +253,15 @@ build_gpu_parse_chunks(const struct wave_pool* wp, struct damacy_wave* wave)
     gc->decompressed_nbytes = c->decompressed_nbytes;
     gc->sample_idx_in_batch = c->sample_idx_in_batch;
     gc->codec_id = c->codec_id;
-    gc->is_fill = c->is_fill;
+    gc->is_fill = c->is_fill | effective_fill_force;
 
     struct assemble_chunk* a = &wave->h_assemble_chunks[i];
     a->shuffle_mode = (uint8_t)ASSEMBLE_SHUFFLE_NONE;
     a->shuffle_typesize = 0;
     a->shuffle_blocksize = 0;
 
-    if (c->is_fill || c->codec_id == (uint8_t)CODEC_FILL)
+    if (c->is_fill || c->codec_id == (uint8_t)CODEC_FILL ||
+        effective_fill_force)
       continue;
 
     if (c->codec_id == (uint8_t)CODEC_NONE) {
@@ -359,11 +370,16 @@ prepare_decode_caps(struct wave_pool* wp, struct damacy_wave* wave)
 {
   struct damacy_batch_slot* slot = &wp->pool->slots[wave->batch_pool_slot];
   size_t need_zsubs = 0;
-  for (uint32_t i = 0; i < wave->n_chunks; ++i) {
-    const struct chunk_plan* c =
-      &slot->chunk_plans[wave->batch_chunk_offset + i];
-    const struct sample_plan* sp = &slot->sample_plans[c->sample_idx_in_batch];
-    need_zsubs += chunk_zsubs_upper_bound(c, sp);
+  // bypass_decode flips every chunk to is_fill at build time, so the
+  // wave needs zero zstd substream scratch.
+  if (!wp->bypass_decode) {
+    for (uint32_t i = 0; i < wave->n_chunks; ++i) {
+      const struct chunk_plan* c =
+        &slot->chunk_plans[wave->batch_chunk_offset + i];
+      const struct sample_plan* sp =
+        &slot->sample_plans[c->sample_idx_in_batch];
+      need_zsubs += chunk_zsubs_upper_bound(c, sp);
+    }
   }
   enum damacy_status gs = fanout_grow(&wave->h_zstd_fan,
                                       &wave->zstd_fan,
@@ -579,7 +595,7 @@ build_assemble_meta(const struct wave_pool* wp, struct damacy_wave* wave)
     struct assemble_chunk* a = &wave->h_assemble_chunks[i];
     a->src_base_byte_off = (uint64_t)c->dev_decompressed_offset;
     a->sample_idx_in_batch = c->sample_idx_in_batch;
-    a->is_fill = c->is_fill;
+    a->is_fill = c->is_fill | wp->bypass_decode;
     for (uint8_t d = 0; d < spatial_rank; ++d)
       a->chunk_d[d] = c->chunk_d[d];
 

@@ -114,9 +114,11 @@ struct scenario
   uint32_t n_io_threads;
   uint64_t max_gpu_memory_bytes;         // 0 → library default
   uint32_t max_chunk_uncompressed_bytes; // 0 → library default
+  uint64_t max_read_op_bytes;            // 0 → library default
   uint32_t n_zarrs_meta_cache;
   uint32_t n_shards_meta_cache;
   uint8_t host_buffer_waves; // 0 → library default
+  uint8_t bypass_decode;
 
   // raw JSON src for echo (kept alive by main)
   struct cslice src;
@@ -162,6 +164,32 @@ read_uint_opt(struct cslice src,
 {
   if (read_uint(src, parts, n_parts, out))
     *out = fallback;
+}
+
+// Optional bool with a default. Accepts `true`/`false` or 0/1.
+static void
+read_bool_opt(struct cslice src,
+              const struct json_query* parts,
+              size_t n_parts,
+              int* out,
+              int fallback)
+{
+  struct json_node n;
+  if (json_resolve(src, parts, n_parts, &n, NULL)) {
+    *out = fallback;
+    return;
+  }
+  int b = 0;
+  if (json_as_bool(n, &b) == JSON_OK) {
+    *out = b;
+    return;
+  }
+  uint64_t v = 0;
+  if (json_as_uint(n, &v) == JSON_OK) {
+    *out = v ? 1 : 0;
+    return;
+  }
+  *out = fallback;
 }
 
 // Read an array of int64 into `out[0..max)`. Sets *out_n.
@@ -346,6 +374,11 @@ parse_scenario(struct cslice src, struct scenario* sc)
     sc->max_gpu_memory_bytes = v << 20;
     read_uint_opt(src, p_c, countof(p_c), &v, 0);
     sc->max_chunk_uncompressed_bytes = (uint32_t)(v << 20);
+    static const struct json_query p_ro[] = {
+      { QUERY_KEY, .key = "pipeline" }, { QUERY_KEY, .key = "max_read_op_kb" }
+    };
+    read_uint_opt(src, p_ro, countof(p_ro), &v, 0);
+    sc->max_read_op_bytes = v << 10; // KB → bytes
     read_uint_opt(src, p_zm, countof(p_zm), &v, 4096);
     sc->n_zarrs_meta_cache = (uint32_t)v;
     read_uint_opt(src, p_sm, countof(p_sm), &v, 16384);
@@ -355,6 +388,12 @@ parse_scenario(struct cslice src, struct scenario* sc)
                                                 .key = "host_buffer_waves" } };
     read_uint_opt(src, p_hw, countof(p_hw), &v, 0);
     sc->host_buffer_waves = (uint8_t)v;
+    static const struct json_query p_bd[] = {
+      { QUERY_KEY, .key = "pipeline" }, { QUERY_KEY, .key = "bypass_decode" }
+    };
+    int bd = 0;
+    read_bool_opt(src, p_bd, countof(p_bd), &bd, 0);
+    sc->bypass_decode = (uint8_t)bd;
   }
 
   // sanity: all axes can fit a sample
@@ -723,15 +762,19 @@ main(int argc, char** argv)
   struct damacy_config cfg = {
     .batch_size = sc.batch_size,
     .lookahead_batches = sc.lookahead_batches,
-    .n_io_threads = sc.n_io_threads,
-    .max_gpu_memory_bytes = sc.max_gpu_memory_bytes,
-    .max_chunk_uncompressed_bytes = sc.max_chunk_uncompressed_bytes,
-    .host_buffer_waves = sc.host_buffer_waves,
-    .batch_output_reserve_bytes = pool_reserve,
-    .n_zarrs_meta_cache = sc.n_zarrs_meta_cache,
-    .n_shards_meta_cache = sc.n_shards_meta_cache,
     .dtype = sc.dtype,
     .device = -1,
+    .tuning = {
+      .n_io_threads = sc.n_io_threads,
+      .n_zarrs_meta_cache = sc.n_zarrs_meta_cache,
+      .n_shards_meta_cache = sc.n_shards_meta_cache,
+      .max_chunk_uncompressed_bytes = sc.max_chunk_uncompressed_bytes,
+      .max_read_op_bytes = sc.max_read_op_bytes,
+      .max_gpu_memory_bytes = sc.max_gpu_memory_bytes,
+      .batch_output_reserve_bytes = pool_reserve,
+      .host_buffer_waves = sc.host_buffer_waves,
+    },
+    .debug = { .bypass_decode = sc.bypass_decode },
   };
 
   struct rng rng = { .s = sc.sampling_seed ? sc.sampling_seed : 0xdeadbeefULL };

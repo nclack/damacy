@@ -81,6 +81,12 @@ struct wave_pool
   // + cuFileDriverOpen succeeded). Set by wave_pool_init from the
   // enable_gds parameter.
   uint8_t use_gds;
+
+  // Bench bypass: chunks are flipped to is_fill=1 at parse +
+  // assemble build time so decode does no work and assemble broadcasts
+  // sample.fill_value. Planner, IO, and H2D are unaffected — this
+  // isolates decode out of the pipeline. See damacy_config.bypass_decode.
+  uint8_t bypass_decode;
 };
 
 // Create the streams, initialize the wave array, and allocate
@@ -101,6 +107,7 @@ wave_pool_init(struct wave_pool* wp,
                uint64_t dev_decompressed_per_wave,
                uint64_t max_chunk_uncompressed_bytes,
                int enable_gds,
+               int bypass_decode,
                struct gpu_budget* budget);
 
 // Sync + destroy streams, free per-wave + per-slot pinned host, then
