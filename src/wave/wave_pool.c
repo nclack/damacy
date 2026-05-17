@@ -902,7 +902,7 @@ wave_pool_peel_reserve(struct wave_pool* wp,
               g0 ? (unsigned long long)g0->total_decompressed : 0ull,
               (unsigned long long)hs->cap,
               (unsigned long long)dev_cap);
-    *err = DAMACY_OOM;
+    *err = DAMACY_BUDGET;
     return t;
   }
   hs->io_t_start_ns = monotonic_ns();

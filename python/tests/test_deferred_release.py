@@ -52,6 +52,7 @@ def _mk_cfg() -> Config:
         n_zarrs_meta_cache=4,
         n_shards_meta_cache=4,
         sample_shape=(8, 16),
+        max_gpu_memory_bytes=1 << 30,
     )
 
 

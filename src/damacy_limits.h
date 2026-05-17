@@ -41,10 +41,6 @@ _Static_assert(DAMACY_DEFAULT_READ_OP_MAX_BYTES <= UINT32_MAX,
                "read_op.nbytes is uint32_t");
 #endif
 
-// Default for damacy_config.max_gpu_memory_bytes when the user leaves
-// it at 0. ~1 GB fits comfortably on consumer GPUs.
-#define DAMACY_DEFAULT_MAX_GPU_MEMORY_BYTES (1ull << 30) // 1 GB
-
 // In-flight wave count. Fixed; sets the minimum host_buffer_waves and
 // the device-side decode concurrency depth.
 #define DAMACY_N_WAVES 2

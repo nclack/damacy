@@ -56,6 +56,7 @@ mk_cfg(const char* root, uint32_t batch_size, int64_t sy, int64_t sx)
       .n_io_threads = 1,
       .n_zarrs_meta_cache = 4,
       .n_shards_meta_cache = 4,
+      .max_gpu_memory_bytes = 1ull << 30,
     },
   };
   c.sample_shape[0] = sy;

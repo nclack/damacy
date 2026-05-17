@@ -1115,17 +1115,12 @@ api_register_types(PyObject* m)
     const char* name;
     int value;
   } statuses[] = {
-    { "STATUS_OK", DAMACY_OK },
-    { "STATUS_AGAIN", DAMACY_AGAIN },
-    { "STATUS_INVAL", DAMACY_INVAL },
-    { "STATUS_NOTFOUND", DAMACY_NOTFOUND },
-    { "STATUS_DTYPE", DAMACY_DTYPE },
-    { "STATUS_RANK", DAMACY_RANK },
-    { "STATUS_IO", DAMACY_IO },
-    { "STATUS_DECODE", DAMACY_DECODE },
-    { "STATUS_CUDA", DAMACY_CUDA },
-    { "STATUS_OOM", DAMACY_OOM },
-    { "STATUS_SHUTDOWN", DAMACY_SHUTDOWN },
+    { "STATUS_OK", DAMACY_OK },         { "STATUS_AGAIN", DAMACY_AGAIN },
+    { "STATUS_INVAL", DAMACY_INVAL },   { "STATUS_NOTFOUND", DAMACY_NOTFOUND },
+    { "STATUS_DTYPE", DAMACY_DTYPE },   { "STATUS_RANK", DAMACY_RANK },
+    { "STATUS_IO", DAMACY_IO },         { "STATUS_DECODE", DAMACY_DECODE },
+    { "STATUS_CUDA", DAMACY_CUDA },     { "STATUS_OOM", DAMACY_OOM },
+    { "STATUS_BUDGET", DAMACY_BUDGET }, { "STATUS_SHUTDOWN", DAMACY_SHUTDOWN },
   };
   for (size_t i = 0; i < sizeof statuses / sizeof statuses[0]; ++i) {
     if (PyModule_AddIntConstant(m, statuses[i].name, statuses[i].value) < 0)

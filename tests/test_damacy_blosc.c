@@ -61,6 +61,7 @@ mk_cfg(const char* root, uint32_t batch_size, int64_t sy, int64_t sx)
       .n_io_threads = 1,
       .n_zarrs_meta_cache = 4,
       .n_shards_meta_cache = 4,
+      .max_gpu_memory_bytes = 1ull << 30,
     },
   };
   c.sample_shape[0] = sy;
@@ -366,8 +367,8 @@ test_wave_grows_substream_cap(void)
   EXPECT(fixture_write_zarr_codec(
            p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
 
-  // Default-budget per-wave geometry easily holds 64 chunks (256 B
-  // decompressed each).
+  // 1 GiB per-wave geometry easily holds 64 chunks (256 B decompressed
+  // each).
   struct damacy_config cfg = {
     .batch_size = 1,
     .lookahead_batches = 2,
@@ -379,6 +380,7 @@ test_wave_grows_substream_cap(void)
       .n_io_threads = 1,
       .n_zarrs_meta_cache = 4,
       .n_shards_meta_cache = 4,
+      .max_gpu_memory_bytes = 1ull << 30,
     },
   };
   struct damacy* d = NULL;
@@ -435,7 +437,7 @@ damacy_set_gpu_bytes_committed_for_test(struct damacy* d, uint64_t v);
 // damacy_create, so the observe-and-grow paths never trip the budget
 // when run inside a successfully-created instance. Replays the
 // substream-grow workload at a tight budget (resolved per-wave near
-// the floor) and asserts the run completes without DAMACY_OOM.
+// the floor) and asserts the run completes without DAMACY_BUDGET.
 static int
 test_grow_inside_tight_budget(void)
 {
@@ -471,7 +473,7 @@ test_grow_inside_tight_budget(void)
 
   // 64 chunks × 32 blocks/chunk = 2048 substreams, > the 1024 initial
   // floor, so both fanout + decoder grows fire inside the tight budget.
-  // The grow paths must not return DAMACY_OOM here — the resolver
+  // The grow paths must not return DAMACY_BUDGET here — the resolver
   // reserved the worst-case footprint.
   struct damacy_batch* b = NULL;
   EXPECT(damacy_pop(d, &b) == DAMACY_OK);
@@ -543,7 +545,7 @@ test_layout_probe_avoids_decoder_grow(void)
   return 0;
 }
 
-// Exercise the batch-output pool's OOM branch with the
+// Exercise the batch-output pool's BUDGET branch with the
 // gpu_bytes_committed counter inflated to the cap. Belt-and-suspenders
 // alongside test_layout_probe_avoids_decoder_grow: this one shows that
 // the same hook plus a much tighter headroom trips the earlier
@@ -573,7 +575,7 @@ test_batch_pool_rejected_at_inflated_committed(void)
   EXPECT(damacy_push(d, slice).status == DAMACY_OK);
 
   struct damacy_batch* b = NULL;
-  EXPECT(damacy_pop(d, &b) == DAMACY_OOM);
+  EXPECT(damacy_pop(d, &b) == DAMACY_BUDGET);
 
   damacy_destroy(d);
   fixture_rm_tree(root);

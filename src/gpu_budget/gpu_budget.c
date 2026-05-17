@@ -38,7 +38,7 @@ gpu_budget_try_commit(struct gpu_budget* b, uint64_t bytes, const char* tag)
               (unsigned long long)b->committed,
               (unsigned long long)bytes,
               (unsigned long long)b->max_bytes);
-    return DAMACY_OOM;
+    return DAMACY_BUDGET;
   }
   b->committed += bytes;
   return DAMACY_OK;

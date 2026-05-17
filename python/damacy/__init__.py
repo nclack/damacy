@@ -11,7 +11,7 @@ Typical use::
 
     cfg = damacy.Config(
         batch_size=8,
-        max_gpu_memory_bytes=1 << 30,  # 1 GiB GPU budget
+        max_gpu_memory_bytes=1 << 30,
         dtype="bf16",
     )
     samples = [
@@ -53,6 +53,7 @@ if TYPE_CHECKING:  # avoid runtime import; only used for type hints
 __all__ = [
     "Batch",
     "BatchInfo",
+    "BudgetExceeded",
     "Config",
     "DamacyError",
     "DecodeError",
@@ -131,6 +132,7 @@ class Status(IntEnum):
     DECODE = _native.STATUS_DECODE
     CUDA = _native.STATUS_CUDA
     OOM = _native.STATUS_OOM
+    BUDGET = _native.STATUS_BUDGET
     SHUTDOWN = _native.STATUS_SHUTDOWN
 
 
@@ -179,7 +181,17 @@ class NativeCudaError(DamacyError):
 
 
 class OutOfMemory(DamacyError):
-    """Configured GPU memory cap would be exceeded."""
+    """Host allocation failed (malloc/calloc returned NULL). Distinct
+    from :class:`BudgetExceeded` — the OS denied memory, the
+    configured cap was not the limiting factor."""
+
+
+class BudgetExceeded(DamacyError):
+    """A configured cap is too small to satisfy the request. Most
+    commonly: ``Config.max_gpu_memory_bytes`` cannot fit the
+    requested batch geometry, or a chunk's uncompressed size exceeds
+    ``Config.max_chunk_uncompressed_bytes``. Raise the relevant cap
+    and retry."""
 
 
 class ShutdownError(DamacyError):
@@ -198,6 +210,7 @@ _STATUS_TO_EXC: dict[int, type[DamacyError]] = {
     _native.STATUS_DECODE: DecodeError,
     _native.STATUS_CUDA: NativeCudaError,
     _native.STATUS_OOM: OutOfMemory,
+    _native.STATUS_BUDGET: BudgetExceeded,
     _native.STATUS_SHUTDOWN: ShutdownError,
 }
 
@@ -347,7 +360,7 @@ class Config:
     ``dtype`` argument; the stored field is always a :class:`Dtype`.
 
     ```pycon
-    >>> Config(batch_size=0, sample_shape=(8, 16))
+    >>> Config(batch_size=0, sample_shape=(8, 16), max_gpu_memory_bytes=1 << 30)
     Traceback (most recent call last):
         ...
     ValueError: batch_size must be >= 1 (got 0)
@@ -358,8 +371,10 @@ class Config:
         batch_size: Samples per batch (>= 1).
         max_gpu_memory_bytes: Primary GPU budget knob. Hard cap on
             GPU memory allocated for wave-resident buffers, decoder
-            scratch, per-wave fanout SOAs, and batch-output pools. 0
-            selects the default (~1 GB). Internal sizing (host slab,
+            scratch, per-wave fanout SOAs, and batch-output pools.
+            Required — no default. A value too small for the
+            requested batch geometry raises :class:`BudgetExceeded`
+            from ``Pipeline(cfg)``. Internal sizing (host slab,
             dev decompress arena, nvcomp temp) is derived from this
             value; the create-time resolver also reserves the
             worst-case observe-and-grow footprint so grows inside a
@@ -396,7 +411,7 @@ class Config:
         *,
         batch_size: int,
         sample_shape: Sequence[int],
-        max_gpu_memory_bytes: int = 0,
+        max_gpu_memory_bytes: int,
         dtype: Dtype | str | int = Dtype.F32,
         lookahead_batches: int = 2,
         n_io_threads: int = 4,
@@ -420,8 +435,10 @@ class Config:
             raise ValueError(f"n_io_threads must be >= 1 (got {n_io_threads})")
         if max_chunk_uncompressed_bytes < 0:
             raise ValueError("max_chunk_uncompressed_bytes must be >= 0")
-        if max_gpu_memory_bytes < 0:
-            raise ValueError("max_gpu_memory_bytes must be >= 0")
+        if max_gpu_memory_bytes < 1:
+            raise ValueError(
+                f"max_gpu_memory_bytes must be >= 1 (got {max_gpu_memory_bytes})"
+            )
         if host_buffer_waves < 0:
             raise ValueError("host_buffer_waves must be >= 0")
         shape_t = tuple(int(x) for x in sample_shape)

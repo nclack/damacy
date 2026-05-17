@@ -36,6 +36,7 @@ def test_status_constants_present():
         "STATUS_DECODE",
         "STATUS_CUDA",
         "STATUS_OOM",
+        "STATUS_BUDGET",
         "STATUS_SHUTDOWN",
     ):
         assert isinstance(getattr(_native, name), int), name

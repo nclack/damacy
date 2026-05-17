@@ -45,6 +45,7 @@ validate_config(const struct damacy_config* cfg)
 {
   CHECK_SILENT(Invalid, cfg);
   CHECK_SILENT(Invalid, cfg->batch_size > 0);
+  CHECK_SILENT(Invalid, cfg->tuning.max_gpu_memory_bytes > 0);
   CHECK_SILENT(Invalid, cfg->lookahead_batches >= 2);
   CHECK_SILENT(Invalid, cfg->tuning.n_io_threads > 0);
   CHECK_SILENT(Invalid, cfg->tuning.n_io_threads <= DAMACY_MAX_IO_THREADS);
@@ -93,15 +94,6 @@ resolve_max_read_op_bytes(const struct damacy_config* cfg)
   uint64_t v = cfg->tuning.max_read_op_bytes;
   if (v == 0)
     v = DAMACY_DEFAULT_READ_OP_MAX_BYTES;
-  return v;
-}
-
-uint64_t
-resolve_max_gpu_memory(const struct damacy_config* cfg)
-{
-  uint64_t v = cfg->tuning.max_gpu_memory_bytes;
-  if (v == 0)
-    v = DAMACY_DEFAULT_MAX_GPU_MEMORY_BYTES;
   return v;
 }
 

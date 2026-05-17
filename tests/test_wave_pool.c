@@ -216,7 +216,7 @@ test_peel_reserve_defers_oversize_group(void)
   return 0;
 }
 
-// First group exceeds dev_cap on a fresh wave → DAMACY_OOM.
+// First group exceeds dev_cap on a fresh wave → DAMACY_BUDGET.
 static int
 test_peel_reserve_errors_when_first_group_too_big(void)
 {
@@ -238,7 +238,7 @@ test_peel_reserve_errors_when_first_group_too_big(void)
   struct wave_pool_peel_ticket t = wave_pool_peel_reserve(&f.wp, 0, &err);
   damacy_log_set_quiet(0);
 
-  EXPECT(err == DAMACY_OOM);
+  EXPECT(err == DAMACY_BUDGET);
   EXPECT(t.slot_idx == -1);
   EXPECT(f.pool.slots[0].n_chunks_dispatched == 0);
   EXPECT(f.pool.slots[0].n_groups_dispatched == 0);
