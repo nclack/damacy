@@ -182,6 +182,7 @@ add_src_lib(planner
     SOURCES planner/planner.h planner/planner.c
             planner/coalesce.h planner/coalesce.c
             planner/group_chunks.h planner/group_chunks.c
+            planner/read_op_sort.h planner/read_op_sort.c
     LINKS zarr_meta_cache zarr_shard_cache zarr dtype platform strbuf log
 )
 

@@ -238,9 +238,9 @@ build_gpu_parse_chunks(const struct wave_pool* wp, struct damacy_wave* wave)
   uint32_t n_blosc_chunks = 0;
   uint32_t n_blosc_blocks = 0;
 
-  // bypass_decode: every chunk acts as fill — decode kernels skip, no
-  // memcpy/zstd/blosc op is emitted. assemble's build_assemble_meta
-  // mirrors this on the assemble_chunk side.
+  // bypass_decode flips every chunk to fill; kick_decode still records
+  // its events on stream_decode, but decode + decode_gap metrics are
+  // meaningless under bypass.
   uint8_t effective_fill_force = wp->bypass_decode;
   for (uint32_t i = 0; i < wave->n_chunks; ++i) {
     struct chunk_plan* c = &slot->chunk_plans[wave->batch_chunk_offset + i];
@@ -848,6 +848,10 @@ wave_pool_peel(struct wave_pool* wp, uint16_t batch_slot_idx)
     uint64_t host_add = (new_read && !c->is_fill) ? r->nbytes : 0;
     if (host_cursor + host_add > hs->cap ||
         dev_cursor + c->decompressed_nbytes > dev_cap) {
+      // Rewind every chunk in the broken read. The host_cursor /
+      // n_reads decrements are balanced because group_chunks_by_read
+      // keeps same-read-op chunks contiguous, so a read_op always
+      // opens (new_read=1) on its first chunk in this wave.
       if (!new_read) {
         uint32_t broken_op = c->read_op_idx;
         while (take > 0 &&

@@ -1,19 +1,9 @@
 #include "planner/coalesce.h"
 
 #include "damacy_limits.h" // DAMACY_MAX_PATH
+#include "planner/read_op_sort.h"
 
 #include <string.h>
-
-static int
-perm_lt(const struct read_op* ops, uint32_t a, uint32_t b)
-{
-  int cmp = strncmp(ops[a].shard_path, ops[b].shard_path, DAMACY_MAX_PATH);
-  if (cmp != 0)
-    return cmp < 0;
-  if (ops[a].file_offset != ops[b].file_offset)
-    return ops[a].file_offset < ops[b].file_offset;
-  return a < b;
-}
 
 enum damacy_status
 coalesce_chunks(struct planner_output* out,
@@ -48,16 +38,7 @@ coalesce_chunks(struct planner_output* out,
       perm[n_io++] = i;
   }
 
-  // Insertion sort by (path, file_offset, original index). Stable.
-  for (uint32_t i = 1; i < n_io; ++i) {
-    uint32_t key = perm[i];
-    uint32_t j = i;
-    while (j > 0 && !perm_lt(out->read_ops, perm[j - 1], key)) {
-      perm[j] = perm[j - 1];
-      j--;
-    }
-    perm[j] = key;
-  }
+  read_op_perm_sort(out->read_ops, perm, n_io);
 
   // Greedy fuse-with-cap. A new leader starts when: path differs, or
   // there's a gap (curr_offset > leader_end), or fusing would push
@@ -118,8 +99,14 @@ coalesce_chunks(struct planner_output* out,
     struct chunk_plan* cp = &out->chunk_plans[i];
     uint32_t old = cp->read_op_idx;
     cp->read_op_idx = remap[old];
-    if (!cp->is_fill)
-      cp->offset_in_read += offset_shift[old];
+    if (cp->is_fill)
+      continue;
+    // Defends an invariant: fusion caps fused_size at UINT32_MAX, and
+    // offset_in_read + offset_shift <= fused_size by construction.
+    uint64_t sum = (uint64_t)cp->offset_in_read + (uint64_t)offset_shift[old];
+    if (sum > UINT32_MAX)
+      return DAMACY_INVAL;
+    cp->offset_in_read = (uint32_t)sum;
   }
 
   // Counters for the bench's filter→fuse row.

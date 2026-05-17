@@ -26,10 +26,9 @@ struct planner
   uint32_t scratch_chunk_plans_cap;
 };
 
-// Sizes all post-emit scratch to `need` (== pre-coalesce n_read_ops ==
-// n_chunk_plans, since emission is 1:1). coalesce_chunks needs
-// 3 * need uint32s + need read_ops; group_chunks_by_read needs
-// n_read_ops + 1 uint32s + need chunk_plans (n_read_ops <= need).
+// `need` = pre-coalesce n_read_ops (== n_chunk_plans). The uint32
+// buffer is sized to 3*need; post-coalesce n_read_ops <= need so
+// group_chunks_by_read's n_read_ops+1 slots fit in the same buffer.
 static enum damacy_status
 planner_ensure_scratch(struct planner* self, uint32_t need)
 {
@@ -546,8 +545,9 @@ planner_plan(struct planner* self,
     s = coalesce_chunks(out, cap, self->scratch_u32, self->scratch_ops);
     if (s != DAMACY_OK)
       return s;
-    s = group_chunks_by_read(
-      out, self->scratch_u32, self->scratch_chunk_plans);
+    if (out->n_read_ops + 1u > 3u * self->scratch_u32_cap)
+      return DAMACY_OOM;
+    s = group_chunks_by_read(out, self->scratch_u32, self->scratch_chunk_plans);
     if (s != DAMACY_OK)
       return s;
   }

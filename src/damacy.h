@@ -125,7 +125,9 @@ extern "C"
   {
     // Skip decode: planner, IO, and H2D run normally, but every chunk
     // is flipped to is_fill at parse + assemble build. Assemble
-    // broadcasts the array's fill_value.
+    // broadcasts the array's fill_value. CUevents on stream_decode
+    // are still recorded so the state machine advances, but the decode
+    // and decode_gap metrics are meaningless under this flag.
     uint8_t bypass_decode;
   };
 
