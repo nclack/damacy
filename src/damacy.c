@@ -928,8 +928,14 @@ damacy_flush(struct damacy* self)
     self->stats.batches_truncated++;
   }
 
+  // any_slot_in_flight catches the SLOT_PEELING window: peel_reserve has
+  // already bumped n_chunks_dispatched (so find_oldest_filling_slot can
+  // be -1) but peel_submit hasn't run yet, no wave exists yet — without
+  // this check, flush would return while the worker still has unposted
+  // IO to submit. damacy_pop's AGAIN gate keeps the same invariant.
   uint64_t flush_t0 = monotonic_ns();
   while ((any_wave_in_flight(&self->wave_pool) ||
+          any_slot_in_flight(&self->wave_pool) ||
           find_oldest_filling_slot(&self->batch_pool) >= 0 ||
           any_batch_planning(&self->batch_pool)) &&
          self->failed_status == DAMACY_OK)
