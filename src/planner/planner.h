@@ -3,8 +3,8 @@
 // / assemble pipeline.
 //
 // Build-order step 3: page-aligned reads from day 1, one read_op per
-// chunk (no coalescing, no waves). Wave-scheduler fields
-// (host_buf_offset, dev_decompressed_offset) are filled in later by the
+// chunk (no coalescing, no waves). chunk_plan wave-scheduler fields
+// (host_buf_offset, dev_decompressed_offset) are filled in by the
 // scheduler; the planner zeroes them.
 #pragma once
 
@@ -33,7 +33,6 @@ extern "C"
     char shard_path[DAMACY_MAX_PATH]; // null-terminated; truncation = OOM
     uint64_t file_offset;             // multiple of page_alignment
     uint32_t nbytes;                  // multiple of page_alignment
-    uint64_t host_buf_offset;         // wave-scheduler-assigned; planner sets 0
   };
 
   // Per-dimension bundle for one sample. Co-locating all of dimension d's

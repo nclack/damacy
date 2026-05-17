@@ -2,6 +2,7 @@
 // fuse-with-cap. No zarr/store/cache plumbing — every input read_op
 // and chunk_plan is constructed inline.
 
+#include "damacy_limits.h"
 #include "expect.h"
 #include "planner/coalesce.h"
 #include "planner/planner.h"
@@ -305,6 +306,43 @@ test_non_overlapping_output(void)
   return 0;
 }
 
+// Long contiguous touching stream past DAMACY_MAX_CHUNKS_PER_WAVE: no
+// surviving read_op may end up referenced by more than the cap.
+static int
+test_chunk_count_cap(void)
+{
+  const uint32_t cap = DAMACY_MAX_CHUNKS_PER_WAVE;
+  const uint32_t n = cap + 5u;
+  const uint32_t step = 4096u;
+  struct read_op* reads = (struct read_op*)calloc(n, sizeof *reads);
+  struct chunk_plan* chunks = (struct chunk_plan*)calloc(n, sizeof *chunks);
+  EXPECT(reads && chunks);
+  for (uint32_t i = 0; i < n; ++i)
+    mk(&reads[i], &chunks[i], "shard/0", (uint64_t)i * step, step, i, 0);
+  struct planner_output out = {
+    .read_ops = reads,
+    .read_ops_cap = n,
+    .n_read_ops = n,
+    .chunk_plans = chunks,
+    .chunk_plans_cap = n,
+    .n_chunk_plans = n,
+  };
+  EXPECT(run_coalesce(&out, CAP_UNCAPPED, n) == DAMACY_OK);
+  // Exact split: one leader at the cap, one with the 5 stragglers —
+  // proves fusion happened up to cap and reset cleanly on overflow.
+  EXPECT(out.n_read_ops == 2);
+  uint32_t refs[2] = { 0, 0 };
+  for (uint32_t i = 0; i < out.n_chunk_plans; ++i)
+    refs[chunks[i].read_op_idx]++;
+  uint32_t lo = refs[0] < refs[1] ? refs[0] : refs[1];
+  uint32_t hi = refs[0] < refs[1] ? refs[1] : refs[0];
+  EXPECT(lo == 5u);
+  EXPECT(hi == cap);
+  free(reads);
+  free(chunks);
+  return 0;
+}
+
 // Fill placeholders survive coalesce as their own read_ops; counters
 // exclude them; chunk_plans pointing at them get a valid read_op_idx.
 static int
@@ -348,6 +386,7 @@ main(void)
   RUN(test_cap_splits);
   RUN(test_single_over_cap);
   RUN(test_non_overlapping_output);
+  RUN(test_chunk_count_cap);
   RUN(test_fills_passthrough);
   return 0;
 }
