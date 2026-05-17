@@ -377,26 +377,26 @@ planner_plan(struct planner* self,
     const struct damacy_sample* sample = &samples[sample_idx];
     CHECK_SILENT(Invalid, sample->uri);
 
-    const struct zarr_metadata* meta = NULL;
+    struct zarr_metadata meta;
     enum damacy_status meta_status =
       zarr_meta_cache_get(self->cfg.meta_cache, sample->uri, &meta);
     if (meta_status != DAMACY_OK)
       return meta_status;
-    if (sample->aabb.rank != meta->rank)
+    if (sample->aabb.rank != meta.rank)
       return DAMACY_RANK;
-    if ((uint8_t)(meta->rank + 1) != dst_full_rank)
+    if ((uint8_t)(meta.rank + 1) != dst_full_rank)
       return DAMACY_RANK;
-    if (meta->inner_codec.id == CODEC_BLOSC_LZ4) {
+    if (meta.inner_codec.id == CODEC_BLOSC_LZ4) {
       log_error("planner: blosc1-lz4 inner codec is not supported (uri=%s)",
                 sample->uri);
       return DAMACY_INVAL;
     }
 
     uint64_t inner_per_shard_dim[DAMACY_MAX_RANK];
-    if (zarr_metadata_inner_per_shard(meta, inner_per_shard_dim, NULL))
+    if (zarr_metadata_inner_per_shard(&meta, inner_per_shard_dim, NULL))
       return DAMACY_DECODE;
 
-    uint64_t decompressed_n_bytes = inner_chunk_bytes(meta);
+    uint64_t decompressed_n_bytes = inner_chunk_bytes(&meta);
     if (decompressed_n_bytes == 0)
       return DAMACY_DECODE;
     if (self->cfg.max_chunk_uncompressed_bytes > 0 &&
@@ -411,7 +411,7 @@ planner_plan(struct planner* self,
 
     uint64_t chunk_lo[DAMACY_MAX_RANK];
     uint64_t chunk_hi[DAMACY_MAX_RANK];
-    if (chunk_range(&sample->aabb, meta, chunk_lo, chunk_hi))
+    if (chunk_range(&sample->aabb, &meta, chunk_lo, chunk_hi))
       return DAMACY_INVAL;
 
     if (out->n_sample_plans >= out->sample_plans_cap)
@@ -420,17 +420,17 @@ planner_plan(struct planner* self,
     *sp = (struct sample_plan){
       .batch_pool_slot = batch_pool_slot,
       .sample_idx_in_batch = (uint16_t)sample_idx,
-      .rank = meta->rank,
-      .src_dtype = (uint8_t)meta->dtype,
+      .rank = meta.rank,
+      .src_dtype = (uint8_t)meta.dtype,
       .sample_dst_off_elems = (int64_t)sample_idx * dst_strides[0],
       .chunk_count = 0, // filled after the chunk emit loop
     };
-    memcpy(sp->fill_value, meta->fill_value, sizeof sp->fill_value);
+    memcpy(sp->fill_value, meta.fill_value, sizeof sp->fill_value);
     int64_t src_strides[DAMACY_MAX_RANK];
-    row_major_strides(meta->inner_chunk_shape, meta->rank, src_strides);
+    row_major_strides(meta.inner_chunk_shape, meta.rank, src_strides);
     uint32_t chunk_count = 1;
-    for (uint8_t d = 0; d < meta->rank; ++d) {
-      uint32_t S = (uint32_t)meta->inner_chunk_shape[d];
+    for (uint8_t d = 0; d < meta.rank; ++d) {
+      uint32_t S = (uint32_t)meta.inner_chunk_shape[d];
       uint32_t N = (uint32_t)(chunk_hi[d] - chunk_lo[d]);
       int64_t chunk_grid_origin = (int64_t)(chunk_lo[d] * (uint64_t)S);
       sp->dims[d] = (struct sample_dim){
@@ -448,12 +448,12 @@ planner_plan(struct planner* self,
 
     struct emit_ctx ctx = {
       .sample = sample,
-      .meta = meta,
+      .meta = &meta,
       .inner_per_shard_dim = inner_per_shard_dim,
       .chunk_lo = chunk_lo,
       .sample_idx_in_batch = sample_idx,
       .batch_pool_slot = batch_pool_slot,
-      .codec_id = (uint8_t)meta->inner_codec.id,
+      .codec_id = (uint8_t)meta.inner_codec.id,
       .decompressed_n_bytes = (uint32_t)decompressed_n_bytes,
       .page_alignment_bytes = self->cfg.page_alignment,
       .sp = sp,
@@ -462,7 +462,7 @@ planner_plan(struct planner* self,
 
     // Iterate chunks in [chunk_lo, chunk_hi) row-major.
     uint64_t chunk_coord[DAMACY_MAX_RANK];
-    for (uint8_t d = 0; d < meta->rank; ++d)
+    for (uint8_t d = 0; d < meta.rank; ++d)
       chunk_coord[d] = chunk_lo[d];
 
     // Track last-seen shard so we skip the cache+path work for chunks
@@ -474,14 +474,14 @@ planner_plan(struct planner* self,
       // Compute shard coord and local-inner-coord for this chunk.
       uint64_t shard_coord[DAMACY_MAX_RANK];
       uint64_t local_inner[DAMACY_MAX_RANK];
-      for (uint8_t d = 0; d < meta->rank; ++d) {
+      for (uint8_t d = 0; d < meta.rank; ++d) {
         shard_coord[d] = chunk_coord[d] / inner_per_shard_dim[d];
         local_inner[d] = chunk_coord[d] % inner_per_shard_dim[d];
       }
 
       // Same shard as cached?
       int same_shard = have_cached_shard;
-      for (uint8_t d = 0; d < meta->rank && same_shard; ++d)
+      for (uint8_t d = 0; d < meta.rank && same_shard; ++d)
         if (shard_coord[d] != cached_shard_coord[d])
           same_shard = 0;
 
@@ -489,7 +489,7 @@ planner_plan(struct planner* self,
         enum damacy_status shard_status =
           zarr_shard_cache_get(self->cfg.shard_cache,
                                sample->uri,
-                               meta,
+                               &meta,
                                shard_coord,
                                &ctx.shard_entries,
                                &ctx.n_shard_entries);
@@ -504,13 +504,13 @@ planner_plan(struct planner* self,
         } else {
           ctx.shard_missing = 0;
           if (zarr_shard_path_build(
-                &self->path_sb, sample->uri, shard_coord, meta->rank))
+                &self->path_sb, sample->uri, shard_coord, meta.rank))
             return DAMACY_OOM;
           // emit_chunk copies path bytes into each read_op; path_sb is
           // overwritten next iteration but each read_op carries its own.
           ctx.interned_path = strbuf_cstr(&self->path_sb);
         }
-        for (uint8_t d = 0; d < meta->rank; ++d)
+        for (uint8_t d = 0; d < meta.rank; ++d)
           cached_shard_coord[d] = shard_coord[d];
         have_cached_shard = 1;
       }
@@ -522,7 +522,7 @@ planner_plan(struct planner* self,
 
       // Advance row-major.
       int finished = 1;
-      for (int d = (int)meta->rank - 1; d >= 0; --d) {
+      for (int d = (int)meta.rank - 1; d >= 0; --d) {
         chunk_coord[d]++;
         if (chunk_coord[d] < chunk_hi[d]) {
           finished = 0;

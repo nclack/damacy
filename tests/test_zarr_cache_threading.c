@@ -64,11 +64,12 @@ meta_worker(void* arg)
   struct worker_args* w = (struct worker_args*)arg;
   for (int i = 0; i < N_ITERATIONS; ++i) {
     const char* uri = w->uris[i % N_URIS];
-    const struct zarr_metadata* m = NULL;
-    if (zarr_meta_cache_get(w->meta_cache, uri, &m) == DAMACY_OK && m) {
+    struct zarr_metadata m = { 0 };
+    if (zarr_meta_cache_get(w->meta_cache, uri, &m) == DAMACY_OK) {
       // Also exercise the layout side: it goes through the same LRU
       // promotion path on the hit branch and pokes the entry's mutex.
-      (void)zarr_meta_cache_layout_get(w->meta_cache, uri);
+      struct chunk_layout cl = { 0 };
+      (void)zarr_meta_cache_layout_get(w->meta_cache, uri, &cl);
       atomic_fetch_add(&w->ok_count, 1);
     }
   }
@@ -115,7 +116,7 @@ test_meta_cache_concurrent(void)
   struct zarr_meta_cache* c = zarr_meta_cache_create(store, 16);
   EXPECT(c);
   for (int i = 0; i < N_URIS; ++i) {
-    const struct zarr_metadata* m = NULL;
+    struct zarr_metadata m = { 0 };
     EXPECT(zarr_meta_cache_get(c, names[i], &m) == DAMACY_OK);
   }
 
@@ -209,9 +210,8 @@ test_shard_cache_concurrent(void)
 
   struct zarr_meta_cache* mc = zarr_meta_cache_create(store, 16);
   EXPECT(mc);
-  const struct zarr_metadata* meta = NULL;
+  struct zarr_metadata meta = { 0 };
   EXPECT(zarr_meta_cache_get(mc, "zarr_a", &meta) == DAMACY_OK);
-  EXPECT(meta);
 
   struct zarr_shard_cache* sc_cache = zarr_shard_cache_create(store, 16);
   EXPECT(sc_cache);
@@ -221,10 +221,11 @@ test_shard_cache_concurrent(void)
   const struct zarr_shard_entry* entries = NULL;
   uint64_t n_entries = 0;
   EXPECT(zarr_shard_cache_get(
-           sc_cache, "zarr_a", meta, coord, &entries, &n_entries) == DAMACY_OK);
+           sc_cache, "zarr_a", &meta, coord, &entries, &n_entries) ==
+         DAMACY_OK);
 
   struct shard_worker_args w = { .shard_cache = sc_cache,
-                                 .meta = meta,
+                                 .meta = &meta,
                                  .uri = "zarr_a" };
   atomic_init(&w.ok_count, 0);
 
@@ -245,10 +246,87 @@ test_shard_cache_concurrent(void)
   return 0;
 }
 
+// Eviction-pressure: working set > cache capacity, so every miss
+// evicts. Validates the copy-by-value lifetime contract on _get — a
+// concurrent _get on URI B may evict the entry for URI A while thread
+// T is still using its returned metadata. With copy semantics each
+// thread owns its bytes, so TSan reports no race on the meta payload.
+#define EVICT_CAP 2
+#define EVICT_URIS 8
+
+struct evict_worker_args
+{
+  struct zarr_meta_cache* meta_cache;
+  const char* uris[EVICT_URIS];
+  atomic_int ok_count;
+};
+
+static void*
+evict_worker(void* arg)
+{
+  struct evict_worker_args* w = (struct evict_worker_args*)arg;
+  for (int i = 0; i < N_ITERATIONS; ++i) {
+    const char* uri = w->uris[i % EVICT_URIS];
+    struct zarr_metadata m = { 0 };
+    if (zarr_meta_cache_get(w->meta_cache, uri, &m) == DAMACY_OK) {
+      // Touch the copy after the call returns; a stale pointer into an
+      // evicted entry would be a UAF here.
+      if (m.rank == 2 && m.shape[0] == 64)
+        atomic_fetch_add(&w->ok_count, 1);
+    }
+  }
+  return NULL;
+}
+
+static int
+test_meta_cache_eviction_concurrent(void)
+{
+  char tmpl[] = "/tmp/damacy_cache_evict_XXXXXX";
+  char* root = mkdtemp(tmpl);
+  EXPECT(root);
+
+  const char* names[EVICT_URIS] = { "z0", "z1", "z2", "z3",
+                                    "z4", "z5", "z6", "z7" };
+  for (int i = 0; i < EVICT_URIS; ++i) {
+    char path[512];
+    snprintf(path, sizeof path, "%s/%s", root, names[i]);
+    EXPECT(mkdir(path, 0755) == 0);
+    snprintf(path, sizeof path, "%s/%s/zarr.json", root, names[i]);
+    EXPECT(fixture_write_file(path, MINIMAL_ZARR_JSON) == 0);
+  }
+
+  struct store_fs_config sc = { .root = root, .nthreads = 1 };
+  struct store* store = store_fs_create(&sc);
+  EXPECT(store);
+
+  // Capacity below the working set: misses force eviction.
+  struct zarr_meta_cache* c = zarr_meta_cache_create(store, EVICT_CAP);
+  EXPECT(c);
+
+  struct evict_worker_args w = { .meta_cache = c };
+  for (int i = 0; i < EVICT_URIS; ++i)
+    w.uris[i] = names[i];
+  atomic_init(&w.ok_count, 0);
+
+  pthread_t threads[N_THREADS];
+  for (int t = 0; t < N_THREADS; ++t)
+    EXPECT(pthread_create(&threads[t], NULL, evict_worker, &w) == 0);
+  for (int t = 0; t < N_THREADS; ++t)
+    EXPECT(pthread_join(threads[t], NULL) == 0);
+
+  EXPECT(atomic_load(&w.ok_count) == N_THREADS * N_ITERATIONS);
+
+  zarr_meta_cache_destroy(c);
+  store_destroy(store);
+  fixture_rm_tree(root);
+  return 0;
+}
+
 int
 main(void)
 {
   RUN(test_meta_cache_concurrent);
+  RUN(test_meta_cache_eviction_concurrent);
   RUN(test_shard_cache_concurrent);
   log_info("all tests passed");
   return 0;
