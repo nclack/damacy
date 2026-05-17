@@ -706,6 +706,8 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                          "max_gpu_memory_bytes",
                          "device",
                          "host_buffer_waves",
+                         "max_read_op_bytes",
+                         "bypass_decode",
                          NULL };
   unsigned int batch_size = 0;
   unsigned int lookahead = 2;
@@ -717,9 +719,11 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   unsigned long long max_gpu_bytes = 0;
   int device = -1;
   unsigned int host_buffer_waves = 0;
+  unsigned long long max_read_op_bytes = 0;
+  int bypass_decode = 0;
   if (!PyArg_ParseTupleAndKeywords(args,
                                    kw,
-                                   "IIIIIOI|KiI",
+                                   "IIIIIOI|KiIKp",
                                    kws,
                                    &batch_size,
                                    &lookahead,
@@ -730,7 +734,9 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                                    &max_chunk_uncompressed,
                                    &max_gpu_bytes,
                                    &device,
-                                   &host_buffer_waves))
+                                   &host_buffer_waves,
+                                   &max_read_op_bytes,
+                                   &bypass_decode))
     return -1;
 
   enum damacy_dtype dt;
@@ -740,14 +746,18 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   struct damacy_config cfg = {
     .batch_size = batch_size,
     .lookahead_batches = lookahead,
-    .n_io_threads = n_io,
-    .n_zarrs_meta_cache = n_zarrs_meta,
-    .n_shards_meta_cache = n_shards_meta,
     .dtype = dt,
-    .max_chunk_uncompressed_bytes = max_chunk_uncompressed,
-    .max_gpu_memory_bytes = (uint64_t)max_gpu_bytes,
     .device = device,
-    .host_buffer_waves = (uint8_t)host_buffer_waves,
+    .tuning = {
+      .n_io_threads = n_io,
+      .n_zarrs_meta_cache = n_zarrs_meta,
+      .n_shards_meta_cache = n_shards_meta,
+      .max_chunk_uncompressed_bytes = max_chunk_uncompressed,
+      .max_read_op_bytes = (uint64_t)max_read_op_bytes,
+      .max_gpu_memory_bytes = (uint64_t)max_gpu_bytes,
+      .host_buffer_waves = (uint8_t)host_buffer_waves,
+    },
+    .debug = { .bypass_decode = (uint8_t)(bypass_decode ? 1 : 0) },
   };
 
   struct damacy* d = NULL;
