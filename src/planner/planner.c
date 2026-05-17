@@ -573,9 +573,6 @@ planner_plan(struct planner* self,
     }
   }
 
-  // Release the active pin before post-loop planning. Coalesce /
-  // group_chunks operate on read_ops/chunk_plans only — shard_entries
-  // are no longer referenced.
   zarr_shard_cache_release(self->cfg.shard_cache, active_pin);
   active_pin = (struct zarr_shard_pin){ 0 };
 

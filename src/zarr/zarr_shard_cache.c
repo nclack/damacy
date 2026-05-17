@@ -297,25 +297,29 @@ void
 zarr_shard_cache_release(struct zarr_shard_cache* self,
                          struct zarr_shard_pin pin)
 {
-  if (!self || !pin.opaque)
+  CHECK(Fail, self);
+  if (!pin.opaque)
     return;
   pthread_mutex_lock(&self->mu);
   lru_entry_release((struct lru_entry*)pin.opaque);
   pthread_mutex_unlock(&self->mu);
+  return;
+Fail:
+  return;
 }
 
 void
-zarr_shard_cache_stats_get(const struct zarr_shard_cache* self,
+zarr_shard_cache_stats_get(struct zarr_shard_cache* self,
                            struct zarr_shard_cache_stats* out)
 {
   if (!out)
     return;
   struct lru_stats stats;
   if (self)
-    pthread_mutex_lock((pthread_mutex_t*)&self->mu);
+    pthread_mutex_lock(&self->mu);
   lru_stats_get(self ? self->lru : NULL, &stats);
   if (self)
-    pthread_mutex_unlock((pthread_mutex_t*)&self->mu);
+    pthread_mutex_unlock(&self->mu);
   *out = (struct zarr_shard_cache_stats){
     .counters = stats.counters,
     .size = stats.size,

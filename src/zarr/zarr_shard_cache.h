@@ -72,7 +72,7 @@ extern "C"
     uint32_t capacity;
   };
 
-  void zarr_shard_cache_stats_get(const struct zarr_shard_cache* c,
+  void zarr_shard_cache_stats_get(struct zarr_shard_cache* c,
                                   struct zarr_shard_cache_stats* out);
 
 #ifdef __cplusplus

@@ -83,6 +83,7 @@ test_shard_cache(void)
   EXPECT(st.counters.hits == 1);
   EXPECT(st.counters.misses == 1);
   EXPECT(st.size == 1);
+  // Pins are per-acquisition: two pins to the same entry refcount 2 -> 1 -> 0.
   zarr_shard_cache_release(c, pin_b);
   zarr_shard_cache_release(c, pin);
 
