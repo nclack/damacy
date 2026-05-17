@@ -740,14 +740,16 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   struct damacy_config cfg = {
     .batch_size = batch_size,
     .lookahead_batches = lookahead,
-    .n_io_threads = n_io,
-    .n_zarrs_meta_cache = n_zarrs_meta,
-    .n_shards_meta_cache = n_shards_meta,
     .dtype = dt,
-    .max_chunk_uncompressed_bytes = max_chunk_uncompressed,
-    .max_gpu_memory_bytes = (uint64_t)max_gpu_bytes,
     .device = device,
-    .host_buffer_waves = (uint8_t)host_buffer_waves,
+    .tuning = {
+      .n_io_threads = n_io,
+      .n_zarrs_meta_cache = n_zarrs_meta,
+      .n_shards_meta_cache = n_shards_meta,
+      .max_chunk_uncompressed_bytes = max_chunk_uncompressed,
+      .max_gpu_memory_bytes = (uint64_t)max_gpu_bytes,
+      .host_buffer_waves = (uint8_t)host_buffer_waves,
+    },
   };
 
   struct damacy* d = NULL;
