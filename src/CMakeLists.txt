@@ -3,7 +3,7 @@
 # Logging — internal log_* macros (log/log.h) + public callback-registry
 # control surface (damacy_log.h). util/prelude.h's CHECK macros lower
 # onto log_error, so any module that uses prelude must link this target.
-add_src_lib(log SOURCES log/log.h log/log.c ${PROJECT_SOURCE_DIR}/src/damacy_log.h)
+add_src_lib(log SOURCES log/log.h log/log.c ${PROJECT_SOURCE_DIR}/src/damacy_log.h LINKS platform)
 
 # Phase 6 observability: NVTX wrappers + named CUDA streams.
 # DAMACY_NVTX_ENABLED=ON (default for non-fuzz builds) links the
@@ -33,16 +33,20 @@ add_src_lib(hash   SOURCES util/hash.c   util/hash.h)
 add_src_lib(lru    SOURCES util/lru.c    util/lru.h LINKS log)
 add_src_lib(path_intern SOURCES util/path_intern.c util/path_intern.h LINKS hash)
 
-# NUMA-aware pinned-host placement + thread affinity. libnuma is loaded
-# via dlopen at runtime (see numa/numa.c) so a single binary works on
-# hosts with or without libnuma installed; -ldl is universally available
-# on Linux. CUDA::cuda_driver for cuDeviceGetAttribute(HOST_NUMA_ID) and
-# the BDF sysfs fallback.
-add_cuda_lib(numa SOURCES numa/numa.h numa/numa.c LINKS log CUDA::cuda_driver ${CMAKE_DL_LIBS})
-
-# Platform abstraction (posix-only for now; chucky-style platform-split lives here)
-add_src_lib(platform    SOURCES platform/platform.h    LINKS Threads::Threads)
+# Platform abstraction (posix-only for now; chucky-style platform-split lives here).
+# platform.posix.c uses dlopen for platform_dl*; numa.posix.c uses libnuma via
+# platform_dl* so a single binary works on hosts with or without libnuma installed.
+add_src_lib(platform
+    SOURCES platform/platform.h platform/numa.h
+    LINKS Threads::Threads ${CMAKE_DL_LIBS}
+)
 add_platform_sources(platform platform/platform)
+add_platform_sources(platform platform/numa)
+
+# CUDA-side GPU→host-NUMA-node resolution + scope/affinity wrappers over
+# the platform NUMA primitives. CUDA::cuda_driver for cuDeviceGetAttribute
+# (HOST_NUMA_ID) and the BDF sysfs fallback.
+add_cuda_lib(numa SOURCES numa/numa.h numa/numa.c LINKS log platform CUDA::cuda_driver)
 
 add_src_lib(platform_io SOURCES platform/platform_io.h LINKS platform)
 add_platform_sources(platform_io platform/platform_io)

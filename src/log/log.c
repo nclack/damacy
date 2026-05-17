@@ -1,9 +1,9 @@
 #include "log/log.h"
 #include "damacy_log.h"
+#include "platform/platform.h"
 
 #include <stdarg.h>
 #include <stdio.h>
-#include <time.h>
 
 #define DAMACY_LOG_MAX_CALLBACKS 32
 #define DAMACY_LOG_MSG_BUFFER 2048
@@ -29,21 +29,11 @@ static const char* level_strings[] = {
 };
 
 static void
-localtime_portable(const time_t* t, struct tm* out)
-{
-#ifdef _WIN32
-  localtime_s(out, t);
-#else
-  localtime_r(t, out);
-#endif
-}
-
-static void
 stderr_sink(const damacy_log_event* ev, void* udata)
 {
   (void)udata;
   struct tm tm;
-  localtime_portable(&ev->time.tv_sec, &tm);
+  platform_localtime(&ev->time.tv_sec, &tm);
   char timebuf[16];
   strftime(timebuf, sizeof(timebuf), "%H:%M:%S", &tm);
   fprintf(stderr,

@@ -1,6 +1,5 @@
 #include "store/store_fs.h"
 
-#include "log/log.h"
 #include "store/store.h"
 #include "util/prelude.h"
 #include "util/strbuf.h"
@@ -14,15 +13,15 @@
 static platform_file*
 fs_get_file(struct store_fs* fs, const char* key)
 {
-  pthread_mutex_lock(&fs->cache_mu);
+  platform_mutex_lock(fs->cache_mu);
   for (size_t i = 0; i < fs->n_slots; ++i) {
     if (strcmp(fs->slots[i].key, key) == 0) {
       platform_file* f = fs->slots[i].file;
-      pthread_mutex_unlock(&fs->cache_mu);
+      platform_mutex_unlock(fs->cache_mu);
       return f;
     }
   }
-  pthread_mutex_unlock(&fs->cache_mu);
+  platform_mutex_unlock(fs->cache_mu);
 
   // Compose full path and open outside the lock.
   struct strbuf path = { 0 };
@@ -36,11 +35,11 @@ Out:
 
   // Insert into cache; if a concurrent caller raced us, drop ours and reuse
   // theirs.
-  pthread_mutex_lock(&fs->cache_mu);
+  platform_mutex_lock(fs->cache_mu);
   for (size_t i = 0; i < fs->n_slots; ++i) {
     if (strcmp(fs->slots[i].key, key) == 0) {
       platform_file* winner = fs->slots[i].file;
-      pthread_mutex_unlock(&fs->cache_mu);
+      platform_mutex_unlock(fs->cache_mu);
       platform_file_close(f);
       return winner;
     }
@@ -50,7 +49,7 @@ Out:
     struct fs_cache_slot* p = (struct fs_cache_slot*)realloc(
       fs->slots, new_cap * sizeof(struct fs_cache_slot));
     if (!p) {
-      pthread_mutex_unlock(&fs->cache_mu);
+      platform_mutex_unlock(fs->cache_mu);
       platform_file_close(f);
       return NULL;
     }
@@ -59,7 +58,7 @@ Out:
   }
   char* dup = strdup(key);
   if (!dup) {
-    pthread_mutex_unlock(&fs->cache_mu);
+    platform_mutex_unlock(fs->cache_mu);
     platform_file_close(f);
     return NULL;
   }
@@ -67,7 +66,7 @@ Out:
   fs->slots[fs->n_slots].key = dup;
   fs->slots[fs->n_slots].file = f;
   fs->n_slots++;
-  pthread_mutex_unlock(&fs->cache_mu);
+  platform_mutex_unlock(fs->cache_mu);
   return f;
 }
 
@@ -222,7 +221,7 @@ fs_destroy(struct store* s)
     platform_file_close(fs->slots[i].file);
   }
   free(fs->slots);
-  pthread_mutex_destroy(&fs->cache_mu);
+  platform_mutex_free(fs->cache_mu);
   free(fs->root);
   free(fs);
 }
@@ -236,7 +235,7 @@ store_fs_free_partial(struct store_fs* fs)
   if (!fs)
     return;
   io_queue_destroy(fs->q);
-  pthread_mutex_destroy(&fs->cache_mu);
+  platform_mutex_free(fs->cache_mu);
   free(fs->root);
   free(fs);
 }
@@ -269,9 +268,8 @@ store_fs_create(const struct store_fs_config* cfg)
   fs = (struct store_fs*)calloc(1, sizeof(*fs));
   CHECK_SILENT(Fail, fs);
   fs->base.vt = &fs_vtable_host;
-  // Init the mutex up front so store_fs_free_partial can always
-  // unconditionally destroy it.
-  pthread_mutex_init(&fs->cache_mu, NULL);
+  fs->cache_mu = platform_mutex_new();
+  CHECK_SILENT(Fail, fs->cache_mu);
   fs->root = strdup(cfg->root);
   CHECK_SILENT(Fail, fs->root);
   fs->q = io_queue_create(cfg->nthreads, cfg->affinity);

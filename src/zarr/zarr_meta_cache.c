@@ -1,6 +1,7 @@
 #include "zarr/zarr_meta_cache.h"
 
 #include "log/log.h"
+#include "platform/platform.h"
 #include "store/store.h"
 #include "util/hash.h"
 #include "util/lru.h"
@@ -8,7 +9,6 @@
 #include "util/strbuf.h"
 #include "zarr/zarr_metadata.h"
 
-#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -24,7 +24,7 @@ struct zarr_meta_cache
 {
   struct store* store; // borrowed
   struct lru* lru;
-  pthread_mutex_t mu; // guards layout/layout_probed on cached entries
+  struct platform_mutex* mu; // guards layout/layout_probed on cached entries
 };
 
 static int
@@ -58,7 +58,8 @@ zarr_meta_cache_create(struct store* store, uint32_t capacity)
   self = (struct zarr_meta_cache*)calloc(1, sizeof(*self));
   CHECK(Error, self);
   self->store = store;
-  pthread_mutex_init(&self->mu, NULL);
+  self->mu = platform_mutex_new();
+  CHECK(Error, self->mu);
 
   struct lru_ops ops = {
     .eq = meta_eq,
@@ -82,7 +83,7 @@ zarr_meta_cache_destroy(struct zarr_meta_cache* self)
   if (!self)
     return;
   lru_destroy(self->lru);
-  pthread_mutex_destroy(&self->mu);
+  platform_mutex_free(self->mu);
   free(self);
 }
 
@@ -97,14 +98,14 @@ zarr_meta_cache_get(struct zarr_meta_cache* self,
 
   // Copy under the lock so *out is independent of any later eviction.
   uint64_t hash = hash_fnv1a_str(uri);
-  pthread_mutex_lock(&self->mu);
+  platform_mutex_lock(self->mu);
   struct lru_entry* hit = lru_get(self->lru, hash, uri);
   if (hit) {
     *out = ((const struct meta_entry*)lru_entry_value(hit))->meta;
-    pthread_mutex_unlock(&self->mu);
+    platform_mutex_unlock(self->mu);
     return DAMACY_OK;
   }
-  pthread_mutex_unlock(&self->mu);
+  platform_mutex_unlock(self->mu);
 
   struct strbuf key = { 0 };
   if (strbuf_join_path(&key, uri, "zarr.json")) {
@@ -136,7 +137,7 @@ zarr_meta_cache_get(struct zarr_meta_cache* self,
     return DAMACY_OOM;
   }
 
-  pthread_mutex_lock(&self->mu);
+  platform_mutex_lock(self->mu);
   // Re-check under the lock: another thread may have raced us on the
   // same URI while we were parsing. If so, drop our duplicate and
   // copy from the winner. lru_peek doesn't count as a miss/hit and
@@ -144,18 +145,18 @@ zarr_meta_cache_get(struct zarr_meta_cache* self,
   struct lru_entry* existing = lru_peek(self->lru, hash, uri);
   if (existing) {
     *out = ((const struct meta_entry*)lru_entry_value(existing))->meta;
-    pthread_mutex_unlock(&self->mu);
+    platform_mutex_unlock(self->mu);
     meta_destroy(entry, NULL);
     return DAMACY_OK;
   }
   struct lru_entry* inserted = lru_put(self->lru, hash, uri, entry);
   if (!inserted) {
     // lru_put already destroyed entry on failure.
-    pthread_mutex_unlock(&self->mu);
+    platform_mutex_unlock(self->mu);
     return DAMACY_OOM;
   }
   *out = ((const struct meta_entry*)lru_entry_value(inserted))->meta;
-  pthread_mutex_unlock(&self->mu);
+  platform_mutex_unlock(self->mu);
   return DAMACY_OK;
 
 Invalid:
@@ -175,7 +176,7 @@ zarr_meta_cache_layout_get(struct zarr_meta_cache* self,
     return 1;
   memset(out, 0, sizeof *out);
   uint64_t hash = hash_fnv1a_str(uri);
-  pthread_mutex_lock(&self->mu);
+  platform_mutex_lock(self->mu);
   struct lru_entry* hit = lru_get(self->lru, hash, uri);
   int rc = 1;
   if (hit) {
@@ -185,7 +186,7 @@ zarr_meta_cache_layout_get(struct zarr_meta_cache* self,
       rc = 0;
     }
   }
-  pthread_mutex_unlock(&self->mu);
+  platform_mutex_unlock(self->mu);
   return rc;
 }
 
@@ -198,10 +199,10 @@ zarr_meta_cache_layout_set(struct zarr_meta_cache* self,
   if (!self || !uri || !layout)
     return 1;
   uint64_t hash = hash_fnv1a_str(uri);
-  pthread_mutex_lock(&self->mu);
+  platform_mutex_lock(self->mu);
   struct lru_entry* hit = lru_get(self->lru, hash, uri);
   if (!hit) {
-    pthread_mutex_unlock(&self->mu);
+    platform_mutex_unlock(self->mu);
     return 1;
   }
   struct meta_entry* entry = (struct meta_entry*)lru_entry_value(hit);
@@ -209,7 +210,7 @@ zarr_meta_cache_layout_set(struct zarr_meta_cache* self,
     entry->layout = *layout;
     entry->layout_probed = 1;
   }
-  pthread_mutex_unlock(&self->mu);
+  platform_mutex_unlock(self->mu);
   return 0;
 }
 
@@ -231,20 +232,20 @@ zarr_meta_cache_probe_layout(struct zarr_meta_cache* self,
   if (!self || !uri || !shard_path || !out)
     return 1;
   uint64_t hash = hash_fnv1a_str(uri);
-  pthread_mutex_lock(&self->mu);
+  platform_mutex_lock(self->mu);
   struct lru_entry* hit = lru_get(self->lru, hash, uri);
   if (!hit) {
-    pthread_mutex_unlock(&self->mu);
+    platform_mutex_unlock(self->mu);
     return 1;
   }
   const struct meta_entry* entry =
     (const struct meta_entry*)lru_entry_value(hit);
   if (entry->layout_probed) {
     *out = entry->layout;
-    pthread_mutex_unlock(&self->mu);
+    platform_mutex_unlock(self->mu);
     return 0;
   }
-  pthread_mutex_unlock(&self->mu);
+  platform_mutex_unlock(self->mu);
 
   struct chunk_layout probed = { 0 };
   if (zarr_chunk_layout_probe(self->store,
@@ -255,12 +256,12 @@ zarr_meta_cache_probe_layout(struct zarr_meta_cache* self,
                               &probed))
     return 1;
 
-  pthread_mutex_lock(&self->mu);
+  platform_mutex_lock(self->mu);
   // Re-fetch via lru_peek (the lookup is an internal re-check, not a
   // user-visible hit, and shouldn't promote or bump counters).
   hit = lru_peek(self->lru, hash, uri);
   if (!hit) {
-    pthread_mutex_unlock(&self->mu);
+    platform_mutex_unlock(self->mu);
     return 1;
   }
   struct meta_entry* fresh = (struct meta_entry*)lru_entry_value(hit);
@@ -269,7 +270,7 @@ zarr_meta_cache_probe_layout(struct zarr_meta_cache* self,
     fresh->layout_probed = 1;
   }
   *out = fresh->layout;
-  pthread_mutex_unlock(&self->mu);
+  platform_mutex_unlock(self->mu);
   return 0;
 }
 
@@ -281,10 +282,10 @@ zarr_meta_cache_stats_get(const struct zarr_meta_cache* self,
     return;
   struct lru_stats stats;
   if (self)
-    pthread_mutex_lock((pthread_mutex_t*)&self->mu);
+    platform_mutex_lock(self->mu);
   lru_stats_get(self ? self->lru : NULL, &stats);
   if (self)
-    pthread_mutex_unlock((pthread_mutex_t*)&self->mu);
+    platform_mutex_unlock(self->mu);
   *out = (struct zarr_meta_cache_stats){
     .counters = stats.counters,
     .size = stats.size,

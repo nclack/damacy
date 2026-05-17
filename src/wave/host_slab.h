@@ -10,6 +10,7 @@
 //        → FREE (bulk_h2d_end on stream_h2d)
 #pragma once
 
+#include "platform/platform.h"
 #include "store/store.h"
 
 #include <stdint.h>
@@ -45,8 +46,10 @@ struct host_slab_slot
   uint8_t is_fill_wave; // 1 if every chunk in this slot is a fill chunk
                         // (no IO submitted); polling skips io_event entirely.
 
-  uint64_t io_t_start_ns; // peel-submit wall-clock
-  uint64_t io_t_end_ns;   // SLOT_IO → SLOT_READY transition
+  // tic'd at peel-submit; toc at SLOT_IO→SLOT_READY captures io_ms
+  // AND advances last_ns so the bind-time toc measures bind-wait.
+  struct platform_clock io_clock;
+  float io_ms;
   uint64_t io_bytes;
 };
 

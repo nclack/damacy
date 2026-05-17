@@ -251,7 +251,8 @@ plan_run(struct damacy* self, uint16_t slot_idx, float* out_elapsed_ms)
     .read_op_groups_cap = DAMACY_MAX_CHUNKS_PER_BATCH,
     .paths = &slot->paths,
   };
-  uint64_t plan_t0 = monotonic_ns();
+  struct platform_clock plan_clock = { 0 };
+  platform_toc(&plan_clock);
   enum damacy_status status = planner_plan(self->planner,
                                            self->batch_stage,
                                            slot->n_samples,
@@ -259,7 +260,7 @@ plan_run(struct damacy* self, uint16_t slot_idx, float* out_elapsed_ms)
                                            self->batch_pool.strides,
                                            self->batch_pool.rank,
                                            &plan_out);
-  *out_elapsed_ms = (float)((monotonic_ns() - plan_t0) / 1.0e6);
+  *out_elapsed_ms = platform_toc(&plan_clock) * 1000.0f;
   if (status != DAMACY_OK)
     return status;
   slot->n_chunks = plan_out.n_chunk_plans;
@@ -639,8 +640,8 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   // wave_pool_init so first-touch of pinned-host slabs + per-wave
   // scratch lands on the right node. Restored immediately after.
   {
-    uint8_t saved_aff[128];
-    numa_scope_enter(&self->numa, saved_aff);
+    struct platform_cpu_mask saved_aff;
+    numa_scope_enter(&self->numa, &saved_aff);
     int wp_rc = wave_pool_init(&self->wave_pool,
                                &self->batch_pool,
                                self->store,
@@ -653,7 +654,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
                                (int)want_gds,
                                cfg->debug.bypass_decode,
                                self->budget);
-    numa_scope_exit(saved_aff);
+    numa_scope_exit(&saved_aff);
     CHECK(Fail, wp_rc == 0);
   }
   if (want_gds)
@@ -806,10 +807,11 @@ damacy_pop(struct damacy* self, struct damacy_batch** out)
       r = DAMACY_AGAIN;
       goto Done;
     }
-    uint64_t wait_t0 = monotonic_ns();
+    struct platform_clock wait_clock = { 0 };
+    platform_toc(&wait_clock);
     SCHEDULER_WAIT_DIAG(self->sched, 5000);
     metric_record(
-      &self->stats.pop_wait, (float)((monotonic_ns() - wait_t0) / 1.0e6), 0, 0);
+      &self->stats.pop_wait, platform_toc(&wait_clock) * 1000.0f, 0, 0);
   }
 
 Done:
@@ -977,17 +979,16 @@ damacy_flush(struct damacy* self)
   // be -1) but peel_submit hasn't run yet, no wave exists yet — without
   // this check, flush would return while the worker still has unposted
   // IO to submit. damacy_pop's AGAIN gate keeps the same invariant.
-  uint64_t flush_t0 = monotonic_ns();
+  struct platform_clock flush_clock = { 0 };
+  platform_toc(&flush_clock);
   while ((any_wave_in_flight(&self->wave_pool) ||
           any_slot_in_flight(&self->wave_pool) ||
           find_oldest_filling_slot(&self->batch_pool) >= 0 ||
           any_batch_planning(&self->batch_pool)) &&
          self->failed_status == DAMACY_OK)
     SCHEDULER_WAIT_DIAG(self->sched, 5000);
-  metric_record(&self->stats.flush_wait,
-                (float)((monotonic_ns() - flush_t0) / 1.0e6),
-                0,
-                0);
+  metric_record(
+    &self->stats.flush_wait, platform_toc(&flush_clock) * 1000.0f, 0, 0);
   r = self->failed_status != DAMACY_OK ? self->failed_status : DAMACY_OK;
 
 Done:

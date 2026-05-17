@@ -299,13 +299,12 @@ build_gpu_parse_chunks(const struct wave_pool* wp, struct damacy_wave* wave)
   wave->n_blosc_zstd_blocks = n_blosc_blocks;
 }
 
-// IO already retired into io_t_end_ns by the caller. Push io timing into
-// stats.io so failure paths don't bias the rolling totals.
+// IO timing already captured into wave->io_ms; push into stats.io so
+// failure paths don't bias the rolling totals.
 static void
 record_io_metric(const struct wave_pool* wp, const struct damacy_wave* wave)
 {
-  float io_ms = (float)((wave->io_t_end_ns - wave->io_t_start_ns) / 1.0e6);
-  metric_record(&wp->stats->io, io_ms, wave->io_bytes, wave->io_bytes);
+  metric_record(&wp->stats->io, wave->io_ms, wave->io_bytes, wave->io_bytes);
 }
 
 // Phase 1: record h2d_start, queue the slab memcpy, record bulk_h2d_end.
@@ -569,8 +568,7 @@ kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
   return DAMACY_OK;
 
 Error:
-  // IO already retired into io_t_end_ns at bind; record it unconditionally
-  // so failure paths don't bias the rolling stats.
+  // Record IO metric on the failure path too so it doesn't bias rolling totals.
   record_io_metric(wp, wave);
   if (needs_end_record) {
     // Keep the polling state machine from hanging on a never-recorded
@@ -905,7 +903,7 @@ wave_pool_peel_reserve(struct wave_pool* wp,
     *err = DAMACY_BUDGET;
     return t;
   }
-  hs->io_t_start_ns = monotonic_ns();
+  platform_toc(&hs->io_clock);
   hs->is_fill_wave = (n_reads == 0);
   hs->batch_pool_slot = batch_slot_idx;
   hs->batch_chunk_offset = base;
@@ -974,10 +972,8 @@ bind_slot_to_wave(struct wave_pool* wp, struct damacy_wave* wave, int slot_idx)
   struct host_slab_slot* hs = &wp->slots[slot_idx];
   damacy_nvtx_range_pushf(
     "bind/w%td/slot%d", wave_index_of(wp, wave), slot_idx);
-  metric_record(&wp->stats->bind_wait,
-                (float)((monotonic_ns() - hs->io_t_end_ns) / 1.0e6),
-                0,
-                0);
+  metric_record(
+    &wp->stats->bind_wait, platform_toc(&hs->io_clock) * 1000.0f, 0, 0);
   wave->bound_slot = (int8_t)slot_idx;
   wave->host_slab = hs->buf;
   // GDS path: cuFile wrote directly into the slot's device staging
@@ -991,8 +987,7 @@ bind_slot_to_wave(struct wave_pool* wp, struct damacy_wave* wave, int slot_idx)
   wave->n_chunks = hs->n_chunks;
   wave->host_used_bytes = hs->used_bytes;
   wave->io_bytes = hs->io_bytes;
-  wave->io_t_start_ns = hs->io_t_start_ns;
-  wave->io_t_end_ns = hs->io_t_end_ns;
+  wave->io_ms = hs->io_ms;
   wave->decomp_in_bytes = 0;
   wave->decomp_out_bytes = 0;
   wave->assemble_out_bytes = 0;
@@ -1030,7 +1025,7 @@ wave_pool_advance(struct wave_pool* wp)
       continue;
     int ready = hs->is_fill_wave || store_event_query(wp->store, hs->io_event);
     if (ready) {
-      hs->io_t_end_ns = monotonic_ns();
+      hs->io_ms = platform_toc(&hs->io_clock) * 1000.0f;
       hs->state = SLOT_READY;
     }
   }

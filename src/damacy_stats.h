@@ -5,14 +5,12 @@
 
 #include <stdint.h>
 
-uint64_t monotonic_ns(void);
-
-void metric_init(struct damacy_metric* m, const char* name);
+void
+metric_init(struct damacy_metric* m, const char* name);
 
 // Stall-style metrics pass 0 for both byte counters.
-void metric_record(struct damacy_metric* m,
-                   float ms,
-                   uint64_t bin,
-                   uint64_t bout);
+void
+metric_record(struct damacy_metric* m, float ms, uint64_t bin, uint64_t bout);
 
-void stats_init(struct damacy_stats* s);
+void
+stats_init(struct damacy_stats* s);

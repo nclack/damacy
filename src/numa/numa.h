@@ -9,16 +9,15 @@
 //   3. numa_apply_thread_affinity — pin a worker thread permanently
 //      (io_queue, scheduler) to the node's CPU set.
 //
-// All entry points are NULL-safe and graceful no-ops when libnuma
-// can't be dlopen'd at runtime, NUMA is unavailable
-// (numa_available() < 0), the host is single-node, or the build target
-// isn't Linux.
+// All entry points are NULL-safe and graceful no-ops when NUMA is
+// unavailable (platform_numa_available()==0), the host is single-node,
+// or the GPU's host-NUMA node can't be resolved.
 #pragma once
 
 #include "damacy.h"
+#include "platform/numa.h"
 
 #include <cuda.h>
-#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C"
@@ -26,35 +25,30 @@ extern "C"
 #endif
 
   // Resolved NUMA placement plan. node < 0 means "no pinning"; produced
-  // by numa_init when strategy is disabled, libnuma can't be loaded,
-  // numa_available() < 0, the driver attr returns -1, or the resolved
-  // node has no CPUs. cpu_mask is opaque; numa_apply_thread_affinity
-  // consumes it.
+  // by numa_init when strategy is disabled, NUMA is unavailable, the
+  // driver attr returns -1, or the resolved node has no CPUs.
   struct numa_resolved
   {
     int node;
-    // Saved cpu-mask blob. Sized to fit cpu_set_t; treated as opaque by
-    // callers. 1024 bits covers up to 1024 logical CPUs which is more
-    // than today's flagship sockets.
-    uint8_t cpu_mask[128];
+    struct platform_cpu_mask cpu_mask;
   };
 
   // Resolve the GPU's host-NUMA node and populate `out`. Logs once at
-  // INFO if libnuma can't be loaded or numa_available() < 0; that log
-  // line is emitted from the first call and silenced thereafter.
+  // INFO if NUMA is unavailable; that log line is silenced thereafter.
   void numa_init(enum damacy_numa_strategy strategy,
                  int override_node,
                  CUdevice cu_device,
                  struct numa_resolved* out);
 
   // Temporarily pin the calling thread to the resolved node's CPU set,
-  // saving the prior mask in `saved`. Pair with numa_scope_exit. No-op
-  // (and writes a zero `saved`) when `r->node < 0`.
-  void numa_scope_enter(const struct numa_resolved* r, uint8_t saved[128]);
+  // saving the prior mask in `*saved`. Pair with numa_scope_exit. No-op
+  // (and writes an empty `*saved`) when `r->node < 0`.
+  void numa_scope_enter(const struct numa_resolved* r,
+                        struct platform_cpu_mask* saved);
 
   // Restore the affinity captured by numa_scope_enter. Safe to call when
-  // numa_scope_enter was a no-op (recognizes the zero `saved`).
-  void numa_scope_exit(const uint8_t saved[128]);
+  // numa_scope_enter was a no-op (recognizes the empty mask).
+  void numa_scope_exit(const struct platform_cpu_mask* saved);
 
   // Permanently set the current thread's CPU affinity to the resolved
   // node's CPU set. Intended to run from worker-thread entry. No-op

@@ -4,9 +4,9 @@
 #include "store/store.h"
 
 #include "io_queue/io_queue.h"
+#include "platform/platform.h"
 #include "platform/platform_io.h"
 
-#include <pthread.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -48,7 +48,7 @@ struct store_fs
   struct io_queue* q;
 
   // Open-file cache. Linear scan; small until we find we need better.
-  pthread_mutex_t cache_mu;
+  struct platform_mutex* cache_mu;
   struct fs_cache_slot* slots;
   size_t n_slots;
   size_t cap_slots;

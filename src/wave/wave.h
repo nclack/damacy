@@ -130,9 +130,7 @@ struct damacy_wave
   // this wave's decomp_start.
   CUevent prev_decode_anchor;
 
-  // Host-side IO timing (copied from slot at bind).
-  uint64_t io_t_start_ns;
-  uint64_t io_t_end_ns;
+  float io_ms;
 
   // Per-stage byte totals (filled at bind + compute time, drained at
   // finalize into the cumulative damacy_stats fields).
