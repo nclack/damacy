@@ -399,6 +399,17 @@ Miss:
 }
 
 struct lru_entry*
+lru_peek(struct lru* self, uint64_t hash, const void* probe_key)
+{
+  if (!self)
+    return NULL;
+  uint32_t cell_idx = index_lookup(self, hash, probe_key);
+  if (cell_idx == LRU_NIL)
+    return NULL;
+  return &self->slots[self->index.cells[cell_idx]];
+}
+
+struct lru_entry*
 lru_put(struct lru* self, uint64_t hash, const void* probe_key, void* value)
 {
   // Preconditions: NULL self leaks `value` (no destroy callback to call);
