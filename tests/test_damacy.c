@@ -49,11 +49,13 @@ mk_cfg(const char* root, uint32_t batch_size)
   return (struct damacy_config){
     .batch_size = batch_size,
     .lookahead_batches = 2,
-    .n_io_threads = 1,
-    .n_zarrs_meta_cache = 4,
-    .n_shards_meta_cache = 4,
     .dtype = DAMACY_F32,
     .device = -1,
+    .tuning = {
+      .n_io_threads = 1,
+      .n_zarrs_meta_cache = 4,
+      .n_shards_meta_cache = 4,
+    },
   };
 }
 
@@ -580,7 +582,6 @@ test_missing_shard_fills_nonzero(void)
   fixture_rm_tree(root);
   return 0;
 }
-
 
 // Engineered race for damacy_release_event.
 //

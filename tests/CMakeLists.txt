@@ -43,6 +43,8 @@ add_damacy_test(
 target_link_libraries(test_zarr_cache_threading PRIVATE Threads::Threads)
 set_tests_properties(test_zarr_cache_threading PROPERTIES LABELS tsan)
 add_damacy_test(test_planner planner zarr_meta_cache zarr_shard_cache zarr store test_fixture)
+add_damacy_test(test_coalesce planner log)
+add_damacy_test(test_group_chunks planner log)
 add_damacy_test(test_chunk_layout planner zarr_chunk_layout zarr_meta_cache zarr_shard_cache zarr store test_fixture)
 add_damacy_test(test_lookahead lookahead log)
 add_damacy_test(test_scheduler scheduler platform log)

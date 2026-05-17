@@ -4,7 +4,7 @@
 //
 // Build-order step 3: page-aligned reads from day 1, one read_op per
 // chunk (no coalescing, no waves). Wave-scheduler fields
-// (dst_buf_offset, dev_decompressed_offset) are filled in later by the
+// (host_buf_offset, dev_decompressed_offset) are filled in later by the
 // scheduler; the planner zeroes them.
 #pragma once
 
@@ -33,7 +33,7 @@ extern "C"
     char shard_path[DAMACY_MAX_PATH]; // null-terminated; truncation = OOM
     uint64_t file_offset;             // multiple of page_alignment
     uint32_t nbytes;                  // multiple of page_alignment
-    uint64_t dst_buf_offset;          // wave-scheduler-assigned; planner sets 0
+    uint64_t host_buf_offset;         // wave-scheduler-assigned; planner sets 0
   };
 
   // Per-dimension bundle for one sample. Co-locating all of dimension d's
@@ -61,8 +61,9 @@ extern "C"
     struct sample_dim dims[DAMACY_MAX_RANK]; // dims[0..rank)
     int64_t sample_dst_off_elems; // sample slot start (elements; * dst bpe at
                                   // runtime)
-    uint32_t chunk_offset;        // first chunk in chunk_plans
-    uint32_t chunk_count;         // ∏ dims[d].chunk_grid_extent
+    uint32_t chunk_count;         // ∏ dims[d].chunk_grid_extent (informational;
+                                  // chunk_plans are not contiguous per-sample
+                                  // after group_chunks_by_read)
     // Array-level fill_value (zarr v3 metadata). Chunks tagged is_fill
     // broadcast these bytes; bytes are interpreted under src_dtype.
     uint8_t fill_value[DAMACY_MAX_DTYPE_BYTES];
@@ -89,6 +90,7 @@ extern "C"
     uint32_t offset_in_read; // chunk start within the read
     uint32_t compressed_nbytes;
     uint32_t decompressed_nbytes;
+    uint64_t host_buf_offset;         // scheduler-assigned (per wave)
     uint32_t dev_decompressed_offset; // scheduler-assigned (per wave)
     uint16_t batch_pool_slot;
     uint16_t sample_idx_in_batch; // index into planner_output.sample_plans
@@ -109,6 +111,10 @@ extern "C"
     // kernel's nblocks check, and surfaces sample.uri to the caller.
     // 0 means "no extra cap beyond DAMACY_MAX_CHUNK_BYTES".
     uint64_t max_chunk_uncompressed_bytes;
+    // Cap on the size of any post-coalesce read_op (bytes). Tunes the
+    // request-count vs queue-depth tradeoff: bigger = fewer IOs;
+    // smaller = more in-flight requests.
+    uint64_t read_op_max_bytes;
   };
 
   struct planner;
@@ -131,6 +137,8 @@ extern "C"
     struct sample_plan* sample_plans;
     uint32_t sample_plans_cap;
     uint32_t n_sample_plans;
+    uint32_t n_chunks_to_load; // non-fill chunks (= IO requests pre-coalesce)
+    uint32_t n_loads_issued;   // real (non-fill) read_ops after coalesce
   };
 
   // Plan one training batch — i.e., the N samples that land in one
