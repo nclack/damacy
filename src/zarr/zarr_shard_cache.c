@@ -116,6 +116,7 @@ zarr_shard_cache_get(struct zarr_shard_cache* self,
                      const char* uri,
                      const struct zarr_metadata* meta,
                      const uint64_t* shard_coord,
+                     struct zarr_shard_pin* out_pin,
                      const struct zarr_shard_entry** out_entries,
                      uint64_t* out_n_entries)
 {
@@ -123,8 +124,10 @@ zarr_shard_cache_get(struct zarr_shard_cache* self,
   CHECK_SILENT(Invalid, uri);
   CHECK_SILENT(Invalid, meta);
   CHECK_SILENT(Invalid, shard_coord);
+  CHECK_SILENT(Invalid, out_pin);
   CHECK_SILENT(Invalid, out_entries);
   CHECK_SILENT(Invalid, out_n_entries);
+  out_pin->opaque = NULL;
   if (meta->rank == 0 || meta->rank > DAMACY_MAX_RANK) {
     *out_entries = NULL;
     *out_n_entries = 0;
@@ -140,18 +143,19 @@ zarr_shard_cache_get(struct zarr_shard_cache* self,
   };
   uint64_t hash = shard_hash(uri, shard_coord, meta->rank);
 
-  // Lock is held across the *out_* assignment so the deref of the
-  // returned entry can't race a concurrent lru_put eviction. After
-  // return, the (entries, n_entries) pair is valid only while no other
-  // thread can mutate this cache; see the header for the lifetime
-  // contract.
+  // Acquire the pin under the cache mutex so the refcount bump is
+  // atomic with the lookup — eviction selection won't touch a slot
+  // whose refcount > 0, so once we hold the pin the (entries,
+  // n_entries) pair stays valid until release.
   pthread_mutex_lock(&self->mu);
   struct lru_entry* hit = lru_get(self->lru, hash, &probe);
   if (hit) {
+    lru_entry_acquire(hit);
     const struct shard_entry* entry =
       (const struct shard_entry*)lru_entry_value(hit);
     *out_entries = entry->entries;
     *out_n_entries = entry->n_entries;
+    out_pin->opaque = hit;
     pthread_mutex_unlock(&self->mu);
     return DAMACY_OK;
   }
@@ -255,10 +259,12 @@ zarr_shard_cache_get(struct zarr_shard_cache* self,
   struct lru_entry* existing = lru_peek(self->lru, hash, &probe);
   if (existing) {
     shard_destroy(entry, NULL);
+    lru_entry_acquire(existing);
     const struct shard_entry* held =
       (const struct shard_entry*)lru_entry_value(existing);
     *out_entries = held->entries;
     *out_n_entries = held->n_entries;
+    out_pin->opaque = existing;
     pthread_mutex_unlock(&self->mu);
     return DAMACY_OK;
   }
@@ -268,14 +274,18 @@ zarr_shard_cache_get(struct zarr_shard_cache* self,
     pthread_mutex_unlock(&self->mu);
     return DAMACY_OOM;
   }
+  lru_entry_acquire(inserted);
   const struct shard_entry* held =
     (const struct shard_entry*)lru_entry_value(inserted);
   *out_entries = held->entries;
   *out_n_entries = held->n_entries;
+  out_pin->opaque = inserted;
   pthread_mutex_unlock(&self->mu);
   return DAMACY_OK;
 
 Invalid:
+  if (out_pin)
+    out_pin->opaque = NULL;
   if (out_entries)
     *out_entries = NULL;
   if (out_n_entries)
@@ -284,17 +294,32 @@ Invalid:
 }
 
 void
-zarr_shard_cache_stats_get(const struct zarr_shard_cache* self,
+zarr_shard_cache_release(struct zarr_shard_cache* self,
+                         struct zarr_shard_pin pin)
+{
+  CHECK(Fail, self);
+  if (!pin.opaque)
+    return;
+  pthread_mutex_lock(&self->mu);
+  lru_entry_release((struct lru_entry*)pin.opaque);
+  pthread_mutex_unlock(&self->mu);
+  return;
+Fail:
+  return;
+}
+
+void
+zarr_shard_cache_stats_get(struct zarr_shard_cache* self,
                            struct zarr_shard_cache_stats* out)
 {
   if (!out)
     return;
   struct lru_stats stats;
   if (self)
-    pthread_mutex_lock((pthread_mutex_t*)&self->mu);
+    pthread_mutex_lock(&self->mu);
   lru_stats_get(self ? self->lru : NULL, &stats);
   if (self)
-    pthread_mutex_unlock((pthread_mutex_t*)&self->mu);
+    pthread_mutex_unlock(&self->mu);
   *out = (struct zarr_shard_cache_stats){
     .counters = stats.counters,
     .size = stats.size,

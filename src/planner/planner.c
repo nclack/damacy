@@ -361,6 +361,14 @@ planner_plan(struct planner* self,
              uint8_t dst_full_rank,
              struct planner_output* out)
 {
+  // Pin held across shard-coord runs. Released on shard change and on
+  // every exit path (Cleanup). Zero-init = unpinned, safe to release.
+  struct zarr_shard_pin active_pin = { 0 };
+  enum damacy_status status = DAMACY_OK;
+
+  // Precondition checks before any pin could be held — these don't go
+  // through Cleanup because `self` may be NULL (Cleanup dereferences
+  // self->cfg.shard_cache).
   CHECK_SILENT(Invalid, self);
   CHECK_SILENT(Invalid, samples);
   CHECK_SILENT(Invalid, out);
@@ -375,30 +383,44 @@ planner_plan(struct planner* self,
 
   for (uint32_t sample_idx = 0; sample_idx < n_samples; ++sample_idx) {
     const struct damacy_sample* sample = &samples[sample_idx];
-    CHECK_SILENT(Invalid, sample->uri);
+    if (!sample->uri) {
+      status = DAMACY_INVAL;
+      goto Cleanup;
+    }
 
     struct zarr_metadata meta;
     enum damacy_status meta_status =
       zarr_meta_cache_get(self->cfg.meta_cache, sample->uri, &meta);
-    if (meta_status != DAMACY_OK)
-      return meta_status;
-    if (sample->aabb.rank != meta.rank)
-      return DAMACY_RANK;
-    if ((uint8_t)(meta.rank + 1) != dst_full_rank)
-      return DAMACY_RANK;
+    if (meta_status != DAMACY_OK) {
+      status = meta_status;
+      goto Cleanup;
+    }
+    if (sample->aabb.rank != meta.rank) {
+      status = DAMACY_RANK;
+      goto Cleanup;
+    }
+    if ((uint8_t)(meta.rank + 1) != dst_full_rank) {
+      status = DAMACY_RANK;
+      goto Cleanup;
+    }
     if (meta.inner_codec.id == CODEC_BLOSC_LZ4) {
       log_error("planner: blosc1-lz4 inner codec is not supported (uri=%s)",
                 sample->uri);
-      return DAMACY_INVAL;
+      status = DAMACY_INVAL;
+      goto Cleanup;
     }
 
     uint64_t inner_per_shard_dim[DAMACY_MAX_RANK];
-    if (zarr_metadata_inner_per_shard(&meta, inner_per_shard_dim, NULL))
-      return DAMACY_DECODE;
+    if (zarr_metadata_inner_per_shard(&meta, inner_per_shard_dim, NULL)) {
+      status = DAMACY_DECODE;
+      goto Cleanup;
+    }
 
     uint64_t decompressed_n_bytes = inner_chunk_bytes(&meta);
-    if (decompressed_n_bytes == 0)
-      return DAMACY_DECODE;
+    if (decompressed_n_bytes == 0) {
+      status = DAMACY_DECODE;
+      goto Cleanup;
+    }
     if (self->cfg.max_chunk_uncompressed_bytes > 0 &&
         decompressed_n_bytes > self->cfg.max_chunk_uncompressed_bytes) {
       log_error("planner: chunk uncompressed=%llu exceeds runtime cap=%llu "
@@ -406,16 +428,21 @@ planner_plan(struct planner* self,
                 (unsigned long long)decompressed_n_bytes,
                 (unsigned long long)self->cfg.max_chunk_uncompressed_bytes,
                 sample->uri);
-      return DAMACY_INVAL;
+      status = DAMACY_INVAL;
+      goto Cleanup;
     }
 
     uint64_t chunk_lo[DAMACY_MAX_RANK];
     uint64_t chunk_hi[DAMACY_MAX_RANK];
-    if (chunk_range(&sample->aabb, &meta, chunk_lo, chunk_hi))
-      return DAMACY_INVAL;
+    if (chunk_range(&sample->aabb, &meta, chunk_lo, chunk_hi)) {
+      status = DAMACY_INVAL;
+      goto Cleanup;
+    }
 
-    if (out->n_sample_plans >= out->sample_plans_cap)
-      return DAMACY_OOM;
+    if (out->n_sample_plans >= out->sample_plans_cap) {
+      status = DAMACY_OOM;
+      goto Cleanup;
+    }
     struct sample_plan* sp = &out->sample_plans[out->n_sample_plans];
     *sp = (struct sample_plan){
       .batch_pool_slot = batch_pool_slot,
@@ -486,11 +513,17 @@ planner_plan(struct planner* self,
           same_shard = 0;
 
       if (!same_shard) {
+        // Crossing into a new shard: drop the prior pin (if any)
+        // before acquiring the next one. release is NULL-safe.
+        zarr_shard_cache_release(self->cfg.shard_cache, active_pin);
+        active_pin = (struct zarr_shard_pin){ 0 };
+
         enum damacy_status shard_status =
           zarr_shard_cache_get(self->cfg.shard_cache,
                                sample->uri,
                                &meta,
                                shard_coord,
+                               &active_pin,
                                &ctx.shard_entries,
                                &ctx.n_shard_entries);
         if (shard_status == DAMACY_NOTFOUND) {
@@ -500,12 +533,15 @@ planner_plan(struct planner* self,
           ctx.n_shard_entries = 0;
           ctx.interned_path = NULL;
         } else if (shard_status != DAMACY_OK) {
-          return shard_status;
+          status = shard_status;
+          goto Cleanup;
         } else {
           ctx.shard_missing = 0;
           if (zarr_shard_path_build(
-                &self->path_sb, sample->uri, shard_coord, meta.rank))
-            return DAMACY_OOM;
+                &self->path_sb, sample->uri, shard_coord, meta.rank)) {
+            status = DAMACY_OOM;
+            goto Cleanup;
+          }
           // emit_chunk copies path bytes into each read_op; path_sb is
           // overwritten next iteration but each read_op carries its own.
           ctx.interned_path = strbuf_cstr(&self->path_sb);
@@ -517,8 +553,10 @@ planner_plan(struct planner* self,
 
       enum damacy_status emit_status =
         emit_chunk(&ctx, chunk_coord, local_inner, out);
-      if (emit_status != DAMACY_OK)
-        return emit_status;
+      if (emit_status != DAMACY_OK) {
+        status = emit_status;
+        goto Cleanup;
+      }
 
       // Advance row-major.
       int finished = 1;
@@ -535,22 +573,32 @@ planner_plan(struct planner* self,
     }
   }
 
+  zarr_shard_cache_release(self->cfg.shard_cache, active_pin);
+  active_pin = (struct zarr_shard_pin){ 0 };
+
   {
-    enum damacy_status s = planner_ensure_scratch(self, out->n_read_ops);
-    if (s != DAMACY_OK)
-      return s;
-    s = coalesce_chunks(
+    status = planner_ensure_scratch(self, out->n_read_ops);
+    if (status != DAMACY_OK)
+      goto Cleanup;
+    status = coalesce_chunks(
       out, self->cfg.read_op_max_bytes, self->scratch_u32, self->scratch_ops);
-    if (s != DAMACY_OK)
-      return s;
-    if (out->n_read_ops + 1u > 3u * self->scratch_u32_cap)
-      return DAMACY_OOM;
-    s = group_chunks_by_read(out, self->scratch_u32, self->scratch_chunk_plans);
-    if (s != DAMACY_OK)
-      return s;
+    if (status != DAMACY_OK)
+      goto Cleanup;
+    if (out->n_read_ops + 1u > 3u * self->scratch_u32_cap) {
+      status = DAMACY_OOM;
+      goto Cleanup;
+    }
+    status =
+      group_chunks_by_read(out, self->scratch_u32, self->scratch_chunk_plans);
+    if (status != DAMACY_OK)
+      goto Cleanup;
   }
 
   return DAMACY_OK;
+
+Cleanup:
+  zarr_shard_cache_release(self->cfg.shard_cache, active_pin);
+  return status;
 
 Invalid:
   return DAMACY_INVAL;

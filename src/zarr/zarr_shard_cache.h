@@ -21,6 +21,16 @@ extern "C"
   struct store;
   struct zarr_shard_cache;
 
+  // Opaque pin handle. Returned by zarr_shard_cache_get; the caller
+  // must pass it back to zarr_shard_cache_release once they are done
+  // reading the returned (entries, n_entries). A zero-initialized pin
+  // (`.opaque = NULL`) is a no-op for release — safe to release an
+  // un-acquired pin.
+  struct zarr_shard_pin
+  {
+    void* opaque;
+  };
+
   struct zarr_shard_cache* zarr_shard_cache_create(struct store* store,
                                                    uint32_t capacity);
 
@@ -31,17 +41,29 @@ extern "C"
   // the index from the shard file (location per meta->index_location_end)
   // via the store and caches it. shard_coord has meta->rank entries.
   //
-  // Thread-safe. Returns a borrow: (entries, n_entries) are owned by
-  // the cache and remain valid until the entry is evicted. v1 has no
-  // pin/release API, so size `capacity` above the working set to keep
-  // returned pointers usable across long operations.
+  // On DAMACY_OK, the cache pins the returned entry — *out_entries /
+  // *out_n_entries are guaranteed valid until the caller passes
+  // *out_pin to zarr_shard_cache_release. On any non-OK status,
+  // *out_pin is left zero (no release needed but a release call is
+  // still safe).
+  //
+  // Thread-safe; the pin survives concurrent eviction (eviction skips
+  // pinned slots). Size `capacity` above the working set so put
+  // failures don't fire under contention.
   enum damacy_status zarr_shard_cache_get(
     struct zarr_shard_cache* c,
     const char* uri,
     const struct zarr_metadata* meta,
     const uint64_t* shard_coord,
+    struct zarr_shard_pin* out_pin,
     const struct zarr_shard_entry** out_entries,
     uint64_t* out_n_entries);
+
+  // Release a pin acquired via zarr_shard_cache_get. Safe to call with
+  // a zero-initialized pin (no-op). Must NOT be called more than once
+  // per acquired pin.
+  void zarr_shard_cache_release(struct zarr_shard_cache* c,
+                                struct zarr_shard_pin pin);
 
   struct zarr_shard_cache_stats
   {
@@ -50,7 +72,7 @@ extern "C"
     uint32_t capacity;
   };
 
-  void zarr_shard_cache_stats_get(const struct zarr_shard_cache* c,
+  void zarr_shard_cache_stats_get(struct zarr_shard_cache* c,
                                   struct zarr_shard_cache_stats* out);
 
 #ifdef __cplusplus
