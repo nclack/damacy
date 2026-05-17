@@ -1,6 +1,5 @@
 #include "planner/coalesce.h"
 
-#include "damacy_limits.h" // DAMACY_MAX_PATH
 #include "planner/read_op_sort.h"
 
 #include <string.h>
@@ -53,7 +52,7 @@ coalesce_chunks(struct planner_output* out,
     int fusable = 0;
     if (leader_old != UINT32_MAX) {
       struct read_op* leader = &out->read_ops[leader_old];
-      if (strncmp(curr->shard_path, leader->shard_path, DAMACY_MAX_PATH) == 0 &&
+      if (strcmp(curr->shard_path, leader->shard_path) == 0 &&
           curr->file_offset >= leader->file_offset &&
           curr->file_offset <= leader_end) {
         uint64_t fused_end = curr_end > leader_end ? curr_end : leader_end;
@@ -101,8 +100,6 @@ coalesce_chunks(struct planner_output* out,
     cp->read_op_idx = remap[old];
     if (cp->is_fill)
       continue;
-    // Defends an invariant: fusion caps fused_size at UINT32_MAX, and
-    // offset_in_read + offset_shift <= fused_size by construction.
     uint64_t sum = (uint64_t)cp->offset_in_read + (uint64_t)offset_shift[old];
     if (sum > UINT32_MAX)
       return DAMACY_INVAL;

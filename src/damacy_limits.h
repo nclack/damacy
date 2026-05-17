@@ -38,8 +38,16 @@
 // 8 GB-class GPU budget viable out of the box.
 #define DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES (512ull << 10) // 512 KB
 
-// Default cap on post-coalesce read_op size.
+// Default cap on post-coalesce read_op size. read_op.nbytes is uint32_t,
+// so the cap must fit there too — coalesce_chunks won't fuse past it.
 #define DAMACY_DEFAULT_READ_OP_MAX_BYTES (512ull << 10)
+#ifdef __cplusplus
+static_assert(DAMACY_DEFAULT_READ_OP_MAX_BYTES <= UINT32_MAX,
+              "read_op.nbytes is uint32_t");
+#else
+_Static_assert(DAMACY_DEFAULT_READ_OP_MAX_BYTES <= UINT32_MAX,
+               "read_op.nbytes is uint32_t");
+#endif
 
 // Default for damacy_config.max_gpu_memory_bytes when the user leaves
 // it at 0. ~1 GB fits comfortably on consumer GPUs.

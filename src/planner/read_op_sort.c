@@ -1,6 +1,5 @@
 #include "planner/read_op_sort.h"
 
-#include "damacy_limits.h"   // DAMACY_MAX_PATH
 #include "planner/planner.h" // struct read_op
 
 #include <string.h>
@@ -10,7 +9,7 @@
 static int
 perm_lt(const struct read_op* ops, uint32_t a, uint32_t b)
 {
-  int cmp = strncmp(ops[a].shard_path, ops[b].shard_path, DAMACY_MAX_PATH);
+  int cmp = strcmp(ops[a].shard_path, ops[b].shard_path);
   if (cmp != 0)
     return cmp < 0;
   if (ops[a].file_offset != ops[b].file_offset)

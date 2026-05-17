@@ -332,7 +332,7 @@ emit_chunk(const struct emit_ctx* ctx,
   memcpy(r->shard_path, ctx->interned_path, path_len + 1);
   r->file_offset = aligned_file_offset;
   r->nbytes = (uint32_t)read_n_bytes;
-  r->dst_buf_offset = 0;
+  r->host_buf_offset = 0;
   out->n_read_ops++;
 
   struct chunk_plan* cp = &out->chunk_plans[out->n_chunk_plans];
@@ -536,13 +536,11 @@ planner_plan(struct planner* self,
   }
 
   {
-    uint64_t cap = self->cfg.read_op_max_bytes;
-    if (cap == 0)
-      cap = DAMACY_DEFAULT_READ_OP_MAX_BYTES;
     enum damacy_status s = planner_ensure_scratch(self, out->n_read_ops);
     if (s != DAMACY_OK)
       return s;
-    s = coalesce_chunks(out, cap, self->scratch_u32, self->scratch_ops);
+    s = coalesce_chunks(
+      out, self->cfg.read_op_max_bytes, self->scratch_u32, self->scratch_ops);
     if (s != DAMACY_OK)
       return s;
     if (out->n_read_ops + 1u > 3u * self->scratch_u32_cap)

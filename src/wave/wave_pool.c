@@ -837,7 +837,7 @@ wave_pool_peel_reserve(struct wave_pool* wp,
   struct host_slab_slot* hs = &wp->slots[slot_idx];
 
   for (uint32_t i = 0; i < remaining; ++i)
-    batch->read_ops[batch->chunk_plans[base + i].read_op_idx].dst_buf_offset =
+    batch->read_ops[batch->chunk_plans[base + i].read_op_idx].host_buf_offset =
       UINT64_MAX;
 
   uint64_t host_cursor = 0;
@@ -848,14 +848,17 @@ wave_pool_peel_reserve(struct wave_pool* wp,
   for (; take < remaining && take < DAMACY_MAX_CHUNKS_PER_WAVE; ++take) {
     struct chunk_plan* c = &batch->chunk_plans[base + take];
     struct read_op* r = &batch->read_ops[c->read_op_idx];
-    int new_read = (r->dst_buf_offset == UINT64_MAX);
+    int new_read = (r->host_buf_offset == UINT64_MAX);
+    // group_chunks_by_read invariant: !new_read implies the previous
+    // chunk shares this read_op (chunks of one read_op are contiguous).
+    CHECK(Invariant,
+          new_read ||
+            batch->chunk_plans[base + take - 1].read_op_idx == c->read_op_idx);
     uint64_t host_add = (new_read && !c->is_fill) ? r->nbytes : 0;
     if (host_cursor + host_add > hs->cap ||
         dev_cursor + c->decompressed_nbytes > dev_cap) {
-      // Rewind every chunk in the broken read. The host_cursor /
-      // n_reads decrements are balanced because group_chunks_by_read
-      // keeps same-read-op chunks contiguous, so a read_op always
-      // opens (new_read=1) on its first chunk in this wave.
+      // group_chunks_by_read keeps same-read-op chunks contiguous, so
+      // the broken read_op's chunks are at the tail; rewind them.
       if (!new_read) {
         uint32_t broken_op = c->read_op_idx;
         while (take > 0 &&
@@ -877,10 +880,10 @@ wave_pool_peel_reserve(struct wave_pool* wp,
         .offset = r->file_offset,
         .len = r->nbytes,
       };
-      r->dst_buf_offset = host_cursor;
+      r->host_buf_offset = host_cursor;
       host_cursor += host_add;
     }
-    c->host_buf_offset = c->is_fill ? 0 : r->dst_buf_offset;
+    c->host_buf_offset = c->is_fill ? 0 : r->host_buf_offset;
     c->dev_decompressed_offset = dev_cursor;
     dev_cursor += c->decompressed_nbytes;
   }
@@ -907,6 +910,9 @@ wave_pool_peel_reserve(struct wave_pool* wp,
   t.slot_idx = slot_idx;
   t.n_reads = n_reads;
   return t;
+Invariant:
+  *err = DAMACY_INVAL;
+  return (struct wave_pool_peel_ticket){ .slot_idx = -1, .n_reads = 0 };
 }
 
 struct store_event

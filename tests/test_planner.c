@@ -171,6 +171,7 @@ fixture_init_with_json(struct fixture* f,
     .meta_cache = f->meta,
     .shard_cache = f->shards,
     .page_alignment = PAGE,
+    .read_op_max_bytes = UINT64_MAX,
   };
   EXPECT(planner_create(&pcfg, &f->planner) == DAMACY_OK);
   return 0;
@@ -205,7 +206,10 @@ mk_sample(const char* uri, int64_t y0, int64_t y1, int64_t x0, int64_t x1)
 // Post-group_chunks_by_read, chunk_plans are ordered by read_op_idx, so
 // positional indexing is brittle — callers look up by chunk_d instead.
 static const struct chunk_plan*
-find_chunk_2d(const struct chunk_plan* chunks, uint32_t n, uint32_t y, uint32_t x)
+find_chunk_2d(const struct chunk_plan* chunks,
+              uint32_t n,
+              uint32_t y,
+              uint32_t x)
 {
   for (uint32_t i = 0; i < n; ++i)
     if (chunks[i].chunk_d[0] == y && chunks[i].chunk_d[1] == x)
@@ -559,6 +563,7 @@ test_missing_shard_becomes_fill(void)
     .meta_cache = meta,
     .shard_cache = shards,
     .page_alignment = PAGE,
+    .read_op_max_bytes = UINT64_MAX,
   };
   struct planner* planner = NULL;
   EXPECT(planner_create(&pcfg, &planner) == DAMACY_OK);
@@ -877,6 +882,7 @@ fixture_init_unsharded(struct fixture* f, const uint32_t* chunk_bytes_2x2)
     .meta_cache = f->meta,
     .shard_cache = f->shards,
     .page_alignment = PAGE,
+    .read_op_max_bytes = UINT64_MAX,
   };
   EXPECT(planner_create(&pcfg, &f->planner) == DAMACY_OK);
   return 0;
@@ -1015,6 +1021,7 @@ test_sharded_index_start(void)
     .meta_cache = f.meta,
     .shard_cache = f.shards,
     .page_alignment = PAGE,
+    .read_op_max_bytes = UINT64_MAX,
   };
   EXPECT(planner_create(&pcfg, &f.planner) == DAMACY_OK);
 

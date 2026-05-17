@@ -49,9 +49,18 @@ def parse_value(v: str):
             return v
 
 
-def run_one(scenario_path: Path) -> dict:
+def run_one(scenario_path: Path, runs_dir: Path) -> dict:
+    runs_dir.mkdir(parents=True, exist_ok=True)
     proc = subprocess.run(
-        ["uv", "run", str(RUN_SCRIPT), str(scenario_path)],
+        [
+            "uv",
+            "run",
+            str(RUN_SCRIPT),
+            str(scenario_path),
+            "--runs-dir",
+            str(runs_dir),
+            "--no-report",
+        ],
         capture_output=True,
         text=True,
     )
@@ -59,14 +68,14 @@ def run_one(scenario_path: Path) -> dict:
         sys.stderr.write(proc.stdout)
         sys.stderr.write(proc.stderr)
         raise RuntimeError(f"run.py exited {proc.returncode}")
-    import re
-
-    m = re.search(r"results:[^/]*(/\S+\.json)", proc.stdout + proc.stderr)
-    if not m:
+    # run.py writes <runs_dir>/<timestamp>/results.json; we own a fresh
+    # runs_dir per iteration so exactly one results.json lands here.
+    hits = sorted(runs_dir.glob("*/results.json"))
+    if not hits:
         sys.stderr.write(proc.stdout)
         sys.stderr.write(proc.stderr)
-        raise RuntimeError("could not locate results.json in run.py output")
-    return json.loads(Path(m.group(1)).read_text())
+        raise RuntimeError(f"no results.json under {runs_dir}")
+    return json.loads(hits[-1].read_text())
 
 
 @app.command()
@@ -82,14 +91,14 @@ def main(
 
     results: list[tuple[object, dict]] = []
     with tempfile.TemporaryDirectory() as td:
-        for v in parsed:
+        for i, v in enumerate(parsed):
             sc = json.loads(json.dumps(base_data))  # deep copy
             patch(sc, param, v)
             sc["name"] = f"{sc.get('name', 'sweep')}-{param.split('.')[-1]}{v}"
             tmp = Path(td) / f"sweep_{v}.json"
             tmp.write_text(json.dumps(sc, indent=2))
             console.print(f"[bold cyan]── {param} = {v} ──[/bold cyan]")
-            data = run_one(tmp)
+            data = run_one(tmp, Path(td) / f"runs_{i}")
             results.append((v, data))
 
     t = Table(title=f"sweep: {param}", title_style="bold cyan")
