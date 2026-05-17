@@ -748,34 +748,65 @@ class Batch:
 # way, but with the lock it's deterministic.
 _warned_local_rank_pairs: set[tuple[int, int]] = set()
 _warned_local_rank_lock = threading.Lock()
+_warned_multi_gpu_pairs: set[tuple[int, int]] = set()
+_warned_multi_gpu_lock = threading.Lock()
 
 
-def _warn_if_local_rank_disagrees(cfg_device: int | None, bound: int) -> None:
+def _warn_if_local_rank_disagrees(cfg_device: int | None, bound: int) -> bool:
     """Warn when ``LOCAL_RANK`` is set but the bound device disagrees;
     silent unless the user looks like they're under torchrun. Skipped
     when the user passed ``Config.device`` explicitly — they've already
     declared their intent and the native cross-check has run. Each
-    (LOCAL_RANK, bound) pair warns at most once per process."""
+    (LOCAL_RANK, bound) pair warns at most once per process. Returns
+    True when a warning is emitted (callers chain other heuristics off
+    this to avoid stacking warnings on the same construction)."""
     if cfg_device is not None:
-        return
+        return False
     raw = os.environ.get("LOCAL_RANK")
     if raw is None:
-        return
+        return False
     try:
         local_rank = int(raw)
     except ValueError:
-        return
+        return False
     if local_rank == bound:
-        return
+        return False
     key = (local_rank, bound)
     with _warned_local_rank_lock:
         if key in _warned_local_rank_pairs:
-            return
+            return True
         _warned_local_rank_pairs.add(key)
     warnings.warn(
         f"damacy.Pipeline bound to CUDA device {bound} but LOCAL_RANK={local_rank}. "
         f"Did you forget torch.cuda.set_device({local_rank}) before constructing "
         f"the pipeline, or pass Config(device={local_rank}) to bind explicitly?",
+        stacklevel=3,
+    )
+    return True
+
+
+def _warn_if_multi_gpu_implicit(cfg_device: int | None, bound: int) -> None:
+    """On a multi-GPU host with no ``Config.device``, warn that the
+    binding came from whatever CUcontext happened to be current. Covers
+    the launchers that don't export ``LOCAL_RANK`` (raw ``srun``, manual
+    ``CUDA_VISIBLE_DEVICES``) where the bug pattern is every rank silently
+    binding to GPU 0. Caller suppresses this when the LOCAL_RANK warning
+    already fired — same root cause, one message is enough."""
+    if cfg_device is not None:
+        return
+    count = _native.cuda_device_count()
+    if count <= 1:
+        return
+    key = (count, bound)
+    with _warned_multi_gpu_lock:
+        if key in _warned_multi_gpu_pairs:
+            return
+        _warned_multi_gpu_pairs.add(key)
+    warnings.warn(
+        f"damacy.Pipeline bound to CUDA device {bound} of {count}. "
+        f"The current CUDA context was captured implicitly; pass "
+        f"`Config(device=...)` to bind explicitly, or call "
+        f"`torch.cuda.set_device(...)` before construction.",
         stacklevel=3,
     )
 
@@ -832,7 +863,9 @@ class Pipeline:
         # itertools.chain() layers under sustained backpressure.
         self._pending: deque[Iterator[Sample]] = deque()
         self._pending_buf: list[Sample] = []
-        _warn_if_local_rank_disagrees(config.device, self._native.device)
+        bound = self._native.device
+        if not _warn_if_local_rank_disagrees(config.device, bound):
+            _warn_if_multi_gpu_implicit(config.device, bound)
 
     @property
     def device(self) -> int:
