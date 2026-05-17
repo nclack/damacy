@@ -612,10 +612,10 @@ but the bound device differs.</p>
 </span><span id="__span-1-26"><a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a>
 </span><span id="__span-1-27"><a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a>    <span class="n">cfg</span> <span class="o">=</span> <span class="n">damacy</span><span class="o">.</span><span class="n">Config</span><span class="p">(</span>
 </span><span id="__span-1-28"><a id="__codelineno-1-28" name="__codelineno-1-28" href="#__codelineno-1-28"></a>        <span class="n">batch_size</span><span class="o">=</span><span class="mi">8</span><span class="p">,</span>
-</span><span id="__span-1-29"><a id="__codelineno-1-29" name="__codelineno-1-29" href="#__codelineno-1-29"></a>        <span class="n">host_buffer_bytes</span><span class="o">=</span><span class="mi">1</span> <span class="o">&lt;&lt;</span> <span class="mi">30</span><span class="p">,</span>    <span class="c1"># per-rank; see &quot;Sizing per rank&quot;</span>
-</span><span id="__span-1-30"><a id="__codelineno-1-30" name="__codelineno-1-30" href="#__codelineno-1-30"></a>        <span class="n">device_buffer_bytes</span><span class="o">=</span><span class="mi">1</span> <span class="o">&lt;&lt;</span> <span class="mi">30</span><span class="p">,</span>  <span class="c1"># per-rank</span>
+</span><span id="__span-1-29"><a id="__codelineno-1-29" name="__codelineno-1-29" href="#__codelineno-1-29"></a>        <span class="n">sample_shape</span><span class="o">=</span><span class="p">(</span><span class="mi">64</span><span class="p">,</span> <span class="mi">256</span><span class="p">,</span> <span class="mi">256</span><span class="p">),</span>
+</span><span id="__span-1-30"><a id="__codelineno-1-30" name="__codelineno-1-30" href="#__codelineno-1-30"></a>        <span class="n">max_gpu_memory_bytes</span><span class="o">=</span><span class="mi">1</span> <span class="o">&lt;&lt;</span> <span class="mi">30</span><span class="p">,</span>   <span class="c1"># per-rank GPU budget</span>
 </span><span id="__span-1-31"><a id="__codelineno-1-31" name="__codelineno-1-31" href="#__codelineno-1-31"></a>        <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;bf16&quot;</span><span class="p">,</span>
-</span><span id="__span-1-32"><a id="__codelineno-1-32" name="__codelineno-1-32" href="#__codelineno-1-32"></a>        <span class="n">n_io_threads</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>                <span class="c1"># per-rank</span>
+</span><span id="__span-1-32"><a id="__codelineno-1-32" name="__codelineno-1-32" href="#__codelineno-1-32"></a>        <span class="n">n_io_threads</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>                 <span class="c1"># per-rank</span>
 </span><span id="__span-1-33"><a id="__codelineno-1-33" name="__codelineno-1-33" href="#__codelineno-1-33"></a>        <span class="n">device</span><span class="o">=</span><span class="n">local_rank</span><span class="p">,</span>
 </span><span id="__span-1-34"><a id="__codelineno-1-34" name="__codelineno-1-34" href="#__codelineno-1-34"></a>    <span class="p">)</span>
 </span><span id="__span-1-35"><a id="__codelineno-1-35" name="__codelineno-1-35" href="#__codelineno-1-35"></a>
@@ -670,30 +670,27 @@ deterministic and disjoint.</p>
 </thead>
 <tbody>
 <tr>
-<td><code>host_buffer_bytes</code></td>
-<td>pinned RAM staging pool</td>
+<td><code>max_gpu_memory_bytes</code></td>
+<td>GPU budget: wave buffers, decoder scratch, batch-output pool</td>
 </tr>
 <tr>
-<td><code>device_buffer_bytes</code></td>
-<td>device decompress scratch</td>
+<td><code>host_buffer_waves</code></td>
+<td>pinned-host slab pool, in waves</td>
 </tr>
 <tr>
 <td><code>n_io_threads</code></td>
 <td>I/O worker threads</td>
 </tr>
 <tr>
-<td><code>n_compute_threads</code></td>
-<td>host blosc1 parse workers</td>
+<td><code>n_zarrs_meta_cache</code>, <code>n_shards_meta_cache</code></td>
+<td>LRU caps for parsed metadata</td>
 </tr>
 </tbody>
 </table>
 <p>Tune <code>n_io_threads</code> to your storage tier (NVMe pool, parallel
-filesystem, object store). <code>n_compute_threads</code> defaults to <code>0</code>
-(parse runs serially on the calling thread, which is fine when waves
-are small); raise it when chunks-per-wave is large enough that the
-parse shows up in <code>stats.decompress_parse</code>. When stacking multiple
-ranks on one GPU (uncommon, but valid), divide the device-side
-budgets so the per-GPU total fits below <code>max_gpu_memory_bytes</code>.</p>
+filesystem, object store). When stacking multiple ranks on one GPU
+(uncommon, but valid), divide <code>max_gpu_memory_bytes</code> so the per-GPU
+total fits within the device.</p>
 <h2 id="cuda-streams">CUDA streams<a class="headerlink" href="#cuda-streams" title="Permanent link">&para;</a></h2>
 <p>DLPack handles synchronization. <code>torch.from_dlpack(batch)</code> records
 an event on damacy's output stream and makes the consuming PyTorch
