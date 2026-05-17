@@ -34,16 +34,26 @@ extern "C"
   // before return. Spurious wakeups possible.
   void scheduler_wait(struct scheduler* s);
 
-  // Timed variant. Logs a warning with `site` and the elapsed time on
-  // timeout, then re-waits. Use a macro at call sites to capture
-  // __FILE__:__LINE__ as `site`.
+  // Timed variant. On timeout, the supplied counter is incremented and
+  // logged on the 1st, then every Nth occurrence (see DIAG_LOG_EVERY in
+  // scheduler.c) — so a real hang is visible without flooding. Counter
+  // is reset to zero on a successful (non-timeout) wake. Use the
+  // SCHEDULER_WAIT_DIAG macro to allocate a per-call-site static counter
+  // and pass __FILE__:__LINE__ as `site` automatically.
   void scheduler_wait_diag(struct scheduler* s,
                            const char* site,
-                           int timeout_ms);
+                           int timeout_ms,
+                           int* count);
+#define DAMACY_SCHED_STRINGIFY_INNER(x) #x
+#define DAMACY_SCHED_STRINGIFY(x) DAMACY_SCHED_STRINGIFY_INNER(x)
 #define SCHEDULER_WAIT_DIAG(s, ms)                                             \
-  scheduler_wait_diag((s), __FILE__ ":" SCHED_STR(__LINE__), (ms))
-#define SCHED_STR(x) SCHED_STR2(x)
-#define SCHED_STR2(x) #x
+  do {                                                                         \
+    static int _damacy_diag_count = 0;                                         \
+    scheduler_wait_diag((s),                                                   \
+                        __FILE__ ":" DAMACY_SCHED_STRINGIFY(__LINE__),         \
+                        (ms),                                                  \
+                        &_damacy_diag_count);                                  \
+  } while (0)
 
   // Caller must hold the lock.
   void scheduler_broadcast(struct scheduler* s);
