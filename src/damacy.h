@@ -87,87 +87,67 @@ extern "C"
     const struct damacy_sample* end;
   };
 
+  // Performance + resource-sizing knobs. Anything with `0 → DEFAULT_*`
+  // resolves to its DAMACY_DEFAULT_* sibling in damacy_limits.h.
+  struct damacy_tuning
+  {
+    uint32_t n_io_threads;
+    uint32_t n_zarrs_meta_cache;
+    uint32_t n_shards_meta_cache;
+    // 0 → DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES; capped at
+    // DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES.
+    uint32_t max_chunk_uncompressed_bytes;
+    // 0 → DAMACY_DEFAULT_READ_OP_MAX_BYTES.
+    uint64_t max_read_op_bytes;
+    // Primary GPU budget. 0 → DAMACY_DEFAULT_MAX_GPU_MEMORY_BYTES.
+    uint64_t max_gpu_memory_bytes;
+    // Reservation for the lazy batch-output pool; subtract from
+    // max_gpu_memory_bytes before sizing waves. 0 = no reservation.
+    uint64_t batch_output_reserve_bytes;
+    // Pinned-host slab pool depth, in waves. 0 →
+    // DAMACY_DEFAULT_HOST_BUFFER_WAVES. Clamped to
+    // [DAMACY_N_WAVES, DAMACY_MAX_HOST_BUFFER_WAVES].
+    uint8_t host_buffer_waves;
+    // AUTO resolves the GPU's host-NUMA node; DISABLED is a no-op;
+    // PIN_TO forces `numa_node`.
+    enum damacy_numa_strategy numa_strategy;
+    int numa_node;
+    // GPUDirect Storage: cuFile reads compressed bytes straight to GPU.
+    // Requires libcufile.so.0 and a successful cuFileDriverOpen at
+    // damacy_create. DAMACY_GDS_ENABLE=1 in the env forces this on.
+    uint8_t enable_gds;
+  };
+
+  // Measurement/profiling switches. None of these should be set in
+  // production — they intentionally alter pipeline correctness to
+  // isolate stages for benchmarking.
+  struct damacy_debug_flags
+  {
+    // Skip decode: planner, IO, and H2D run normally, but every chunk
+    // is flipped to is_fill at parse + assemble build. Assemble
+    // broadcasts the array's fill_value. CUevents on stream_decode
+    // are still recorded so the state machine advances, but the decode
+    // and decode_gap metrics are meaningless under this flag.
+    uint8_t bypass_decode;
+  };
+
   // All resource caps fixed at create-time. Nothing grows after this.
   // Output batches are double-buffered (B=2); waves are double-buffered
   // internally. Neither is configurable.
   struct damacy_config
   {
-    // Batch geometry
     uint32_t batch_size;        // samples per batch
     uint32_t lookahead_batches; // user-push queue depth (>= 2)
-    uint32_t n_io_threads;
-
-    // LRU caps (FDs are cached per-key by the fs store; not bounded here).
-    uint32_t n_zarrs_meta_cache;
-    uint32_t n_shards_meta_cache;
-
-    // Destination dtype of assembled batches. Source zarrs may carry any
-    // supported integer or float type; the assemble kernel casts each
-    // element to this dtype (RNE float-promote, no overflow handling —
-    // precision is bounded by the destination's mantissa). Sources
+    // Destination dtype of assembled batches. Source zarrs may carry
+    // any supported integer or float type; the assemble kernel casts
+    // each element (RNE float-promote, no overflow handling). Sources
     // without a cast path error with DAMACY_DTYPE at push.
     enum damacy_dtype dtype;
-
-    // Largest uncompressed chunk size damacy will accept. nvcomp temp
-    // scratch is sized for this; chunks exceeding this at planner are
-    // rejected with DAMACY_INVAL. 0 means "use
-    // DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES (512 KB)"; values
-    // exceeding DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES (the kernel-array
-    // ceiling, 2 MB) are rejected at create time.
-    uint32_t max_chunk_uncompressed_bytes;
-
-    // Primary GPU memory budget. Hard cap on total GPU memory damacy
-    // will allocate for wave-resident buffers, the shared decoder
-    // scratch, per-wave fanout SOAs, and per-batch metadata. Internal
-    // sizing (host slab, device decompress arena, nvcomp temp, …) is
-    // derived from this value. 0 selects
-    // DAMACY_DEFAULT_MAX_GPU_MEMORY_BYTES. damacy_create returns
-    // DAMACY_OOM (with a log_error breakdown) if even the smallest
-    // viable wave geometry would exceed this. damacy_push returns
-    // DAMACY_OOM if the lazily-sized batch-output pool, computed from
-    // the first sample's AABB, would push past it. Observe-and-grow
-    // paths (zstd decoder scratch, per-wave fanout) also enforce this
-    // cap at grow time and return DAMACY_OOM if the new size would
-    // exceed it.
-    uint64_t max_gpu_memory_bytes;
-
-    // Subtracted from max_gpu_memory_bytes before sizing wave-resident
-    // buffers, so the lazy batch-output pool fits at first push.
-    // Set to the expected pool size: 2 * batch_size * sample_volume *
-    // dtype_bpe. 0 = no reservation.
-    uint64_t batch_output_reserve_bytes;
-
-    // Pinned-host slab pool depth, in waves. Each slot holds one wave's
-    // compressed bytes; extra slots let IO for upcoming waves complete
-    // before the wave struct is free, shrinking the wave-boundary gap on
-    // stream_decode. Must be >= DAMACY_N_WAVES (2). 0 selects
-    // DAMACY_DEFAULT_HOST_BUFFER_WAVES (3). Each slot costs one
-    // dev_compressed_per_wave of pinned host memory.
-    uint8_t host_buffer_waves;
-
     // -1 captures current CUcontext; >= 0 retains the primary for that
     // device internally and rejects a current context on another device.
     int device;
-
-    // NUMA placement plan for pinned-host allocations + io_queue /
-    // scheduler worker thread affinity. AUTO resolves the GPU's
-    // host-NUMA node via cuDeviceGetAttribute(HOST_NUMA_ID) (with a
-    // /sys/bus/pci/devices/<BDF>/numa_node fallback). DISABLED is a
-    // no-op; PIN_TO forces `numa_node`. The whole feature is a no-op
-    // when libnuma is not linked in or numa_available()<0 at runtime
-    // (a single INFO log line announces it once).
-    enum damacy_numa_strategy numa_strategy;
-    // Only consulted when numa_strategy == DAMACY_NUMA_PIN_TO. Out-of-
-    // range values fall back to no-op with a warning.
-    int numa_node;
-
-    // Read compressed chunk bytes directly into device memory via
-    // NVIDIA GPUDirect Storage (cuFile), skipping the pinned-host
-    // staging slab and the bulk H2D copy. libcufile is dlopen'd at
-    // store init; if it isn't present on the host, or cuFileDriverOpen
-    // fails, damacy_create returns DAMACY_INVAL. The DAMACY_GDS_ENABLE=1
-    // environment variable overrides this at damacy_create time when set.
-    int enable_gds;
+    struct damacy_tuning tuning;
+    struct damacy_debug_flags debug;
   };
 
   struct damacy;
@@ -331,7 +311,10 @@ extern "C"
     uint64_t batches_truncated;
     uint64_t waves_emitted;
     uint64_t chunks_dispatched;
-    uint64_t worker_steps; // scheduler ticks (proxy for worker CPU)
+    uint64_t chunks_planned; // total chunk_plans emitted (incl. fills)
+    uint64_t chunks_to_load; // non-fill chunks (filter survivors)
+    uint64_t reads_issued;   // real read_ops after coalesce
+    uint64_t worker_steps;   // scheduler ticks (proxy for worker CPU)
 
     // Total GPU bytes currently committed to wave-resident buffers and
     // batch-output pools, counted against max_gpu_memory_bytes. Grows from
