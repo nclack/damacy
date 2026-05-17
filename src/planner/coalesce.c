@@ -39,12 +39,13 @@ coalesce_chunks(struct planner_output* out,
 
   read_op_perm_sort(out->read_ops, perm, n_io);
 
-  // Greedy fuse-with-cap. A new leader starts when: path differs, or
-  // there's a gap (curr_offset > leader_end), or fusing would push
-  // the leader past read_op_max_bytes.
+  // leader_chunks == chunk_plans sharing the surviving read_op
+  // (planner emits 1:1 read_op-per-chunk_plan pre-coalesce); cap keeps
+  // wave peel from receiving a read_op wider than one wave can intake.
   uint32_t write = 0;
   uint32_t leader_old = UINT32_MAX;
   uint64_t leader_end = 0;
+  uint32_t leader_chunks = 0;
   for (uint32_t k = 0; k < n_io; ++k) {
     uint32_t e = perm[k];
     struct read_op* curr = &out->read_ops[e];
@@ -54,7 +55,8 @@ coalesce_chunks(struct planner_output* out,
       struct read_op* leader = &out->read_ops[leader_old];
       if (strcmp(curr->shard_path, leader->shard_path) == 0 &&
           curr->file_offset >= leader->file_offset &&
-          curr->file_offset <= leader_end) {
+          curr->file_offset <= leader_end &&
+          leader_chunks < DAMACY_MAX_CHUNKS_PER_WAVE) {
         uint64_t fused_end = curr_end > leader_end ? curr_end : leader_end;
         uint64_t fused_size = fused_end - leader->file_offset;
         if (fused_size <= read_op_max_bytes && fused_size <= UINT32_MAX)
@@ -69,12 +71,14 @@ coalesce_chunks(struct planner_output* out,
       offset_shift[e] =
         (uint32_t)(curr->file_offset - tmp[new_idx].file_offset);
       leader_end = fused_end;
+      leader_chunks++;
     } else {
       tmp[write] = *curr;
       remap[e] = write;
       offset_shift[e] = 0;
       leader_old = e;
       leader_end = curr_end;
+      leader_chunks = 1;
       write++;
     }
   }
