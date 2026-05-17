@@ -208,8 +208,11 @@ plan_reserve(struct damacy* self, uint16_t slot_idx, uint32_t n_samples)
   return DAMACY_OK;
 }
 
+// Returns elapsed ms via *out_elapsed_ms so the metric can be recorded
+// in plan_commit, which runs under scheduler_lock (stats are read by
+// damacy_stats_get under the same lock).
 static enum damacy_status
-plan_run(struct damacy* self, uint16_t slot_idx)
+plan_run(struct damacy* self, uint16_t slot_idx, float* out_elapsed_ms)
 {
   struct damacy_batch_slot* slot = &self->batch_pool.slots[slot_idx];
   struct planner_output plan_out = {
@@ -228,8 +231,7 @@ plan_run(struct damacy* self, uint16_t slot_idx)
                                            self->batch_pool.strides,
                                            self->batch_pool.rank,
                                            &plan_out);
-  metric_record(
-    &self->stats.plan, (float)((monotonic_ns() - plan_t0) / 1.0e6), 0, 0);
+  *out_elapsed_ms = (float)((monotonic_ns() - plan_t0) / 1.0e6);
   if (status != DAMACY_OK)
     return status;
   slot->n_chunks = plan_out.n_chunk_plans;
@@ -247,8 +249,10 @@ plan_run(struct damacy* self, uint16_t slot_idx)
 static enum damacy_status
 plan_commit(struct damacy* self,
             uint16_t slot_idx,
-            enum damacy_status run_status)
+            enum damacy_status run_status,
+            float elapsed_ms)
 {
+  metric_record(&self->stats.plan, elapsed_ms, 0, 0);
   struct damacy_batch_slot* slot = &self->batch_pool.slots[slot_idx];
   for (uint32_t i = 0; i < slot->n_samples; ++i)
     sample_slot_clear(&self->batch_samples[i]);
@@ -305,9 +309,10 @@ kick_peel_into_free_slots(struct damacy* self)
       if (s != DAMACY_OK)
         return s;
       scheduler_unlock(self->sched);
-      enum damacy_status rs = plan_run(self, (uint16_t)free_slot);
+      float plan_ms = 0.f;
+      enum damacy_status rs = plan_run(self, (uint16_t)free_slot, &plan_ms);
       scheduler_lock(self->sched);
-      s = plan_commit(self, (uint16_t)free_slot, rs);
+      s = plan_commit(self, (uint16_t)free_slot, rs, plan_ms);
       if (s != DAMACY_OK)
         return s;
       continue;
@@ -894,9 +899,12 @@ damacy_flush(struct damacy* self)
 
   // Worker only plans at full batch_size; flush emits the truncated tail.
   if (self->lookahead.size > 0 && self->lookahead.size < self->cfg.batch_size) {
-    // Wait until a slot is FREE *and* no other plan is in progress —
-    // plan_run releases the lock so another plan from the worker
-    // could be mid-flight.
+    // Wait until a slot is FREE *and* no other plan is in progress.
+    // plan_run releases the lock so a worker plan could be mid-flight;
+    // both predicates are re-evaluated together under the lock on every
+    // wake (cv_wait yields only inside the loop body), so we exit when
+    // both hold simultaneously and the subsequent find_free_batch_slot
+    // read is current.
     while ((find_free_batch_slot(&self->batch_pool) < 0 ||
             any_batch_planning(&self->batch_pool)) &&
            self->failed_status == DAMACY_OK)
@@ -911,9 +919,10 @@ damacy_flush(struct damacy* self)
     if (r != DAMACY_OK)
       goto Done;
     scheduler_unlock(self->sched);
-    enum damacy_status rs = plan_run(self, (uint16_t)free_slot);
+    float plan_ms = 0.f;
+    enum damacy_status rs = plan_run(self, (uint16_t)free_slot, &plan_ms);
     scheduler_lock(self->sched);
-    r = plan_commit(self, (uint16_t)free_slot, rs);
+    r = plan_commit(self, (uint16_t)free_slot, rs, plan_ms);
     if (r != DAMACY_OK)
       goto Done;
     self->stats.batches_truncated++;
