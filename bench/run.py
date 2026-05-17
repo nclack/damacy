@@ -36,7 +36,12 @@ from rich.progress import (
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GEN_SCRIPT = REPO_ROOT / "bench" / "gen_dataset.py"
-BENCH_BIN = REPO_ROOT / "build" / "bench" / "damacy_bench"
+# DAMACY_BENCH_BIN lets bench/sweep_b.py point at build-bN/bench/damacy_bench
+# without symlink gymnastics on the default build/ tree.
+_ENV_BIN = os.environ.get("DAMACY_BENCH_BIN")
+BENCH_BIN = (
+    Path(_ENV_BIN) if _ENV_BIN else REPO_ROOT / "build" / "bench" / "damacy_bench"
+)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from report import make_console  # noqa: E402
@@ -181,14 +186,32 @@ def drop_page_cache(roots: list[Path]) -> tuple[int, int]:
     return n, sz
 
 
-def run_bench(scenario_path: Path) -> tuple[int, str]:
+def run_bench(scenario_path: Path, sc: Scenario) -> tuple[int, str]:
     if not BENCH_BIN.exists():
         raise typer.Exit(
             f"error: {BENCH_BIN} not found; run `cmake --build build` first"
         )
+    # Noise lives in env vars, not damacy_config: src/store/store_fs_noisy.c
+    # checks them at store_fs_noisy_create from damacy_create.
+    env = os.environ.copy()
+    if sc.noise.mean_ms > 0.0:
+        env["DAMACY_NOISY_MEAN_MS"] = repr(sc.noise.mean_ms)
+        env["DAMACY_NOISY_P99_MS"] = repr(
+            sc.noise.p99_ms if sc.noise.p99_ms > 0.0 else sc.noise.mean_ms
+        )
+        env["DAMACY_NOISY_JITTER_MS"] = repr(sc.noise.jitter_ms)
+        if sc.noise.seed:
+            env["DAMACY_NOISY_SEED"] = str(sc.noise.seed)
+        console.print(
+            f"[dim]noise: mean={sc.noise.mean_ms}ms p99={sc.noise.p99_ms}ms "
+            f"jitter={sc.noise.jitter_ms}ms[/dim]"
+        )
     console.print(f"[dim]+ {BENCH_BIN} {scenario_path}[/dim]")
     proc = subprocess.run(
-        [str(BENCH_BIN), str(scenario_path)], stdout=subprocess.PIPE, text=True
+        [str(BENCH_BIN), str(scenario_path)],
+        stdout=subprocess.PIPE,
+        text=True,
+        env=env,
     )
     return proc.returncode, proc.stdout
 
@@ -242,7 +265,7 @@ def main(
             f"[green]✓[/green] page cache dropped: {n} files, {sz / 1e9:.2f} GB hinted"
         )
 
-    rc, stdout = run_bench(scenario_path)
+    rc, stdout = run_bench(scenario_path, sc)
     if rc != 0:
         console.print(f"[red]damacy_bench exited {rc}[/red]")
         raise typer.Exit(rc)

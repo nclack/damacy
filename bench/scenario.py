@@ -94,12 +94,23 @@ class Consumer(BaseModel):
     hold_ms: float = 0.0
 
 
+class Noise(BaseModel):
+    """Injects per-read sleep via store_fs_noisy. Wired through env vars
+    by bench/run.py; mean_ms == 0 means no injection."""
+
+    mean_ms: float = 0.0
+    p99_ms: float = 0.0
+    jitter_ms: float = 0.0
+    seed: int = 0
+
+
 class Scenario(BaseModel):
     name: str = "scenario"
     dataset: Dataset
     sampling: Sampling
     pipeline: Pipeline
     consumer: Consumer = Field(default_factory=Consumer)
+    noise: Noise = Field(default_factory=Noise)
 
 
 # --- results -----------------------------------------------------------------
