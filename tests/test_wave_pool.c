@@ -1,19 +1,14 @@
 // Unit tests for the host-side parts of src/wave/wave_pool.c.
-//
-//   test_peel_commit_rollback_once — a submit-failure rollback decrements
-//     stats once; a second commit on the same ticket is a no-op so the
-//     counters don't underflow.
-//   test_peel_commit_success_then_recommit — success path transitions the
-//     slot to SLOT_IO; a second commit is a no-op.
-//
-// We don't exercise wave_pool_init / wave_pool_peel_reserve here: those
-// need CUDA. peel_commit is pure host code touching wp->stats,
-// wp->pool->slots, and a host_slab_slot — all constructible on the stack.
+// wave_pool_init needs CUDA (creates streams); peel_reserve and
+// peel_commit don't — they touch stats, batch slot fields, host_slab
+// state, and chunk_plans / read_op_groups, all stack-constructible.
 
 #include "batch_pool/batch_pool.h"
 #include "damacy.h"
+#include "damacy_limits.h"
 #include "damacy_log.h"
 #include "expect.h"
+#include "planner/planner.h"
 #include "store/store.h"
 #include "wave/host_slab.h"
 #include "wave/wave_pool.h"
@@ -148,6 +143,108 @@ test_peel_commit_rolls_back_groups(void)
   return 0;
 }
 
+// Stack-constructible scaffold for peel_reserve. All planner-output
+// arrays are inline so a test can populate groups/chunks/read_ops and
+// fire reserve without touching CUDA or the heap.
+struct reserve_fixture
+{
+  struct wave_pool wp;
+  struct damacy_batch_pool pool;
+  struct damacy_stats stats;
+  uint8_t host_buf[8192];
+  struct store_read store_reads[DAMACY_MAX_CHUNKS_PER_WAVE];
+  struct read_op read_ops[8];
+  struct chunk_plan chunk_plans[8];
+  struct read_op_group groups[4];
+};
+
+static void
+init_reserve_fixture(struct reserve_fixture* f,
+                     uint64_t host_cap,
+                     uint64_t dev_cap)
+{
+  memset(f, 0, sizeof(*f));
+  f->wp.pool = &f->pool;
+  f->wp.stats = &f->stats;
+  f->wp.n_slots = 1;
+  f->wp.use_gds = 0;
+  f->wp.waves[0].dev_decompressed_cap = dev_cap;
+  f->wp.slots[0].state = SLOT_FREE;
+  f->wp.slots[0].cap = host_cap;
+  f->wp.slots[0].buf = f->host_buf;
+  f->wp.slots[0].store_reads = f->store_reads;
+  f->pool.slots[0].chunk_plans = f->chunk_plans;
+  f->pool.slots[0].read_ops = f->read_ops;
+  f->pool.slots[0].read_op_groups = f->groups;
+}
+
+// dev_cap blocks group 1 after group 0 lands; group 1 must defer whole.
+static int
+test_peel_reserve_defers_oversize_group(void)
+{
+  struct reserve_fixture f;
+  init_reserve_fixture(&f, 4096, 200);
+
+  strcpy(f.read_ops[0].shard_path, "a");
+  f.read_ops[0].nbytes = 64;
+  strcpy(f.read_ops[1].shard_path, "b");
+  f.read_ops[1].nbytes = 64;
+  f.chunk_plans[0].read_op_idx = 0;
+  f.chunk_plans[0].decompressed_nbytes = 100;
+  f.chunk_plans[1].read_op_idx = 1;
+  f.chunk_plans[1].decompressed_nbytes = 200;
+  f.groups[0] = (struct read_op_group){
+    .read_op_idx = 0, .first_chunk = 0, .n_chunks = 1, .total_decompressed = 100
+  };
+  f.groups[1] = (struct read_op_group){
+    .read_op_idx = 1, .first_chunk = 1, .n_chunks = 1, .total_decompressed = 200
+  };
+  f.pool.slots[0].n_chunks = 2;
+  f.pool.slots[0].n_read_op_groups = 2;
+
+  enum damacy_status err = DAMACY_OK;
+  struct wave_pool_peel_ticket t = wave_pool_peel_reserve(&f.wp, 0, &err);
+
+  EXPECT(err == DAMACY_OK);
+  EXPECT(t.slot_idx == 0);
+  EXPECT(t.n_reads == 1);
+  EXPECT(t.prev_n_groups_dispatched == 0);
+  EXPECT(f.pool.slots[0].n_chunks_dispatched == 1);
+  EXPECT(f.pool.slots[0].n_groups_dispatched == 1);
+  EXPECT(f.wp.slots[0].n_chunks == 1);
+  EXPECT(f.wp.slots[0].state == SLOT_PEELING);
+  return 0;
+}
+
+// First group exceeds dev_cap on a fresh wave → DAMACY_OOM.
+static int
+test_peel_reserve_errors_when_first_group_too_big(void)
+{
+  struct reserve_fixture f;
+  init_reserve_fixture(&f, 4096, 50);
+
+  strcpy(f.read_ops[0].shard_path, "a");
+  f.read_ops[0].nbytes = 64;
+  f.chunk_plans[0].read_op_idx = 0;
+  f.chunk_plans[0].decompressed_nbytes = 100;
+  f.groups[0] = (struct read_op_group){
+    .read_op_idx = 0, .first_chunk = 0, .n_chunks = 1, .total_decompressed = 100
+  };
+  f.pool.slots[0].n_chunks = 1;
+  f.pool.slots[0].n_read_op_groups = 1;
+
+  enum damacy_status err = DAMACY_OK;
+  damacy_log_set_quiet(1);
+  struct wave_pool_peel_ticket t = wave_pool_peel_reserve(&f.wp, 0, &err);
+  damacy_log_set_quiet(0);
+
+  EXPECT(err == DAMACY_OOM);
+  EXPECT(t.slot_idx == -1);
+  EXPECT(f.pool.slots[0].n_chunks_dispatched == 0);
+  EXPECT(f.pool.slots[0].n_groups_dispatched == 0);
+  return 0;
+}
+
 static int
 test_peel_commit_noop_ticket(void)
 {
@@ -178,6 +275,8 @@ main(void)
   RUN(test_peel_commit_rollback_once);
   RUN(test_peel_commit_success_then_recommit);
   RUN(test_peel_commit_rolls_back_groups);
+  RUN(test_peel_reserve_defers_oversize_group);
+  RUN(test_peel_reserve_errors_when_first_group_too_big);
   RUN(test_peel_commit_noop_ticket);
   printf("all wave_pool tests passed\n");
   return 0;
