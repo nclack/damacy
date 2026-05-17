@@ -877,7 +877,6 @@ wave_pool_peel_reserve(struct wave_pool* wp,
           .offset = r->file_offset,
           .len = r->nbytes,
         };
-        r->host_buf_offset = host_cursor;
         host_cursor += host_add;
       }
       for (uint32_t i = 0; i < g.n_chunks; ++i) {
