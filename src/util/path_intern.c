@@ -1,6 +1,8 @@
 #include "util/path_intern.h"
 
+#include "log/log.h"
 #include "util/hash.h"
+#include "util/prelude.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -36,10 +38,12 @@ slots_rehash(struct path_intern* pi, size_t new_cap)
   return 0;
 }
 
-// Backward-shift deletion: an open-addressed table cannot just NULL a
-// bucket without orphaning later entries that probed past it. We walk
-// forward, moving any entry whose ideal home is at or before the gap
-// into the gap, until we hit an empty slot.
+// Backward-shift deletion. Walk forward until an empty slot; any entry
+// whose ideal home is at-or-before the gap (in mod order) migrates into
+// the gap. The "stop at first in-home entry" optimization is unsafe —
+// it orphans entries whose ideal preceded the gap but landed past an
+// in-home neighbor (e.g. ideals A=5, B=6, C=5 land at 5,6,7; deleting
+// A must shift C, not stop at B).
 static void
 slot_evict(struct path_intern* pi, size_t idx)
 {
@@ -49,40 +53,14 @@ slot_evict(struct path_intern* pi, size_t idx)
   free(pi->slots[idx].str);
   pi->slots[idx] = (struct path_intern_slot){ 0 };
   pi->n--;
-  for (;;) {
-    size_t next = (idx + 1u) & mask;
-    struct path_intern_slot* s = &pi->slots[next];
-    if (!s->str)
-      return;
-    size_t ideal = (size_t)s->hash & mask;
-    // Distance from ideal home (mod cap). If the entry would still
-    // resolve correctly when found at `idx`, move it there.
-    size_t dist_from_idx = (idx - ideal) & mask;
-    size_t dist_from_next = (next - ideal) & mask;
-    if (dist_from_idx < dist_from_next) {
-      pi->slots[idx] = *s;
-      *s = (struct path_intern_slot){ 0 };
-      idx = next;
-    } else {
-      return;
+  for (size_t scan = (idx + 1u) & mask; pi->slots[scan].str;
+       scan = (scan + 1u) & mask) {
+    size_t ideal = (size_t)pi->slots[scan].hash & mask;
+    if (((idx - ideal) & mask) <= ((scan - ideal) & mask)) {
+      pi->slots[idx] = pi->slots[scan];
+      pi->slots[scan] = (struct path_intern_slot){ 0 };
+      idx = scan;
     }
-  }
-}
-
-static size_t
-slot_find(const struct path_intern* pi, uint64_t h, const char* s)
-{
-  if (!pi->cap)
-    return (size_t)-1;
-  size_t mask = pi->cap - 1u;
-  size_t j = (size_t)h & mask;
-  for (;;) {
-    const struct path_intern_slot* slot = &pi->slots[j];
-    if (!slot->str)
-      return (size_t)-1;
-    if (slot->hash == h && strcmp(slot->str, s) == 0)
-      return j;
-    j = (j + 1u) & mask;
   }
 }
 
@@ -152,13 +130,15 @@ path_intern_release(struct path_intern* pi, const char* s)
 {
   if (!pi || !s)
     return;
-  uint64_t h = hash_fnv1a_str(s);
-  size_t idx = slot_find(pi, h, s);
-  if (idx == (size_t)-1)
-    return;
+  size_t idx;
+  for (idx = 0; idx < pi->cap; ++idx)
+    if (pi->slots[idx].str == s)
+      break;
+  CHECK(End, idx < pi->cap);
   struct path_intern_slot* slot = &pi->slots[idx];
-  if (slot->refs == 0)
-    return;
+  CHECK(End, slot->refs > 0);
   if (--slot->refs == 0)
     slot_evict(pi, idx);
+End:
+  return;
 }

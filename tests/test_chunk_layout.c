@@ -276,11 +276,8 @@ test_planner_populates_layout_blosc_zstd(void)
   EXPECT(samples[0].layout.blocksize > 0);
   EXPECT(samples[0].layout.nblocks >= 1);
 
-  // Second plan call must reset the intern (same lifecycle the
-  // batch_slot would do between planner_plan calls).
   struct sample_plan samples2[4] = { 0 };
   out.sample_plans = samples2;
-  path_intern_reset(&paths);
   EXPECT(planner_plan(planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(samples2[0].layout_probed == 1);
   EXPECT(samples2[0].layout.typesize == samples[0].layout.typesize);

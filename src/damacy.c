@@ -238,10 +238,8 @@ static enum damacy_status
 plan_run(struct damacy* self, uint16_t slot_idx, float* out_elapsed_ms)
 {
   struct damacy_batch_slot* slot = &self->batch_pool.slots[slot_idx];
-  // Slot is BATCH_PLANNING here; the prior batch's read_ops have all
-  // retired (else the slot wouldn't have transitioned through FREE).
-  // Safe to drop the interned strings they referenced.
-  path_intern_reset(&slot->paths);
+  // PLANNING => prior read_ops retired; planner_plan resets the intern.
+  CHECK(InvalidArg, slot->state == BATCH_PLANNING);
   struct planner_output plan_out = {
     .read_ops = slot->read_ops,
     .read_ops_cap = DAMACY_MAX_CHUNKS_PER_BATCH,
@@ -274,6 +272,8 @@ plan_run(struct damacy* self, uint16_t slot_idx, float* out_elapsed_ms)
       return DAMACY_CUDA;
   }
   return DAMACY_OK;
+InvalidArg:
+  return DAMACY_INVAL;
 }
 
 static enum damacy_status

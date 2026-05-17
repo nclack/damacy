@@ -374,6 +374,7 @@ planner_plan(struct planner* self,
   CHECK_SILENT(Invalid, out->paths);
   CHECK_SILENT(Invalid, dst_strides);
   CHECK_SILENT(Invalid, dst_full_rank >= 1);
+  path_intern_reset(out->paths);
   out->n_read_ops = 0;
   out->n_chunk_plans = 0;
   out->n_sample_plans = 0;

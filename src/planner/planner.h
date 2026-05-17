@@ -35,8 +35,8 @@ extern "C"
   {
     const char* shard_path;
     uint64_t file_offset;     // multiple of page_alignment
-    uint32_t nbytes;          // multiple of page_alignment
     uint64_t host_buf_offset; // wave-scheduler-assigned; planner sets 0
+    uint32_t nbytes;          // multiple of page_alignment
   };
 
   // Per-dimension bundle for one sample. Co-locating all of dimension d's
@@ -130,8 +130,8 @@ extern "C"
   // populates *_n on success. If any buffer fills before the plan
   // completes, planner_plan returns DAMACY_OOM.
   //
-  // `paths` interns each emitted read_op's shard_path. Caller resets
-  // it between plans into the same buffer (when read_ops are recycled).
+  // `paths` interns each emitted read_op's shard_path. planner_plan
+  // resets it at entry; caller need not.
   struct planner_output
   {
     struct read_op* read_ops;
