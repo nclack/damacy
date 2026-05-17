@@ -803,10 +803,10 @@ def _warn_if_multi_gpu_implicit(cfg_device: int | None, bound: int) -> None:
             return
         _warned_multi_gpu_pairs.add(key)
     warnings.warn(
-        f"damacy.Pipeline bound to CUDA device {bound} of {count}. "
-        f"The current CUDA context was captured implicitly; pass "
-        f"`Config(device=...)` to bind explicitly, or call "
-        f"`torch.cuda.set_device(...)` before construction.",
+        f"damacy.Pipeline bound to CUDA device {bound} of {count}, "
+        f"but you didn't say which device to use. Pass "
+        f"`Config(device=...)` to pick one, or call "
+        f"`torch.cuda.set_device(...)` before constructing the Pipeline.",
         stacklevel=3,
     )
 
