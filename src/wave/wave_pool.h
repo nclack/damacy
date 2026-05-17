@@ -151,6 +151,8 @@ struct wave_pool_peel_ticket
 {
   int slot_idx;
   uint32_t n_reads;
+  uint32_t prev_n_groups_dispatched;
+  uint32_t prev_group_chunk_offset;
   uint8_t consumed;
 };
 

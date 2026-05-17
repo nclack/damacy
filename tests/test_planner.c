@@ -256,6 +256,8 @@ test_single_chunk_aligned(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups_cap = 8,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
 
@@ -327,6 +329,8 @@ test_multi_chunk_partial(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups_cap = 8,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_chunk_plans == 4);
@@ -392,6 +396,8 @@ test_two_samples_indices(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups_cap = 8,
   };
   EXPECT(planner_plan(f.planner, s, 2, 7, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_chunk_plans == 2);
@@ -436,6 +442,8 @@ test_empty_chunk_becomes_fill(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups_cap = 8,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_chunk_plans == 4);
@@ -484,6 +492,8 @@ test_fill_value_int16_neg1(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups_cap = 8,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_chunk_plans == 4);
@@ -523,6 +533,8 @@ test_fill_value_f32_nan(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups_cap = 8,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   {
@@ -581,6 +593,8 @@ test_missing_shard_becomes_fill(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups_cap = 8,
   };
   EXPECT(planner_plan(planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_chunk_plans == 4);
@@ -622,6 +636,8 @@ test_page_alignment(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups_cap = 8,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
 
@@ -675,6 +691,8 @@ run_blosc_codec_id_case(const char* cname, uint8_t expected_codec_id)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups_cap = 8,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_chunk_plans == 4);
@@ -713,6 +731,8 @@ run_blosc_lz4_rejected_case(const char* cname)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups_cap = 8,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) ==
          DAMACY_INVAL);
@@ -762,6 +782,8 @@ test_codec_id_none(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups_cap = 8,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_chunk_plans == 4);
@@ -801,6 +823,8 @@ test_codec_id_blosc_unknown_cname(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups_cap = 8,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) != DAMACY_OK);
 
@@ -912,6 +936,8 @@ test_unsharded_single_chunk(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups_cap = 8,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
 
@@ -957,6 +983,8 @@ test_unsharded_multi_chunk(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups_cap = 8,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_chunk_plans == 4);
@@ -1038,6 +1066,8 @@ test_sharded_index_start(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups_cap = 8,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_chunk_plans == 4);
@@ -1079,6 +1109,8 @@ test_coalesce_adjacent_pages(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups_cap = 8,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_chunk_plans == 4);
@@ -1122,6 +1154,8 @@ test_coalesce_gap_blocks_fusion(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups_cap = 8,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_chunk_plans == 4);
@@ -1166,6 +1200,8 @@ test_coalesce_fill_does_not_block_fusion(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups_cap = 8,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_chunk_plans == 4);
@@ -1224,6 +1260,8 @@ test_coalesce_non_monotonic_shard(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups_cap = 8,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_chunk_plans == 4);
@@ -1269,6 +1307,8 @@ test_coalesce_cross_sample(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups_cap = 8,
   };
   EXPECT(planner_plan(f.planner, s, 2, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_sample_plans == 2);
