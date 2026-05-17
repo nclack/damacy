@@ -152,13 +152,11 @@ batch_pool_allocate(struct damacy* self)
   return DAMACY_OK;
 }
 
-// True if `aabb`'s extents match cfg->sample_shape exactly.
+// 1 if `aabb` extents (assumed same rank as cfg) match cfg->sample_shape.
 static int
-sample_aabb_matches_cfg(const struct damacy_config* cfg,
-                        const struct damacy_aabb* aabb)
+sample_aabb_extents_match_cfg(const struct damacy_config* cfg,
+                              const struct damacy_aabb* aabb)
 {
-  if (aabb->rank != cfg->sample_rank)
-    return 0;
   for (uint8_t d = 0; d < cfg->sample_rank; ++d) {
     int64_t extent = aabb->dims[d].end - aabb->dims[d].beg;
     if (extent != cfg->sample_shape[d])
@@ -187,7 +185,9 @@ push_one(struct damacy* self, const struct damacy_sample* sample)
     return DAMACY_DTYPE;
   if (sample->aabb.rank != meta->rank)
     return DAMACY_RANK;
-  if (!sample_aabb_matches_cfg(&self->cfg, &sample->aabb))
+  if (sample->aabb.rank != self->cfg.sample_rank)
+    return DAMACY_RANK;
+  if (!sample_aabb_extents_match_cfg(&self->cfg, &sample->aabb))
     return DAMACY_INVAL;
 
   if (lookahead_push(&self->lookahead, sample))
@@ -525,9 +525,8 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   uint64_t pool_reserve = 0;
   {
     uint64_t pool_bytes = 0;
-    s = resolve_sample_volume_bytes(cfg, &pool_bytes);
-    if (s != DAMACY_OK)
-      goto Fail;
+    CHECK(Fail,
+          (s = resolve_sample_volume_bytes(cfg, &pool_bytes)) == DAMACY_OK);
     pool_reserve = 2ull * pool_bytes;
   }
   if (pool_reserve >= resolved_max_gpu) {
@@ -1079,8 +1078,14 @@ damacy_config_describe(const struct damacy_config* cfg)
     // resolve_sample_volume_bytes rejects rank=0 / non-positive dims; on
     // those, leave pool_reserve at 0 so describe still prints useful
     // info for the rest of the geometry.
-    if (resolve_sample_volume_bytes(cfg, &pool_bytes) == DAMACY_OK)
+    enum damacy_status pvs = resolve_sample_volume_bytes(cfg, &pool_bytes);
+    if (pvs == DAMACY_OK)
       pool_reserve = 2ull * pool_bytes;
+    else
+      log_info(
+        "damacy_config_describe: resolve_sample_volume_bytes failed (%s); "
+        "pool_reserve=0",
+        damacy_status_str(pvs));
   }
   const uint64_t resolver_budget =
     pool_reserve < resolved_max_gpu ? resolved_max_gpu - pool_reserve : 0;

@@ -22,7 +22,11 @@
 //                                     committed counter stays under cap
 //   test_pool_exceeds_budget_rejected_at_create
 //                                   — pool reserve > cap; create returns
-//                                     DAMACY_OOM
+//                                     DAMACY_OOM (pool-reserve branch)
+//   test_resolver_cannot_fit_one_chunk
+//                                   — pool fits but resolver budget too
+//                                     small for one chunk; DAMACY_OOM
+//                                     (wave_pool_resolve_sizing branch)
 //   test_sample_shape_mismatch_rejected
 //                                   — push a sample whose aabb extent !=
 //                                     cfg.sample_shape; expect INVAL
@@ -297,10 +301,10 @@ test_pool_reserve_fits_default_budget(void)
   return 0;
 }
 
-// Same sample geometry as test_pool_reserve_fits_default_budget but
-// cfg.max_gpu_memory_bytes set below the required pool_reserve. The
-// resolver rejects at damacy_create with DAMACY_OOM — nothing is left
-// for wave-resident buffers.
+// pool_reserve = 2 × 20 × 16 × 256 × 256 × 4 ≈ 160 MB, well above
+// the 32 MB cap — the "pool_reserve >= max_gpu_memory_bytes" branch in
+// damacy_create rejects with DAMACY_OOM before wave_pool_resolve_sizing
+// is called.
 static int
 test_pool_exceeds_budget_rejected_at_create(void)
 {
@@ -317,11 +321,27 @@ test_pool_exceeds_budget_rejected_at_create(void)
       .n_io_threads = 1,
       .n_zarrs_meta_cache = 4,
       .n_shards_meta_cache = 4,
-      // pool_reserve = 2 × 20 × 16 × 256 × 256 × 4 ≈ 160 MB, well above
-      // the 32 MB cap below — create fails before sizing.
       .max_gpu_memory_bytes = 32ull << 20,
     },
   };
+  struct damacy* d = NULL;
+  EXPECT(damacy_create(&cfg, &d) == DAMACY_OOM);
+  EXPECT(d == NULL);
+  fixture_rm_tree(root);
+  return 0;
+}
+
+// pool_reserve = 2 × 1 × 8 × 16 × 4 = 1 KB, well under the 2 KB cap, but
+// resolver_budget = 1 KB is too small for one wave's minimum geometry.
+// Exercises the wave_pool_resolve_sizing OOM branch, distinct from the
+// pool_reserve-exceeds-cap branch above.
+static int
+test_resolver_cannot_fit_one_chunk(void)
+{
+  char root[64];
+  EXPECT(mkdtemp_root(root, sizeof root) == 0);
+  struct damacy_config cfg = mk_cfg(root, 1, 8, 16);
+  cfg.tuning.max_gpu_memory_bytes = 2ull << 10;
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OOM);
   EXPECT(d == NULL);
@@ -406,6 +426,7 @@ main(void)
   RUN(test_config_describe);
   RUN(test_pool_reserve_fits_default_budget);
   RUN(test_pool_exceeds_budget_rejected_at_create);
+  RUN(test_resolver_cannot_fit_one_chunk);
   RUN(test_sample_shape_mismatch_rejected);
   RUN(test_resolver_minimum_one_chunk);
   log_info("all tests passed");

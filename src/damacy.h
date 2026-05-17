@@ -91,14 +91,6 @@ extern "C"
   // resolves to its DAMACY_DEFAULT_* sibling in damacy_limits.h.
   struct damacy_tuning
   {
-    uint32_t n_io_threads;
-    uint32_t n_zarrs_meta_cache;
-    uint32_t n_shards_meta_cache;
-    // 0 → DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES; capped at
-    // DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES.
-    uint32_t max_chunk_uncompressed_bytes;
-    // 0 → DAMACY_DEFAULT_READ_OP_MAX_BYTES.
-    uint64_t max_read_op_bytes;
     // Primary GPU budget. Hard cap on total GPU memory damacy will
     // allocate for wave-resident buffers, the shared decoder scratch,
     // per-wave fanout SOAs, and per-batch metadata. The resolver carves
@@ -106,10 +98,21 @@ extern "C"
     // × dtype_bpe) from this cap before sizing wave-resident buffers.
     // 0 → DAMACY_DEFAULT_MAX_GPU_MEMORY_BYTES.
     uint64_t max_gpu_memory_bytes;
+    // 0 → DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES; capped at
+    // DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES.
+    uint32_t max_chunk_uncompressed_bytes;
+    // 0 → DAMACY_DEFAULT_READ_OP_MAX_BYTES.
+    uint64_t max_read_op_bytes;
     // Pinned-host slab pool depth, in waves. 0 →
     // DAMACY_DEFAULT_HOST_BUFFER_WAVES. Clamped to
     // [DAMACY_N_WAVES, DAMACY_MAX_HOST_BUFFER_WAVES].
     uint8_t host_buffer_waves;
+
+    uint32_t n_io_threads;
+
+    uint32_t n_zarrs_meta_cache;
+    uint32_t n_shards_meta_cache;
+
     // AUTO resolves the GPU's host-NUMA node; DISABLED is a no-op;
     // PIN_TO forces `numa_node`.
     enum damacy_numa_strategy numa_strategy;
@@ -138,8 +141,6 @@ extern "C"
   // internally. Neither is configurable.
   struct damacy_config
   {
-    uint32_t batch_size;        // samples per batch
-    uint32_t lookahead_batches; // user-push queue depth (>= 2)
     // Destination dtype of assembled batches. Source zarrs may carry
     // any supported integer or float type; the assemble kernel casts
     // each element (RNE float-promote, no overflow handling). Sources
@@ -155,9 +156,13 @@ extern "C"
     // [1, DAMACY_MAX_RANK]; every sample_shape[d] must be > 0.
     int64_t sample_shape[DAMACY_MAX_RANK];
     uint8_t sample_rank;
+    uint32_t batch_size;        // samples per batch
+    uint32_t lookahead_batches; // user-push queue depth (>= 2)
+
     // -1 captures current CUcontext; >= 0 retains the primary for that
     // device internally and rejects a current context on another device.
     int device;
+
     struct damacy_tuning tuning;
     struct damacy_debug_flags debug;
   };
