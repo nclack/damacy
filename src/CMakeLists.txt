@@ -141,8 +141,10 @@ add_cuda_lib(wave_pool SOURCES wave/wave_pool.h wave/wave_pool.c
 # independent cuFile-backed store. DAMACY_ENABLE_GDS=OFF links the stub
 # (store_fs_gds_create returns NULL); runtime GDS opt-in then fails INVAL.
 add_src_lib(store SOURCES store/store.h store/store.c store/store_fs.h store/store_fs.c
+    store/store_fs_noisy.h store/store_fs_noisy.c
     LINKS io_queue platform_io strbuf log
 )
+target_link_libraries(store PRIVATE m)
 if(NOT DAMACY_FUZZ AND DAMACY_ENABLE_GDS)
     target_sources(store PRIVATE store/store_fs_gds.h store/store_fs_gds.c)
     target_include_directories(store PRIVATE ${CuFile_INCLUDE_DIR})
