@@ -137,11 +137,14 @@ wave_pool_advance(struct wave_pool* wp);
 // wave_pool_peel runs as reserve [locked] → submit [unlocked] → commit
 // [locked]. submit issues async IO with scheduler_lock released; the
 // slot sits in SLOT_PEELING for the window. Ticket carries handoff
-// state. slot_idx < 0 = no-op (no work or no free slab).
+// state. slot_idx < 0 = no-op (no work or no free slab). `consumed` is
+// the one-shot guard on commit: set after the first call so a stray
+// re-commit can't underflow the rollback counters.
 struct wave_pool_peel_ticket
 {
   int slot_idx;
   uint32_t n_reads;
+  uint8_t consumed;
 };
 
 // reserve: *err = DAMACY_OOM on the single-chunk-too-large path.
@@ -153,8 +156,10 @@ wave_pool_peel_reserve(struct wave_pool* wp,
 struct store_event
 wave_pool_peel_submit(struct wave_pool* wp, struct wave_pool_peel_ticket t);
 
-// commit: rolls back the reservation on submit failure → DAMACY_IO.
+// commit: rolls back the reservation on submit failure → DAMACY_IO. The
+// ticket is consumed on first call; a second call is a no-op returning
+// DAMACY_OK so rollback counters can't double-decrement.
 enum damacy_status
 wave_pool_peel_commit(struct wave_pool* wp,
-                      struct wave_pool_peel_ticket t,
+                      struct wave_pool_peel_ticket* t,
                       struct store_event ev);
