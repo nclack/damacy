@@ -18,8 +18,14 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Per-workflow concurrency group (keyed by ref) so two pushes to the
+# same branch collapse to one run, but tsan doesn't share a group
+# with build/test/bench. A shared group across distinct workflows on
+# identical triggers was causing GitHub to auto-cancel one of them
+# (see issue #66). tsan doesn't measure GPU perf, so it doesn't need
+# exclusivity against bench.
 concurrency:
-  group: gpu-runner
+  group: gpu-runner-tsan-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:

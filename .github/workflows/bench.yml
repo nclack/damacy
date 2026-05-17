@@ -26,12 +26,14 @@ permissions:
   pull-requests: write  # comment-on-alert
   deployments: write    # gh-pages deployment status
 
-# Serialize against build / test as well — they share the self-hosted
-# GPU runner, and a CUDA test running concurrently with the bench would
-# contaminate the throughput measurements. All three workflows use the
-# same `gpu-runner` group.
+# Per-workflow concurrency group (keyed by ref) so back-to-back bench
+# triggers collapse cleanly. bench previously shared `gpu-runner` with
+# build/test/tsan, which caused GitHub to auto-cancel one of them on
+# PR pushes (see issue #66). bench is schedule-only + manual, so it
+# rarely overlaps with PR-triggered workflows; if it does, the
+# self-hosted runner's single slot already serializes execution.
 concurrency:
-  group: gpu-runner
+  group: gpu-runner-bench-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:

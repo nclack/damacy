@@ -23,10 +23,14 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Serialize against bench / build on the shared self-hosted GPU runner —
-# concurrent CUDA work contaminates bench throughput measurements.
+# Per-workflow concurrency group (keyed by ref) so two pushes to the
+# same branch collapse to one run, but test doesn't share a group
+# with build/tsan/bench. A shared group across distinct workflows on
+# identical triggers was causing GitHub to auto-cancel one of them
+# (see issue #66). The self-hosted runner's single slot already
+# serializes GPU execution against bench (which is schedule-only).
 concurrency:
-  group: gpu-runner
+  group: gpu-runner-test-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
