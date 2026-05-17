@@ -124,17 +124,17 @@ void
 scheduler_wait_diag(struct scheduler* s,
                     const char* site,
                     int timeout_ms,
-                    int* count)
+                    _Atomic int* count)
 {
   if (platform_cond_timedwait_ms(s->cv, s->m, timeout_ms)) {
-    int n = ++(*count);
+    int n = atomic_fetch_add(count, 1) + 1;
     if (n == 1 || (n % DIAG_LOG_EVERY) == 0)
       log_warn("scheduler_wait_diag: %d ms timeout at %s (count=%d)",
                timeout_ms,
                site,
                n);
   } else {
-    *count = 0;
+    atomic_store(count, 0);
   }
 }
 
