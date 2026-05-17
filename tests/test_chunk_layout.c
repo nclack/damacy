@@ -266,7 +266,7 @@ test_planner_populates_layout_blosc_zstd(void)
     .chunk_plans_cap = 16,
     .sample_plans = samples,
     .sample_plans_cap = 4,
-    .read_op_groups = (struct read_op_group[16]){ 0 },
+    .read_op_groups = (struct read_op_group[16]){ { 0 } },
     .read_op_groups_cap = 16,
     .paths = &paths,
   };
@@ -340,7 +340,7 @@ test_planner_skips_layout_for_zstd(void)
     .chunk_plans_cap = 16,
     .sample_plans = samples,
     .sample_plans_cap = 4,
-    .read_op_groups = (struct read_op_group[16]){ 0 },
+    .read_op_groups = (struct read_op_group[16]){ { 0 } },
     .read_op_groups_cap = 16,
     .paths = &paths,
   };

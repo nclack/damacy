@@ -259,7 +259,7 @@ test_single_chunk_aligned(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
-    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups = (struct read_op_group[8]){ { 0 } },
     .read_op_groups_cap = 8,
     .paths = &f.paths,
   };
@@ -333,7 +333,7 @@ test_multi_chunk_partial(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
-    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups = (struct read_op_group[8]){ { 0 } },
     .read_op_groups_cap = 8,
     .paths = &f.paths,
   };
@@ -401,7 +401,7 @@ test_two_samples_indices(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
-    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups = (struct read_op_group[8]){ { 0 } },
     .read_op_groups_cap = 8,
     .paths = &f.paths,
   };
@@ -448,7 +448,7 @@ test_empty_chunk_becomes_fill(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
-    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups = (struct read_op_group[8]){ { 0 } },
     .read_op_groups_cap = 8,
     .paths = &f.paths,
   };
@@ -499,7 +499,7 @@ test_fill_value_int16_neg1(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
-    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups = (struct read_op_group[8]){ { 0 } },
     .read_op_groups_cap = 8,
     .paths = &f.paths,
   };
@@ -541,7 +541,7 @@ test_fill_value_f32_nan(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
-    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups = (struct read_op_group[8]){ { 0 } },
     .read_op_groups_cap = 8,
     .paths = &f.paths,
   };
@@ -603,7 +603,7 @@ test_missing_shard_becomes_fill(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
-    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups = (struct read_op_group[8]){ { 0 } },
     .read_op_groups_cap = 8,
     .paths = &paths,
   };
@@ -648,7 +648,7 @@ test_page_alignment(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
-    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups = (struct read_op_group[8]){ { 0 } },
     .read_op_groups_cap = 8,
     .paths = &f.paths,
   };
@@ -704,7 +704,7 @@ run_blosc_codec_id_case(const char* cname, uint8_t expected_codec_id)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
-    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups = (struct read_op_group[8]){ { 0 } },
     .read_op_groups_cap = 8,
     .paths = &f.paths,
   };
@@ -745,7 +745,7 @@ run_blosc_lz4_rejected_case(const char* cname)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
-    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups = (struct read_op_group[8]){ { 0 } },
     .read_op_groups_cap = 8,
     .paths = &f.paths,
   };
@@ -797,7 +797,7 @@ test_codec_id_none(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
-    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups = (struct read_op_group[8]){ { 0 } },
     .read_op_groups_cap = 8,
     .paths = &f.paths,
   };
@@ -839,7 +839,7 @@ test_codec_id_blosc_unknown_cname(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
-    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups = (struct read_op_group[8]){ { 0 } },
     .read_op_groups_cap = 8,
     .paths = &f.paths,
   };
@@ -953,7 +953,7 @@ test_unsharded_single_chunk(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
-    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups = (struct read_op_group[8]){ { 0 } },
     .read_op_groups_cap = 8,
     .paths = &f.paths,
   };
@@ -1001,7 +1001,7 @@ test_unsharded_multi_chunk(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
-    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups = (struct read_op_group[8]){ { 0 } },
     .read_op_groups_cap = 8,
     .paths = &f.paths,
   };
@@ -1085,7 +1085,7 @@ test_sharded_index_start(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
-    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups = (struct read_op_group[8]){ { 0 } },
     .read_op_groups_cap = 8,
     .paths = &f.paths,
   };
@@ -1129,7 +1129,7 @@ test_coalesce_adjacent_pages(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
-    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups = (struct read_op_group[8]){ { 0 } },
     .read_op_groups_cap = 8,
     .paths = &f.paths,
   };
@@ -1175,7 +1175,7 @@ test_coalesce_gap_blocks_fusion(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
-    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups = (struct read_op_group[8]){ { 0 } },
     .read_op_groups_cap = 8,
     .paths = &f.paths,
   };
@@ -1222,7 +1222,7 @@ test_coalesce_fill_does_not_block_fusion(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
-    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups = (struct read_op_group[8]){ { 0 } },
     .read_op_groups_cap = 8,
     .paths = &f.paths,
   };
@@ -1283,7 +1283,7 @@ test_coalesce_non_monotonic_shard(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
-    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups = (struct read_op_group[8]){ { 0 } },
     .read_op_groups_cap = 8,
     .paths = &f.paths,
   };
@@ -1331,7 +1331,7 @@ test_coalesce_cross_sample(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
-    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups = (struct read_op_group[8]){ { 0 } },
     .read_op_groups_cap = 8,
     .paths = &f.paths,
   };
