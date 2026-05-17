@@ -7,21 +7,25 @@
 #include <string.h>
 
 void
-sample_slot_clear(struct damacy_sample_slot* slot)
+sample_slot_clear(struct damacy_sample_slot* slot, struct path_intern* uris)
 {
   if (!slot)
     return;
-  free(slot->uri);
+  if (slot->uri)
+    path_intern_release(uris, slot->uri);
   slot->uri = NULL;
   memset(&slot->aabb, 0, sizeof(slot->aabb));
 }
 
 int
-lookahead_init(struct damacy_lookahead* la, uint32_t cap)
+lookahead_init(struct damacy_lookahead* la,
+               uint32_t cap,
+               struct path_intern* uris)
 {
   la->slots =
     (struct damacy_sample_slot*)calloc(cap, sizeof(struct damacy_sample_slot));
   CHECK(Error, la->slots);
+  la->uris = uris;
   la->cap = cap;
   la->head = 0;
   la->tail = 0;
@@ -37,7 +41,7 @@ lookahead_destroy(struct damacy_lookahead* la)
   if (!la || !la->slots)
     return;
   for (uint32_t i = 0; i < la->cap; ++i)
-    sample_slot_clear(&la->slots[i]);
+    sample_slot_clear(&la->slots[i], la->uris);
   free(la->slots);
   la->slots = NULL;
 }
@@ -48,7 +52,7 @@ lookahead_push(struct damacy_lookahead* la, const struct damacy_sample* sample)
   if (la->size == la->cap)
     return 1;
   struct damacy_sample_slot* slot = &la->slots[la->tail];
-  slot->uri = strdup(sample->uri);
+  slot->uri = path_intern_acquire(la->uris, sample->uri);
   if (!slot->uri)
     return 1;
   slot->aabb = sample->aabb;

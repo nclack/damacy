@@ -20,6 +20,7 @@
 #include "store/store.h"
 #include "store/store_fs_gds.h"
 #include "util/cuda_check.h"
+#include "util/path_intern.h"
 #include "util/prelude.h"
 #include "wave/wave_budget.h"
 #include "wave/wave_pool.h"
@@ -67,6 +68,9 @@ struct damacy
 
   struct damacy_lookahead lookahead;
   struct damacy_batch_pool batch_pool;
+  // Interns sample URIs; refs live across the lookahead+batch_samples
+  // span. Bounded by lookahead.cap * distinct URIs in flight.
+  struct path_intern uris;
   // Owns the 4 streams + both waves; built once in damacy_create and
   // driven directly by the orchestrator (no per-call ctx building).
   struct wave_pool wave_pool;
@@ -214,7 +218,7 @@ plan_reserve(struct damacy* self, uint16_t slot_idx, uint32_t n_samples)
   enum damacy_status status = batch_pool_allocate(self);
   if (status != DAMACY_OK) {
     for (uint32_t i = 0; i < n_samples; ++i)
-      sample_slot_clear(&self->batch_samples[i]);
+      sample_slot_clear(&self->batch_samples[i], &self->uris);
     self->failed_status = status;
     return status;
   }
@@ -234,6 +238,10 @@ static enum damacy_status
 plan_run(struct damacy* self, uint16_t slot_idx, float* out_elapsed_ms)
 {
   struct damacy_batch_slot* slot = &self->batch_pool.slots[slot_idx];
+  // Slot is BATCH_PLANNING here; the prior batch's read_ops have all
+  // retired (else the slot wouldn't have transitioned through FREE).
+  // Safe to drop the interned strings they referenced.
+  path_intern_reset(&slot->paths);
   struct planner_output plan_out = {
     .read_ops = slot->read_ops,
     .read_ops_cap = DAMACY_MAX_CHUNKS_PER_BATCH,
@@ -241,6 +249,7 @@ plan_run(struct damacy* self, uint16_t slot_idx, float* out_elapsed_ms)
     .chunk_plans_cap = DAMACY_MAX_CHUNKS_PER_BATCH,
     .sample_plans = slot->sample_plans,
     .sample_plans_cap = self->cfg.batch_size,
+    .paths = &slot->paths,
   };
   uint64_t plan_t0 = monotonic_ns();
   enum damacy_status status = planner_plan(self->planner,
@@ -276,7 +285,7 @@ plan_commit(struct damacy* self,
   metric_record(&self->stats.plan, elapsed_ms, 0, 0);
   struct damacy_batch_slot* slot = &self->batch_pool.slots[slot_idx];
   for (uint32_t i = 0; i < slot->n_samples; ++i)
-    sample_slot_clear(&self->batch_samples[i]);
+    sample_slot_clear(&self->batch_samples[i], &self->uris);
   if (run_status != DAMACY_OK) {
     slot->state = BATCH_FREE;
     slot->n_samples = 0;
@@ -412,6 +421,7 @@ destroy_inner(struct damacy* self, int cuda_skip)
   self->batch_samples = NULL;
   lookahead_destroy(&self->lookahead);
   batch_pool_destroy(&self->batch_pool, cuda_skip);
+  path_intern_free(&self->uris);
 
   planner_destroy(self->planner);
   self->planner = NULL;
@@ -654,7 +664,8 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
 
   CHECK(Fail,
         lookahead_init(&self->lookahead,
-                       cfg->lookahead_batches * cfg->batch_size) == 0);
+                       cfg->lookahead_batches * cfg->batch_size,
+                       &self->uris) == 0);
 
   self->batch_samples = (struct damacy_sample_slot*)calloc(
     cfg->batch_size, sizeof(struct damacy_sample_slot));

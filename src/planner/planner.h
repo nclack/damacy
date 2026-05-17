@@ -23,17 +23,20 @@ extern "C"
 
   struct zarr_meta_cache;
   struct zarr_shard_cache;
+  struct path_intern;
 
   // Page-aligned IO operation. Multiple chunk_plans may share one
   // read_op once coalescing lands; pre-step-7 it's 1:1 with chunk_plans.
-  // shard_path is inlined so a read_op survives across batches in the
-  // wave scheduler's plan queue (step 5+).
+  // shard_path is interned by the planner; equal paths share a pointer,
+  // and the pointer is valid for the planner's lifetime — long enough
+  // for the wave scheduler's plan queue to outlive any batch. Fills set
+  // shard_path = NULL.
   struct read_op
   {
-    char shard_path[DAMACY_MAX_PATH]; // null-terminated; truncation = OOM
-    uint64_t file_offset;             // multiple of page_alignment
-    uint32_t nbytes;                  // multiple of page_alignment
-    uint64_t host_buf_offset;         // wave-scheduler-assigned; planner sets 0
+    const char* shard_path;
+    uint64_t file_offset;     // multiple of page_alignment
+    uint32_t nbytes;          // multiple of page_alignment
+    uint64_t host_buf_offset; // wave-scheduler-assigned; planner sets 0
   };
 
   // Per-dimension bundle for one sample. Co-locating all of dimension d's
@@ -126,6 +129,9 @@ extern "C"
   // Output buffers for planner_plan. Caller owns the storage; planner
   // populates *_n on success. If any buffer fills before the plan
   // completes, planner_plan returns DAMACY_OOM.
+  //
+  // `paths` interns each emitted read_op's shard_path. Caller resets
+  // it between plans into the same buffer (when read_ops are recycled).
   struct planner_output
   {
     struct read_op* read_ops;
@@ -137,6 +143,7 @@ extern "C"
     struct sample_plan* sample_plans;
     uint32_t sample_plans_cap;
     uint32_t n_sample_plans;
+    struct path_intern* paths;
     uint32_t n_chunks_to_load; // non-fill chunks (= IO requests pre-coalesce)
     uint32_t n_loads_issued;   // real (non-fill) read_ops after coalesce
   };
@@ -157,9 +164,9 @@ extern "C"
   // carrying the array's fill_value; downstream skips IO/decompress and
   // assemble broadcasts the fill bytes over the chunk's region.
   //
-  // shard_path strings are copied into each emitted read_op (inline
-  // storage, capped at DAMACY_MAX_PATH); the planner no longer
-  // retains string ownership across calls.
+  // shard_path strings are interned by the planner; equal paths share
+  // a pointer across all emitted read_ops, and the storage lives until
+  // planner_destroy.
   enum damacy_status planner_plan(struct planner* p,
                                   const struct damacy_sample* samples,
                                   uint32_t n_samples,

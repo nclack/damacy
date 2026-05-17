@@ -7,6 +7,7 @@
 #include "fixture.h"
 #include "planner/planner.h"
 #include "store/store.h"
+#include "util/path_intern.h"
 #include "zarr/zarr_meta_cache.h"
 #include "zarr/zarr_metadata.h"
 #include "zarr/zarr_shard_cache.h"
@@ -136,6 +137,7 @@ struct fixture
   struct zarr_meta_cache* meta;
   struct zarr_shard_cache* shards;
   struct planner* planner;
+  struct path_intern paths;
 };
 
 static int
@@ -190,6 +192,7 @@ fixture_destroy(struct fixture* f)
   zarr_shard_cache_destroy(f->shards);
   zarr_meta_cache_destroy(f->meta);
   store_destroy(f->store);
+  path_intern_free(&f->paths);
   fixture_rm_tree(f->root);
 }
 
@@ -256,6 +259,7 @@ test_single_chunk_aligned(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .paths = &f.paths,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
 
@@ -327,6 +331,7 @@ test_multi_chunk_partial(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .paths = &f.paths,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_chunk_plans == 4);
@@ -392,6 +397,7 @@ test_two_samples_indices(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .paths = &f.paths,
   };
   EXPECT(planner_plan(f.planner, s, 2, 7, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_chunk_plans == 2);
@@ -436,6 +442,7 @@ test_empty_chunk_becomes_fill(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .paths = &f.paths,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_chunk_plans == 4);
@@ -484,6 +491,7 @@ test_fill_value_int16_neg1(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .paths = &f.paths,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_chunk_plans == 4);
@@ -523,6 +531,7 @@ test_fill_value_f32_nan(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .paths = &f.paths,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   {
@@ -574,6 +583,7 @@ test_missing_shard_becomes_fill(void)
   struct read_op reads[8] = { 0 };
   struct chunk_plan chunks[8] = { 0 };
   struct sample_plan samples[4] = { 0 };
+  struct path_intern paths = { 0 };
   struct planner_output out = {
     .read_ops = reads,
     .read_ops_cap = 8,
@@ -581,6 +591,7 @@ test_missing_shard_becomes_fill(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .paths = &paths,
   };
   EXPECT(planner_plan(planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_chunk_plans == 4);
@@ -589,6 +600,7 @@ test_missing_shard_becomes_fill(void)
     EXPECT(chunks[i].codec_id == CODEC_FILL);
   }
 
+  path_intern_free(&paths);
   planner_destroy(planner);
   zarr_shard_cache_destroy(shards);
   zarr_meta_cache_destroy(meta);
@@ -622,6 +634,7 @@ test_page_alignment(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .paths = &f.paths,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
 
@@ -675,6 +688,7 @@ run_blosc_codec_id_case(const char* cname, uint8_t expected_codec_id)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .paths = &f.paths,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_chunk_plans == 4);
@@ -713,6 +727,7 @@ run_blosc_lz4_rejected_case(const char* cname)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .paths = &f.paths,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) ==
          DAMACY_INVAL);
@@ -762,6 +777,7 @@ test_codec_id_none(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .paths = &f.paths,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_chunk_plans == 4);
@@ -801,6 +817,7 @@ test_codec_id_blosc_unknown_cname(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .paths = &f.paths,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) != DAMACY_OK);
 
@@ -912,6 +929,7 @@ test_unsharded_single_chunk(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .paths = &f.paths,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
 
@@ -957,6 +975,7 @@ test_unsharded_multi_chunk(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .paths = &f.paths,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_chunk_plans == 4);
@@ -1038,6 +1057,7 @@ test_sharded_index_start(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .paths = &f.paths,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_chunk_plans == 4);
@@ -1079,6 +1099,7 @@ test_coalesce_adjacent_pages(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .paths = &f.paths,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_chunk_plans == 4);
@@ -1122,6 +1143,7 @@ test_coalesce_gap_blocks_fusion(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .paths = &f.paths,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_chunk_plans == 4);
@@ -1166,6 +1188,7 @@ test_coalesce_fill_does_not_block_fusion(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .paths = &f.paths,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_chunk_plans == 4);
@@ -1224,6 +1247,7 @@ test_coalesce_non_monotonic_shard(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .paths = &f.paths,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_chunk_plans == 4);
@@ -1269,6 +1293,7 @@ test_coalesce_cross_sample(void)
     .chunk_plans_cap = 8,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .paths = &f.paths,
   };
   EXPECT(planner_plan(f.planner, s, 2, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_sample_plans == 2);

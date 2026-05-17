@@ -12,6 +12,7 @@
 #include "fixture.h"
 #include "planner/planner.h"
 #include "store/store.h"
+#include "util/path_intern.h"
 #include "zarr/zarr_chunk_layout.h"
 #include "zarr/zarr_meta_cache.h"
 #include "zarr/zarr_metadata.h"
@@ -257,6 +258,7 @@ test_planner_populates_layout_blosc_zstd(void)
   struct read_op reads[16] = { 0 };
   struct chunk_plan chunks[16] = { 0 };
   struct sample_plan samples[4] = { 0 };
+  struct path_intern paths = { 0 };
   struct planner_output out = {
     .read_ops = reads,
     .read_ops_cap = 16,
@@ -264,6 +266,7 @@ test_planner_populates_layout_blosc_zstd(void)
     .chunk_plans_cap = 16,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .paths = &paths,
   };
   EXPECT(planner_plan(planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_sample_plans == 1);
@@ -273,14 +276,17 @@ test_planner_populates_layout_blosc_zstd(void)
   EXPECT(samples[0].layout.blocksize > 0);
   EXPECT(samples[0].layout.nblocks >= 1);
 
-  // Second plan call should hit the cached layout (no re-probe).
+  // Second plan call must reset the intern (same lifecycle the
+  // batch_slot would do between planner_plan calls).
   struct sample_plan samples2[4] = { 0 };
   out.sample_plans = samples2;
+  path_intern_reset(&paths);
   EXPECT(planner_plan(planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(samples2[0].layout_probed == 1);
   EXPECT(samples2[0].layout.typesize == samples[0].layout.typesize);
   EXPECT(samples2[0].layout.nblocks == samples[0].layout.nblocks);
 
+  path_intern_free(&paths);
   planner_destroy(planner);
   zarr_shard_cache_destroy(shards);
   zarr_meta_cache_destroy(meta);
@@ -327,6 +333,7 @@ test_planner_skips_layout_for_zstd(void)
   struct read_op reads[16] = { 0 };
   struct chunk_plan chunks[16] = { 0 };
   struct sample_plan samples[4] = { 0 };
+  struct path_intern paths = { 0 };
   struct planner_output out = {
     .read_ops = reads,
     .read_ops_cap = 16,
@@ -334,6 +341,7 @@ test_planner_skips_layout_for_zstd(void)
     .chunk_plans_cap = 16,
     .sample_plans = samples,
     .sample_plans_cap = 4,
+    .paths = &paths,
   };
   EXPECT(planner_plan(planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_sample_plans == 1);
@@ -341,6 +349,7 @@ test_planner_skips_layout_for_zstd(void)
   // non-zero and layout_probed stays 0.
   EXPECT(samples[0].layout_probed == 0);
 
+  path_intern_free(&paths);
   planner_destroy(planner);
   zarr_shard_cache_destroy(shards);
   zarr_meta_cache_destroy(meta);

@@ -16,14 +16,6 @@
 // shards are ~1 GB.
 #define DAMACY_MAX_SHARD_BYTES (1ull << 46)
 
-// Max bytes (including trailing NUL) for a shard path inlined into
-// struct read_op. The plan queue stores read_ops by value across batches
-// (step 5+), so paths can't be heap pointers owned by the planner —
-// they'd dangle on the next plan. 224 leaves headroom for an absolute
-// uri + chunk-grid coordinates without inflating chunk_plan-sized
-// records too much.
-#define DAMACY_MAX_PATH 224
-
 // Hard ceiling on per-substream uncompressed bytes. Compile-time max for
 // kernel array sizing (smem bstarts/sorted in the parse + emit kernels)
 // and the upper bound the runtime config's max_chunk_uncompressed_bytes

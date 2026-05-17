@@ -41,6 +41,7 @@ batch_slot_destroy(struct damacy_batch_slot* slot, int cuda_skip)
   free(slot->read_ops);
   free(slot->chunk_plans);
   free(slot->sample_plans);
+  path_intern_free(&slot->paths);
   if (!cuda_skip && slot->d_sample_plans)
     cuMemFree(CUDPTR(slot->d_sample_plans));
   memset(slot, 0, sizeof(*slot));

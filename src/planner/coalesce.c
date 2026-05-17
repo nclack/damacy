@@ -29,11 +29,11 @@ coalesce_chunks(struct planner_output* out,
   for (uint32_t i = 0; i < n; ++i)
     remap[i] = UINT32_MAX;
 
-  // Partition: real (path non-empty, nbytes > 0) vs fill placeholders.
+  // Partition: real (path interned, nbytes > 0) vs fill placeholders.
   uint32_t n_io = 0;
   for (uint32_t i = 0; i < n; ++i) {
     struct read_op* r = &out->read_ops[i];
-    if (r->nbytes != 0 && r->shard_path[0] != '\0')
+    if (r->nbytes != 0 && r->shard_path)
       perm[n_io++] = i;
   }
 
@@ -52,7 +52,7 @@ coalesce_chunks(struct planner_output* out,
     int fusable = 0;
     if (leader_old != UINT32_MAX) {
       struct read_op* leader = &out->read_ops[leader_old];
-      if (strcmp(curr->shard_path, leader->shard_path) == 0 &&
+      if (curr->shard_path == leader->shard_path &&
           curr->file_offset >= leader->file_offset &&
           curr->file_offset <= leader_end) {
         uint64_t fused_end = curr_end > leader_end ? curr_end : leader_end;
@@ -115,7 +115,7 @@ coalesce_chunks(struct planner_output* out,
     uint32_t loads = 0;
     for (uint32_t i = 0; i < out->n_read_ops; ++i) {
       const struct read_op* r = &out->read_ops[i];
-      if (r->nbytes != 0 && r->shard_path[0] != '\0')
+      if (r->nbytes != 0 && r->shard_path)
         loads++;
     }
     out->n_chunks_to_load = to_load;
