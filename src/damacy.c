@@ -241,6 +241,8 @@ plan_run(struct damacy* self, uint16_t slot_idx, float* out_elapsed_ms)
     .chunk_plans_cap = DAMACY_MAX_CHUNKS_PER_BATCH,
     .sample_plans = slot->sample_plans,
     .sample_plans_cap = self->cfg.batch_size,
+    .read_op_groups = slot->read_op_groups,
+    .read_op_groups_cap = DAMACY_MAX_CHUNKS_PER_BATCH,
   };
   uint64_t plan_t0 = monotonic_ns();
   enum damacy_status status = planner_plan(self->planner,
@@ -257,6 +259,7 @@ plan_run(struct damacy* self, uint16_t slot_idx, float* out_elapsed_ms)
   slot->n_chunks_to_load = plan_out.n_chunks_to_load;
   slot->n_loads_issued = plan_out.n_loads_issued;
   slot->n_sample_plans = plan_out.n_sample_plans;
+  slot->n_read_op_groups = plan_out.n_read_op_groups;
   if (plan_out.n_sample_plans > 0) {
     if (cuMemcpyHtoD(CUDPTR(slot->d_sample_plans),
                      slot->sample_plans,
@@ -285,6 +288,8 @@ plan_commit(struct damacy* self,
     return run_status;
   }
   slot->n_chunks_dispatched = 0;
+  slot->n_groups_dispatched = 0;
+  slot->group_chunk_offset = 0;
   slot->chunks_remaining = (int32_t)slot->n_chunks;
   slot->batch_id = self->next_batch_id++;
   slot->state = BATCH_FILLING;
@@ -838,6 +843,8 @@ damacy_release(struct damacy* self, struct damacy_batch* b)
   self->batch_pool.slots[s].state = BATCH_FREE;
   self->batch_pool.slots[s].n_chunks = 0;
   self->batch_pool.slots[s].n_chunks_dispatched = 0;
+  self->batch_pool.slots[s].n_groups_dispatched = 0;
+  self->batch_pool.slots[s].group_chunk_offset = 0;
   self->batch_pool.slots[s].deferred_release_pending = 0;
   scheduler_unlock(self->sched);
 }
@@ -892,6 +899,8 @@ damacy_release_event(struct damacy* self, struct damacy_batch* b, void* event)
     slot->state = BATCH_FREE;
     slot->n_chunks = 0;
     slot->n_chunks_dispatched = 0;
+    slot->n_groups_dispatched = 0;
+  slot->group_chunk_offset = 0;
     slot->deferred_release_pending = 0;
     r = DAMACY_CUDA;
     goto Done;
@@ -901,6 +910,8 @@ damacy_release_event(struct damacy* self, struct damacy_batch* b, void* event)
   slot->state = BATCH_FREE;
   slot->n_chunks = 0;
   slot->n_chunks_dispatched = 0;
+  slot->n_groups_dispatched = 0;
+  slot->group_chunk_offset = 0;
   r = DAMACY_OK;
 
 Done:
