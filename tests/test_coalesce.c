@@ -328,18 +328,16 @@ test_chunk_count_cap(void)
     .n_chunk_plans = n,
   };
   EXPECT(run_coalesce(&out, CAP_UNCAPPED, n) == DAMACY_OK);
-  EXPECT(out.n_read_ops >= 2);
-  uint32_t* refs = (uint32_t*)calloc(out.n_read_ops, sizeof(uint32_t));
-  EXPECT(refs);
+  // Exact split: one leader at the cap, one with the 5 stragglers —
+  // proves fusion happened up to cap and reset cleanly on overflow.
+  EXPECT(out.n_read_ops == 2);
+  uint32_t refs[2] = { 0, 0 };
   for (uint32_t i = 0; i < out.n_chunk_plans; ++i)
-    if (!chunks[i].is_fill)
-      refs[chunks[i].read_op_idx]++;
-  for (uint32_t i = 0; i < out.n_read_ops; ++i) {
-    if (reads[i].nbytes == 0)
-      continue;
-    EXPECT(refs[i] <= cap);
-  }
-  free(refs);
+    refs[chunks[i].read_op_idx]++;
+  uint32_t lo = refs[0] < refs[1] ? refs[0] : refs[1];
+  uint32_t hi = refs[0] < refs[1] ? refs[1] : refs[0];
+  EXPECT(lo == 5u);
+  EXPECT(hi == cap);
   free(reads);
   free(chunks);
   return 0;
