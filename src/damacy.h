@@ -95,8 +95,9 @@ extern "C"
     // Primary GPU budget. Hard cap on total GPU memory damacy will
     // allocate for wave-resident buffers, the shared decoder scratch,
     // per-wave fanout SOAs, and per-batch metadata. The resolver carves
-    // out the batch-output pool (2 × batch_size × product(sample_shape)
-    // × dtype_bpe) from this cap before sizing wave-resident buffers.
+    // out the batch-output pool (DAMACY_BATCH_SLOTS × batch_size ×
+    // product(sample_shape) × dtype_bpe) from this cap before sizing
+    // wave-resident buffers.
     // Required — no default; a value too small for the requested
     // geometry returns DAMACY_BUDGET from damacy_create.
     uint64_t max_gpu_memory_bytes;
@@ -139,8 +140,8 @@ extern "C"
   };
 
   // All resource caps fixed at create-time. Nothing grows after this.
-  // Output batches are double-buffered (B=2); waves are double-buffered
-  // internally. Neither is configurable.
+  // Output batches use DAMACY_BATCH_SLOTS slots (compile-time, default 2);
+  // waves are double-buffered internally. Neither is runtime-configurable.
   struct damacy_config
   {
     // Destination dtype of assembled batches. Source zarrs may carry
@@ -150,8 +151,8 @@ extern "C"
     enum damacy_dtype dtype;
     // Per-sample output extents (in dst voxels) along the zarr's axis
     // order — same layout damacy_sample.aabb uses. The resolver carves
-    // out 2 × batch_size × product(sample_shape) × dtype_bpe from
-    // tuning.max_gpu_memory_bytes before sizing wave-resident buffers,
+    // out DAMACY_BATCH_SLOTS × batch_size × product(sample_shape) ×
+    // dtype_bpe from tuning.max_gpu_memory_bytes before sizing waves,
     // so the batch-output pool is guaranteed to fit. damacy_push
     // validates each sample's aabb extent against this shape and
     // rejects mismatches with DAMACY_INVAL. sample_rank must be in

@@ -19,6 +19,7 @@
 #include "scheduler/scheduler.h"
 #include "store/store.h"
 #include "store/store_fs_gds.h"
+#include "store/store_fs_noisy.h"
 #include "util/cuda_check.h"
 #include "util/path_intern.h"
 #include "util/prelude.h"
@@ -143,7 +144,7 @@ batch_pool_allocate(struct damacy* self)
   if (s != DAMACY_OK)
     return s;
 
-  const uint64_t need = 2ull * pool->n_bytes;
+  const uint64_t need = (uint64_t)DAMACY_BATCH_SLOTS * pool->n_bytes;
   s = gpu_budget_try_commit(self->budget, need, "batch-output pool");
   if (s != DAMACY_OK)
     return s;
@@ -539,7 +540,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     uint64_t pool_bytes = 0;
     CHECK(Fail,
           (s = resolve_sample_volume_bytes(cfg, &pool_bytes)) == DAMACY_OK);
-    pool_reserve = 2ull * pool_bytes;
+    pool_reserve = (uint64_t)DAMACY_BATCH_SLOTS * pool_bytes;
   }
   if (pool_reserve >= max_gpu) {
     log_error("damacy: batch-output pool reserve=%llu >= "
@@ -608,7 +609,14 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     .nthreads = (int)cfg->tuning.n_io_threads,
     .affinity = &self->numa,
   };
-  self->store = want_gds ? store_fs_gds_create(&sc) : store_fs_create(&sc);
+  {
+    struct store_fs_noisy_params np = { 0 };
+    if (!want_gds && store_fs_noisy_params_from_env(&np)) {
+      self->store = store_fs_noisy_create(&sc, &np);
+    } else {
+      self->store = want_gds ? store_fs_gds_create(&sc) : store_fs_create(&sc);
+    }
+  }
   if (!self->store) {
     s = want_gds ? DAMACY_INVAL : DAMACY_OOM;
     goto Fail;
@@ -630,7 +638,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   };
   CHECK(Fail, planner_create(&pcfg, &self->planner) == DAMACY_OK);
 
-  for (int b = 0; b < 2; ++b)
+  for (int b = 0; b < DAMACY_BATCH_SLOTS; ++b)
     CHECK(Fail,
           batch_slot_init(&self->batch_pool.slots[b], cfg->batch_size) == 0);
 
@@ -1091,7 +1099,7 @@ damacy_config_describe(const struct damacy_config* cfg)
     // info for the rest of the geometry.
     enum damacy_status pvs = resolve_sample_volume_bytes(cfg, &pool_bytes);
     if (pvs == DAMACY_OK)
-      pool_reserve = 2ull * pool_bytes;
+      pool_reserve = (uint64_t)DAMACY_BATCH_SLOTS * pool_bytes;
     else
       log_info(
         "damacy_config_describe: resolve_sample_volume_bytes failed (%s); "

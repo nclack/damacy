@@ -71,13 +71,21 @@ test_state_predicates(void)
   EXPECT(find_filling_slot_with_work(&pool) == -1);
   EXPECT(any_batch_in_flight(&pool) == 0);
 
-  // slot[0] FILLING with work, slot[1] READY (newer batch_id)
+  // slot[0] FILLING with work, slot[1] READY (newer batch_id). Any
+  // additional slots from DAMACY_BATCH_SLOTS>2 stay FILLING-fully-dispatched
+  // so they neither steal the find_*_slot result nor leave a FREE slot.
   pool.slots[0].state = BATCH_FILLING;
   pool.slots[0].batch_id = 10;
   pool.slots[0].n_chunks = 4;
   pool.slots[0].n_chunks_dispatched = 2;
   pool.slots[1].state = BATCH_READY;
   pool.slots[1].batch_id = 11;
+  for (int s = 2; s < DAMACY_BATCH_SLOTS; ++s) {
+    pool.slots[s].state = BATCH_FILLING;
+    pool.slots[s].batch_id = 100u + s;
+    pool.slots[s].n_chunks = 1;
+    pool.slots[s].n_chunks_dispatched = 1;
+  }
 
   EXPECT(find_free_batch_slot(&pool) == -1);
   EXPECT(find_oldest_ready_slot(&pool) == 1);

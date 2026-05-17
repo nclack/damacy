@@ -41,6 +41,12 @@ _Static_assert(DAMACY_DEFAULT_READ_OP_MAX_BYTES <= UINT32_MAX,
                "read_op.nbytes is uint32_t");
 #endif
 
+// Batch-output pool depth. Override at configure with
+// `-DDAMACY_BATCH_SLOTS=N` to investigate GH issue #79.
+#ifndef DAMACY_BATCH_SLOTS
+#define DAMACY_BATCH_SLOTS 2
+#endif
+
 // In-flight wave count. Fixed; sets the minimum host_buffer_waves and
 // the device-side decode concurrency depth.
 #define DAMACY_N_WAVES 2

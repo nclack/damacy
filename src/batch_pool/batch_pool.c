@@ -56,7 +56,7 @@ batch_pool_destroy(struct damacy_batch_pool* pool, int cuda_skip)
 {
   if (!pool)
     return;
-  for (int s = 0; s < 2; ++s) {
+  for (int s = 0; s < DAMACY_BATCH_SLOTS; ++s) {
     if (!cuda_skip && pool->slots[s].dev_ptr)
       cuMemFree(CUDPTR(pool->slots[s].dev_ptr));
     batch_slot_destroy(&pool->slots[s], cuda_skip);
@@ -107,7 +107,7 @@ batch_pool_alloc_dev(struct damacy_batch_pool* pool)
     return DAMACY_OK;
   if (!pool->layout_set)
     return DAMACY_INVAL;
-  for (int s = 0; s < 2; ++s) {
+  for (int s = 0; s < DAMACY_BATCH_SLOTS; ++s) {
     CUdeviceptr dptr = 0;
     if (cuMemAlloc(&dptr, pool->n_bytes) != CUDA_SUCCESS) {
       log_error("batch_pool: cuMemAlloc(%llu) failed",
@@ -123,7 +123,7 @@ batch_pool_alloc_dev(struct damacy_batch_pool* pool)
 int
 find_free_batch_slot(const struct damacy_batch_pool* pool)
 {
-  for (int s = 0; s < 2; ++s)
+  for (int s = 0; s < DAMACY_BATCH_SLOTS; ++s)
     if (pool->slots[s].state == BATCH_FREE)
       return s;
   return -1;
@@ -134,7 +134,7 @@ find_oldest_ready_slot(const struct damacy_batch_pool* pool)
 {
   int best = -1;
   uint64_t best_id = UINT64_MAX;
-  for (int s = 0; s < 2; ++s) {
+  for (int s = 0; s < DAMACY_BATCH_SLOTS; ++s) {
     if (pool->slots[s].state == BATCH_READY &&
         pool->slots[s].batch_id < best_id) {
       best = s;
@@ -149,7 +149,7 @@ find_oldest_filling_slot(const struct damacy_batch_pool* pool)
 {
   int best = -1;
   uint64_t best_id = UINT64_MAX;
-  for (int s = 0; s < 2; ++s) {
+  for (int s = 0; s < DAMACY_BATCH_SLOTS; ++s) {
     if (pool->slots[s].state == BATCH_FILLING &&
         pool->slots[s].batch_id < best_id) {
       best = s;
@@ -164,7 +164,7 @@ find_filling_slot_with_work(const struct damacy_batch_pool* pool)
 {
   int best = -1;
   uint64_t best_id = UINT64_MAX;
-  for (int s = 0; s < 2; ++s) {
+  for (int s = 0; s < DAMACY_BATCH_SLOTS; ++s) {
     const struct damacy_batch_slot* slot = &pool->slots[s];
     if (slot->state == BATCH_FILLING &&
         slot->n_chunks_dispatched < slot->n_chunks &&
@@ -179,7 +179,7 @@ find_filling_slot_with_work(const struct damacy_batch_pool* pool)
 int
 any_batch_in_flight(const struct damacy_batch_pool* pool)
 {
-  for (int s = 0; s < 2; ++s) {
+  for (int s = 0; s < DAMACY_BATCH_SLOTS; ++s) {
     enum batch_slot_state st = pool->slots[s].state;
     if (st == BATCH_PLANNING || st == BATCH_FILLING || st == BATCH_READY ||
         st == BATCH_HELD)
@@ -191,7 +191,7 @@ any_batch_in_flight(const struct damacy_batch_pool* pool)
 int
 any_batch_planning(const struct damacy_batch_pool* pool)
 {
-  for (int s = 0; s < 2; ++s)
+  for (int s = 0; s < DAMACY_BATCH_SLOTS; ++s)
     if (pool->slots[s].state == BATCH_PLANNING)
       return 1;
   return 0;
