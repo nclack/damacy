@@ -78,7 +78,7 @@ wave_pool_shared_predict_bytes(uint64_t dev_decompressed_bytes,
 // blosc1 meta, batch_metadata) is accounted for. The resolver insists
 // on holding at least one chunk at `max_chunk_uncompressed_bytes` per
 // wave; if the smallest viable geometry doesn't fit, returns
-// DAMACY_OOM with a logged breakdown so the user knows what to raise.
+// DAMACY_BUDGET with a logged breakdown so the user knows what to raise.
 struct wave_pool_sizing
 {
   uint64_t host_slab_per_wave;        // pinned-host + dev_compressed mirror

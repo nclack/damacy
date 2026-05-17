@@ -24,6 +24,8 @@ damacy_status_str(enum damacy_status s)
       return "cuda error";
     case DAMACY_OOM:
       return "out of memory";
+    case DAMACY_BUDGET:
+      return "configured budget too small";
     case DAMACY_SHUTDOWN:
       return "shutdown";
   }

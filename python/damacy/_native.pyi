@@ -32,6 +32,7 @@ STATUS_IO: Final[int]
 STATUS_DECODE: Final[int]
 STATUS_CUDA: Final[int]
 STATUS_OOM: Final[int]
+STATUS_BUDGET: Final[int]
 STATUS_SHUTDOWN: Final[int]
 
 # ---- damacy_dtype integers ----------------------------------------------
@@ -123,7 +124,7 @@ class Pipeline:
         n_shards_meta_cache: int,
         dtype: str | int,
         max_chunk_uncompressed_bytes: int,
-        max_gpu_memory_bytes: int = 0,
+        max_gpu_memory_bytes: int,
         device: int = -1,
         host_buffer_waves: int = 0,
     ) -> None: ...

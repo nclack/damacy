@@ -20,48 +20,18 @@ target_link_libraries(_native PRIVATE damacy log warnings)
 # wheel; the extension goes alongside the package's __init__.py.
 install(TARGETS _native LIBRARY DESTINATION damacy)
 
-# Pytest harness for the bindings. Gated on pytest being importable
-# from the cmake-located Python interpreter — non-Python-dev
-# environments build the extension without registering this test.
-# The damacy package itself is imported at test runtime, so the test
-# correctly fires after a build/editable-install ordering (see
-# Dockerfile). WRITE_ZARR_SCRIPT mirrors the C-side fixture path.
+# --cov-fail-under floor matches codecov.yml's patch target so the two
+# gates (project-total here, per-PR-patch on codecov) read the same number.
 if(BUILD_TESTING)
-    execute_process(
-        COMMAND ${Python_EXECUTABLE} -c "import pytest"
-        RESULT_VARIABLE _damacy_have_pytest
-        OUTPUT_QUIET
-        ERROR_QUIET
-    )
-    if(_damacy_have_pytest EQUAL 0)
-        # Probe for pytest-cov; if present, layer --cov flags onto the
-        # invocation so ctest produces a coverage summary alongside the
-        # gcovr C-side report.
-        execute_process(
-            COMMAND ${Python_EXECUTABLE} -c "import pytest_cov"
-            RESULT_VARIABLE _damacy_have_pytest_cov
-            OUTPUT_QUIET
-            ERROR_QUIET
-        )
-        set(_damacy_pytest_cov_args "")
-        if(_damacy_have_pytest_cov EQUAL 0)
-            # Local floor matches codecov.yml's patch target so the two
-            # gates (project-total here, per-PR-patch on codecov) read
-            # the same number. Headroom above the floor lets defensive
-            # except blocks land without a same-PR test for every line.
-            list(
-                APPEND _damacy_pytest_cov_args
-                "--cov=damacy"
-                "--cov-report=term-missing:skip-covered"
-                "--cov-fail-under=70"
-            )
-        endif()
+    find_program(UV_EXECUTABLE uv)
+    if(UV_EXECUTABLE)
         add_test(
             NAME python_pytest
             COMMAND
-                ${Python_EXECUTABLE} -m pytest -v --color=yes
-                ${_damacy_pytest_cov_args} "${CMAKE_CURRENT_SOURCE_DIR}/tests"
-            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+                ${UV_EXECUTABLE} run --extra dev pytest -v --color=yes
+                --cov=damacy --cov-report=term-missing:skip-covered
+                --cov-fail-under=70 "${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
         )
         set_tests_properties(
             python_pytest
@@ -72,8 +42,7 @@ if(BUILD_TESTING)
     else()
         message(
             STATUS
-            "damacy: pytest not importable from ${Python_EXECUTABLE}; "
-            "skipping python_pytest registration"
+            "damacy: uv not on PATH; skipping python_pytest registration"
         )
     endif()
 endif()

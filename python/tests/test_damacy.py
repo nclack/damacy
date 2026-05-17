@@ -20,12 +20,12 @@ import damacy
 import pytest
 from damacy import (
     BatchInfo,
+    BudgetExceeded,
     Config,
     DamacyError,
     DtypeMismatch,
     InvalidArgument,
     NotFound,
-    OutOfMemory,
     Pipeline,
     Sample,
     Stats,
@@ -129,6 +129,7 @@ def _base_config(dtype: str | int | damacy.Dtype = "f32") -> Config:
         n_zarrs_meta_cache=4,
         n_shards_meta_cache=4,
         sample_shape=(8, 16),
+        max_gpu_memory_bytes=1 << 30,
     )
 
 
@@ -180,11 +181,11 @@ def test_oversize_max_chunk_raises_invalid_argument():
     assert isinstance(excinfo.value, RuntimeError)
 
 
-def test_max_gpu_memory_too_small_raises_oom():
+def test_max_gpu_memory_too_small_raises_budget():
     cfg = dataclasses.replace(_base_config(), max_gpu_memory_bytes=64)
-    with pytest.raises(OutOfMemory) as excinfo:
+    with pytest.raises(BudgetExceeded) as excinfo:
         Pipeline(cfg)
-    assert excinfo.value.status is Status.OOM
+    assert excinfo.value.status is Status.BUDGET
 
 
 @pytest.mark.parametrize("dtype", ["f32", "bf16", "float32", "bfloat16"])
@@ -260,7 +261,7 @@ def test_oversize_chunk_surfaces_at_pop(tmp_path, write_zarr_script):
     )
     with Pipeline(cfg) as d:
         d.push([Sample(uri=str(out), aabb=[(0, 8), (0, 16)])])
-        with pytest.raises(InvalidArgument):
+        with pytest.raises(BudgetExceeded):
             d.pop()
 
 
@@ -365,18 +366,31 @@ def test_push_error_drops_offending_iterator(tiny_zarr):
 
 def test_config_validates_eagerly():
     ss = (8, 16)
+    gpu = 1 << 30
     with pytest.raises(ValueError, match="batch_size"):
-        Config(batch_size=0, sample_shape=ss)
+        Config(batch_size=0, sample_shape=ss, max_gpu_memory_bytes=gpu)
     with pytest.raises(ValueError, match="lookahead_batches"):
-        Config(batch_size=1, sample_shape=ss, lookahead_batches=1)
+        Config(
+            batch_size=1,
+            sample_shape=ss,
+            lookahead_batches=1,
+            max_gpu_memory_bytes=gpu,
+        )
     with pytest.raises(ValueError, match="n_io_threads"):
-        Config(batch_size=1, sample_shape=ss, n_io_threads=0)
+        Config(batch_size=1, sample_shape=ss, n_io_threads=0, max_gpu_memory_bytes=gpu)
     with pytest.raises(ValueError, match="max_chunk_uncompressed_bytes"):
-        Config(batch_size=1, sample_shape=ss, max_chunk_uncompressed_bytes=-1)
+        Config(
+            batch_size=1,
+            sample_shape=ss,
+            max_chunk_uncompressed_bytes=-1,
+            max_gpu_memory_bytes=gpu,
+        )
+    with pytest.raises(ValueError, match="max_gpu_memory_bytes"):
+        Config(batch_size=1, sample_shape=ss, max_gpu_memory_bytes=0)
     with pytest.raises(ValueError, match="sample_shape"):
-        Config(batch_size=1, sample_shape=())
+        Config(batch_size=1, sample_shape=(), max_gpu_memory_bytes=gpu)
     with pytest.raises(ValueError, match="sample_shape"):
-        Config(batch_size=1, sample_shape=(8, 0))
+        Config(batch_size=1, sample_shape=(8, 0), max_gpu_memory_bytes=gpu)
 
 
 def test_config_dtype_coerced():

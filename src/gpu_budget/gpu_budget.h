@@ -28,8 +28,8 @@ void
 gpu_budget_destroy(struct gpu_budget* b);
 
 // Add `bytes` to committed. Returns DAMACY_OK on success;
-// DAMACY_OOM (with a log_error tagged by `tag`) if committed + bytes
-// would exceed the cap. On OOM the committed counter is unchanged.
+// DAMACY_BUDGET (with a log_error tagged by `tag`) if committed + bytes
+// would exceed the cap. On failure the committed counter is unchanged.
 enum damacy_status
 gpu_budget_try_commit(struct gpu_budget* b, uint64_t bytes, const char* tag);
 

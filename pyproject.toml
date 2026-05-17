@@ -12,16 +12,13 @@ authors = [{ name = "Nathan Clack", email = "nclack@gmail.com" }]
 requires-python = ">=3.11"
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.6", "pyright>=1.1", "torch"]
-# mkdocstrings reads damacy via griffe's static analysis (AST parse), so the
-# docs build does not import the package — no CUDA / nvcomp needed at build.
-# ruff is here so mkdocstrings can format rendered signatures (it imports
-# the python module, not the shell binary nix ships).
+dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.6", "pyright>=1.1"]
+gpu = ["torch"]
 docs = [
-    "mkdocs>=1.6",
-    "mkdocs-material>=9.5",
-    "mkdocstrings[python]>=0.26",
-    "ruff>=0.6",
+  "mkdocs>=1.6",
+  "mkdocs-material>=9.5",
+  "mkdocstrings[python]>=0.26",
+  "ruff>=0.6",
 ]
 
 [tool.scikit-build]
@@ -29,14 +26,10 @@ cmake.args = ["-DDAMACY_PYTHON=ON"]
 cmake.build-type = "RelWithDebInfo"
 build-dir = "build/{wheel_tag}"
 wheel.packages = ["python/damacy"]
-# ABI-stable wheels are deferred until the public surface is final;
-# until then we build a per-cpython wheel.
 wheel.py-api = ""
 
 [tool.scikit-build.cmake.define]
 DAMACY_FUZZ = "OFF"
-
-# ---- ruff ---------------------------------------------------------------
 
 [tool.ruff]
 line-length = 88

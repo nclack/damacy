@@ -25,10 +25,6 @@ resolve_max_chunk_uncompressed(const struct damacy_config* cfg);
 uint64_t
 resolve_max_read_op_bytes(const struct damacy_config* cfg);
 
-// 0 → DAMACY_DEFAULT_MAX_GPU_MEMORY_BYTES.
-uint64_t
-resolve_max_gpu_memory(const struct damacy_config* cfg);
-
 // 0 → DAMACY_DEFAULT_HOST_BUFFER_WAVES; clamped to
 // [DAMACY_N_WAVES, DAMACY_MAX_HOST_BUFFER_WAVES].
 uint8_t

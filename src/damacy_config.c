@@ -96,15 +96,6 @@ resolve_max_read_op_bytes(const struct damacy_config* cfg)
   return v;
 }
 
-uint64_t
-resolve_max_gpu_memory(const struct damacy_config* cfg)
-{
-  uint64_t v = cfg->tuning.max_gpu_memory_bytes;
-  if (v == 0)
-    v = DAMACY_DEFAULT_MAX_GPU_MEMORY_BYTES;
-  return v;
-}
-
 uint8_t
 resolve_host_buffer_waves(const struct damacy_config* cfg)
 {

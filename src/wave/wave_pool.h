@@ -155,7 +155,7 @@ struct wave_pool_peel_ticket
   uint8_t consumed;
 };
 
-// reserve: *err = DAMACY_OOM on the single-chunk-too-large path.
+// reserve: *err = DAMACY_BUDGET on the single-chunk-too-large path.
 struct wave_pool_peel_ticket
 wave_pool_peel_reserve(struct wave_pool* wp,
                        uint16_t batch_slot_idx,

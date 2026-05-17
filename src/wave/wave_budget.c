@@ -236,7 +236,7 @@ wave_pool_resolve_sizing(uint64_t max_gpu_memory_bytes,
               (unsigned long long)max_gpu_memory_bytes,
               (unsigned long long)total_min,
               (unsigned long long)max_chunk_uncompressed_bytes);
-    return DAMACY_OOM;
+    return DAMACY_BUDGET;
   }
 
   // dev_compressed + dev_decompressed scale 1:1 with per_wave; 2× for

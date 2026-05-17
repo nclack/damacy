@@ -3,29 +3,29 @@
 // (derived from cfg.sample_shape).
 //
 // Test cases:
-//   test_create_default_caps        — 0/0 config matches pre-existing
-//                                     behaviour, instance comes up fine
+//   test_create_default_caps        — chunk cap at 0 picks the C default
+//                                     (512 KB); instance comes up fine
 //   test_oversize_chunk_rejected    — set chunk cap below the inner-chunk
 //                                     uncompressed size; planner returns
-//                                     DAMACY_INVAL via damacy_pop
+//                                     DAMACY_BUDGET via damacy_pop
 //   test_chunk_cap_too_high         — value > compile-time ceiling rejected
 //                                     at create with DAMACY_INVAL
 //   test_gpu_budget_too_small       — max_gpu_memory_bytes set absurdly
-//                                     low; create returns DAMACY_OOM
+//                                     low; create returns DAMACY_BUDGET
 //   test_chunk_cap_shrinks_nvcomp   — smaller runtime cap → smaller nvcomp
 //                                     temp scratch (queried directly)
 //   test_config_describe            — damacy_config_describe runs and
 //                                     logs without touching CUDA state
 //   test_pool_reserve_fits_default_budget
-//                                   — non-trivial pool reserve at the
-//                                     default cap; create+push+pop OK,
-//                                     committed counter stays under cap
+//                                   — non-trivial pool reserve at a 1 GiB
+//                                     cap; create+push+pop OK, committed
+//                                     counter stays under cap
 //   test_pool_exceeds_budget_rejected_at_create
 //                                   — pool reserve > cap; create returns
-//                                     DAMACY_OOM (pool-reserve branch)
+//                                     DAMACY_BUDGET (pool-reserve branch)
 //   test_resolver_cannot_fit_one_chunk
 //                                   — pool fits but resolver budget too
-//                                     small for one chunk; DAMACY_OOM
+//                                     small for one chunk; DAMACY_BUDGET
 //                                     (wave_pool_resolve_sizing branch)
 //   test_sample_shape_mismatch_rejected
 //                                   — push a sample whose aabb extent !=
@@ -67,6 +67,7 @@ mk_cfg(const char* root, uint32_t batch_size, int64_t sy, int64_t sx)
       .n_io_threads = 1,
       .n_zarrs_meta_cache = 4,
       .n_shards_meta_cache = 4,
+      .max_gpu_memory_bytes = 1ull << 30,
     },
   };
   c.sample_shape[0] = sy;
@@ -83,9 +84,8 @@ mk_sample(const char* uri, int64_t y0, int64_t y1, int64_t x0, int64_t x1)
   return s;
 }
 
-// Default config should still bring up the pipeline and run a sample —
-// proves the runtime-cap default (512 KB) lines up with the pre-runtime
-// behaviour for the existing test workloads.
+// chunk_uncompressed_bytes at 0 picks the C default (512 KB) and brings
+// the pipeline up cleanly.
 static int
 test_create_default_caps(void)
 {
@@ -98,9 +98,7 @@ test_create_default_caps(void)
            p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
 
   struct damacy_config cfg = mk_cfg(root, 1, 8, 16);
-  // Both runtime knobs at 0 — defaults: 512 KB chunk cap, no GPU cap.
   cfg.tuning.max_chunk_uncompressed_bytes = 0;
-  cfg.tuning.max_gpu_memory_bytes = 0;
 
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
@@ -118,7 +116,7 @@ test_create_default_caps(void)
 }
 
 // Inner chunk = 8x16 u16 = 256 bytes. Set runtime cap = 128 bytes; the
-// planner must reject the chunk with DAMACY_INVAL (surfaces through the
+// planner must reject the chunk with DAMACY_BUDGET (surfaces through the
 // pop after push consumes the sample into the lookahead).
 static int
 test_oversize_chunk_rejected(void)
@@ -142,7 +140,7 @@ test_oversize_chunk_rejected(void)
   // push validates dtype/rank only; the planner rejection lands at pop.
   EXPECT(damacy_push(d, slice).status == DAMACY_OK);
   struct damacy_batch* b = NULL;
-  EXPECT(damacy_pop(d, &b) == DAMACY_INVAL);
+  EXPECT(damacy_pop(d, &b) == DAMACY_BUDGET);
 
   damacy_destroy(d);
   fixture_rm_tree(root);
@@ -168,7 +166,7 @@ test_chunk_cap_too_high(void)
 }
 
 // max_gpu_memory_bytes set absurdly low (64 B) — wave-resident memory
-// at default config is many MB, so create must fail with DAMACY_OOM.
+// at default config is many MB, so create must fail with DAMACY_BUDGET.
 static int
 test_gpu_budget_too_small(void)
 {
@@ -177,7 +175,7 @@ test_gpu_budget_too_small(void)
   struct damacy_config cfg = mk_cfg(root, 1, 8, 16);
   cfg.tuning.max_gpu_memory_bytes = 64;
   struct damacy* d = NULL;
-  EXPECT(damacy_create(&cfg, &d) == DAMACY_OOM);
+  EXPECT(damacy_create(&cfg, &d) == DAMACY_BUDGET);
   EXPECT(d == NULL);
   fixture_rm_tree(root);
   return 0;
@@ -223,9 +221,10 @@ test_config_describe(void)
   char root[64];
   EXPECT(mkdtemp_root(root, sizeof root) == 0);
   struct damacy_config cfg = mk_cfg(root, 1, 8, 16);
-  cfg.tuning.max_gpu_memory_bytes = 0;
   damacy_config_describe(&cfg);
   cfg.tuning.max_gpu_memory_bytes = 256ull << 20;
+  damacy_config_describe(&cfg);
+  cfg.tuning.max_gpu_memory_bytes = 0;
   damacy_config_describe(&cfg);
   // NULL-safe sanity: must not crash.
   damacy_config_describe(NULL);
@@ -256,8 +255,8 @@ test_pool_reserve_fits_default_budget(void)
            p, shape, inner, shard, 4, "uint16", 0, "blosc-zstd") == 0);
 
   // batch_size=20, sample=(16,1,256,256) f32 → 80 MB per slot, 160 MB
-  // double-buffered. Default cap is 1 GiB; ~860 MB left for the
-  // resolver, comfortably fits the wave-resident geometry.
+  // double-buffered. 1 GiB cap leaves ~860 MB for the resolver,
+  // comfortably fits the wave-resident geometry.
   struct damacy_config cfg = {
     .batch_size = 20,
     .lookahead_batches = 2,
@@ -269,6 +268,7 @@ test_pool_reserve_fits_default_budget(void)
       .n_io_threads = 1,
       .n_zarrs_meta_cache = 4,
       .n_shards_meta_cache = 4,
+      .max_gpu_memory_bytes = 1ull << 30,
     },
   };
   struct damacy* d = NULL;
@@ -293,8 +293,7 @@ test_pool_reserve_fits_default_budget(void)
   struct damacy_stats st;
   damacy_stats_get(d, &st);
   EXPECT(st.gpu_bytes_committed > 0);
-  // Default cap when cfg.max_gpu_memory_bytes is left at 0.
-  EXPECT(st.gpu_bytes_committed <= DAMACY_DEFAULT_MAX_GPU_MEMORY_BYTES);
+  EXPECT(st.gpu_bytes_committed <= cfg.tuning.max_gpu_memory_bytes);
 
   damacy_destroy(d);
   fixture_rm_tree(root);
@@ -303,7 +302,7 @@ test_pool_reserve_fits_default_budget(void)
 
 // pool_reserve = 2 × 20 × 16 × 256 × 256 × 4 ≈ 160 MB, well above
 // the 32 MB cap — the "pool_reserve >= max_gpu_memory_bytes" branch in
-// damacy_create rejects with DAMACY_OOM before wave_pool_resolve_sizing
+// damacy_create rejects with DAMACY_BUDGET before wave_pool_resolve_sizing
 // is called.
 static int
 test_pool_exceeds_budget_rejected_at_create(void)
@@ -325,7 +324,7 @@ test_pool_exceeds_budget_rejected_at_create(void)
     },
   };
   struct damacy* d = NULL;
-  EXPECT(damacy_create(&cfg, &d) == DAMACY_OOM);
+  EXPECT(damacy_create(&cfg, &d) == DAMACY_BUDGET);
   EXPECT(d == NULL);
   fixture_rm_tree(root);
   return 0;
@@ -333,7 +332,7 @@ test_pool_exceeds_budget_rejected_at_create(void)
 
 // pool_reserve = 2 × 1 × 8 × 16 × 4 = 1 KB, well under the 2 KB cap, but
 // resolver_budget = 1 KB is too small for one wave's minimum geometry.
-// Exercises the wave_pool_resolve_sizing OOM branch, distinct from the
+// Exercises the wave_pool_resolve_sizing BUDGET branch, distinct from the
 // pool_reserve-exceeds-cap branch above.
 static int
 test_resolver_cannot_fit_one_chunk(void)
@@ -343,7 +342,7 @@ test_resolver_cannot_fit_one_chunk(void)
   struct damacy_config cfg = mk_cfg(root, 1, 8, 16);
   cfg.tuning.max_gpu_memory_bytes = 2ull << 10;
   struct damacy* d = NULL;
-  EXPECT(damacy_create(&cfg, &d) == DAMACY_OOM);
+  EXPECT(damacy_create(&cfg, &d) == DAMACY_BUDGET);
   EXPECT(d == NULL);
   fixture_rm_tree(root);
   return 0;

@@ -523,11 +523,9 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     }
   }
 
-  // max_gpu_memory_bytes is the primary knob. Apply the default
-  // (~1 GB) if the user left it at 0.
-  const uint64_t resolved_max_gpu = resolve_max_gpu_memory(cfg);
+  const uint64_t max_gpu = cfg->tuning.max_gpu_memory_bytes;
   const uint64_t runtime_chunk_cap = resolve_max_chunk_uncompressed(cfg);
-  self->budget = gpu_budget_new(resolved_max_gpu);
+  self->budget = gpu_budget_new(max_gpu);
   if (!self->budget) {
     s = DAMACY_OOM;
     goto Fail;
@@ -543,16 +541,16 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
           (s = resolve_sample_volume_bytes(cfg, &pool_bytes)) == DAMACY_OK);
     pool_reserve = 2ull * pool_bytes;
   }
-  if (pool_reserve >= resolved_max_gpu) {
+  if (pool_reserve >= max_gpu) {
     log_error("damacy: batch-output pool reserve=%llu >= "
               "max_gpu_memory_bytes=%llu; nothing left for wave-resident "
               "buffers (sample_shape × batch_size × dtype_bpe × 2 exceeds cap)",
               (unsigned long long)pool_reserve,
-              (unsigned long long)resolved_max_gpu);
-    s = DAMACY_OOM;
+              (unsigned long long)max_gpu);
+    s = DAMACY_BUDGET;
     goto Fail;
   }
-  const uint64_t resolver_budget = resolved_max_gpu - pool_reserve;
+  const uint64_t resolver_budget = max_gpu - pool_reserve;
 
   // Resolve per-wave geometry from the resolver budget; rejects with
   // OOM if even the minimum (one chunk per wave) doesn't fit. Then
@@ -577,7 +575,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
              "(pool_reserve=%llu, resolver_budget=%llu): "
              "host_slab_per_wave=%llu dev_decompressed_per_wave=%llu "
              "initial_nvcomp_temp=%llu predicted_total=%llu",
-             (unsigned long long)resolved_max_gpu,
+             (unsigned long long)max_gpu,
              (unsigned long long)pool_reserve,
              (unsigned long long)resolver_budget,
              (unsigned long long)sizing.host_slab_per_wave,
@@ -599,7 +597,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
         (unsigned long long)predicted.fanout_soa,
         (unsigned long long)predicted.nvcomp_temp,
         (unsigned long long)predicted.batch_metadata);
-      s = DAMACY_OOM;
+      s = DAMACY_BUDGET;
       goto Fail;
     }
   }
@@ -1088,7 +1086,7 @@ damacy_config_describe(const struct damacy_config* cfg)
     log_info("damacy_config_describe: NULL config");
     return;
   }
-  const uint64_t resolved_max_gpu = resolve_max_gpu_memory(cfg);
+  const uint64_t max_gpu = cfg->tuning.max_gpu_memory_bytes;
   const uint64_t runtime_chunk_cap = resolve_max_chunk_uncompressed(cfg);
   uint64_t pool_reserve = 0;
   {
@@ -1106,12 +1104,11 @@ damacy_config_describe(const struct damacy_config* cfg)
         damacy_status_str(pvs));
   }
   const uint64_t resolver_budget =
-    pool_reserve < resolved_max_gpu ? resolved_max_gpu - pool_reserve : 0;
-  log_info("damacy_config_describe: input max_gpu_memory_bytes=%llu "
-           "(resolved=%llu, pool_reserve=%llu, resolver_budget=%llu, "
+    pool_reserve < max_gpu ? max_gpu - pool_reserve : 0;
+  log_info("damacy_config_describe: max_gpu_memory_bytes=%llu "
+           "(pool_reserve=%llu, resolver_budget=%llu, "
            "max_chunk_uncompressed_bytes=%llu, batch_size=%u)",
-           (unsigned long long)cfg->tuning.max_gpu_memory_bytes,
-           (unsigned long long)resolved_max_gpu,
+           (unsigned long long)max_gpu,
            (unsigned long long)pool_reserve,
            (unsigned long long)resolver_budget,
            (unsigned long long)runtime_chunk_cap,
@@ -1154,13 +1151,12 @@ damacy_config_describe(const struct damacy_config* cfg)
   const uint64_t worst_case = sizing.worst_case_total_bytes;
   const uint64_t reserved_for_grow =
     worst_case > initial_alloc ? worst_case - initial_alloc : 0;
-  const uint64_t slack =
-    resolved_max_gpu > worst_case ? resolved_max_gpu - worst_case : 0;
+  const uint64_t slack = max_gpu > worst_case ? max_gpu - worst_case : 0;
   log_info("damacy_config_describe: initial_alloc=%llu reserved_for_grow=%llu "
            "worst_case_total=%llu slack=%llu cap=%llu",
            (unsigned long long)initial_alloc,
            (unsigned long long)reserved_for_grow,
            (unsigned long long)worst_case,
            (unsigned long long)slack,
-           (unsigned long long)resolved_max_gpu);
+           (unsigned long long)max_gpu);
 }

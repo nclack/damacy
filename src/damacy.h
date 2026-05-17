@@ -50,7 +50,8 @@ extern "C"
     DAMACY_IO,       // read/open failure on a shard file
     DAMACY_DECODE,   // codec parse / decompression failure
     DAMACY_CUDA,     // driver/runtime call failed
-    DAMACY_OOM,      // would exceed a configured cap
+    DAMACY_OOM,      // host allocation failed (calloc/malloc returned null)
+    DAMACY_BUDGET,   // a configured cap is too small to satisfy the request
     DAMACY_SHUTDOWN, // pipeline destroyed or in failed state
   };
 
@@ -96,7 +97,8 @@ extern "C"
     // per-wave fanout SOAs, and per-batch metadata. The resolver carves
     // out the batch-output pool (2 × batch_size × product(sample_shape)
     // × dtype_bpe) from this cap before sizing wave-resident buffers.
-    // 0 → DAMACY_DEFAULT_MAX_GPU_MEMORY_BYTES.
+    // Required — no default; a value too small for the requested
+    // geometry returns DAMACY_BUDGET from damacy_create.
     uint64_t max_gpu_memory_bytes;
     // 0 → DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES; capped at
     // DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES.
@@ -177,9 +179,9 @@ extern "C"
                                    struct damacy** out);
 
   // Log a one-line-per-field description of the geometry damacy would
-  // resolve from `cfg` at damacy_create time: input max_gpu_memory_bytes
-  // plus the derived host_slab_per_wave, dev_decompressed_per_wave,
-  // initial nvcomp temp, initial allocation, headroom reserved for the
+  // resolve from `cfg` at damacy_create time: max_gpu_memory_bytes plus
+  // the derived host_slab_per_wave, dev_decompressed_per_wave, initial
+  // nvcomp temp, initial allocation, headroom reserved for the
   // observe-and-grow paths, and remaining slack. Emitted at LOG_INFO
   // through the standard log/log.h dispatcher. Useful when diagnosing
   // "why does damacy use N MB" without standing the instance up.

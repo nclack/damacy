@@ -425,7 +425,7 @@ planner_plan(struct planner* self,
                 (unsigned long long)decompressed_n_bytes,
                 (unsigned long long)self->cfg.max_chunk_uncompressed_bytes,
                 sample->uri);
-      status = DAMACY_INVAL;
+      status = DAMACY_BUDGET;
       goto Cleanup;
     }
 
