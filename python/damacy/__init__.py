@@ -200,17 +200,14 @@ class ShutdownError(DamacyError):
 
 
 class PoolStarved(DamacyError):
-    """Raised by :meth:`Pipeline.pop` when ``Config.pop_timeout_s``
-    elapses without a free output slot. Has no native status — the
-    timer fires entirely in Python; the C-side pop is still blocking
-    in a background thread when this raises, and the next
-    :meth:`Pipeline.pop` will adopt that thread's result rather than
-    starting a fresh wait.
+    """Raised when :meth:`Pipeline.pop` waits longer than
+    ``Config.pop_timeout_s`` for the next batch.
 
-    The usual cause is held DLPack tensor references pinning every
-    output slot in the pool: with the slot count fixed at B=2, a
-    consumer that stashes tensors across iterations starves the
-    producer."""
+    The usual cause is your loop holding on to tensors from previous
+    batches — for example by stashing them in a list — which keeps
+    damacy from reusing that memory. Drop those references before
+    the next ``pop()``, or call ``.clone()`` if you need to keep
+    them."""
 
     status = Status.SHUTDOWN
 
@@ -409,12 +406,9 @@ class Config:
             the current ``CUcontext`` on the calling thread; pass an
             int (e.g. ``local_rank``) to retain that device's primary
             context internally — recommended under torchrun / MPI.
-        pop_timeout_s: Seconds :meth:`Pipeline.pop` will wait before
-            raising :class:`PoolStarved`. Advisory: the timeout does
-            not prevent slot starvation, it just surfaces the likely
-            cause (DLPack tensor references pinning every output
-            slot). ``None`` restores unbounded blocking. Default 30.0,
-            generous enough to cover slow training steps.
+        pop_timeout_s: How long :meth:`Pipeline.pop` waits for the
+            next batch before raising :class:`PoolStarved`. Defaults
+            to 30 seconds; pass ``None`` to wait forever.
     """
 
     batch_size: int
@@ -1001,10 +995,10 @@ class Pipeline:
         :class:`Batch` you can hand to ``torch.from_dlpack`` (or any
         DLPack consumer) — preferably inside a ``with`` block.
 
-        Raises :class:`PoolStarved` if ``Config.pop_timeout_s``
-        elapses before a slot frees. The most common cause is held
-        DLPack tensor references pinning every output slot — drop
-        the references or ``.clone()`` if you need to retain them."""
+        Raises :class:`PoolStarved` if no batch arrives within
+        ``Config.pop_timeout_s`` seconds (default 30). Usually that
+        means tensors from previous batches are still being held —
+        drop them, or ``.clone()`` if you need to keep them."""
         self._check_open()
         self._drain_pending()
         timeout = self._config.pop_timeout_s
@@ -1030,9 +1024,10 @@ class Pipeline:
                 t.start()
         if not self._pop_done.wait(timeout):
             raise PoolStarved(
-                "All output slots pinned. Drop DLPack tensor references "
-                "from prior iterations before calling pop(), or `.clone()` "
-                "if you need to keep them."
+                "Pipeline.pop() timed out waiting for the next batch. "
+                "This usually means tensors from previous batches are "
+                "still being held — drop those references before the "
+                "next pop(), or .clone() if you need to keep them."
             )
         with self._pop_lock:
             err = self._pop_err
