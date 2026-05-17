@@ -1,5 +1,6 @@
 #include "platform/platform.h"
 
+#include <dlfcn.h>
 #include <errno.h>
 #include <pthread.h>
 #include <sched.h>
@@ -67,6 +68,12 @@ platform_toc(struct platform_clock* clock)
   float elapsed = (float)((now - clock->last_ns) / 1e9);
   clock->last_ns = now;
   return elapsed;
+}
+
+void
+platform_localtime(const time_t* t, struct tm* out)
+{
+  localtime_r(t, out);
 }
 
 void
@@ -229,4 +236,36 @@ platform_default_thread_count(void)
 {
   long n = sysconf(_SC_NPROCESSORS_ONLN);
   return n > 0 ? (int)n : 1;
+}
+
+void*
+platform_dlopen(const char* path)
+{
+  return dlopen(path, RTLD_LAZY | RTLD_LOCAL);
+}
+
+void*
+platform_dlsym(void* handle, const char* name)
+{
+  return dlsym(handle, name);
+}
+
+void
+platform_dlclose(void* handle)
+{
+  if (!handle)
+    return;
+  dlclose(handle);
+}
+
+const char*
+platform_dlerror(void)
+{
+  return dlerror();
+}
+
+const char*
+platform_getenv(const char* name)
+{
+  return getenv(name);
 }

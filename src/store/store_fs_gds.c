@@ -1,13 +1,12 @@
 #include "store/store_fs_gds.h"
 
 #include "log/log.h"
+#include "platform/platform.h"
 #include "platform/platform_io.h"
 #include "store/store.h"
 #include "store/store_fs.h"
 
 #include <cufile.h>
-#include <dlfcn.h>
-#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -24,8 +23,9 @@ typedef CUfileError_t (*pfn_cuFileReadAsync)(CUfileHandle_t,
                                              ssize_t*,
                                              CUstream);
 
-// pthread_once happens-before establishes safe unsynchronized reads of
-// g_libcufile.* afterward. dlopen handle leaked at process exit.
+// platform_call_once establishes a happens-before edge so unsynchronized
+// reads of g_libcufile.* are safe afterward. dlopen handle leaked at
+// process exit.
 static struct
 {
   pfn_cuFileDriverOpen cuFileDriverOpen;
@@ -36,15 +36,15 @@ static struct
 } g_libcufile;
 
 #define DLSYM_BIND(handle, table, sym)                                         \
-  (*(void**)&(table).sym = dlsym((handle), #sym))
+  (*(void**)&(table).sym = platform_dlsym((handle), #sym))
 
-static pthread_once_t g_libcufile_once = PTHREAD_ONCE_INIT;
+static platform_once g_libcufile_once = PLATFORM_ONCE_INIT;
 static int g_libcufile_ok;
 
 static void
 libcufile_once_init(void)
 {
-  void* h = dlopen("libcufile.so.0", RTLD_LAZY | RTLD_LOCAL);
+  void* h = platform_dlopen("libcufile.so.0");
   if (!h) {
     log_error(
       "cuFile: libcufile.so.0 not loadable — install the cuFile runtime "
@@ -62,7 +62,7 @@ libcufile_once_init(void)
       !g_libcufile.cuFileHandleDeregister || !g_libcufile.cuFileReadAsync) {
     log_error("cuFile: missing required symbol in libcufile.so.0; GDS "
               "unavailable");
-    dlclose(h);
+    platform_dlclose(h);
     memset(&g_libcufile, 0, sizeof(g_libcufile));
     return;
   }
@@ -72,7 +72,7 @@ libcufile_once_init(void)
 static int
 try_load_libcufile(void)
 {
-  pthread_once(&g_libcufile_once, libcufile_once_init);
+  platform_call_once(&g_libcufile_once, libcufile_once_init);
   return g_libcufile_ok;
 }
 
@@ -91,7 +91,7 @@ struct store_fs_gds
   struct store* host; // owns; underlying store_fs for host-path forwards
   void* gds_stream;   // CUstream as void*
   uint8_t driver_opened;
-  pthread_mutex_t handle_mu;
+  struct platform_mutex* handle_mu;
   struct gds_handle_slot* handles;
   size_t n_handles, cap_handles;
 };
@@ -104,17 +104,17 @@ gds_get_handle(struct store_fs_gds* g, const char* key)
   if (!f)
     return NULL;
 
-  pthread_mutex_lock(&g->handle_mu);
+  platform_mutex_lock(g->handle_mu);
   for (size_t i = 0; i < g->n_handles; ++i) {
     if (strcmp(g->handles[i].key, key) == 0) {
       CUfileHandle_t h = (CUfileHandle_t)g->handles[i].handle;
-      pthread_mutex_unlock(&g->handle_mu);
+      platform_mutex_unlock(g->handle_mu);
       return h;
     }
   }
   int fd = platform_file_fd(f);
   if (fd < 0) {
-    pthread_mutex_unlock(&g->handle_mu);
+    platform_mutex_unlock(g->handle_mu);
     return NULL;
   }
   CUfileDescr_t descr;
@@ -125,7 +125,7 @@ gds_get_handle(struct store_fs_gds* g, const char* key)
   CUfileError_t e = g_libcufile.cuFileHandleRegister(&h, &descr);
   if (e.err != CU_FILE_SUCCESS) {
     log_error("cuFileHandleRegister(%s) failed: err=%d", key, (int)e.err);
-    pthread_mutex_unlock(&g->handle_mu);
+    platform_mutex_unlock(g->handle_mu);
     return NULL;
   }
   if (g->n_handles == g->cap_handles) {
@@ -134,7 +134,7 @@ gds_get_handle(struct store_fs_gds* g, const char* key)
       g->handles, new_cap * sizeof(struct gds_handle_slot));
     if (!p) {
       g_libcufile.cuFileHandleDeregister(h);
-      pthread_mutex_unlock(&g->handle_mu);
+      platform_mutex_unlock(g->handle_mu);
       return NULL;
     }
     g->handles = p;
@@ -143,13 +143,13 @@ gds_get_handle(struct store_fs_gds* g, const char* key)
   char* dup = strdup(key);
   if (!dup) {
     g_libcufile.cuFileHandleDeregister(h);
-    pthread_mutex_unlock(&g->handle_mu);
+    platform_mutex_unlock(g->handle_mu);
     return NULL;
   }
   g->handles[g->n_handles].key = dup;
   g->handles[g->n_handles].handle = (void*)h;
   g->n_handles++;
-  pthread_mutex_unlock(&g->handle_mu);
+  platform_mutex_unlock(g->handle_mu);
   return h;
 }
 
@@ -289,15 +289,15 @@ gds_destroy(struct store* s)
     return;
   if (g->gds_stream)
     cuStreamSynchronize((CUstream)g->gds_stream);
-  pthread_mutex_lock(&g->handle_mu);
+  platform_mutex_lock(g->handle_mu);
   for (size_t i = 0; i < g->n_handles; ++i) {
     if (g->handles[i].handle && g_libcufile.cuFileHandleDeregister)
       g_libcufile.cuFileHandleDeregister((CUfileHandle_t)g->handles[i].handle);
     free(g->handles[i].key);
   }
-  pthread_mutex_unlock(&g->handle_mu);
+  platform_mutex_unlock(g->handle_mu);
   free(g->handles);
-  pthread_mutex_destroy(&g->handle_mu);
+  platform_mutex_free(g->handle_mu);
   if (g->driver_opened && g_libcufile.cuFileDriverClose)
     g_libcufile.cuFileDriverClose();
   // Deregister handles before tearing down host (handles reference its FDs).
@@ -335,11 +335,16 @@ store_fs_gds_create(const struct store_fs_config* cfg)
   }
   g->base.vt = &gds_vtable;
   g->driver_opened = 1;
-  pthread_mutex_init(&g->handle_mu, NULL);
+  g->handle_mu = platform_mutex_new();
+  if (!g->handle_mu) {
+    g_libcufile.cuFileDriverClose();
+    free(g);
+    return NULL;
+  }
 
   g->host = store_fs_create(cfg);
   if (!g->host) {
-    pthread_mutex_destroy(&g->handle_mu);
+    platform_mutex_free(g->handle_mu);
     g_libcufile.cuFileDriverClose();
     free(g);
     return NULL;

@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <time.h>
 
 #ifdef __cplusplus
 extern "C"
@@ -22,16 +23,11 @@ extern "C"
 
   float platform_toc(struct platform_clock* clock);
 
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-  typedef INIT_ONCE platform_once;
-#define PLATFORM_ONCE_INIT INIT_ONCE_STATIC_INIT
-#else
+  void platform_localtime(const time_t* t, struct tm* out);
+
 #include <pthread.h>
-typedef pthread_once_t platform_once;
+  typedef pthread_once_t platform_once;
 #define PLATFORM_ONCE_INIT PTHREAD_ONCE_INIT
-#endif
 
   void platform_call_once(platform_once* flag, void (*fn)(void));
 
@@ -58,6 +54,14 @@ typedef pthread_once_t platform_once;
 
   void platform_cpu_pause(void);
   int platform_default_thread_count(void);
+
+  // Path is platform-native; no translation between "libfoo.so.N" / "foo.dll".
+  void* platform_dlopen(const char* path);
+  void* platform_dlsym(void* handle, const char* name);
+  void platform_dlclose(void* handle);
+  const char* platform_dlerror(void);
+
+  const char* platform_getenv(const char* name);
 
 #ifdef __cplusplus
 }

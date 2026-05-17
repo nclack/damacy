@@ -1,15 +1,6 @@
 #include "damacy_stats.h"
 
 #include <string.h>
-#include <time.h>
-
-uint64_t
-monotonic_ns(void)
-{
-  struct timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
-}
 
 void
 metric_init(struct damacy_metric* m, const char* name)
