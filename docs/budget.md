@@ -2,8 +2,10 @@
 
 `Config.max_gpu_memory_bytes` is the single knob you use to tell
 damacy how much GPU memory it may consume. It is a **hard cap**:
-damacy refuses to allocate past it, and the refusal happens at
-`Pipeline(cfg)` construction — not midway through streaming.
+damacy refuses to allocate past it. Budget-sizing failures
+surface at `Pipeline(cfg)` construction, before any streaming
+has started, with a logged breakdown of what damacy tried to
+reserve.
 
 The number itself is easy to set. Picking a *good* number — one
 large enough to deliver throughput but small enough to leave room
@@ -51,46 +53,56 @@ budget.
 
 Four buckets share `max_gpu_memory_bytes`:
 
-| Bucket                  | What it holds                                              | Scales with                          |
-| ----------------------- | ---------------------------------------------------------- | ------------------------------------ |
-| Output batch pool       | The batches you `pop`, double-buffered                     | `batch_size`, `sample_shape`, dtype  |
-| Wave-resident buffers   | Compressed + decoded chunk bytes for the two in-flight waves | `max_chunk_uncompressed_bytes`     |
-| Decoder scratch         | nvcomp's working memory                                    | Peak sub-stream count in the dataset |
-| Per-wave metadata       | Pointer/size arrays for the decoder                        | Peak sub-stream count                |
+| Bucket                  | What it holds                                              | Scales with                                              |
+| ----------------------- | ---------------------------------------------------------- | -------------------------------------------------------- |
+| Output batch pool       | The batches you `pop`, double-buffered                     | `batch_size`, `sample_shape`, dtype                      |
+| Wave-resident buffers   | Compressed + decoded chunk bytes for the two in-flight waves | budget headroom, in `max_chunk_uncompressed_bytes` steps |
+| Decoder scratch         | nvcomp's working memory                                    | Peak sub-stream count in the dataset                     |
+| Per-wave metadata       | Pointer/size arrays for the decoder                        | Peak sub-stream count                                    |
 
 The first two are the large ones; the last two are small but
-*depend on the data*. damacy cannot know the sub-stream count of a
-chunk until it inspects the chunk's header, so the resolver
-reserves the worst-case footprint up front. That reservation is
-what makes the cap a guarantee rather than a hope: once
-`Pipeline(cfg)` returns, in-flight grows are already paid for.
+*depend on the data*. damacy cannot know the sub-stream count of
+a chunk until it inspects the chunk's header, so the resolver
+picks per-wave geometry such that even after adaptive growth to
+the structural ceiling, the total fits inside the cap. Grows
+commit additional bytes against `gpu_bytes_committed` as they
+happen, but the geometry choice guarantees they cannot trip the
+cap.
 
 ## Sizing the budget
 
-A workable starting point:
+Compute the *floor* — the smallest budget that admits the
+configuration — then round up generously:
 
 ```text
 pool_reservation  = 2 × batch_size × prod(sample_shape) × dtype_bytes
-per_wave_bytes    ≈ max_chunk_uncompressed_bytes × 2   # compressed + decoded
-budget            ≈ pool_reservation + 2 × per_wave_bytes + scratch_slack
+per_wave_floor    ≈ max_chunk_uncompressed_bytes × 2   # compressed + decoded, one chunk per wave
+budget_floor      ≈ pool_reservation + 2 × per_wave_floor + scratch_slack
 ```
 
-The `2 ×` in front of `per_wave_bytes` is the two GPU waves; it is
-not a tunable. `scratch_slack` covers decoder workspace and per-wave
-metadata — a few tens of MiB for typical workloads, more if your
-chunks decompose into many sub-streams.
+The `2 ×` in front of `per_wave_floor` is the two GPU waves; it
+is not a tunable. `scratch_slack` covers decoder workspace and
+per-wave metadata — a few tens of MiB for typical workloads,
+more if your chunks decompose into many sub-streams.
+
+`per_wave_floor` is what the resolver needs to hold *one* chunk
+per wave at the configured chunk cap. Any budget headroom above
+that floor lets the resolver size each wave to hold many chunks
+at once — fewer wave turnovers per batch, better overlap.
 
 A worked example for `batch_size=8`, `bf16` (2 bytes/element),
 `sample_shape=(64, 256, 256)`, `max_chunk_uncompressed_bytes=4 MiB`:
 
 ```text
 pool_reservation  = 2 × 8 × (64 × 256 × 256) × 2  ≈ 128 MiB
-per_wave_bytes    ≈ 4 MiB × 2                     =   8 MiB
-budget            ≈ 128 + 2 × 8 + slack           ≈ 200 MiB minimum
+per_wave_floor    ≈ 4 MiB × 2                     =   8 MiB
+budget_floor      ≈ 128 + 2 × 8 + slack           ≈ 200 MiB
 ```
 
-Round generously to the next sensible boundary (512 MiB or 1 GiB)
-to leave room for the scratch/metadata grows. The 1 GiB in the
+Round up to the next sensible boundary — 512 MiB or 1 GiB. The
+headroom does not sit idle: the resolver spends it on bigger
+per-wave buffers (in `max_chunk_uncompressed_bytes`-sized steps),
+which shrinks wave turnover during streaming. The 1 GiB in the
 [quick start](index.md) is a reasonable default for a wide range
 of single-GPU workloads.
 
@@ -134,19 +146,26 @@ can also matter:
 
 ## When the budget refuses
 
-**`damacy.BudgetExceeded`** is the error you will see when the
-cap is too small. It is raised from `Pipeline(cfg)` — never
-mid-stream — and the message includes the breakdown of what
-damacy tried to reserve.
-
-The fix is one of:
+**`damacy.BudgetExceeded`** is the error you see when a
+configured cap is too small. The common case is
+`max_gpu_memory_bytes`: damacy raises it from `Pipeline(cfg)`
+with a logged breakdown of what it tried to reserve, before any
+streaming has started. The fix is one of:
 
 1. Raise `max_gpu_memory_bytes`. This is the usual answer.
 2. Reduce `batch_size` or `sample_shape`. The pool reservation
    scales linearly with both, and it is the part of the budget
    you control most directly.
 3. Reduce `max_chunk_uncompressed_bytes` if your dataset happens
-   to allow it. Chunk size sets the per-wave footprint.
+   to allow it. Chunk size sets the per-wave floor.
+
+The less common case is `max_chunk_uncompressed_bytes`: if a
+chunk's actual uncompressed size exceeds that cap, the planner
+raises `BudgetExceeded` mid-stream — from the `pop()` that
+touches the chunk. That is a per-chunk configuration failure,
+not a budget-sizing failure; the fix is to raise
+`max_chunk_uncompressed_bytes` to fit the dataset (and
+`max_gpu_memory_bytes` along with it, if needed).
 
 ## What is *not* a budget error
 
@@ -165,12 +184,13 @@ this behaviour.
 ## Summary
 
 - One number caps every GPU-resident byte damacy uses.
-- The cap is enforced at `Pipeline(cfg)`, not mid-stream — the
-  resolver reserves the worst-case footprint up front.
+- The cap is enforced at `Pipeline(cfg)`: the resolver picks
+  per-wave geometry such that even after adaptive growth the
+  total stays inside the cap.
 - Most of the budget goes to the output batch pool and the two
   in-flight wave buffers.
-- Per-wave buffer size scales with `max_chunk_uncompressed_bytes`;
-  the wave *count* (2) is fixed.
+- The wave *count* (2) is fixed. Per-wave buffer size scales
+  with budget headroom, in `max_chunk_uncompressed_bytes` steps.
 - Set `damacy.set_log_level("info")` to see the resolved
   geometry; read `Stats.gpu_bytes_committed` for runtime use.
 - `BudgetExceeded` means raise the cap (or shrink the request).
