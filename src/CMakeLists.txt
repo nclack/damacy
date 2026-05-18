@@ -150,7 +150,7 @@ add_src_lib(store SOURCES store/store.h store/store.c store/store_fs.h store/sto
 if(NOT DAMACY_FUZZ AND DAMACY_ENABLE_GDS)
     target_sources(store PRIVATE store/store_fs_gds.h store/store_fs_gds.c)
     target_include_directories(store PRIVATE ${CuFile_INCLUDE_DIR})
-    target_link_libraries(store PRIVATE CUDA::cuda_driver ${CMAKE_DL_LIBS})
+    target_link_libraries(store PRIVATE lru hash CUDA::cuda_driver ${CMAKE_DL_LIBS})
 else()
     target_sources(store PRIVATE store/store_fs_gds.h store/store_fs_gds_stub.c)
 endif()

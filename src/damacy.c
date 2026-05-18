@@ -604,12 +604,21 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
 
   // Sample.uri is absolute; fs store joins root+key, so empty root is a
   // pass-through.
-  struct store_fs_config sc = {
-    .root = "",
-    .nthreads = (int)cfg->tuning.n_io_threads,
-    .affinity = &self->numa,
-  };
-  self->store = want_gds ? store_fs_gds_create(&sc) : store_fs_create(&sc);
+  if (want_gds) {
+    struct store_fs_gds_config sc = {
+      .root = "",
+      .fd_cache_capacity = 0,
+      .affinity = &self->numa,
+    };
+    self->store = store_fs_gds_create(&sc);
+  } else {
+    struct store_fs_config sc = {
+      .root = "",
+      .nthreads = (int)cfg->tuning.n_io_threads,
+      .affinity = &self->numa,
+    };
+    self->store = store_fs_create(&sc);
+  }
   if (!self->store) {
     s = want_gds ? DAMACY_INVAL : DAMACY_OOM;
     goto Fail;

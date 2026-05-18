@@ -5,10 +5,16 @@
 #include "platform/platform_io.h"
 #include "store/store.h"
 #include "store/store_fs.h"
+#include "util/hash.h"
+#include "util/lru.h"
+#include "util/prelude.h"
+#include "util/strbuf.h"
 
 #include <cufile.h>
 #include <stdlib.h>
 #include <string.h>
+
+#define DEFAULT_FD_CACHE_CAPACITY 256u
 
 typedef CUfileError_t (*pfn_cuFileDriverOpen)(void);
 typedef CUfileError_t (*pfn_cuFileDriverClose)(void);
@@ -76,81 +82,134 @@ try_load_libcufile(void)
   return g_libcufile_ok;
 }
 
-struct gds_handle_slot
-{
-  char* key;
-  void* handle; // CUfileHandle_t
-};
-
 // io_queue seqs are monotonic from 1; UINT64_MAX never collides.
 #define GDS_SENTINEL_SEQ ((uint64_t)~(uint64_t)0)
+
+struct fs_gds_cache_entry
+{
+  char* key;
+  platform_file* file;
+  CUfileHandle_t handle;
+};
 
 struct store_fs_gds
 {
   struct store base;
-  struct store* host; // owns; underlying store_fs for host-path forwards
-  void* gds_stream;   // CUstream as void*
+  char* root;
+  void* gds_stream; // CUstream as void*
   uint8_t driver_opened;
-  struct platform_mutex* handle_mu;
-  struct gds_handle_slot* handles;
-  size_t n_handles, cap_handles;
+  struct platform_mutex* cache_mu;
+  struct lru* cache;
 };
 
-static CUfileHandle_t
-gds_get_handle(struct store_fs_gds* g, const char* key)
+static int
+fs_gds_entry_eq(const void* value, const void* probe_key, void* user)
 {
-  struct store_fs* host_fs = (struct store_fs*)g->host;
-  platform_file* f = store_fs_get_file_external(host_fs, key);
-  if (!f)
-    return NULL;
+  (void)user;
+  const struct fs_gds_cache_entry* e =
+    (const struct fs_gds_cache_entry*)value;
+  return strcmp(e->key, (const char*)probe_key) == 0;
+}
 
-  platform_mutex_lock(g->handle_mu);
-  for (size_t i = 0; i < g->n_handles; ++i) {
-    if (strcmp(g->handles[i].key, key) == 0) {
-      CUfileHandle_t h = (CUfileHandle_t)g->handles[i].handle;
-      platform_mutex_unlock(g->handle_mu);
-      return h;
+// cuFile is undefined if the fd closes while a handle is still
+// registered against it — deregister must precede close.
+static void
+fs_gds_entry_destroy(void* value, void* user)
+{
+  (void)user;
+  struct fs_gds_cache_entry* e = (struct fs_gds_cache_entry*)value;
+  if (!e)
+    return;
+  if (e->handle && g_libcufile.cuFileHandleDeregister)
+    g_libcufile.cuFileHandleDeregister(e->handle);
+  platform_file_close(e->file);
+  free(e->key);
+  free(e);
+}
+
+static struct lru_entry*
+fs_gds_acquire(struct store_fs_gds* g, const char* key)
+{
+  uint64_t hash = hash_fnv1a_str(key);
+
+  platform_mutex_lock(g->cache_mu);
+  struct lru_entry* hit = lru_get(g->cache, hash, key);
+  if (hit) {
+    lru_entry_acquire(hit);
+    platform_mutex_unlock(g->cache_mu);
+    return hit;
+  }
+  platform_mutex_unlock(g->cache_mu);
+
+  struct strbuf path = { 0 };
+  platform_file* f = NULL;
+  CUfileHandle_t h = NULL;
+  struct fs_gds_cache_entry* entry = NULL;
+  char* dup = NULL;
+
+  CHECK_SILENT(Fail, strbuf_join_path(&path, g->root, key) == 0);
+  f = platform_file_open_read(strbuf_cstr(&path), 0);
+  CHECK_SILENT(Fail, f);
+
+  {
+    int fd = platform_file_fd(f);
+    CHECK_SILENT(Fail, fd >= 0);
+    CUfileDescr_t descr;
+    memset(&descr, 0, sizeof(descr));
+    descr.type = CU_FILE_HANDLE_TYPE_OPAQUE_FD;
+    descr.handle.fd = fd;
+    CUfileError_t e = g_libcufile.cuFileHandleRegister(&h, &descr);
+    if (e.err != CU_FILE_SUCCESS) {
+      log_error(
+        "cuFileHandleRegister(%s) failed: err=%d", key, (int)e.err);
+      h = NULL;
+      goto Fail;
     }
   }
-  int fd = platform_file_fd(f);
-  if (fd < 0) {
-    platform_mutex_unlock(g->handle_mu);
-    return NULL;
-  }
-  CUfileDescr_t descr;
-  memset(&descr, 0, sizeof(descr));
-  descr.type = CU_FILE_HANDLE_TYPE_OPAQUE_FD;
-  descr.handle.fd = fd;
-  CUfileHandle_t h = NULL;
-  CUfileError_t e = g_libcufile.cuFileHandleRegister(&h, &descr);
-  if (e.err != CU_FILE_SUCCESS) {
-    log_error("cuFileHandleRegister(%s) failed: err=%d", key, (int)e.err);
-    platform_mutex_unlock(g->handle_mu);
-    return NULL;
-  }
-  if (g->n_handles == g->cap_handles) {
-    size_t new_cap = g->cap_handles ? g->cap_handles * 2 : 16;
-    struct gds_handle_slot* p = (struct gds_handle_slot*)realloc(
-      g->handles, new_cap * sizeof(struct gds_handle_slot));
-    if (!p) {
-      g_libcufile.cuFileHandleDeregister(h);
-      platform_mutex_unlock(g->handle_mu);
+
+  entry = (struct fs_gds_cache_entry*)calloc(1, sizeof(*entry));
+  CHECK_SILENT(Fail, entry);
+  dup = strdup(key);
+  CHECK_SILENT(Fail, dup);
+  entry->key = dup;
+  entry->file = f;
+  entry->handle = h;
+
+  platform_mutex_lock(g->cache_mu);
+  {
+    struct lru_entry* existing = lru_peek(g->cache, hash, key);
+    if (existing) {
+      lru_entry_acquire(existing);
+      platform_mutex_unlock(g->cache_mu);
+      fs_gds_entry_destroy(entry, NULL);
+      strbuf_free(&path);
+      return existing;
+    }
+    struct lru_entry* inserted = lru_put(g->cache, hash, key, entry);
+    if (!inserted) {
+      // lru_put already invoked fs_gds_entry_destroy on `entry`.
+      platform_mutex_unlock(g->cache_mu);
+      strbuf_free(&path);
       return NULL;
     }
-    g->handles = p;
-    g->cap_handles = new_cap;
+    lru_entry_acquire(inserted);
+    platform_mutex_unlock(g->cache_mu);
+    strbuf_free(&path);
+    return inserted;
   }
-  char* dup = strdup(key);
-  if (!dup) {
+
+Fail:
+  if (entry) {
+    free(entry);
+    entry = NULL;
+  }
+  free(dup);
+  if (h && g_libcufile.cuFileHandleDeregister)
     g_libcufile.cuFileHandleDeregister(h);
-    platform_mutex_unlock(g->handle_mu);
-    return NULL;
-  }
-  g->handles[g->n_handles].key = dup;
-  g->handles[g->n_handles].handle = (void*)h;
-  g->n_handles++;
-  platform_mutex_unlock(g->handle_mu);
-  return h;
+  if (f)
+    platform_file_close(f);
+  strbuf_free(&path);
+  return NULL;
 }
 
 // cuFileReadAsync stashes pointers to these fields and dereferences
@@ -162,12 +221,32 @@ struct fs_gds_async_params
   off_t file_off;
   off_t buf_off;
   ssize_t bytes_read;
+  struct lru_entry* pin;
+};
+
+struct fs_gds_async_ctx
+{
+  struct store_fs_gds* g;
+  size_t n;
+  struct fs_gds_async_params* params;
 };
 
 static void CUDA_CB
 fs_gds_free_params_cb(void* userdata)
 {
-  free(userdata);
+  struct fs_gds_async_ctx* ctx = (struct fs_gds_async_ctx*)userdata;
+  if (!ctx)
+    return;
+  if (ctx->params) {
+    platform_mutex_lock(ctx->g->cache_mu);
+    for (size_t i = 0; i < ctx->n; ++i) {
+      if (ctx->params[i].pin)
+        lru_entry_release(ctx->params[i].pin);
+    }
+    platform_mutex_unlock(ctx->g->cache_mu);
+    free(ctx->params);
+  }
+  free(ctx);
 }
 
 static struct store_event
@@ -188,27 +267,37 @@ gds_submit_dev(struct store* s, const struct store_read* reads, size_t n)
     return ev;
   }
 
-  struct fs_gds_async_params* params =
-    (struct fs_gds_async_params*)calloc(n, sizeof(*params));
-  if (!params)
+  struct fs_gds_async_ctx* ctx =
+    (struct fs_gds_async_ctx*)calloc(1, sizeof(*ctx));
+  if (!ctx)
     return ev;
+  ctx->g = g;
+  ctx->n = n;
+  ctx->params =
+    (struct fs_gds_async_params*)calloc(n, sizeof(*ctx->params));
+  if (!ctx->params) {
+    free(ctx);
+    return ev;
+  }
 
+  size_t submitted = 0;
   for (size_t i = 0; i < n; ++i) {
-    CUfileHandle_t h = gds_get_handle(g, reads[i].key);
-    if (!h) {
-      free(params);
-      return ev;
-    }
-    params[i].size = reads[i].len;
-    params[i].file_off = (off_t)reads[i].offset;
-    params[i].buf_off = 0;
-    params[i].bytes_read = 0;
-    CUfileError_t e = g_libcufile.cuFileReadAsync(h,
+    struct lru_entry* pin = fs_gds_acquire(g, reads[i].key);
+    if (!pin)
+      goto SubmitFail;
+    ctx->params[i].pin = pin;
+    ctx->params[i].size = reads[i].len;
+    ctx->params[i].file_off = (off_t)reads[i].offset;
+    ctx->params[i].buf_off = 0;
+    ctx->params[i].bytes_read = 0;
+    const struct fs_gds_cache_entry* entry =
+      (const struct fs_gds_cache_entry*)lru_entry_value(pin);
+    CUfileError_t e = g_libcufile.cuFileReadAsync(entry->handle,
                                                   reads[i].dst,
-                                                  &params[i].size,
-                                                  &params[i].file_off,
-                                                  &params[i].buf_off,
-                                                  &params[i].bytes_read,
+                                                  &ctx->params[i].size,
+                                                  &ctx->params[i].file_off,
+                                                  &ctx->params[i].buf_off,
+                                                  &ctx->params[i].bytes_read,
                                                   stream);
     if (e.err != CU_FILE_SUCCESS) {
       log_error("cuFileReadAsync(%s,off=%llu,len=%zu) failed: err=%d",
@@ -216,21 +305,61 @@ gds_submit_dev(struct store* s, const struct store_read* reads, size_t n)
                 (unsigned long long)reads[i].offset,
                 reads[i].len,
                 (int)e.err);
-      // Drain already-submitted reads before freeing their params.
-      cuStreamSynchronize(stream);
-      free(params);
-      return ev;
+      submitted = i;
+      goto SubmitFail;
     }
   }
 
-  CUresult cr = cuLaunchHostFunc(stream, fs_gds_free_params_cb, params);
-  if (cr != CUDA_SUCCESS) {
-    log_error("cuLaunchHostFunc(free params) failed: %d", (int)cr);
-    cuStreamSynchronize(stream);
-    free(params);
-    return ev;
+  if (cuLaunchHostFunc(stream, fs_gds_free_params_cb, ctx) != CUDA_SUCCESS) {
+    log_error("cuLaunchHostFunc(free params) failed");
+    submitted = n;
+    goto SubmitFail;
   }
 
+  ev.seq = GDS_SENTINEL_SEQ;
+  return ev;
+
+SubmitFail:
+  // Drain so cuFile is done dereferencing params before we free them.
+  // The host-func callback never ran, so pin-release is ours.
+  if (submitted > 0)
+    cuStreamSynchronize(stream);
+  platform_mutex_lock(g->cache_mu);
+  for (size_t i = 0; i < n; ++i) {
+    if (ctx->params[i].pin)
+      lru_entry_release(ctx->params[i].pin);
+  }
+  platform_mutex_unlock(g->cache_mu);
+  free(ctx->params);
+  free(ctx);
+  return ev;
+}
+
+// Metadata path (shard footers, zarr.json). Inline pread is fine here:
+// small, cold, infrequent. Bulk reads go through submit_dev.
+static struct store_event
+gds_submit(struct store* s, const struct store_read* reads, size_t n)
+{
+  struct store_fs_gds* g = (struct store_fs_gds*)s;
+  struct store_event ev = { 0 };
+  if (n == 0) {
+    ev.seq = GDS_SENTINEL_SEQ;
+    return ev;
+  }
+  for (size_t i = 0; i < n; ++i) {
+    struct lru_entry* pin = fs_gds_acquire(g, reads[i].key);
+    if (!pin)
+      return ev;
+    const struct fs_gds_cache_entry* entry =
+      (const struct fs_gds_cache_entry*)lru_entry_value(pin);
+    int64_t got =
+      platform_file_pread(entry->file, reads[i].dst, reads[i].len, reads[i].offset);
+    platform_mutex_lock(g->cache_mu);
+    lru_entry_release(pin);
+    platform_mutex_unlock(g->cache_mu);
+    if (got < 0 || (size_t)got != reads[i].len)
+      return ev;
+  }
   ev.seq = GDS_SENTINEL_SEQ;
   return ev;
 }
@@ -239,46 +368,67 @@ static int
 gds_stat(struct store* s, const char* key, uint64_t* out)
 {
   struct store_fs_gds* g = (struct store_fs_gds*)s;
-  return g->host->vt->stat(g->host, key, out);
-}
-
-static struct store_event
-gds_submit(struct store* s, const struct store_read* reads, size_t n)
-{
-  struct store_fs_gds* g = (struct store_fs_gds*)s;
-  return g->host->vt->submit(g->host, reads, n);
+  struct strbuf path = { 0 };
+  int rc = 1;
+  CHECK_SILENT(Out, strbuf_join_path(&path, g->root, key) == 0);
+  rc = platform_path_size(strbuf_cstr(&path), out);
+Out:
+  strbuf_free(&path);
+  return rc;
 }
 
 static void
 gds_event_wait(struct store* s, struct store_event ev)
 {
-  if (ev.seq == GDS_SENTINEL_SEQ)
-    return;
-  struct store_fs_gds* g = (struct store_fs_gds*)s;
-  g->host->vt->event_wait(g->host, ev);
+  (void)s;
+  (void)ev;
 }
 
 static int
 gds_event_query(struct store* s, struct store_event ev)
 {
-  if (ev.seq == GDS_SENTINEL_SEQ)
-    return 1;
-  struct store_fs_gds* g = (struct store_fs_gds*)s;
-  return g->host->vt->event_query(g->host, ev);
+  (void)s;
+  return ev.seq == GDS_SENTINEL_SEQ ? 1 : 0;
 }
 
 static int
 gds_map(struct store* s, const char* key, struct store_view* out)
 {
   struct store_fs_gds* g = (struct store_fs_gds*)s;
-  return g->host->vt->map(g->host, key, out);
+  struct strbuf path = { 0 };
+  struct platform_file_view* pv = NULL;
+  int rc = 1;
+
+  CHECK_SILENT(Out, strbuf_join_path(&path, g->root, key) == 0);
+  pv = (struct platform_file_view*)calloc(1, sizeof(*pv));
+  CHECK_SILENT(Out, pv);
+  rc = platform_file_map_path(strbuf_cstr(&path), pv);
+  if (rc) {
+    free(pv);
+    pv = NULL;
+    goto Out;
+  }
+  out->data = pv->data;
+  out->len = pv->len;
+  out->backend = pv;
+
+Out:
+  strbuf_free(&path);
+  return rc;
 }
 
 static void
 gds_unmap(struct store* s, struct store_view* view)
 {
-  struct store_fs_gds* g = (struct store_fs_gds*)s;
-  g->host->vt->unmap(g->host, view);
+  (void)s;
+  if (!view || !view->backend)
+    return;
+  struct platform_file_view* pv = (struct platform_file_view*)view->backend;
+  platform_file_unmap(pv);
+  free(pv);
+  view->data = NULL;
+  view->len = 0;
+  view->backend = NULL;
 }
 
 static void
@@ -287,22 +437,15 @@ gds_destroy(struct store* s)
   struct store_fs_gds* g = (struct store_fs_gds*)s;
   if (!g)
     return;
+  // Drain in-flight host-funcs so a late pin-release can't land on a
+  // freed mutex.
   if (g->gds_stream)
     cuStreamSynchronize((CUstream)g->gds_stream);
-  platform_mutex_lock(g->handle_mu);
-  for (size_t i = 0; i < g->n_handles; ++i) {
-    if (g->handles[i].handle && g_libcufile.cuFileHandleDeregister)
-      g_libcufile.cuFileHandleDeregister((CUfileHandle_t)g->handles[i].handle);
-    free(g->handles[i].key);
-  }
-  platform_mutex_unlock(g->handle_mu);
-  free(g->handles);
-  platform_mutex_free(g->handle_mu);
+  lru_destroy(g->cache);
+  platform_mutex_free(g->cache_mu);
   if (g->driver_opened && g_libcufile.cuFileDriverClose)
     g_libcufile.cuFileDriverClose();
-  // Deregister handles before tearing down host (handles reference its FDs).
-  if (g->host)
-    g->host->vt->destroy(g->host);
+  free(g->root);
   free(g);
 }
 
@@ -318,39 +461,51 @@ static const struct store_vtable gds_vtable = {
 };
 
 struct store*
-store_fs_gds_create(const struct store_fs_config* cfg)
+store_fs_gds_create(const struct store_fs_gds_config* cfg)
 {
+  struct store_fs_gds* g = NULL;
+
+  if (!cfg || !cfg->root)
+    return NULL;
   if (!try_load_libcufile())
     return NULL;
-  CUfileError_t e = g_libcufile.cuFileDriverOpen();
-  if (e.err != CU_FILE_SUCCESS) {
-    log_error("cuFileDriverOpen failed (err=%d); GDS unavailable", (int)e.err);
-    return NULL;
+
+  {
+    CUfileError_t e = g_libcufile.cuFileDriverOpen();
+    if (e.err != CU_FILE_SUCCESS) {
+      log_error(
+        "cuFileDriverOpen failed (err=%d); GDS unavailable", (int)e.err);
+      return NULL;
+    }
   }
 
-  struct store_fs_gds* g = (struct store_fs_gds*)calloc(1, sizeof(*g));
-  if (!g) {
-    g_libcufile.cuFileDriverClose();
-    return NULL;
-  }
+  g = (struct store_fs_gds*)calloc(1, sizeof(*g));
+  CHECK_SILENT(Fail, g);
   g->base.vt = &gds_vtable;
   g->driver_opened = 1;
-  g->handle_mu = platform_mutex_new();
-  if (!g->handle_mu) {
-    g_libcufile.cuFileDriverClose();
-    free(g);
-    return NULL;
-  }
-
-  g->host = store_fs_create(cfg);
-  if (!g->host) {
-    platform_mutex_free(g->handle_mu);
-    g_libcufile.cuFileDriverClose();
-    free(g);
-    return NULL;
+  g->root = strdup(cfg->root);
+  CHECK_SILENT(Fail, g->root);
+  g->cache_mu = platform_mutex_new();
+  CHECK_SILENT(Fail, g->cache_mu);
+  {
+    uint32_t cap = cfg->fd_cache_capacity ? cfg->fd_cache_capacity
+                                          : DEFAULT_FD_CACHE_CAPACITY;
+    struct lru_ops ops = {
+      .eq = fs_gds_entry_eq,
+      .destroy = fs_gds_entry_destroy,
+    };
+    g->cache = lru_create(cap, 16, &ops);
+    CHECK_SILENT(Fail, g->cache);
   }
   log_info("damacy: cuFile driver opened; GDS submit_dev available");
   return &g->base;
+
+Fail:
+  if (g)
+    gds_destroy(&g->base);
+  else
+    g_libcufile.cuFileDriverClose();
+  return NULL;
 }
 
 void

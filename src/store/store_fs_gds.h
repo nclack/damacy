@@ -1,22 +1,30 @@
-// GPUDirect Storage (cuFile) store. Composes a host store_fs underneath
-// for stat/submit/map and overrides submit_dev with cuFileReadAsync.
-// store_fs.c has no GDS coupling — damacy.c picks one or the other.
+// GPUDirect Storage (cuFile) store. The LRU destroy callback
+// deregisters each CUfileHandle_t BEFORE closing its backing fd; that
+// ordering is required by cuFile and lives inside one local function.
+//
 // DAMACY_ENABLE_GDS=OFF links store_fs_gds_stub.c which makes
 // store_fs_gds_create return NULL.
 #pragma once
 
-struct store;
-struct store_fs_config;
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C"
 {
 #endif
 
-  // NULL on driver init failure, missing libcufile, or stub build.
-  struct store* store_fs_gds_create(const struct store_fs_config* cfg);
+  struct store;
+  struct numa_resolved;
 
-  // cuFileReadAsync rides this stream. Caller owns it.
+  struct store_fs_gds_config
+  {
+    const char* root;
+    uint32_t fd_cache_capacity; // 0 → library default
+    const struct numa_resolved* affinity;
+  };
+
+  struct store* store_fs_gds_create(const struct store_fs_gds_config* cfg);
+
   void store_fs_gds_set_stream(struct store* s, void* stream);
 
 #ifdef __cplusplus

@@ -4,7 +4,7 @@
 #include <stddef.h>
 
 struct store*
-store_fs_gds_create(const struct store_fs_config* cfg)
+store_fs_gds_create(const struct store_fs_gds_config* cfg)
 {
   (void)cfg;
   return NULL;

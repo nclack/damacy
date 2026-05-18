@@ -591,7 +591,7 @@ gds_runtime_available(void)
   char* root = mkdtemp(tmpl);
   if (!root)
     return 0;
-  struct store_fs_config sc = { .root = root, .nthreads = 1 };
+  struct store_fs_gds_config sc = { .root = root };
   struct store* s = store_fs_gds_create(&sc);
   int ok = (s != NULL);
   store_destroy(s);
