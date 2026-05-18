@@ -44,8 +44,8 @@ genuinely need to keep them.
 The push didn't reach the lookahead, or the consumer never frees
 a slot:
 
-- Check `pipeline.pending` — if it stays True, pushed samples are
-  not draining into the native lookahead.
+- Read `pipeline.stats().batches_emitted` — if it stays at 0,
+  pushed samples are not draining into the native lookahead.
 - Make sure each `pop()` is inside a `with` block so the batch
   releases its slot before the next `pop()`.
 - Verify you're popping at the rate you push (or push lazily via

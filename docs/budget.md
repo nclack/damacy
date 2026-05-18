@@ -24,30 +24,34 @@ Compute the *floor* — the smallest budget that admits the
 configuration — then round up generously:
 
 ```text
-pool_reservation  = 2 × batch_size × prod(sample_shape) × dtype_bytes
-per_wave_floor    ≈ max_chunk_uncompressed_bytes × 2   # compressed + decoded, one chunk per wave
-budget_floor      ≈ pool_reservation + 2 × per_wave_floor + scratch_slack
+pool_reservation       = 2 × batch_size × prod(sample_shape) × dtype_bytes
+one_chunk_per_wave     ≈ max_chunk_uncompressed_bytes × 2   # compressed + decoded buffers, one chunk
+both_waves_one_chunk   ≈ 2 × one_chunk_per_wave             # two GPU waves resident at once
+budget_floor           ≈ pool_reservation + both_waves_one_chunk + scratch_slack
 ```
 
-The `2 ×` in front of `pool_reservation` is double-buffering on
-the output side. The `2 ×` in front of `per_wave_floor` is the
-two GPU waves (a fixed count, not a tunable). `scratch_slack`
-covers decoder workspace and per-wave metadata — a few tens of
-MiB for typical workloads, more if your chunks decompose into
-many sub-streams.
+The `2 ×` in `pool_reservation` is output-side double-buffering.
+The `× 2` in `one_chunk_per_wave` is the compressed + decoded
+buffer pair a wave holds for each chunk it dispatches. The `2 ×`
+in `both_waves_one_chunk` is the (fixed) GPU wave count — these
+are two different factors, not the same one applied twice.
+`scratch_slack` covers decoder workspace and per-wave metadata —
+a few tens of MiB for typical workloads, more if your chunks
+decompose into many sub-streams.
 
-`per_wave_floor` is what damacy needs to hold *one* chunk per wave
-at the configured chunk cap. Any budget headroom above that floor
-lets damacy size each wave to hold many chunks at once — fewer
-wave turnovers per batch, better overlap.
+`one_chunk_per_wave` is what damacy needs to hold *one* chunk per
+wave at the configured chunk cap. Any budget headroom above the
+floor lets damacy size each wave to hold many chunks at once —
+fewer wave turnovers per batch, better overlap.
 
 A worked example for `batch_size=8`, `bf16` (2 bytes/element),
 `sample_shape=(64, 256, 256)`, `max_chunk_uncompressed_bytes=4 MiB`:
 
 ```text
-pool_reservation  = 2 × 8 × (64 × 256 × 256) × 2  ≈ 128 MiB
-per_wave_floor    ≈ 4 MiB × 2                     =   8 MiB
-budget_floor      ≈ 128 + 2 × 8 + slack           ≈ 200 MiB
+pool_reservation       = 2 × 8 × (64 × 256 × 256) × 2  ≈ 128 MiB
+one_chunk_per_wave     ≈ 4 MiB × 2                     =   8 MiB
+both_waves_one_chunk   ≈ 2 × 8                         =  16 MiB
+budget_floor           ≈ 128 + 16 + slack              ≈ 200 MiB
 ```
 
 Round up to the next sensible boundary — 512 MiB or 1 GiB. The
@@ -158,13 +162,13 @@ streaming has started. The fix is one of:
 3. Reduce `max_chunk_uncompressed_bytes` if your dataset happens
    to allow it. Chunk size sets the per-wave floor.
 
-The less common case is `max_chunk_uncompressed_bytes`: if a
-chunk's actual uncompressed size exceeds that cap, the planner
-raises `BudgetExceeded` mid-stream — from the `pop()` that
-touches the chunk. That is a per-chunk configuration failure,
-not a budget-sizing failure; the fix is to raise
-`max_chunk_uncompressed_bytes` to fit the dataset (and
-`max_gpu_memory_bytes` along with it, if needed).
+The less common case is a `BudgetExceeded` raised mid-stream
+from `pop()` rather than from `Pipeline(cfg)`: a chunk's actual
+uncompressed size exceeded `max_chunk_uncompressed_bytes`. That
+is a per-chunk configuration failure, not a budget-sizing
+failure. See [Troubleshooting → BudgetExceeded
+mid-stream](troubleshooting.md#budgetexceeded-mid-stream) for
+the fix.
 
 ## What is *not* a budget error
 
@@ -190,8 +194,9 @@ this behaviour.
   in-flight wave buffers.
 - The wave *count* (2) is fixed. Per-wave buffer size scales
   with budget headroom, in `max_chunk_uncompressed_bytes` steps.
-- Set `damacy.set_log_level("info")` to see the resolved
-  geometry; read `Stats.gpu_bytes_committed` for runtime use.
+- Set `damacy.set_log_level(damacy.LOG_DEBUG)` to see the
+  resolved geometry; read `Stats.gpu_bytes_committed` for
+  runtime use.
 - `BudgetExceeded` means raise the cap (or shrink the request).
   `PoolStarved` is a different problem: a consumer holding
   references.

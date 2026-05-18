@@ -57,7 +57,6 @@ You hand damacy a stream of `Sample`s; it returns a stream of
 - A **`Pipeline`** is a streaming context. You `push` an iterable
   of samples (lazy generators are fine — and recommended for long
   runs) and call `pop()` to block for the next ready batch.
-  `batches(n)` is sugar for `pop()` in a `for` loop of length *n*.
 - A **`Batch`** is a DLPack-ready handle to a GPU-resident tensor.
   Use it inside a `with` block so damacy can reclaim the slot when
   you're done.
