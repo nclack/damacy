@@ -708,6 +708,7 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                          "device",
                          "host_buffer_waves",
                          "max_read_op_bytes",
+                         "enable_gds",
                          "bypass_decode",
                          NULL };
   unsigned int batch_size = 0;
@@ -722,10 +723,11 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   int device = -1;
   unsigned int host_buffer_waves = 0;
   unsigned long long max_read_op_bytes = 0;
+  int enable_gds = 0;
   int bypass_decode = 0;
   if (!PyArg_ParseTupleAndKeywords(args,
                                    kw,
-                                   "IIIIIOIKO|iIKp",
+                                   "IIIIIOIKO|iIKpp",
                                    kws,
                                    &batch_size,
                                    &lookahead,
@@ -739,6 +741,7 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                                    &device,
                                    &host_buffer_waves,
                                    &max_read_op_bytes,
+                                   &enable_gds,
                                    &bypass_decode))
     return -1;
 
@@ -759,6 +762,7 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
       .max_read_op_bytes = (uint64_t)max_read_op_bytes,
       .max_gpu_memory_bytes = (uint64_t)max_gpu_bytes,
       .host_buffer_waves = (uint8_t)host_buffer_waves,
+      .enable_gds = (uint8_t)(enable_gds ? 1 : 0),
     },
     .debug = { .bypass_decode = (uint8_t)(bypass_decode ? 1 : 0) },
   };

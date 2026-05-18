@@ -409,6 +409,13 @@ class Config:
         pop_timeout_s: How long :meth:`Pipeline.pop` waits for the
             next batch before raising :class:`PoolStarved`. Defaults
             to 30 seconds; pass ``None`` to wait forever.
+        enable_gds: Opt into GPUDirect Storage. When ``True``, damacy
+            uses cuFile to read compressed bytes from the shard files
+            directly into device memory, bypassing the host-staging
+            slabs. Requires ``libcufile.so.0`` on the host and a
+            successful ``cuFileDriverOpen`` at create time;
+            ``DAMACY_GDS_ENABLE=1`` in the environment also forces
+            this on. Defaults to ``False`` (host-staging path).
     """
 
     batch_size: int
@@ -423,6 +430,7 @@ class Config:
     sample_shape: tuple[int, ...]
     device: int | None
     pop_timeout_s: float | None
+    enable_gds: bool
 
     def __init__(
         self,
@@ -439,6 +447,7 @@ class Config:
         host_buffer_waves: int = 0,
         device: int | None = None,
         pop_timeout_s: float | None = 30.0,
+        enable_gds: bool = False,
     ) -> None:
         # Custom __init__ rather than __post_init__ so the constructor
         # signature accepts the polymorphic dtype input while reads of
@@ -480,6 +489,7 @@ class Config:
         set_(self, "sample_shape", shape_t)
         set_(self, "device", device)
         set_(self, "pop_timeout_s", pop_timeout_s)
+        set_(self, "enable_gds", bool(enable_gds))
 
 
 @dataclass(frozen=True, slots=True)
@@ -882,6 +892,7 @@ class Pipeline:
                 host_buffer_waves=config.host_buffer_waves,
                 sample_shape=tuple(config.sample_shape),
                 device=-1 if config.device is None else int(config.device),
+                enable_gds=config.enable_gds,
             )
         except _native.DamacyError as exc:
             _reraise_typed(exc)

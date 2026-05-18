@@ -126,8 +126,10 @@ class Pipeline:
         dtype: str | int,
         max_chunk_uncompressed_bytes: int,
         max_gpu_memory_bytes: int,
+        sample_shape: tuple[int, ...],
         device: int = -1,
         host_buffer_waves: int = 0,
+        enable_gds: bool = False,
     ) -> None: ...
     @property
     def device(self) -> int: ...
