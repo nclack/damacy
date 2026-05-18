@@ -13,10 +13,10 @@
         <link rel="canonical" href="https://nclack.github.io/damacy/distributed/">
       
       
-        <link rel="prev" href="..">
+        <link rel="prev" href="../budget/">
       
       
-        <link rel="next" href="../api/">
+        <link rel="next" href="../troubleshooting/">
       
       
         
@@ -286,6 +286,33 @@
       
   
   
+  
+  
+    <li class="md-nav__item">
+      <a href="../budget/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GPU memory budget
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
     
   
   
@@ -418,6 +445,33 @@
   
 </nav>
       
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
     </li>
   
 
@@ -703,6 +757,9 @@ sees damacy's work either. If you bypass DLPack and read
 <code>BatchInfo.ready_stream</code> on your consumer stream before launching
 your kernel — the implicit default-stream sync is gone.</p>
 <h2 id="common-failures">Common failures<a class="headerlink" href="#common-failures" title="Permanent link">&para;</a></h2>
+<p>Multi-rank-specific symptoms. For single-GPU errors
+(<code>no CUcontext is current</code>, blocking <code>pop()</code>, <code>BudgetExceeded</code>,
+<code>PoolStarved</code>), see <a href="../troubleshooting/">Troubleshooting</a>.</p>
 <table>
 <thead>
 <tr>
@@ -718,14 +775,6 @@ your kernel — the implicit default-stream sync is gone.</p>
 <tr>
 <td><code>damacy.InvalidArgument</code> at <code>Pipeline(cfg)</code> with "Config.device=N but … current on device M"</td>
 <td><code>Config(device=N)</code> and <code>set_device(M)</code> were called for different N and M. Make them match.</td>
-</tr>
-<tr>
-<td><code>damacy.InvalidArgument</code> ("no CUcontext is current")</td>
-<td><code>Config.device</code> not set <em>and</em> no CUDA context primed yet. Either pass <code>device=local_rank</code> or do a <code>torch.empty(1, device="cuda")</code> first.</td>
-</tr>
-<tr>
-<td>Pipeline construction succeeds but the first <code>pop</code> blocks forever</td>
-<td>The push didn't reach the lookahead, or the consumer never frees a slot. The Python wrapper queues overflow on <code>push</code>; check <code>pipeline.pending</code> and that you're popping at the rate you push.</td>
 </tr>
 </tbody>
 </table>

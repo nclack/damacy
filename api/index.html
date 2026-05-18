@@ -13,7 +13,7 @@
         <link rel="canonical" href="https://nclack.github.io/damacy/api/">
       
       
-        <link rel="prev" href="../distributed/">
+        <link rel="prev" href="../troubleshooting/">
       
       
       
@@ -287,6 +287,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../budget/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GPU memory budget
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../distributed/" class="md-nav__link">
         
   
@@ -295,6 +322,33 @@
     
   
     Distributed
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
   
 
     
@@ -788,10 +842,32 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#damacy.BudgetExceeded" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-class"></code>&nbsp;BudgetExceeded
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#damacy.ShutdownError" class="md-nav__link">
     <span class="md-ellipsis">
       
         <code class="doc-symbol doc-symbol-toc doc-symbol-class"></code>&nbsp;ShutdownError
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#damacy.PoolStarved" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-class"></code>&nbsp;PoolStarved
       
     </span>
   </a>
@@ -1280,10 +1356,32 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#damacy.BudgetExceeded" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-class"></code>&nbsp;BudgetExceeded
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#damacy.ShutdownError" class="md-nav__link">
     <span class="md-ellipsis">
       
         <code class="doc-symbol doc-symbol-toc doc-symbol-class"></code>&nbsp;ShutdownError
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#damacy.PoolStarved" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-class"></code>&nbsp;PoolStarved
       
     </span>
   </a>
@@ -3667,6 +3765,58 @@ configured cap was not the limiting factor.</p>
 
 
 
+<h2 id="damacy.BudgetExceeded" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-class"></code>            <span class="doc doc-object-name doc-class-name">BudgetExceeded</span>
+
+
+<a href="#damacy.BudgetExceeded" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+            <p class="doc doc-class-bases">
+              Bases: <code><a class="autorefs autorefs-internal" title="            DamacyError (damacy.DamacyError)" href="#damacy.DamacyError">DamacyError</a></code></p>
+
+
+
+        <p>A configured cap is too small to satisfy the request. Most
+commonly: <code>Config.max_gpu_memory_bytes</code> cannot fit the
+requested batch geometry, or a chunk's uncompressed size exceeds
+<code>Config.max_chunk_uncompressed_bytes</code>. Raise the relevant cap
+and retry.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
 <h2 id="damacy.ShutdownError" class="doc doc-heading">
 <code class="doc-symbol doc-symbol-heading doc-symbol-class"></code>            <span class="doc doc-object-name doc-class-name">ShutdownError</span>
 
@@ -3681,6 +3831,60 @@ configured cap was not the limiting factor.</p>
 
 
         <p>Pipeline destroyed or in failed state.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="damacy.PoolStarved" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-class"></code>            <span class="doc doc-object-name doc-class-name">PoolStarved</span>
+
+
+<a href="#damacy.PoolStarved" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents first">
+            <p class="doc doc-class-bases">
+              Bases: <code><a class="autorefs autorefs-internal" title="            DamacyError (damacy.DamacyError)" href="#damacy.DamacyError">DamacyError</a></code></p>
+
+
+
+        <p>Raised when :meth:<code>Pipeline.pop</code> waits longer than
+<code>Config.pop_timeout_s</code> for the next batch.</p>
+<p>The usual cause is your loop holding on to tensors from previous
+batches — for example by stashing them in a list — which keeps
+damacy from reusing that memory. Drop those references before
+the next <code>pop()</code>, or call <code>.clone()</code> if you need to keep
+them.</p>
 
 
 
