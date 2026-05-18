@@ -53,6 +53,9 @@ documented only via its `.pyi` stub.
   exception hierarchy, and the `Stats`/`Metric` value types.
 - [Distributed](distributed.md) — device binding model and torchrun /
   DDP examples.
+- [Async prefetch](prefetch.md) — zero-copy with deferred release
+  for training loops that prefetch the next batch on a background
+  thread.
 
 ## Performance dashboards
 

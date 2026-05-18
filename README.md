@@ -83,58 +83,10 @@ with damacy.Pipeline(cfg) as p:
             ...                        # train step
 ```
 
-## Async prefetch (training loops)
-
-The `with batch as t` block in *Quick start* releases the slot at scope
-exit by host-syncing on damacy's producer stream. That's fine for the
-synchronous read pattern. If you prefetch the next batch on a
-background thread while the main thread runs fwd/bwd, you want one of
-the patterns below — both avoid the host sync.
-
-**Pattern A — copy onto a dedicated stream, allocate on the default
-stream.** Use when you want a private copy of the data and need
-damacy's slot back before the training step finishes:
-
-```python
-copy_stream = torch.cuda.Stream()
-
-def prefetch(p):
-    batch = p.pop()
-    view = torch.from_dlpack(batch)
-    # Allocate on the DEFAULT stream, not copy_stream. PyTorch's caching
-    # allocator pools per stream; allocating inside
-    # `with torch.cuda.stream(copy_stream)` carves out a separate pool
-    # that fwd/bwd can't reuse — reserved memory balloons and the step
-    # slows down under pressure.
-    tensor = torch.empty_like(view)
-    with torch.cuda.stream(copy_stream):
-        tensor.copy_(view)
-    batch.release(event=copy_stream)  # no host sync; slot reuse waits on stream
-    copy_stream.synchronize()
-    return tensor
-```
-
-**Pattern B — zero-copy, defer release until after the training
-step.** No D2D copy at all; the batch is held for the duration of
-fwd/bwd, and the deferred release queues a stream-wait so damacy
-doesn't overwrite the buffer until the GPU work finishes:
-
-```python
-def prefetch(p):
-    batch = p.pop()
-    tensor = torch.from_dlpack(batch)  # zero-copy view onto damacy's slot
-    return tensor, batch
-
-# In the training loop, after fwd/bwd on `tensor` finishes enqueueing:
-tensor, batch = prefetch_future.result()
-... # fwd/bwd on tensor
-batch.release(event=torch.cuda.current_stream())  # no host sync
-```
-
-Both patterns pass `event=` to `batch.release()`, which records (or
-accepts) a CUevent and tells damacy to wait on it before reusing the
-slot — see `Batch.release` for accepted forms (raw handle,
-`torch.cuda.Event`, `torch.cuda.Stream`, …).
+For training loops that prefetch the next batch on a background
+thread, see [Async prefetch](https://nclack.github.io/damacy/prefetch/)
+— zero-copy with deferred release, plus the dedicated-copy-stream
+variant.
 
 ## Zarr support
 

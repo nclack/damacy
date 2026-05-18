@@ -78,4 +78,5 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Distributed: distributed.md
+  - Async prefetch: prefetch.md
   - API reference: api.md
