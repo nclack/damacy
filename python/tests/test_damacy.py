@@ -391,6 +391,31 @@ def test_config_validates_eagerly():
         Config(batch_size=1, sample_shape=(), max_gpu_memory_bytes=gpu)
     with pytest.raises(ValueError, match="sample_shape"):
         Config(batch_size=1, sample_shape=(8, 0), max_gpu_memory_bytes=gpu)
+    with pytest.raises(ValueError, match="max_read_op_bytes"):
+        Config(
+            batch_size=1,
+            sample_shape=ss,
+            max_read_op_bytes=-1,
+            max_gpu_memory_bytes=gpu,
+        )
+    with pytest.raises(ValueError, match="numa_node"):
+        Config(
+            batch_size=1,
+            sample_shape=ss,
+            max_gpu_memory_bytes=gpu,
+            numa_strategy="pin_to",
+        )
+
+
+def test_config_numa_defaults_and_coercion():
+    cfg = _base_config()
+    assert cfg.numa_strategy is damacy.NumaStrategy.AUTO
+    assert cfg.numa_node == -1
+    cfg2 = dataclasses.replace(cfg, numa_strategy=damacy.NumaStrategy.DISABLED)
+    assert cfg2.numa_strategy is damacy.NumaStrategy.DISABLED
+    cfg3 = dataclasses.replace(cfg, numa_strategy="pin_to", numa_node=0)
+    assert cfg3.numa_strategy is damacy.NumaStrategy.PIN_TO
+    assert cfg3.numa_node == 0
 
 
 def test_config_dtype_coerced():

@@ -126,6 +126,25 @@ filesystem, object store). When stacking multiple ranks on one GPU
 (uncommon, but valid), divide `max_gpu_memory_bytes` so the per-GPU
 total fits within the device.
 
+## NUMA placement
+
+On multi-socket hosts, `Config.numa_strategy` controls where damacy
+pins its pinned-host slabs and worker threads:
+
+- `NumaStrategy.AUTO` (default) resolves the GPU's host-NUMA node
+  from the CUDA driver and pins everything there. On single-node
+  hosts the strategy is a no-op.
+- `NumaStrategy.PIN_TO` plus `numa_node=N` forces pinning to node
+  `N`. Use this when AUTO can't resolve a node (no sysfs topology
+  available) or when you want each rank explicitly pinned to a
+  specific socket.
+- `NumaStrategy.DISABLED` skips all NUMA work, including the
+  driver query at create time.
+
+All three are silent no-ops if `libnuma.so.1` cannot be loaded at
+runtime; damacy logs the no-op reason and falls back to whatever
+the OS scheduler picks.
+
 ## CUDA streams
 
 DLPack handles synchronization. `torch.from_dlpack(batch)` records

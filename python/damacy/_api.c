@@ -709,6 +709,8 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                          "host_buffer_waves",
                          "max_read_op_bytes",
                          "enable_gds",
+                         "numa_strategy",
+                         "numa_node",
                          "bypass_decode",
                          NULL };
   unsigned int batch_size = 0;
@@ -724,10 +726,12 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   unsigned int host_buffer_waves = 0;
   unsigned long long max_read_op_bytes = 0;
   int enable_gds = 0;
+  int numa_strategy = DAMACY_NUMA_AUTO;
+  int numa_node = -1;
   int bypass_decode = 0;
   if (!PyArg_ParseTupleAndKeywords(args,
                                    kw,
-                                   "IIIIIOIKO|iIKpp",
+                                   "IIIIIOIKO|iIKpiip",
                                    kws,
                                    &batch_size,
                                    &lookahead,
@@ -742,6 +746,8 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                                    &host_buffer_waves,
                                    &max_read_op_bytes,
                                    &enable_gds,
+                                   &numa_strategy,
+                                   &numa_node,
                                    &bypass_decode))
     return -1;
 
@@ -763,6 +769,8 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
       .max_gpu_memory_bytes = (uint64_t)max_gpu_bytes,
       .host_buffer_waves = (uint8_t)host_buffer_waves,
       .enable_gds = (uint8_t)(enable_gds ? 1 : 0),
+      .numa_strategy = (enum damacy_numa_strategy)numa_strategy,
+      .numa_node = numa_node,
     },
     .debug = { .bypass_decode = (uint8_t)(bypass_decode ? 1 : 0) },
   };
@@ -1008,7 +1016,10 @@ Pipeline_stats(PipelineObj* self, PyObject* Py_UNUSED(ignored))
     { "batches_truncated", st.batches_truncated },
     { "waves_emitted", st.waves_emitted },
     { "worker_steps", st.worker_steps },
+    { "chunks_planned", st.chunks_planned },
+    { "chunks_to_load", st.chunks_to_load },
     { "chunks_dispatched", st.chunks_dispatched },
+    { "reads_issued", st.reads_issued },
     { "gpu_bytes_committed", st.gpu_bytes_committed },
   };
   for (size_t i = 0; i < sizeof counters / sizeof counters[0]; ++i)
@@ -1136,6 +1147,13 @@ api_register_types(PyObject* m)
   if (PyModule_AddIntConstant(m, "DTYPE_F32", DAMACY_F32) < 0)
     return -1;
   if (PyModule_AddIntConstant(m, "DTYPE_BF16", DAMACY_BF16) < 0)
+    return -1;
+
+  if (PyModule_AddIntConstant(m, "NUMA_AUTO", DAMACY_NUMA_AUTO) < 0)
+    return -1;
+  if (PyModule_AddIntConstant(m, "NUMA_DISABLED", DAMACY_NUMA_DISABLED) < 0)
+    return -1;
+  if (PyModule_AddIntConstant(m, "NUMA_PIN_TO", DAMACY_NUMA_PIN_TO) < 0)
     return -1;
   return 0;
 }

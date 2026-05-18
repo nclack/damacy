@@ -40,6 +40,12 @@ STATUS_SHUTDOWN: Final[int]
 DTYPE_F32: Final[int]
 DTYPE_BF16: Final[int]
 
+# ---- damacy_numa_strategy integers --------------------------------------
+
+NUMA_AUTO: Final[int]
+NUMA_DISABLED: Final[int]
+NUMA_PIN_TO: Final[int]
+
 # ---- exceptions ---------------------------------------------------------
 
 class DamacyError(RuntimeError):
@@ -129,7 +135,11 @@ class Pipeline:
         sample_shape: tuple[int, ...],
         device: int = -1,
         host_buffer_waves: int = 0,
+        max_read_op_bytes: int = 0,
         enable_gds: bool = False,
+        numa_strategy: int = ...,
+        numa_node: int = -1,
+        bypass_decode: bool = False,
     ) -> None: ...
     @property
     def device(self) -> int: ...
