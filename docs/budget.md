@@ -1,22 +1,66 @@
 # GPU memory budget
 
-`Config.max_gpu_memory_bytes` is the single knob you use to tell
-damacy how much GPU memory it may consume. It is a **hard cap**:
-damacy refuses to allocate past it. Budget-sizing failures
-surface at `Pipeline(cfg)` construction, before any streaming
-has started, with a logged breakdown of what damacy tried to
-reserve.
+`Config.max_gpu_memory_bytes` is the single knob that tells damacy
+how much GPU memory it may consume. It is a **hard cap** — damacy
+refuses to allocate past it, and budget-sizing failures surface
+at `Pipeline(cfg)` construction, before any streaming has started,
+with a logged breakdown of what damacy tried to reserve.
 
-The number itself is easy to set. Picking a *good* number — one
-large enough to deliver throughput but small enough to leave room
-for your model — takes a brief tour of how damacy lays work out
-across the GPU. That tour is the rest of this page.
+**Quick answer:** 1 GiB (`1 << 30`) is a reasonable default for a
+single-GPU setup. If you are sharing the GPU with a training
+model, subtract the model's resident footprint (weights, optimizer
+state, activations) from the device's total memory, leave a few
+hundred MiB of slack for cuDNN/cuBLAS workspaces, and give damacy
+the rest. damacy will use whatever you allocate to it; it will not
+ask for more.
 
-If you only want the recipe, jump to [Sizing the budget](#sizing-the-budget).
+The rest of this page is for users who want to size more
+precisely: a recipe for the floor, a tour of where the bytes go,
+and the error paths.
+
+## Sizing the budget
+
+Compute the *floor* — the smallest budget that admits the
+configuration — then round up generously:
+
+```text
+pool_reservation  = 2 × batch_size × prod(sample_shape) × dtype_bytes
+per_wave_floor    ≈ max_chunk_uncompressed_bytes × 2   # compressed + decoded, one chunk per wave
+budget_floor      ≈ pool_reservation + 2 × per_wave_floor + scratch_slack
+```
+
+The `2 ×` in front of `pool_reservation` is double-buffering on
+the output side. The `2 ×` in front of `per_wave_floor` is the
+two GPU waves (a fixed count, not a tunable). `scratch_slack`
+covers decoder workspace and per-wave metadata — a few tens of
+MiB for typical workloads, more if your chunks decompose into
+many sub-streams.
+
+`per_wave_floor` is what damacy needs to hold *one* chunk per wave
+at the configured chunk cap. Any budget headroom above that floor
+lets damacy size each wave to hold many chunks at once — fewer
+wave turnovers per batch, better overlap.
+
+A worked example for `batch_size=8`, `bf16` (2 bytes/element),
+`sample_shape=(64, 256, 256)`, `max_chunk_uncompressed_bytes=4 MiB`:
+
+```text
+pool_reservation  = 2 × 8 × (64 × 256 × 256) × 2  ≈ 128 MiB
+per_wave_floor    ≈ 4 MiB × 2                     =   8 MiB
+budget_floor      ≈ 128 + 2 × 8 + slack           ≈ 200 MiB
+```
+
+Round up to the next sensible boundary — 512 MiB or 1 GiB. The
+headroom does not sit idle: damacy spends it on bigger per-wave
+buffers (in `max_chunk_uncompressed_bytes`-sized steps), which
+shrinks wave turnover during streaming.
 
 ## How damacy uses the GPU
 
-damacy moves bytes through four stages:
+If you want to understand *why* the recipe looks like that, this
+section walks through where damacy puts the bytes.
+
+damacy moves data through four stages:
 
 1. **Read** compressed chunks from a zarr store (host-side I/O).
 2. **Decode** them on the GPU (zstd or blosc1-zstd, via nvcomp).
@@ -33,15 +77,15 @@ faster than you might expect.
 ### The unit of overlap: a wave
 
 damacy does not stream chunks one at a time. It groups chunk work
-into **waves** and keeps two waves resident on the GPU at all times
-(producer wave decoding while the consumer wave assembles), so the
-read, decode, assemble, and copy stages overlap.
+into **waves** and keeps two waves resident on the GPU at all
+times (producer wave decoding while the consumer wave assembles),
+so the read, decode, assemble, and copy stages overlap.
 
 The GPU-side wave count is fixed at two — it is not a tuning knob.
 What *does* scale with the budget is **how big each wave's buffers
-are**: the maximum compressed and decompressed chunk bytes the wave
-can hold at once, which in turn caps how much I/O can be issued in
-a single planning pass.
+are**: the maximum compressed and decompressed chunk bytes the
+wave can hold at once, which in turn caps how much I/O can be
+issued in a single planning pass.
 
 On the **host** side, pinned-buffer depth is tunable via
 `Config.host_buffer_waves` (default 2, minimum 2). Increasing it
@@ -49,7 +93,7 @@ lets I/O for upcoming waves stay in flight while the GPU waves
 turn over. Host pinned memory does *not* count against the GPU
 budget.
 
-## Where the budget is spent
+### Where the budget is spent
 
 Four buckets share `max_gpu_memory_bytes`:
 
@@ -62,56 +106,11 @@ Four buckets share `max_gpu_memory_bytes`:
 
 The first two are the large ones; the last two are small but
 *depend on the data*. damacy cannot know the sub-stream count of
-a chunk until it inspects the chunk's header, so the resolver
-picks per-wave geometry such that even after adaptive growth to
-the structural ceiling, the total fits inside the cap. Grows
-commit additional bytes against `gpu_bytes_committed` as they
-happen, but the geometry choice guarantees they cannot trip the
-cap.
-
-## Sizing the budget
-
-Compute the *floor* — the smallest budget that admits the
-configuration — then round up generously:
-
-```text
-pool_reservation  = 2 × batch_size × prod(sample_shape) × dtype_bytes
-per_wave_floor    ≈ max_chunk_uncompressed_bytes × 2   # compressed + decoded, one chunk per wave
-budget_floor      ≈ pool_reservation + 2 × per_wave_floor + scratch_slack
-```
-
-The `2 ×` in front of `per_wave_floor` is the two GPU waves; it
-is not a tunable. `scratch_slack` covers decoder workspace and
-per-wave metadata — a few tens of MiB for typical workloads,
-more if your chunks decompose into many sub-streams.
-
-`per_wave_floor` is what the resolver needs to hold *one* chunk
-per wave at the configured chunk cap. Any budget headroom above
-that floor lets the resolver size each wave to hold many chunks
-at once — fewer wave turnovers per batch, better overlap.
-
-A worked example for `batch_size=8`, `bf16` (2 bytes/element),
-`sample_shape=(64, 256, 256)`, `max_chunk_uncompressed_bytes=4 MiB`:
-
-```text
-pool_reservation  = 2 × 8 × (64 × 256 × 256) × 2  ≈ 128 MiB
-per_wave_floor    ≈ 4 MiB × 2                     =   8 MiB
-budget_floor      ≈ 128 + 2 × 8 + slack           ≈ 200 MiB
-```
-
-Round up to the next sensible boundary — 512 MiB or 1 GiB. The
-headroom does not sit idle: the resolver spends it on bigger
-per-wave buffers (in `max_chunk_uncompressed_bytes`-sized steps),
-which shrinks wave turnover during streaming. The 1 GiB in the
-[quick start](index.md) is a reasonable default for a wide range
-of single-GPU workloads.
-
-If you are sharing the GPU with a training model, the simple rule
-is: subtract the model's resident footprint (weights, optimizer
-state, activations) from the device's total memory, leave a few
-hundred MiB of slack for cuDNN/cuBLAS workspaces, and give damacy
-the rest. damacy will use whatever you allocate to it; it will not
-ask for more.
+a chunk until it inspects the chunk's header, so damacy picks
+per-wave geometry such that even after adaptive growth to the
+structural ceiling, the total fits inside the cap. Grows commit
+additional bytes against `gpu_bytes_committed` as they happen,
+but the geometry choice guarantees they cannot trip the cap.
 
 ## Inspecting actual usage
 

@@ -32,9 +32,9 @@ samples = [
 
 with damacy.Pipeline(cfg) as d:
     d.push(samples)
-    for batch in d.batches(len(samples) // cfg.batch_size):
-        with batch as t:
-            x = torch.from_dlpack(t)
+    for _ in range(len(samples) // cfg.batch_size):
+        with d.pop() as batch:
+            x = torch.from_dlpack(batch)
             ...  # train step
 ```
 
@@ -56,8 +56,8 @@ You hand damacy a stream of `Sample`s; it returns a stream of
   per-sample shape, and that shape is `Config.sample_shape`.
 - A **`Pipeline`** is a streaming context. You `push` an iterable
   of samples (lazy generators are fine — and recommended for long
-  runs) and call `pop()` (or iterate `batches(n)`) to receive
-  completed batches.
+  runs) and call `pop()` to block for the next ready batch.
+  `batches(n)` is sugar for `pop()` in a `for` loop of length *n*.
 - A **`Batch`** is a DLPack-ready handle to a GPU-resident tensor.
   Use it inside a `with` block so damacy can reclaim the slot when
   you're done.
@@ -81,6 +81,9 @@ documented only via its `.pyi` stub.
   `max_gpu_memory_bytes`, what it covers, and how to pick a value.
 - [Distributed](distributed.md) — device binding model and torchrun /
   DDP examples.
+- [Troubleshooting](troubleshooting.md) — common errors
+  (`PoolStarved`, `BudgetExceeded`, missing CUDA context) and what
+  to check first.
 
 ## Performance dashboards
 
