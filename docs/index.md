@@ -51,6 +51,8 @@ documented only via its `.pyi` stub.
 
 - [API reference](api.md) — `Pipeline`, `Config`, `Sample`, `Batch`, the
   exception hierarchy, and the `Stats`/`Metric` value types.
+- [GPU memory budget](budget.md) — how to think about
+  `max_gpu_memory_bytes`, what it covers, and how to pick a value.
 - [Distributed](distributed.md) — device binding model and torchrun /
   DDP examples.
 
