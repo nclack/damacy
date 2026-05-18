@@ -448,8 +448,6 @@ class Config:
         n_shards_meta_cache: LRU cap for shard-index entries.
         max_chunk_uncompressed_bytes: Largest uncompressed chunk size
             the pipeline accepts; 0 selects the C default (512 KB).
-            The library carries a compile-time ceiling; values above
-            it are rejected at construction with :class:`InvalidArgument`.
         max_read_op_bytes: Cap on the size of a single coalesced
             read issued to storage. 0 selects the C default. Tune
             against your storage tier: small values keep the queue
