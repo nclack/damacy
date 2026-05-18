@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779030947160,
+  "lastUpdate": 1779115449306,
   "repoUrl": "https://github.com/nclack/damacy",
   "entries": {
     "damacy throughput": [
@@ -543,6 +543,38 @@ window.BENCHMARK_DATA = {
           {
             "name": "damacy/mixed/throughput",
             "value": 5834.56,
+            "unit": "MB/s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Nathan Clack",
+            "username": "nclack",
+            "email": "nclack@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "cceba581d712f3829d53d41361b52d30baa8391a",
+          "message": "Route OS deps through platform shim (#88)\n\n## Summary\n\nEstablishes a one-rule discipline: anything that might depend on the OS\ngoes through `src/platform/`, even though damacy targets Linux only.\nSweeps the existing violations — direct `pthread_*` in four cache\nmodules, raw `dlopen`/`dlsym` in the GDS loader, `monotonic_ns` time\nmath, and a speculative `#ifdef _WIN32` branch that was never backed by\na real Windows build.\n\nThe shape of the change:\n\n- **New `platform/numa.h` + `numa.posix.c`** — OS-neutral NUMA\nprimitives (`platform_cpu_mask` opaque blob,\navailability/max-node/per-node-mask, thread affinity get/set). API\ndesigned against both POSIX (`cpu_set_t` + `pthread_setaffinity_np`) and\na hypothetical Win32 backing (`GROUP_AFFINITY` +\n`SetThreadGroupAffinity`) so the abstraction is honest, even though\nWin32 isn't implemented.\n- **`src/numa/numa.c` slimmed** — keeps only the CUDA-side policy (GPU →\nhost-NUMA-node resolution via driver attribute + sysfs PCI fallback).\nDrops libnuma dlopen plumbing, `_GNU_SOURCE`, pthread/sched includes,\nand the non-Linux `#else` no-op branch (the platform layer handles\navailability now).\n- **`platform_dl{open,sym,close,error}`** added; `store_fs_gds.c` and\n`platform/numa.posix.c` use them instead of raw libdl.\n- **Four cache modules** (`store_fs`, `store_fs_gds`, `zarr_meta_cache`,\n`zarr_shard_cache`) swap embedded `pthread_mutex_t` for `struct\nplatform_mutex*`. `store_fs_gds` also moves `pthread_once_t` →\n`platform_once` + `platform_call_once`.\n- **`monotonic_ns` → `platform_clock` + `platform_toc`** — five call\nsites in `damacy.c` and `wave_pool.c`. The two-timestamp\n`io_t_start_ns`/`io_t_end_ns` pair on `host_slab_slot` and `damacy_wave`\ncollapses to a single `struct platform_clock` + already-computed `float\nio_ms`, because `platform_toc` returns elapsed AND advances `last_ns` to\n\"now\", so the same clock measures both IO duration (start → end) and\nbind-wait (end → bind) without a second timestamp.\n- **`log/log.c`** uses the new `platform_localtime`; the `_WIN32`\n`localtime_s` branch is gone.\n\n## Where to look first\n\n`src/platform/numa.h` for the abstraction. The Win32 column in the\ndesign table (in the PR-draft conversation) is the actual motivation —\ngo through the file and ask \"would `GROUP_AFFINITY` +\n`SetThreadGroupAffinity` fit here?\". The CPU-mask blob is sized for\nglibc's `cpu_set_t` (128 bytes / 1024 CPUs); same blob holds a Win32\n`GROUP_AFFINITY` array.\n\nThen `src/numa/numa.c` to see what the policy layer looks like once the\nOS plumbing is gone — ~190 lines down from ~410.\n\n## Non-obvious decisions\n\n- **CUDA-side resolution stays out of `platform/`**. The GPU → host-NUMA\nmapping uses `CU_DEVICE_ATTRIBUTE_HOST_NUMA_ID` +\n`/sys/bus/pci/.../numa_node`. Both are Linux-flavored but conceptually\nthey're CUDA + PCI sysfs, not OS primitives. Keeping them in\n`src/numa/numa.c` keeps `platform/` free of CUDA.\n- **`platform_dlopen` does no path translation**. Callers pass\n`\"libcufile.so.0\"` on POSIX and would pass `\"cufile.dll\"` on Windows.\nTranslating would invite per-library quirks and a name-mangling table;\nopting out is cleaner.\n- **`log` now PUBLIC-links `platform`** because `log.c` calls\n`platform_localtime`. Every consumer of `log` transitively gets\n`platform`. Almost everything already linked both; the few\nstandalone-log tests now pull in `platform` as well.\n- **`io_queue.posix.c` direct pthread use is NOT a violation** —\n`.posix.c` files ARE the POSIX implementation (mirror of\n`platform.posix.c`). The rule applies to `.c` files that don't carry a\nplatform suffix.\n\n## Out of scope (deliberate)\n\n- Tests' direct `<sys/stat.h>` + `unistd.h` for filesystem fixtures\n(mkdir/unlink). Would need a `platform_fs_*` surface that's larger than\nthis PR warrants.\n- Tests' direct `pthread_mutex_t` / `sched_yield`. Easy in isolation but\nbundled here only inflates the diff.\n\n## Test plan\n\n- `ctest -j8` on both `build/` (release) and `build-tsan/` (thread\nsanitizer): 23/23 and 22/22 pass. TSan exercises the cache locks under\ncontention (`test_zarr_cache_threading`) — relevant since four mutex\nimplementations changed.\n- Verified NUMA disabled path still logs once per process: NixOS dev box\nhas no libnuma → `platform_numa_available()` returns 0 → `numa_init`\nlogs \"unavailable\" once.",
+          "timestamp": "2026-05-17T21:37:42Z",
+          "url": "https://github.com/nclack/damacy/commit/cceba581d712f3829d53d41361b52d30baa8391a"
+        },
+        "date": 1779115448574,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "damacy/default/throughput",
+            "value": 6320.33,
+            "unit": "MB/s"
+          },
+          {
+            "name": "damacy/mixed/throughput",
+            "value": 6209.06,
             "unit": "MB/s"
           }
         ]
