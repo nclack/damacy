@@ -10,6 +10,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
+struct lru;
+struct lru_entry;
+
 // vtable for backend dispatch. store_destroy and the stat/submit/map
 // dispatchers go through this. submit_dev is NULL on backends that
 // don't support direct device reads; store_supports_gds returns 0 in
@@ -35,24 +38,26 @@ struct store
   const struct store_vtable* vt;
 };
 
-struct fs_cache_slot
-{
-  char* key;
-  platform_file* file;
-};
-
 struct store_fs
 {
   struct store base;
   char* root; // owned
   struct io_queue* q;
 
-  // Open-file cache. Linear scan; small until we find we need better.
   struct platform_mutex* cache_mu;
-  struct fs_cache_slot* slots;
-  size_t n_slots;
-  size_t cap_slots;
+  struct lru* fd_cache;
 };
+
+// Returns a borrowed handle and writes the pin to *pin_out. The pin
+// blocks LRU eviction of the entry; must be balanced with
+// store_fs_release. On failure returns NULL with *pin_out = NULL.
+platform_file*
+store_fs_acquire(struct store_fs* fs,
+                 const char* key,
+                 struct lru_entry** pin_out);
+
+void
+store_fs_release(struct store_fs* fs, struct lru_entry* pin);
 
 // Bridge for store_fs_gds.c — returns a cached handle (do not close).
 platform_file*
