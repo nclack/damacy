@@ -1,6 +1,8 @@
 #include "store/store.h"
 
-#include "store/store_fs.h"
+#include "log/log.h"
+#include "platform/platform.h"
+#include "store/store_internal.h"
 #include "util/prelude.h"
 
 void
@@ -117,4 +119,34 @@ store_unmap(struct store* s, struct store_view* view)
   s->vt->unmap(s, view);
 Out:
   return;
+}
+
+uint32_t
+store_default_fd_cache_capacity(void)
+{
+  enum
+  {
+    HEADROOM = 64,
+    MIN_CAP = 16,
+    MAX_CAP = 4096,
+    FALLBACK = 256,
+  };
+  uint64_t limit = platform_max_open_files();
+  if (limit == 0 || limit <= HEADROOM) {
+    log_info("store: RLIMIT_NOFILE unknown or <= headroom; fd_cache_capacity "
+             "fallback=%u (override via store_fs_config.fd_cache_capacity)",
+             (unsigned)FALLBACK);
+    return FALLBACK;
+  }
+  uint64_t cap = (limit - HEADROOM) / 2;
+  if (cap < MIN_CAP)
+    return MIN_CAP;
+  if (cap > MAX_CAP) {
+    log_info("store: fd_cache_capacity clamped to %u (RLIMIT_NOFILE=%llu); "
+             "raise the cap explicitly via store_fs_config.fd_cache_capacity",
+             (unsigned)MAX_CAP,
+             (unsigned long long)limit);
+    return MAX_CAP;
+  }
+  return (uint32_t)cap;
 }
