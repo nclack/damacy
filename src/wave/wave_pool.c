@@ -64,6 +64,11 @@ wave_pool_init(struct wave_pool* wp,
   wp->n_slots = host_buffer_waves;
   wp->use_gds = (uint8_t)(enable_gds != 0);
   wp->bypass_decode = (uint8_t)(bypass_decode != 0);
+  // Init = 1 (not the structural max) so first-wave fanout doesn't
+  // over-allocate. Safety depends on wave_chunks_eligible: a wave with
+  // any unprobed BLOSC_ZSTD chunk is rejected before prepare_decode_caps,
+  // so chunk_zsubs_upper_bound never reaches the observer-fallback path
+  // on the first wave.
   atomic_store_explicit(
     &wp->observed_max_nblocks_per_chunk, 1u, memory_order_relaxed);
 
