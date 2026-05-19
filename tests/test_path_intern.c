@@ -22,6 +22,22 @@ test_pointer_identity(void)
 }
 
 static int
+test_hash_matches_fnv1a(void)
+{
+  struct path_intern pi = { 0 };
+  const char* p = path_intern_acquire(&pi, "alpha/beta/gamma");
+  EXPECT(p != NULL);
+  EXPECT(path_intern_hash(p) == hash_fnv1a_str("alpha/beta/gamma"));
+  const char* q = path_intern_acquire(&pi, "alpha/beta/gamma");
+  EXPECT(p == q);
+  EXPECT(path_intern_hash(q) == hash_fnv1a_str("alpha/beta/gamma"));
+  path_intern_release(&pi, p);
+  path_intern_release(&pi, q);
+  path_intern_free(&pi);
+  return 0;
+}
+
+static int
 test_distinct_strings(void)
 {
   struct path_intern pi = { 0 };
@@ -59,6 +75,29 @@ test_rehash_stability(void)
     EXPECT(strcmp(ptrs[i], buf) == 0);
     EXPECT(path_intern_acquire(&pi, buf) == ptrs[i]);
   }
+  path_intern_free(&pi);
+  return 0;
+}
+
+static int
+test_hash_survives_rehash(void)
+{
+  enum
+  {
+    N = 200
+  };
+  struct path_intern pi = { 0 };
+  const char* early = path_intern_acquire(&pi, "early/key");
+  EXPECT(early != NULL);
+  size_t cap_at_early = pi.cap;
+  char buf[32];
+  for (int i = 0; i < N; ++i) {
+    snprintf(buf, sizeof buf, "shard/%d", i);
+    EXPECT(path_intern_acquire(&pi, buf) != NULL);
+  }
+  EXPECT(pi.cap > cap_at_early);
+  EXPECT(path_intern_hash(early) == hash_fnv1a_str("early/key"));
+  EXPECT(strcmp(early, "early/key") == 0);
   path_intern_free(&pi);
   return 0;
 }
@@ -216,8 +255,10 @@ int
 main(void)
 {
   RUN(test_pointer_identity);
+  RUN(test_hash_matches_fnv1a);
   RUN(test_distinct_strings);
   RUN(test_rehash_stability);
+  RUN(test_hash_survives_rehash);
   RUN(test_release_evicts_at_zero);
   RUN(test_release_preserves_probe_chains);
   RUN(test_release_backward_shift_chain);

@@ -6,6 +6,7 @@
 #pragma once
 
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C"
@@ -34,6 +35,10 @@ extern "C"
 
   // Linear scan; for debug asserts on cache-key contracts.
   int path_intern_owns(const struct path_intern* pi, const char* p);
+
+  // Reads a uint64_t header prepended by path_intern_acquire. `s` MUST
+  // be a pointer returned by acquire; any other pointer is UB.
+  uint64_t path_intern_hash(const char* s);
 
 #ifdef __cplusplus
 }

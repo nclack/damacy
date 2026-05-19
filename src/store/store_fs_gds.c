@@ -128,7 +128,6 @@ static struct lru_entry*
 fs_gds_acquire(struct store_fs_gds* g, const char* key)
 {
   uint64_t hash = hash_fnv1a_str(key);
-
   platform_mutex_lock(g->cache_mu);
   struct lru_entry* hit = lru_get(g->cache, hash, key);
   if (hit) {

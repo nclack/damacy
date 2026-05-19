@@ -4,7 +4,9 @@
 
 #include "fixture.h"
 #include "store/store.h"
+#include "util/hash.h"
 #include "util/path_intern.h"
+#include "zarr/zarr_chunk_layout.h"
 #include "zarr/zarr_meta_cache.h"
 #include "zarr/zarr_metadata.h"
 
@@ -96,12 +98,17 @@ test_meta_cache(void)
   struct store* store = store_fs_create(&sc);
   EXPECT(store);
 
-  struct zarr_meta_cache* c = zarr_meta_cache_create(store, NULL, 4);
+  struct path_intern uris = { 0 };
+  struct zarr_meta_cache* c = zarr_meta_cache_create(store, &uris, 4);
   EXPECT(c);
 
-  // First get: miss → load → return.
+  const char* foo = path_intern_acquire(&uris, "foo");
+  const char* bar = path_intern_acquire(&uris, "bar");
+  const char* nope = path_intern_acquire(&uris, "doesnotexist");
+  EXPECT(foo && bar && nope);
+
   struct zarr_metadata m1 = { 0 };
-  EXPECT(zarr_meta_cache_get(c, "foo", &m1) == DAMACY_OK);
+  EXPECT(zarr_meta_cache_get(c, foo, path_intern_hash(foo), &m1) == DAMACY_OK);
   EXPECT(m1.rank == 2);
   EXPECT(m1.shape[0] == 64 && m1.shape[1] == 1024);
   EXPECT(m1.inner_chunk_shape[0] == 32 && m1.inner_chunk_shape[1] == 128);
@@ -114,25 +121,27 @@ test_meta_cache(void)
   EXPECT(st.counters.misses == 1);
   EXPECT(st.size == 1);
 
-  // Second get same uri: hit. Returned bytes must match.
   struct zarr_metadata m1b = { 0 };
-  EXPECT(zarr_meta_cache_get(c, "foo", &m1b) == DAMACY_OK);
+  EXPECT(zarr_meta_cache_get(c, foo, path_intern_hash(foo), &m1b) == DAMACY_OK);
   EXPECT(memcmp(&m1b, &m1, sizeof m1) == 0);
   zarr_meta_cache_stats_get(c, &st);
   EXPECT(st.counters.hits == 1);
   EXPECT(st.counters.misses == 1);
 
-  // Different uri: another miss; both entries cached.
   struct zarr_metadata m2 = { 0 };
-  EXPECT(zarr_meta_cache_get(c, "bar", &m2) == DAMACY_OK);
+  EXPECT(zarr_meta_cache_get(c, bar, path_intern_hash(bar), &m2) == DAMACY_OK);
   zarr_meta_cache_stats_get(c, &st);
   EXPECT(st.size == 2);
 
-  // Missing uri: NOTFOUND.
   struct zarr_metadata mx = { 0 };
-  EXPECT(zarr_meta_cache_get(c, "doesnotexist", &mx) == DAMACY_NOTFOUND);
+  EXPECT(zarr_meta_cache_get(c, nope, path_intern_hash(nope), &mx) ==
+         DAMACY_NOTFOUND);
 
+  path_intern_release(&uris, foo);
+  path_intern_release(&uris, bar);
+  path_intern_release(&uris, nope);
   zarr_meta_cache_destroy(c);
+  path_intern_free(&uris);
   store_destroy(store);
   fixture_rm_tree(root);
   return 0;
@@ -161,7 +170,7 @@ test_meta_cache_unsharded(void)
   EXPECT(c);
 
   struct zarr_metadata m = { 0 };
-  EXPECT(zarr_meta_cache_get(c, "foo", &m) == DAMACY_OK);
+  EXPECT(zarr_meta_cache_get(c, "foo", hash_fnv1a_str("foo"), &m) == DAMACY_OK);
   EXPECT(m.rank == 2);
   EXPECT(m.shape[0] == 64 && m.shape[1] == 1024);
   EXPECT(m.shard_shape[0] == 32 && m.shard_shape[1] == 128);
@@ -198,7 +207,7 @@ test_meta_cache_index_start(void)
   EXPECT(c);
 
   struct zarr_metadata m = { 0 };
-  EXPECT(zarr_meta_cache_get(c, "foo", &m) == DAMACY_OK);
+  EXPECT(zarr_meta_cache_get(c, "foo", hash_fnv1a_str("foo"), &m) == DAMACY_OK);
   EXPECT(m.sharded == 1);
   EXPECT(m.index_location_end == 0);
 
@@ -244,19 +253,21 @@ test_meta_cache_pointer_identity(void)
   EXPECT(foo_a != bar);
 
   struct zarr_metadata m = { 0 };
-  EXPECT(zarr_meta_cache_get(c, foo_a, &m) == DAMACY_OK);
+  EXPECT(zarr_meta_cache_get(c, foo_a, path_intern_hash(foo_a), &m) ==
+         DAMACY_OK);
   struct zarr_meta_cache_stats st;
   zarr_meta_cache_stats_get(c, &st);
   EXPECT(st.counters.misses == 1);
   EXPECT(st.size == 1);
 
-  EXPECT(zarr_meta_cache_get(c, foo_b, &m) == DAMACY_OK);
+  EXPECT(zarr_meta_cache_get(c, foo_b, path_intern_hash(foo_b), &m) ==
+         DAMACY_OK);
   zarr_meta_cache_stats_get(c, &st);
   EXPECT(st.counters.hits == 1);
   EXPECT(st.counters.misses == 1);
   EXPECT(st.size == 1);
 
-  EXPECT(zarr_meta_cache_get(c, bar, &m) == DAMACY_OK);
+  EXPECT(zarr_meta_cache_get(c, bar, path_intern_hash(bar), &m) == DAMACY_OK);
   zarr_meta_cache_stats_get(c, &st);
   EXPECT(st.counters.misses == 2);
   EXPECT(st.size == 2);
@@ -271,6 +282,71 @@ test_meta_cache_pointer_identity(void)
   return 0;
 }
 
+// A wrong hash on layout_get / layout_set misses silently (the bucket
+// is keyed by (hash, ptr)). Pin down the contract so a future
+// regression in the hash plumbing is loud.
+static int
+test_meta_cache_layout_hash_keying(void)
+{
+  char tmpl[] = "/tmp/damacy_meta_layout_hash_XXXXXX";
+  char* root = mkdtemp(tmpl);
+  EXPECT(root);
+
+  char path[512];
+  snprintf(path, sizeof path, "%s/foo", root);
+  EXPECT(mkdir(path, 0755) == 0);
+  snprintf(path, sizeof path, "%s/foo/zarr.json", root);
+  EXPECT(fixture_write_file(path, MINIMAL_ZARR_JSON) == 0);
+
+  struct store_fs_config sc = { .root = root, .nthreads = 1 };
+  struct store* store = store_fs_create(&sc);
+  EXPECT(store);
+
+  struct zarr_meta_cache* c = zarr_meta_cache_create(store, NULL, 4);
+  EXPECT(c);
+
+  uint64_t foo_hash = hash_fnv1a_str("foo");
+  uint64_t wrong_hash = foo_hash ^ 0xdeadbeefULL;
+
+  struct zarr_metadata m = { 0 };
+  EXPECT(zarr_meta_cache_get(c, "foo", foo_hash, &m) == DAMACY_OK);
+
+  struct chunk_layout cl = {
+    .codec_id = 1,
+    .typesize = 4,
+    .blocksize = 256,
+    .nbytes = 1024,
+    .nblocks = 4,
+    .shuffle = 1,
+  };
+  EXPECT(zarr_meta_cache_layout_set(c, "foo", foo_hash, &cl) == 0);
+
+  {
+    struct chunk_layout got = { 0 };
+    EXPECT(zarr_meta_cache_layout_get(c, "foo", foo_hash, &got) == 0);
+    EXPECT(got.typesize == 4);
+    EXPECT(got.blocksize == 256);
+  }
+
+  {
+    struct chunk_layout got = { 0 };
+    EXPECT(zarr_meta_cache_layout_get(c, "foo", wrong_hash, &got) != 0);
+  }
+
+  struct chunk_layout cl2 = { .typesize = 99 };
+  EXPECT(zarr_meta_cache_layout_set(c, "foo", wrong_hash, &cl2) != 0);
+  {
+    struct chunk_layout got = { 0 };
+    EXPECT(zarr_meta_cache_layout_get(c, "foo", foo_hash, &got) == 0);
+    EXPECT(got.typesize == 4);
+  }
+
+  zarr_meta_cache_destroy(c);
+  store_destroy(store);
+  fixture_rm_tree(root);
+  return 0;
+}
+
 int
 main(void)
 {
@@ -278,6 +354,7 @@ main(void)
   RUN(test_meta_cache_unsharded);
   RUN(test_meta_cache_index_start);
   RUN(test_meta_cache_pointer_identity);
+  RUN(test_meta_cache_layout_hash_keying);
   log_info("all tests passed");
   return 0;
 }

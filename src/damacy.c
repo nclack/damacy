@@ -20,6 +20,7 @@
 #include "store/store.h"
 #include "store/store_fs_gds.h"
 #include "util/cuda_check.h"
+#include "util/hash.h"
 #include "util/path_intern.h"
 #include "util/prelude.h"
 #include "wave/wave_budget.h"
@@ -191,8 +192,8 @@ push_one(struct damacy* self, const struct damacy_sample* sample)
 
   enum damacy_status status;
   struct zarr_metadata meta;
-  enum damacy_status ms =
-    zarr_meta_cache_get(self->meta_cache, interned_uri, &meta);
+  enum damacy_status ms = zarr_meta_cache_get(
+    self->meta_cache, interned_uri, path_intern_hash(interned_uri), &meta);
   if (ms != DAMACY_OK) {
     status = ms;
     goto Cleanup;

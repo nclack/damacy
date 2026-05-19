@@ -8,12 +8,37 @@
 #include <stdlib.h>
 #include <string.h>
 
+// `str` points one header past the malloc'd block; the preceding
+// 8 bytes hold the FNV-1a hash so path_intern_hash is O(1).
 struct path_intern_slot
 {
   uint64_t hash;
   char* str; // NULL = empty bucket
   uint32_t refs;
 };
+
+#define PATH_INTERN_HEADER_BYTES ((size_t)sizeof(uint64_t))
+
+static char*
+slot_alloc(const char* s, size_t n, uint64_t h)
+{
+  char* block = (char*)malloc(PATH_INTERN_HEADER_BYTES + n + 1u);
+  if (!block)
+    return NULL;
+  memcpy(block, &h, sizeof(h));
+  char* str = block + PATH_INTERN_HEADER_BYTES;
+  memcpy(str, s, n);
+  str[n] = '\0';
+  return str;
+}
+
+static void
+slot_free(char* str)
+{
+  if (!str)
+    return;
+  free(str - PATH_INTERN_HEADER_BYTES);
+}
 
 static int
 slots_rehash(struct path_intern* pi, size_t new_cap)
@@ -50,7 +75,7 @@ slot_evict(struct path_intern* pi, size_t idx)
   if (!pi->cap)
     return;
   size_t mask = pi->cap - 1u;
-  free(pi->slots[idx].str);
+  slot_free(pi->slots[idx].str);
   pi->slots[idx] = (struct path_intern_slot){ 0 };
   pi->n--;
   for (size_t scan = (idx + 1u) & mask; pi->slots[scan].str;
@@ -70,7 +95,7 @@ path_intern_free(struct path_intern* pi)
   if (!pi || !pi->slots)
     return;
   for (size_t i = 0; i < pi->cap; ++i)
-    free(pi->slots[i].str);
+    slot_free(pi->slots[i].str);
   free(pi->slots);
   pi->slots = NULL;
   pi->cap = 0;
@@ -83,7 +108,7 @@ path_intern_reset(struct path_intern* pi)
   if (!pi || !pi->slots)
     return;
   for (size_t i = 0; i < pi->cap; ++i) {
-    free(pi->slots[i].str);
+    slot_free(pi->slots[i].str);
     pi->slots[i] = (struct path_intern_slot){ 0 };
   }
   pi->n = 0;
@@ -103,12 +128,13 @@ path_intern_acquire(struct path_intern* pi, const char* s)
   }
 
   uint64_t h = hash_fnv1a_str(s);
+  size_t n = strlen(s);
   size_t mask = pi->cap - 1u;
   size_t j = (size_t)h & mask;
   for (;;) {
     struct path_intern_slot* slot = &pi->slots[j];
     if (!slot->str) {
-      char* copy = strdup(s);
+      char* copy = slot_alloc(s, n, h);
       if (!copy)
         return NULL;
       slot->hash = h;
@@ -123,6 +149,14 @@ path_intern_acquire(struct path_intern* pi, const char* s)
     }
     j = (j + 1u) & mask;
   }
+}
+
+uint64_t
+path_intern_hash(const char* s)
+{
+  uint64_t h;
+  memcpy(&h, s - PATH_INTERN_HEADER_BYTES, sizeof(h));
+  return h;
 }
 
 void

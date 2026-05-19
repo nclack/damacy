@@ -58,9 +58,12 @@ extern "C"
   // Thread-safe; the pin survives concurrent eviction (eviction skips
   // pinned slots). Size `capacity` above the working set so put
   // failures don't fire under contention.
+  // `uri_hash` is the FNV-1a hash of `uri`; pass path_intern_hash(uri)
+  // when `uri` is interned to skip per-call rehashing.
   enum damacy_status zarr_shard_cache_get(
     struct zarr_shard_cache* c,
     const char* uri,
+    uint64_t uri_hash,
     const struct zarr_metadata* meta,
     const uint64_t* shard_coord,
     struct zarr_shard_pin* out_pin,

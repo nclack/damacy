@@ -50,7 +50,6 @@ store_fs_acquire(struct store_fs* fs,
     return NULL;
 
   uint64_t hash = hash_fnv1a_str(key);
-
   platform_mutex_lock(fs->cache_mu);
   {
     struct lru_entry* hit = lru_get(fs->fd_cache, hash, key);
