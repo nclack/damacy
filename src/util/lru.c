@@ -3,6 +3,7 @@
 #include "log/log.h"
 #include "util/prelude.h"
 
+#include <assert.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -199,9 +200,10 @@ index_insert_robin(struct lru* self, uint32_t slot_to_insert)
         self->index.max_probe_observed = probe;
       return LRU_NIL;
     }
-    // Pinned entries are immovable; never swap with them.
+    // relaxed: pin bumps run under this same mutex; only the lock-free
+    // release in evict_lru_tail needs acquire.
     if (atomic_load_explicit(&self->slots[incumbent].refcount,
-                             memory_order_acquire) == 0) {
+                             memory_order_relaxed) == 0) {
       uint32_t incumbent_ideal = ideal_cell(self, self->slots[incumbent].hash);
       uint32_t incumbent_probe = probe_dist(self, cell_idx, incumbent_ideal);
       if (probe > incumbent_probe) {
@@ -232,7 +234,7 @@ index_erase(struct lru* self, uint32_t cell_idx)
       return;
     }
     if (atomic_load_explicit(&self->slots[next_slot].refcount,
-                             memory_order_acquire) > 0) {
+                             memory_order_relaxed) > 0) {
       // Pinned entries don't move; leave a gap at `cell_idx`.
       self->index.cells[cell_idx] = LRU_NIL;
       return;
@@ -312,8 +314,7 @@ evict_lru_tail(struct lru* self)
     struct lru_entry* entry = link_to_entry(node);
     // Racing read: a worker may drop refcount to 0 just after we observe
     // > 0, leaving an evictable entry unevicted this pass — benign, the
-    // next eviction will catch it. A worker cannot raise refcount from 0
-    // because acquire bumps run under the same index mutex held here.
+    // next eviction will catch it.
     if (atomic_load_explicit(&entry->refcount, memory_order_acquire) == 0) {
       evict_slot(self, entry_to_slot_idx(self, entry));
       return 0;
@@ -429,7 +430,7 @@ lru_put(struct lru* self, uint64_t hash, const void* probe_key, void* value)
   if (cell_idx != LRU_NIL) {
     uint32_t slot_idx = self->index.cells[cell_idx];
     if (atomic_load_explicit(&self->slots[slot_idx].refcount,
-                             memory_order_acquire) > 0) {
+                             memory_order_relaxed) > 0) {
       // Pinned entry can't be replaced — would invalidate the pin.
       self->counters.put_failures++;
       self->ops.destroy(value, self->ops.user);
@@ -524,15 +525,11 @@ lru_entry_release(struct lru_entry* entry)
 {
   if (!entry)
     return;
-  uint32_t prev = atomic_load_explicit(&entry->refcount, memory_order_relaxed);
-  while (prev > 0) {
-    if (atomic_compare_exchange_weak_explicit(&entry->refcount,
-                                              &prev,
-                                              prev - 1u,
-                                              memory_order_acq_rel,
-                                              memory_order_relaxed))
-      return;
-  }
+  uint32_t prev =
+    atomic_fetch_sub_explicit(&entry->refcount, 1u, memory_order_acq_rel);
+  // Catches double-release on the lock-free path before it wraps.
+  assert(prev > 0u);
+  (void)prev;
 }
 
 void
