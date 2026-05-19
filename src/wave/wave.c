@@ -61,11 +61,14 @@ wave_init(struct damacy_wave* wave,
                     (size_t)cap * sizeof(uint32_t)));
   CU(Error, cuMemAlloc(&dptr, (size_t)cap * sizeof(uint32_t)));
   wave->d_blosc_chunk_indices = (uint32_t*)(uintptr_t)dptr;
-  CU(Error,
-     cuMemAllocHost((void**)&wave->h_block_chunk_map,
-                    DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE * sizeof(uint32_t)));
-  CU(Error,
-     cuMemAlloc(&dptr, DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE * sizeof(uint32_t)));
+  {
+    const size_t zsubs_max = (size_t)DAMACY_MAX_CHUNKS_PER_WAVE *
+                             (size_t)DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK;
+    CU(Error,
+       cuMemAllocHost((void**)&wave->h_block_chunk_map,
+                      zsubs_max * sizeof(uint32_t)));
+    CU(Error, cuMemAlloc(&dptr, zsubs_max * sizeof(uint32_t)));
+  }
   wave->d_block_chunk_map = (uint32_t*)(uintptr_t)dptr;
   // Bitset: one bit per wave-local chunk index, rounded to uint32_t words.
   CU(Error, cuMemAlloc(&dptr, (size_t)((cap + 31u) / 32u) * sizeof(uint32_t)));

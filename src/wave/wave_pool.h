@@ -17,6 +17,7 @@
 #include "wave/wave.h"
 
 #include <cuda.h>
+#include <stdatomic.h>
 #include <stdint.h>
 
 struct damacy_batch_pool;
@@ -87,6 +88,8 @@ struct wave_pool
   // sample.fill_value. Planner, IO, and H2D are unaffected — this
   // isolates decode out of the pipeline. See damacy_config.bypass_decode.
   uint8_t bypass_decode;
+
+  _Atomic(uint16_t) observed_max_nblocks_per_chunk;
 };
 
 // Create the streams, initialize the wave array, and allocate

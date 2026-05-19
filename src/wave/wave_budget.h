@@ -85,8 +85,9 @@ struct wave_pool_sizing
   uint64_t dev_decompressed_per_wave; // dev_decompressed + unshuffle scratch
   // Worst-case post-grow pool footprint at this geometry: assumes both
   // per-wave fanout SOAs and the shared decoder scratch have grown all
-  // the way to DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE. Always <=
-  // max_gpu_memory_bytes by resolver construction.
+  // the way to DAMACY_MAX_CHUNKS_PER_WAVE *
+  // DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK. Always <= max_gpu_memory_bytes by
+  // resolver construction.
   uint64_t worst_case_total_bytes;
 };
 

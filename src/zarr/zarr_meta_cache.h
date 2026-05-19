@@ -17,6 +17,9 @@
 #include "zarr/zarr_chunk_layout.h"
 #include "zarr/zarr_metadata.h"
 
+#ifndef __cplusplus
+#include <stdatomic.h>
+#endif
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -35,6 +38,15 @@ extern "C"
                                                  uint32_t capacity);
 
   void zarr_meta_cache_destroy(struct zarr_meta_cache* c);
+
+#ifdef __cplusplus
+  void zarr_meta_cache_set_blosc_nblocks_observer(struct zarr_meta_cache* c,
+                                                  void* observer);
+#else
+void
+zarr_meta_cache_set_blosc_nblocks_observer(struct zarr_meta_cache* c,
+                                           _Atomic(uint16_t)* observer);
+#endif
 
   // Look up metadata for the array at `uri` (path within the store). On
   // hit copies the cached metadata into *out; on miss, fetches and parses
