@@ -751,6 +751,20 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                                    &bypass_decode))
     return -1;
 
+  if (enable_gds != DAMACY_GDS_AUTO && enable_gds != DAMACY_GDS_ON &&
+      enable_gds != DAMACY_GDS_OFF) {
+    PyErr_Format(
+      PyExc_ValueError, "enable_gds out of range (got %d)", enable_gds);
+    return -1;
+  }
+  if (numa_strategy != DAMACY_NUMA_AUTO &&
+      numa_strategy != DAMACY_NUMA_DISABLED &&
+      numa_strategy != DAMACY_NUMA_PIN_TO) {
+    PyErr_Format(
+      PyExc_ValueError, "numa_strategy out of range (got %d)", numa_strategy);
+    return -1;
+  }
+
   enum damacy_dtype dt;
   if (parse_dtype(dtype_obj, &dt) != 0)
     return -1;

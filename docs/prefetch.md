@@ -75,6 +75,15 @@ def prefetch(p):
     return tensor
 ```
 
+`copy_stream.synchronize()` blocks the prefetch thread until the
+D2D copy is complete; the main thread's fwd/bwd runs in parallel
+the whole time, so the host-side stall doesn't cost throughput at
+prefetch depth 1. With deeper prefetch (multiple in-flight
+futures), drop the `synchronize()` and have the consumer call
+`torch.cuda.current_stream().wait_stream(copy_stream)` before
+reading `tensor` — that pushes the wait stream-side and lets the
+prefetch thread start the next pop immediately.
+
 ### Allocate on the default stream, copy on the side stream
 
 PyTorch's caching allocator pools per stream. Allocating *inside*

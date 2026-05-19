@@ -117,12 +117,10 @@ resolve_host_buffer_waves(const struct damacy_config* cfg)
 uint8_t
 resolve_enable_gds(const struct damacy_config* cfg)
 {
-  if (cfg) {
-    if (cfg->tuning.enable_gds == DAMACY_GDS_ON)
-      return 1;
-    if (cfg->tuning.enable_gds == DAMACY_GDS_OFF)
-      return 0;
-  }
+  if (cfg->tuning.enable_gds == DAMACY_GDS_ON)
+    return 1;
+  if (cfg->tuning.enable_gds == DAMACY_GDS_OFF)
+    return 0;
   const char* e = platform_getenv("DAMACY_GDS_ENABLE");
   return (e && strcmp(e, "1") == 0) ? 1 : 0;
 }
