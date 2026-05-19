@@ -200,10 +200,11 @@ index_insert_robin(struct lru* self, uint32_t slot_to_insert)
         self->index.max_probe_observed = probe;
       return LRU_NIL;
     }
-    // relaxed: pin bumps run under this same mutex; only the lock-free
-    // release in evict_lru_tail needs acquire.
+    // acquire pairs with lru_entry_release's acq_rel decrement (released
+    // lock-free); the mutex serializes acquires-from-zero but does NOT
+    // carry the release direction.
     if (atomic_load_explicit(&self->slots[incumbent].refcount,
-                             memory_order_relaxed) == 0) {
+                             memory_order_acquire) == 0) {
       uint32_t incumbent_ideal = ideal_cell(self, self->slots[incumbent].hash);
       uint32_t incumbent_probe = probe_dist(self, cell_idx, incumbent_ideal);
       if (probe > incumbent_probe) {
@@ -234,7 +235,7 @@ index_erase(struct lru* self, uint32_t cell_idx)
       return;
     }
     if (atomic_load_explicit(&self->slots[next_slot].refcount,
-                             memory_order_relaxed) > 0) {
+                             memory_order_acquire) > 0) {
       // Pinned entries don't move; leave a gap at `cell_idx`.
       self->index.cells[cell_idx] = LRU_NIL;
       return;
@@ -381,7 +382,11 @@ lru_destroy(struct lru* self)
     return;
   for (struct lru_list* node = self->lru_order.next; node != &self->lru_order;
        node = node->next) {
-    self->ops.destroy(link_to_entry(node)->value, self->ops.user);
+    struct lru_entry* entry = link_to_entry(node);
+    // Caller contract: all pin-holders (workers, host callbacks) must have
+    // drained before destroy. Catches imbalanced acquire/release.
+    assert(atomic_load_explicit(&entry->refcount, memory_order_relaxed) == 0);
+    self->ops.destroy(entry->value, self->ops.user);
   }
   free(self->slots);
   free(self->index.cells);
