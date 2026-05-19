@@ -41,9 +41,8 @@ struct zarr_shard_cache
 };
 
 static uint64_t
-shard_hash(const char* uri, const uint64_t* shard_coord, uint8_t rank)
+shard_hash(uint64_t uri_hash, const uint64_t* shard_coord, uint8_t rank)
 {
-  uint64_t uri_hash = hash_ptr(uri);
   uint64_t coord_hash =
     hash_fnv1a(shard_coord, (size_t)rank * sizeof(uint64_t));
   return hash_combine(uri_hash, coord_hash);
@@ -95,9 +94,9 @@ zarr_shard_cache_create(struct store* store,
     .eq = shard_eq,
     .destroy = shard_destroy,
   };
-  // hash_combine over (hash_ptr(uri), hash_fnv1a(shard_coord)) — the
-  // multiplicative URI hash and content coord hash mix well; observed
-  // chain depths stay well under the cap.
+  // hash_combine over (path_intern_hash(uri), hash_fnv1a(shard_coord))
+  // mixes URI and coord hashes well; observed chain depths stay under
+  // the cap.
   self->lru = lru_create(capacity, 16, &ops);
   CHECK(Error, self->lru);
   self->mu = platform_mutex_new();
@@ -123,6 +122,7 @@ zarr_shard_cache_destroy(struct zarr_shard_cache* self)
 enum damacy_status
 zarr_shard_cache_get(struct zarr_shard_cache* self,
                      const char* uri,
+                     uint64_t uri_hash,
                      const struct zarr_metadata* meta,
                      const uint64_t* shard_coord,
                      struct zarr_shard_pin* out_pin,
@@ -152,7 +152,7 @@ zarr_shard_cache_get(struct zarr_shard_cache* self,
     .rank = meta->rank,
     .shard_coord = shard_coord,
   };
-  uint64_t hash = shard_hash(uri, shard_coord, meta->rank);
+  uint64_t hash = shard_hash(uri_hash, shard_coord, meta->rank);
 
   // Acquire the pin under the cache mutex so the refcount bump is
   // atomic with the lookup — eviction selection won't touch a slot

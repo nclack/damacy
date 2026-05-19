@@ -198,6 +198,7 @@ struct emit_ctx
 {
   // per-sample
   const struct damacy_sample* sample;
+  uint64_t uri_hash; // precomputed FNV-1a of sample->uri (interned)
   const struct zarr_metadata* meta;
   const uint64_t* inner_per_shard_dim; // [meta->rank]
   const uint64_t* chunk_lo;            // [meta->rank], first chunk for sample
@@ -297,6 +298,7 @@ emit_chunk(const struct emit_ctx* ctx,
     struct chunk_layout cl = { 0 };
     if (zarr_meta_cache_probe_layout(ctx->meta_cache,
                                      ctx->sample->uri,
+                                     ctx->uri_hash,
                                      ctx->interned_path,
                                      entry->offset,
                                      (uint32_t)entry->nbytes,
@@ -385,9 +387,11 @@ planner_plan(struct planner* self,
       goto Cleanup;
     }
 
+    uint64_t uri_hash = path_intern_hash(sample->uri);
+
     struct zarr_metadata meta;
     enum damacy_status meta_status =
-      zarr_meta_cache_get(self->cfg.meta_cache, sample->uri, &meta);
+      zarr_meta_cache_get(self->cfg.meta_cache, sample->uri, uri_hash, &meta);
     if (meta_status != DAMACY_OK) {
       status = meta_status;
       goto Cleanup;
@@ -472,6 +476,7 @@ planner_plan(struct planner* self,
 
     struct emit_ctx ctx = {
       .sample = sample,
+      .uri_hash = uri_hash,
       .meta = &meta,
       .inner_per_shard_dim = inner_per_shard_dim,
       .chunk_lo = chunk_lo,
@@ -518,6 +523,7 @@ planner_plan(struct planner* self,
         enum damacy_status shard_status =
           zarr_shard_cache_get(self->cfg.shard_cache,
                                sample->uri,
+                               uri_hash,
                                &meta,
                                shard_coord,
                                &active_pin,

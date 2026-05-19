@@ -15,6 +15,7 @@
 
 #include "fixture.h"
 #include "store/store.h"
+#include "util/hash.h"
 #include "zarr/zarr_meta_cache.h"
 #include "zarr/zarr_metadata.h"
 #include "zarr/zarr_shard_cache.h"
@@ -64,12 +65,13 @@ meta_worker(void* arg)
   struct worker_args* w = (struct worker_args*)arg;
   for (int i = 0; i < N_ITERATIONS; ++i) {
     const char* uri = w->uris[i % N_URIS];
+    uint64_t uri_hash = hash_fnv1a_str(uri);
     struct zarr_metadata m = { 0 };
-    if (zarr_meta_cache_get(w->meta_cache, uri, &m) == DAMACY_OK) {
+    if (zarr_meta_cache_get(w->meta_cache, uri, uri_hash, &m) == DAMACY_OK) {
       // Also exercise the layout side: it goes through the same LRU
       // promotion path on the hit branch and pokes the entry's mutex.
       struct chunk_layout cl = { 0 };
-      (void)zarr_meta_cache_layout_get(w->meta_cache, uri, &cl);
+      (void)zarr_meta_cache_layout_get(w->meta_cache, uri, uri_hash, &cl);
       atomic_fetch_add(&w->ok_count, 1);
     }
   }
@@ -117,7 +119,8 @@ test_meta_cache_concurrent(void)
   EXPECT(c);
   for (int i = 0; i < N_URIS; ++i) {
     struct zarr_metadata m = { 0 };
-    EXPECT(zarr_meta_cache_get(c, names[i], &m) == DAMACY_OK);
+    EXPECT(zarr_meta_cache_get(c, names[i], hash_fnv1a_str(names[i]), &m) ==
+           DAMACY_OK);
   }
 
   struct worker_args w = { .meta_cache = c };
@@ -161,9 +164,14 @@ shard_worker(void* arg)
     const struct zarr_shard_entry* entries = NULL;
     uint64_t n_entries = 0;
     struct zarr_shard_pin pin = { 0 };
-    if (zarr_shard_cache_get(
-          w->shard_cache, w->uri, w->meta, coord, &pin, &entries, &n_entries) ==
-        DAMACY_OK) {
+    if (zarr_shard_cache_get(w->shard_cache,
+                             w->uri,
+                             hash_fnv1a_str(w->uri),
+                             w->meta,
+                             coord,
+                             &pin,
+                             &entries,
+                             &n_entries) == DAMACY_OK) {
       // Touch the pinned entries — the pin must protect against
       // concurrent eviction here. Result is discarded; the read just
       // needs to happen so TSan sees the access.
@@ -219,7 +227,8 @@ test_shard_cache_concurrent(void)
   struct zarr_meta_cache* mc = zarr_meta_cache_create(store, NULL, 16);
   EXPECT(mc);
   struct zarr_metadata meta = { 0 };
-  EXPECT(zarr_meta_cache_get(mc, "zarr_a", &meta) == DAMACY_OK);
+  EXPECT(zarr_meta_cache_get(mc, "zarr_a", hash_fnv1a_str("zarr_a"), &meta) ==
+         DAMACY_OK);
 
   struct zarr_shard_cache* sc_cache = zarr_shard_cache_create(store, NULL, 16);
   EXPECT(sc_cache);
@@ -229,9 +238,14 @@ test_shard_cache_concurrent(void)
   const struct zarr_shard_entry* entries = NULL;
   uint64_t n_entries = 0;
   struct zarr_shard_pin pin = { 0 };
-  EXPECT(zarr_shard_cache_get(
-           sc_cache, "zarr_a", &meta, coord, &pin, &entries, &n_entries) ==
-         DAMACY_OK);
+  EXPECT(zarr_shard_cache_get(sc_cache,
+                              "zarr_a",
+                              hash_fnv1a_str("zarr_a"),
+                              &meta,
+                              coord,
+                              &pin,
+                              &entries,
+                              &n_entries) == DAMACY_OK);
   zarr_shard_cache_release(sc_cache, pin);
 
   struct shard_worker_args w = { .shard_cache = sc_cache,
@@ -276,7 +290,8 @@ meta_evict_worker(void* arg)
   for (int i = 0; i < N_ITERATIONS; ++i) {
     const char* uri = w->uris[i % META_EVICT_URIS];
     struct zarr_metadata m = { 0 };
-    if (zarr_meta_cache_get(w->meta_cache, uri, &m) == DAMACY_OK) {
+    if (zarr_meta_cache_get(w->meta_cache, uri, hash_fnv1a_str(uri), &m) ==
+        DAMACY_OK) {
       if (m.rank == 2 && m.shape[0] == 64)
         atomic_fetch_add(&w->ok_count, 1);
     }
@@ -373,9 +388,14 @@ shard_evict_worker(void* arg)
     const struct zarr_shard_entry* entries = NULL;
     uint64_t n_entries = 0;
     struct zarr_shard_pin pin = { 0 };
-    if (zarr_shard_cache_get(
-          w->shard_cache, w->uri, w->meta, coord, &pin, &entries, &n_entries) ==
-        DAMACY_OK) {
+    if (zarr_shard_cache_get(w->shard_cache,
+                             w->uri,
+                             hash_fnv1a_str(w->uri),
+                             w->meta,
+                             coord,
+                             &pin,
+                             &entries,
+                             &n_entries) == DAMACY_OK) {
       volatile uint64_t sink = 0;
       for (uint64_t j = 0; j < n_entries; ++j)
         sink += entries[j].offset + entries[j].nbytes;
@@ -417,7 +437,8 @@ test_shard_cache_pin_under_eviction(void)
   struct zarr_meta_cache* mc = zarr_meta_cache_create(store, NULL, 16);
   EXPECT(mc);
   struct zarr_metadata meta = { 0 };
-  EXPECT(zarr_meta_cache_get(mc, "zarr_a", &meta) == DAMACY_OK);
+  EXPECT(zarr_meta_cache_get(mc, "zarr_a", hash_fnv1a_str("zarr_a"), &meta) ==
+         DAMACY_OK);
 
   struct zarr_shard_cache* sc_cache =
     zarr_shard_cache_create(store, NULL, SHARD_EVICT_CAP);

@@ -3,7 +3,6 @@
 #include "log/log.h"
 #include "platform/platform.h"
 #include "store/store.h"
-#include "util/hash.h"
 #include "util/lru.h"
 #include "util/path_intern.h"
 #include "util/prelude.h"
@@ -69,8 +68,8 @@ zarr_meta_cache_create(struct store* store,
     .eq = meta_eq,
     .destroy = meta_destroy,
   };
-  // hash_ptr (multiplicative finalizer) spreads malloc-arena clustering
-  // adequately; observed chain depths stay well under the cap.
+  // Caller-supplied FNV-1a hashes (via path_intern_hash) distribute
+  // well across the table; observed chain depths stay under the cap.
   self->lru = lru_create(capacity, 16, &ops);
   CHECK(Error, self->lru);
 
@@ -94,6 +93,7 @@ zarr_meta_cache_destroy(struct zarr_meta_cache* self)
 enum damacy_status
 zarr_meta_cache_get(struct zarr_meta_cache* self,
                     const char* uri,
+                    uint64_t hash,
                     struct zarr_metadata* out)
 {
   CHECK_SILENT(Invalid, self);
@@ -102,7 +102,6 @@ zarr_meta_cache_get(struct zarr_meta_cache* self,
   assert((!self->uris || path_intern_owns(self->uris, uri)) &&
          "zarr_meta_cache_get: uri must be a path_intern pointer");
 
-  uint64_t hash = hash_ptr(uri);
   platform_mutex_lock(self->mu);
   struct lru_entry* hit = lru_get(self->lru, hash, uri);
   if (hit) {
@@ -171,6 +170,7 @@ Invalid:
 int
 zarr_meta_cache_layout_get(struct zarr_meta_cache* self,
                            const char* uri,
+                           uint64_t hash,
                            struct chunk_layout* out)
 {
   if (!self || !uri || !out)
@@ -178,7 +178,6 @@ zarr_meta_cache_layout_get(struct zarr_meta_cache* self,
   assert((!self->uris || path_intern_owns(self->uris, uri)) &&
          "zarr_meta_cache_layout_get: uri must be path_intern pointer");
   memset(out, 0, sizeof *out);
-  uint64_t hash = hash_ptr(uri);
   platform_mutex_lock(self->mu);
   struct lru_entry* hit = lru_get(self->lru, hash, uri);
   int rc = 1;
@@ -197,13 +196,13 @@ zarr_meta_cache_layout_get(struct zarr_meta_cache* self,
 int
 zarr_meta_cache_layout_set(struct zarr_meta_cache* self,
                            const char* uri,
+                           uint64_t hash,
                            const struct chunk_layout* layout)
 {
   if (!self || !uri || !layout)
     return 1;
   assert((!self->uris || path_intern_owns(self->uris, uri)) &&
          "zarr_meta_cache_layout_set: uri must be path_intern pointer");
-  uint64_t hash = hash_ptr(uri);
   platform_mutex_lock(self->mu);
   struct lru_entry* hit = lru_get(self->lru, hash, uri);
   if (!hit) {
@@ -228,6 +227,7 @@ zarr_meta_cache_layout_set(struct zarr_meta_cache* self,
 int
 zarr_meta_cache_probe_layout(struct zarr_meta_cache* self,
                              const char* uri,
+                             uint64_t hash,
                              const char* shard_path,
                              uint64_t first_chunk_off,
                              uint32_t first_chunk_cbytes,
@@ -238,7 +238,6 @@ zarr_meta_cache_probe_layout(struct zarr_meta_cache* self,
     return 1;
   assert((!self->uris || path_intern_owns(self->uris, uri)) &&
          "zarr_meta_cache_probe_layout: uri must be path_intern pointer");
-  uint64_t hash = hash_ptr(uri);
   platform_mutex_lock(self->mu);
   struct lru_entry* hit = lru_get(self->lru, hash, uri);
   if (!hit) {

@@ -22,6 +22,22 @@ test_pointer_identity(void)
 }
 
 static int
+test_hash_matches_fnv1a(void)
+{
+  struct path_intern pi = { 0 };
+  const char* p = path_intern_acquire(&pi, "alpha/beta/gamma");
+  EXPECT(p != NULL);
+  EXPECT(path_intern_hash(p) == hash_fnv1a_str("alpha/beta/gamma"));
+  const char* q = path_intern_acquire(&pi, "alpha/beta/gamma");
+  EXPECT(p == q);
+  EXPECT(path_intern_hash(q) == hash_fnv1a_str("alpha/beta/gamma"));
+  path_intern_release(&pi, p);
+  path_intern_release(&pi, q);
+  path_intern_free(&pi);
+  return 0;
+}
+
+static int
 test_distinct_strings(void)
 {
   struct path_intern pi = { 0 };
@@ -216,6 +232,7 @@ int
 main(void)
 {
   RUN(test_pointer_identity);
+  RUN(test_hash_matches_fnv1a);
   RUN(test_distinct_strings);
   RUN(test_rehash_stability);
   RUN(test_release_evicts_at_zero);

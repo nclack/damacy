@@ -4,6 +4,7 @@
 
 #include "fixture.h"
 #include "store/store.h"
+#include "util/hash.h"
 #include "util/path_intern.h"
 #include "zarr/zarr_meta_cache.h"
 #include "zarr/zarr_metadata.h"
@@ -101,7 +102,8 @@ test_meta_cache(void)
 
   // First get: miss → load → return.
   struct zarr_metadata m1 = { 0 };
-  EXPECT(zarr_meta_cache_get(c, "foo", &m1) == DAMACY_OK);
+  EXPECT(zarr_meta_cache_get(c, "foo", hash_fnv1a_str("foo"), &m1) ==
+         DAMACY_OK);
   EXPECT(m1.rank == 2);
   EXPECT(m1.shape[0] == 64 && m1.shape[1] == 1024);
   EXPECT(m1.inner_chunk_shape[0] == 32 && m1.inner_chunk_shape[1] == 128);
@@ -116,7 +118,8 @@ test_meta_cache(void)
 
   // Second get same uri: hit. Returned bytes must match.
   struct zarr_metadata m1b = { 0 };
-  EXPECT(zarr_meta_cache_get(c, "foo", &m1b) == DAMACY_OK);
+  EXPECT(zarr_meta_cache_get(c, "foo", hash_fnv1a_str("foo"), &m1b) ==
+         DAMACY_OK);
   EXPECT(memcmp(&m1b, &m1, sizeof m1) == 0);
   zarr_meta_cache_stats_get(c, &st);
   EXPECT(st.counters.hits == 1);
@@ -124,13 +127,16 @@ test_meta_cache(void)
 
   // Different uri: another miss; both entries cached.
   struct zarr_metadata m2 = { 0 };
-  EXPECT(zarr_meta_cache_get(c, "bar", &m2) == DAMACY_OK);
+  EXPECT(zarr_meta_cache_get(c, "bar", hash_fnv1a_str("bar"), &m2) ==
+         DAMACY_OK);
   zarr_meta_cache_stats_get(c, &st);
   EXPECT(st.size == 2);
 
   // Missing uri: NOTFOUND.
   struct zarr_metadata mx = { 0 };
-  EXPECT(zarr_meta_cache_get(c, "doesnotexist", &mx) == DAMACY_NOTFOUND);
+  EXPECT(zarr_meta_cache_get(
+           c, "doesnotexist", hash_fnv1a_str("doesnotexist"), &mx) ==
+         DAMACY_NOTFOUND);
 
   zarr_meta_cache_destroy(c);
   store_destroy(store);
@@ -161,7 +167,7 @@ test_meta_cache_unsharded(void)
   EXPECT(c);
 
   struct zarr_metadata m = { 0 };
-  EXPECT(zarr_meta_cache_get(c, "foo", &m) == DAMACY_OK);
+  EXPECT(zarr_meta_cache_get(c, "foo", hash_fnv1a_str("foo"), &m) == DAMACY_OK);
   EXPECT(m.rank == 2);
   EXPECT(m.shape[0] == 64 && m.shape[1] == 1024);
   EXPECT(m.shard_shape[0] == 32 && m.shard_shape[1] == 128);
@@ -198,7 +204,7 @@ test_meta_cache_index_start(void)
   EXPECT(c);
 
   struct zarr_metadata m = { 0 };
-  EXPECT(zarr_meta_cache_get(c, "foo", &m) == DAMACY_OK);
+  EXPECT(zarr_meta_cache_get(c, "foo", hash_fnv1a_str("foo"), &m) == DAMACY_OK);
   EXPECT(m.sharded == 1);
   EXPECT(m.index_location_end == 0);
 
@@ -244,19 +250,21 @@ test_meta_cache_pointer_identity(void)
   EXPECT(foo_a != bar);
 
   struct zarr_metadata m = { 0 };
-  EXPECT(zarr_meta_cache_get(c, foo_a, &m) == DAMACY_OK);
+  EXPECT(zarr_meta_cache_get(c, foo_a, path_intern_hash(foo_a), &m) ==
+         DAMACY_OK);
   struct zarr_meta_cache_stats st;
   zarr_meta_cache_stats_get(c, &st);
   EXPECT(st.counters.misses == 1);
   EXPECT(st.size == 1);
 
-  EXPECT(zarr_meta_cache_get(c, foo_b, &m) == DAMACY_OK);
+  EXPECT(zarr_meta_cache_get(c, foo_b, path_intern_hash(foo_b), &m) ==
+         DAMACY_OK);
   zarr_meta_cache_stats_get(c, &st);
   EXPECT(st.counters.hits == 1);
   EXPECT(st.counters.misses == 1);
   EXPECT(st.size == 1);
 
-  EXPECT(zarr_meta_cache_get(c, bar, &m) == DAMACY_OK);
+  EXPECT(zarr_meta_cache_get(c, bar, path_intern_hash(bar), &m) == DAMACY_OK);
   zarr_meta_cache_stats_get(c, &st);
   EXPECT(st.counters.misses == 2);
   EXPECT(st.size == 2);

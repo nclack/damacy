@@ -6,6 +6,7 @@
 #pragma once
 
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C"
@@ -34,6 +35,10 @@ extern "C"
 
   // Linear scan; for debug asserts on cache-key contracts.
   int path_intern_owns(const struct path_intern* pi, const char* p);
+
+  // O(1) accessor — reads the precomputed FNV-1a hash from the
+  // 8-byte header immediately preceding the interned string.
+  uint64_t path_intern_hash(const char* s);
 
 #ifdef __cplusplus
 }

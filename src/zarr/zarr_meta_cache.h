@@ -9,6 +9,9 @@
 // When `uris` is supplied to _create, the cache asserts ownership in
 // debug builds; under NDEBUG the asserts vanish.
 //
+// Lookup APIs take the FNV-1a hash of `uri` explicitly; pass
+// path_intern_hash(uri) to skip rehashing the interned string.
+//
 // The cache borrows the store and `uris`; both must outlive the cache.
 #pragma once
 
@@ -49,6 +52,7 @@ extern "C"
   // the metadata is malformed; DAMACY_OOM on alloc failure.
   enum damacy_status zarr_meta_cache_get(struct zarr_meta_cache* c,
                                          const char* uri,
+                                         uint64_t hash,
                                          struct zarr_metadata* out);
 
   // Copies the cached chunk layout for `uri` into *out. Returns 0 on
@@ -59,6 +63,7 @@ extern "C"
   // evictions.
   int zarr_meta_cache_layout_get(struct zarr_meta_cache* c,
                                  const char* uri,
+                                 uint64_t hash,
                                  struct chunk_layout* out);
 
   // Records a probed layout against the meta entry for `uri`. No-op if
@@ -66,6 +71,7 @@ extern "C"
   // success. Thread-safe.
   int zarr_meta_cache_layout_set(struct zarr_meta_cache* c,
                                  const char* uri,
+                                 uint64_t hash,
                                  const struct chunk_layout* layout);
 
   // Cached probe: copies the cached layout into *out if present,
@@ -78,6 +84,7 @@ extern "C"
   // first-probes for the same URI may each issue a read.
   int zarr_meta_cache_probe_layout(struct zarr_meta_cache* c,
                                    const char* uri,
+                                   uint64_t hash,
                                    const char* shard_path,
                                    uint64_t first_chunk_off,
                                    uint32_t first_chunk_cbytes,
