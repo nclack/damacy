@@ -80,6 +80,28 @@ test_rehash_stability(void)
 }
 
 static int
+test_hash_survives_rehash(void)
+{
+  enum
+  {
+    N = 200
+  };
+  struct path_intern pi = { 0 };
+  const char* early = path_intern_acquire(&pi, "early/key");
+  EXPECT(early != NULL);
+  size_t cap_at_early = pi.cap;
+  char buf[32];
+  for (int i = 0; i < N; ++i) {
+    snprintf(buf, sizeof buf, "shard/%d", i);
+    EXPECT(path_intern_acquire(&pi, buf) != NULL);
+  }
+  EXPECT(pi.cap > cap_at_early);
+  EXPECT(path_intern_hash(early) == hash_fnv1a_str("early/key"));
+  path_intern_free(&pi);
+  return 0;
+}
+
+static int
 test_release_evicts_at_zero(void)
 {
   struct path_intern pi = { 0 };
@@ -235,6 +257,7 @@ main(void)
   RUN(test_hash_matches_fnv1a);
   RUN(test_distinct_strings);
   RUN(test_rehash_stability);
+  RUN(test_hash_survives_rehash);
   RUN(test_release_evicts_at_zero);
   RUN(test_release_preserves_probe_chains);
   RUN(test_release_backward_shift_chain);

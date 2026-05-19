@@ -3,7 +3,6 @@
 #include "expect.h"
 #include "store/store.h"
 #include "store/store_fs.h"
-#include "util/hash.h"
 #include "util/lru.h"
 
 #include <stdio.h>
@@ -58,7 +57,7 @@ test_bounded_eviction(void)
     char key[32];
     snprintf(key, sizeof key, "k%zu", i);
     struct lru_entry* pin = NULL;
-    EXPECT(store_fs_acquire(fs, key, hash_fnv1a_str(key), &pin) != NULL);
+    EXPECT(store_fs_acquire(fs, key, &pin) != NULL);
     store_fs_release(fs, pin);
   }
 
@@ -97,7 +96,7 @@ test_hit_path(void)
   };
   for (size_t i = 0; i < REPEATS; ++i) {
     struct lru_entry* pin = NULL;
-    EXPECT(store_fs_acquire(fs, "k0", hash_fnv1a_str("k0"), &pin) != NULL);
+    EXPECT(store_fs_acquire(fs, "k0", &pin) != NULL);
     store_fs_release(fs, pin);
   }
 
@@ -131,12 +130,12 @@ test_pin_saturation(void)
   for (size_t i = 0; i < CAP; ++i) {
     char key[32];
     snprintf(key, sizeof key, "k%zu", i);
-    EXPECT(store_fs_acquire(fs, key, hash_fnv1a_str(key), &pins[i]) != NULL);
+    EXPECT(store_fs_acquire(fs, key, &pins[i]) != NULL);
   }
 
   {
     struct lru_entry* extra = NULL;
-    EXPECT(store_fs_acquire(fs, "k4", hash_fnv1a_str("k4"), &extra) == NULL);
+    EXPECT(store_fs_acquire(fs, "k4", &extra) == NULL);
     EXPECT(extra == NULL);
   }
 
@@ -148,7 +147,7 @@ test_pin_saturation(void)
   store_fs_release(fs, pins[0]);
   {
     struct lru_entry* fresh = NULL;
-    EXPECT(store_fs_acquire(fs, "k4", hash_fnv1a_str("k4"), &fresh) != NULL);
+    EXPECT(store_fs_acquire(fs, "k4", &fresh) != NULL);
     store_fs_release(fs, fresh);
   }
 

@@ -97,13 +97,17 @@ test_meta_cache(void)
   struct store* store = store_fs_create(&sc);
   EXPECT(store);
 
-  struct zarr_meta_cache* c = zarr_meta_cache_create(store, NULL, 4);
+  struct path_intern uris = { 0 };
+  struct zarr_meta_cache* c = zarr_meta_cache_create(store, &uris, 4);
   EXPECT(c);
 
-  // First get: miss → load → return.
+  const char* foo = path_intern_acquire(&uris, "foo");
+  const char* bar = path_intern_acquire(&uris, "bar");
+  const char* nope = path_intern_acquire(&uris, "doesnotexist");
+  EXPECT(foo && bar && nope);
+
   struct zarr_metadata m1 = { 0 };
-  EXPECT(zarr_meta_cache_get(c, "foo", hash_fnv1a_str("foo"), &m1) ==
-         DAMACY_OK);
+  EXPECT(zarr_meta_cache_get(c, foo, path_intern_hash(foo), &m1) == DAMACY_OK);
   EXPECT(m1.rank == 2);
   EXPECT(m1.shape[0] == 64 && m1.shape[1] == 1024);
   EXPECT(m1.inner_chunk_shape[0] == 32 && m1.inner_chunk_shape[1] == 128);
@@ -116,29 +120,27 @@ test_meta_cache(void)
   EXPECT(st.counters.misses == 1);
   EXPECT(st.size == 1);
 
-  // Second get same uri: hit. Returned bytes must match.
   struct zarr_metadata m1b = { 0 };
-  EXPECT(zarr_meta_cache_get(c, "foo", hash_fnv1a_str("foo"), &m1b) ==
-         DAMACY_OK);
+  EXPECT(zarr_meta_cache_get(c, foo, path_intern_hash(foo), &m1b) == DAMACY_OK);
   EXPECT(memcmp(&m1b, &m1, sizeof m1) == 0);
   zarr_meta_cache_stats_get(c, &st);
   EXPECT(st.counters.hits == 1);
   EXPECT(st.counters.misses == 1);
 
-  // Different uri: another miss; both entries cached.
   struct zarr_metadata m2 = { 0 };
-  EXPECT(zarr_meta_cache_get(c, "bar", hash_fnv1a_str("bar"), &m2) ==
-         DAMACY_OK);
+  EXPECT(zarr_meta_cache_get(c, bar, path_intern_hash(bar), &m2) == DAMACY_OK);
   zarr_meta_cache_stats_get(c, &st);
   EXPECT(st.size == 2);
 
-  // Missing uri: NOTFOUND.
   struct zarr_metadata mx = { 0 };
-  EXPECT(zarr_meta_cache_get(
-           c, "doesnotexist", hash_fnv1a_str("doesnotexist"), &mx) ==
+  EXPECT(zarr_meta_cache_get(c, nope, path_intern_hash(nope), &mx) ==
          DAMACY_NOTFOUND);
 
+  path_intern_release(&uris, foo);
+  path_intern_release(&uris, bar);
+  path_intern_release(&uris, nope);
   zarr_meta_cache_destroy(c);
+  path_intern_free(&uris);
   store_destroy(store);
   fixture_rm_tree(root);
   return 0;

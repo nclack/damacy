@@ -15,7 +15,7 @@
 
 #include "fixture.h"
 #include "store/store.h"
-#include "util/hash.h"
+#include "util/path_intern.h"
 #include "zarr/zarr_meta_cache.h"
 #include "zarr/zarr_metadata.h"
 #include "zarr/zarr_shard_cache.h"
@@ -65,7 +65,7 @@ meta_worker(void* arg)
   struct worker_args* w = (struct worker_args*)arg;
   for (int i = 0; i < N_ITERATIONS; ++i) {
     const char* uri = w->uris[i % N_URIS];
-    uint64_t uri_hash = hash_fnv1a_str(uri);
+    uint64_t uri_hash = path_intern_hash(uri);
     struct zarr_metadata m = { 0 };
     if (zarr_meta_cache_get(w->meta_cache, uri, uri_hash, &m) == DAMACY_OK) {
       // Also exercise the layout side: it goes through the same LRU
@@ -112,20 +112,20 @@ test_meta_cache_concurrent(void)
   struct store* store = store_fs_create(&sc);
   EXPECT(store);
 
-  // Cache cap > N_URIS so we exercise the hit path (which mutates LRU
-  // order via list_promote) most of the time. A short prewarm seeds the
-  // entries on the main thread.
-  struct zarr_meta_cache* c = zarr_meta_cache_create(store, NULL, 16);
+  struct path_intern uris = { 0 };
+  struct zarr_meta_cache* c = zarr_meta_cache_create(store, &uris, 16);
   EXPECT(c);
-  for (int i = 0; i < N_URIS; ++i) {
-    struct zarr_metadata m = { 0 };
-    EXPECT(zarr_meta_cache_get(c, names[i], hash_fnv1a_str(names[i]), &m) ==
-           DAMACY_OK);
-  }
 
   struct worker_args w = { .meta_cache = c };
-  for (int i = 0; i < N_URIS; ++i)
-    w.uris[i] = names[i];
+  for (int i = 0; i < N_URIS; ++i) {
+    w.uris[i] = path_intern_acquire(&uris, names[i]);
+    EXPECT(w.uris[i]);
+  }
+  for (int i = 0; i < N_URIS; ++i) {
+    struct zarr_metadata m = { 0 };
+    EXPECT(zarr_meta_cache_get(c, w.uris[i], path_intern_hash(w.uris[i]), &m) ==
+           DAMACY_OK);
+  }
   atomic_init(&w.ok_count, 0);
 
   pthread_t threads[N_THREADS + 1];
@@ -137,7 +137,10 @@ test_meta_cache_concurrent(void)
 
   EXPECT(atomic_load(&w.ok_count) == N_THREADS * N_ITERATIONS);
 
+  for (int i = 0; i < N_URIS; ++i)
+    path_intern_release(&uris, w.uris[i]);
   zarr_meta_cache_destroy(c);
+  path_intern_free(&uris);
   store_destroy(store);
   fixture_rm_tree(root);
   return 0;
@@ -166,15 +169,12 @@ shard_worker(void* arg)
     struct zarr_shard_pin pin = { 0 };
     if (zarr_shard_cache_get(w->shard_cache,
                              w->uri,
-                             hash_fnv1a_str(w->uri),
+                             path_intern_hash(w->uri),
                              w->meta,
                              coord,
                              &pin,
                              &entries,
                              &n_entries) == DAMACY_OK) {
-      // Touch the pinned entries — the pin must protect against
-      // concurrent eviction here. Result is discarded; the read just
-      // needs to happen so TSan sees the access.
       volatile uint64_t sink = (n_entries && entries) ? entries[0].offset : 0;
       (void)sink;
       atomic_fetch_add(&w->ok_count, 1);
@@ -224,23 +224,26 @@ test_shard_cache_concurrent(void)
   struct store* store = store_fs_create(&sc);
   EXPECT(store);
 
-  struct zarr_meta_cache* mc = zarr_meta_cache_create(store, NULL, 16);
+  struct path_intern uris = { 0 };
+  const char* uri = path_intern_acquire(&uris, "zarr_a");
+  EXPECT(uri);
+
+  struct zarr_meta_cache* mc = zarr_meta_cache_create(store, &uris, 16);
   EXPECT(mc);
   struct zarr_metadata meta = { 0 };
-  EXPECT(zarr_meta_cache_get(mc, "zarr_a", hash_fnv1a_str("zarr_a"), &meta) ==
+  EXPECT(zarr_meta_cache_get(mc, uri, path_intern_hash(uri), &meta) ==
          DAMACY_OK);
 
-  struct zarr_shard_cache* sc_cache = zarr_shard_cache_create(store, NULL, 16);
+  struct zarr_shard_cache* sc_cache = zarr_shard_cache_create(store, &uris, 16);
   EXPECT(sc_cache);
 
-  // Prewarm the entry so workers hit the cache path.
   uint64_t coord[2] = { 0, 0 };
   const struct zarr_shard_entry* entries = NULL;
   uint64_t n_entries = 0;
   struct zarr_shard_pin pin = { 0 };
   EXPECT(zarr_shard_cache_get(sc_cache,
-                              "zarr_a",
-                              hash_fnv1a_str("zarr_a"),
+                              uri,
+                              path_intern_hash(uri),
                               &meta,
                               coord,
                               &pin,
@@ -250,7 +253,7 @@ test_shard_cache_concurrent(void)
 
   struct shard_worker_args w = { .shard_cache = sc_cache,
                                  .meta = &meta,
-                                 .uri = "zarr_a" };
+                                 .uri = uri };
   atomic_init(&w.ok_count, 0);
 
   pthread_t threads[N_THREADS + 1];
@@ -263,8 +266,10 @@ test_shard_cache_concurrent(void)
 
   EXPECT(atomic_load(&w.ok_count) == N_THREADS * N_ITERATIONS);
 
+  path_intern_release(&uris, uri);
   zarr_shard_cache_destroy(sc_cache);
   zarr_meta_cache_destroy(mc);
+  path_intern_free(&uris);
   store_destroy(store);
   fixture_rm_tree(root);
   return 0;
@@ -290,7 +295,7 @@ meta_evict_worker(void* arg)
   for (int i = 0; i < N_ITERATIONS; ++i) {
     const char* uri = w->uris[i % META_EVICT_URIS];
     struct zarr_metadata m = { 0 };
-    if (zarr_meta_cache_get(w->meta_cache, uri, hash_fnv1a_str(uri), &m) ==
+    if (zarr_meta_cache_get(w->meta_cache, uri, path_intern_hash(uri), &m) ==
         DAMACY_OK) {
       if (m.rank == 2 && m.shape[0] == 64)
         atomic_fetch_add(&w->ok_count, 1);
@@ -320,13 +325,16 @@ test_meta_cache_eviction_concurrent(void)
   struct store* store = store_fs_create(&sc);
   EXPECT(store);
 
+  struct path_intern uris = { 0 };
   struct zarr_meta_cache* c =
-    zarr_meta_cache_create(store, NULL, META_EVICT_CAP);
+    zarr_meta_cache_create(store, &uris, META_EVICT_CAP);
   EXPECT(c);
 
   struct meta_evict_args w = { .meta_cache = c };
-  for (int i = 0; i < META_EVICT_URIS; ++i)
-    w.uris[i] = names[i];
+  for (int i = 0; i < META_EVICT_URIS; ++i) {
+    w.uris[i] = path_intern_acquire(&uris, names[i]);
+    EXPECT(w.uris[i]);
+  }
   atomic_init(&w.ok_count, 0);
 
   pthread_t threads[N_THREADS];
@@ -337,7 +345,10 @@ test_meta_cache_eviction_concurrent(void)
 
   EXPECT(atomic_load(&w.ok_count) == N_THREADS * N_ITERATIONS);
 
+  for (int i = 0; i < META_EVICT_URIS; ++i)
+    path_intern_release(&uris, w.uris[i]);
   zarr_meta_cache_destroy(c);
+  path_intern_free(&uris);
   store_destroy(store);
   fixture_rm_tree(root);
   return 0;
@@ -390,7 +401,7 @@ shard_evict_worker(void* arg)
     struct zarr_shard_pin pin = { 0 };
     if (zarr_shard_cache_get(w->shard_cache,
                              w->uri,
-                             hash_fnv1a_str(w->uri),
+                             path_intern_hash(w->uri),
                              w->meta,
                              coord,
                              &pin,
@@ -434,19 +445,23 @@ test_shard_cache_pin_under_eviction(void)
   struct store* store = store_fs_create(&sc);
   EXPECT(store);
 
-  struct zarr_meta_cache* mc = zarr_meta_cache_create(store, NULL, 16);
+  struct path_intern uris = { 0 };
+  const char* uri = path_intern_acquire(&uris, "zarr_a");
+  EXPECT(uri);
+
+  struct zarr_meta_cache* mc = zarr_meta_cache_create(store, &uris, 16);
   EXPECT(mc);
   struct zarr_metadata meta = { 0 };
-  EXPECT(zarr_meta_cache_get(mc, "zarr_a", hash_fnv1a_str("zarr_a"), &meta) ==
+  EXPECT(zarr_meta_cache_get(mc, uri, path_intern_hash(uri), &meta) ==
          DAMACY_OK);
 
   struct zarr_shard_cache* sc_cache =
-    zarr_shard_cache_create(store, NULL, SHARD_EVICT_CAP);
+    zarr_shard_cache_create(store, &uris, SHARD_EVICT_CAP);
   EXPECT(sc_cache);
 
   struct shard_evict_args w = { .shard_cache = sc_cache,
                                 .meta = &meta,
-                                .uri = "zarr_a" };
+                                .uri = uri };
   atomic_init(&w.ok_count, 0);
 
   pthread_t threads[N_THREADS];
@@ -461,8 +476,10 @@ test_shard_cache_pin_under_eviction(void)
   zarr_shard_cache_stats_get(sc_cache, &st);
   EXPECT(st.counters.evictions > 0);
 
+  path_intern_release(&uris, uri);
   zarr_shard_cache_destroy(sc_cache);
   zarr_meta_cache_destroy(mc);
+  path_intern_free(&uris);
   store_destroy(store);
   fixture_rm_tree(root);
   return 0;
