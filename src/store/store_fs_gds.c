@@ -267,6 +267,8 @@ gds_submit_dev(struct store* s, const struct store_read* reads, size_t n)
     return ev;
   ctx->g = g;
   ctx->n = n;
+  // calloc: SubmitFail's drain loop relies on params[i].pin == NULL for
+  // unacquired entries; switching to malloc would silently break it.
   ctx->params = (struct fs_gds_async_params*)calloc(n, sizeof(*ctx->params));
   if (!ctx->params) {
     free(ctx);
