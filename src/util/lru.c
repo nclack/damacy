@@ -183,6 +183,11 @@ slot_clear(struct lru* self, uint32_t slot_idx)
 
 // --- index helpers -------------------------------------------------------
 
+// Refcount ordering: every eviction-gating read (index_insert_robin,
+// index_erase, evict_lru_tail, lru_put's replace path) uses acquire to
+// pair with lru_entry_release's lock-free acq_rel decrement. Acquires-
+// from-zero run under the caller's mutex and use relaxed.
+
 // Robin-hood insert. Pinned entries (refcount > 0) are immovable; we
 // probe past them without considering them for swap. Returns LRU_NIL on
 // success, or the index of the orphaned slot on cap-exceed. The orphan
@@ -200,9 +205,6 @@ index_insert_robin(struct lru* self, uint32_t slot_to_insert)
         self->index.max_probe_observed = probe;
       return LRU_NIL;
     }
-    // acquire pairs with lru_entry_release's acq_rel decrement (released
-    // lock-free); the mutex serializes acquires-from-zero but does NOT
-    // carry the release direction.
     if (atomic_load_explicit(&self->slots[incumbent].refcount,
                              memory_order_acquire) == 0) {
       uint32_t incumbent_ideal = ideal_cell(self, self->slots[incumbent].hash);
@@ -313,9 +315,6 @@ evict_lru_tail(struct lru* self)
   for (struct lru_list* node = self->lru_order.prev; node != &self->lru_order;
        node = node->prev) {
     struct lru_entry* entry = link_to_entry(node);
-    // Racing read: a worker may drop refcount to 0 just after we observe
-    // > 0, leaving an evictable entry unevicted this pass — benign, the
-    // next eviction will catch it.
     if (atomic_load_explicit(&entry->refcount, memory_order_acquire) == 0) {
       evict_slot(self, entry_to_slot_idx(self, entry));
       return 0;
@@ -435,7 +434,7 @@ lru_put(struct lru* self, uint64_t hash, const void* probe_key, void* value)
   if (cell_idx != LRU_NIL) {
     uint32_t slot_idx = self->index.cells[cell_idx];
     if (atomic_load_explicit(&self->slots[slot_idx].refcount,
-                             memory_order_relaxed) > 0) {
+                             memory_order_acquire) > 0) {
       // Pinned entry can't be replaced — would invalidate the pin.
       self->counters.put_failures++;
       self->ops.destroy(value, self->ops.user);
@@ -513,18 +512,17 @@ lru_entry_value(const struct lru_entry* entry)
   return entry ? entry->value : NULL;
 }
 
-// Acquire runs under the caller's index mutex (see store_fs_acquire); the
-// mutex serializes it against eviction's pinned-check, so relaxed suffices.
 void
 lru_entry_acquire(struct lru_entry* entry)
 {
-  if (entry)
-    atomic_fetch_add_explicit(&entry->refcount, 1u, memory_order_relaxed);
+  if (!entry)
+    return;
+  // Wrap to zero would let eviction free a live entry.
+  assert(atomic_load_explicit(&entry->refcount, memory_order_relaxed) <
+         UINT32_MAX);
+  atomic_fetch_add_explicit(&entry->refcount, 1u, memory_order_relaxed);
 }
 
-// Release is lock-free (hot path from worker IO completion). acq_rel
-// publishes any prior writes performed while the pin was held, so a later
-// eviction reading refcount == 0 sees them happen-before.
 void
 lru_entry_release(struct lru_entry* entry)
 {
@@ -532,7 +530,7 @@ lru_entry_release(struct lru_entry* entry)
     return;
   uint32_t prev =
     atomic_fetch_sub_explicit(&entry->refcount, 1u, memory_order_acq_rel);
-  // Catches double-release on the lock-free path before it wraps.
+  // Catches double-release before underflow.
   assert(prev > 0u);
   (void)prev;
 }
