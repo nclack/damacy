@@ -3,12 +3,12 @@
 #include "log/log.h"
 #include "platform/platform.h"
 #include "store/store.h"
+#include "util/atomic_max.h"
 #include "util/hash.h"
 #include "util/lru.h"
 #include "util/path_intern.h"
 #include "util/prelude.h"
 #include "util/strbuf.h"
-#include "wave/blosc_nblocks_observer.h"
 #include "zarr/zarr_metadata.h"
 
 #include <assert.h>
@@ -225,8 +225,8 @@ zarr_meta_cache_layout_set(struct zarr_meta_cache* self,
   if (!entry->layout_probed) {
     entry->layout = *layout;
     entry->layout_probed = 1;
-    wave_pool_observe_blosc_nblocks(self->blosc_nblocks_observer,
-                                    (uint16_t)layout->nblocks);
+    atomic_u16_observe_max(self->blosc_nblocks_observer,
+                           (uint16_t)layout->nblocks);
   }
   platform_mutex_unlock(self->mu);
   return 0;
@@ -288,8 +288,8 @@ zarr_meta_cache_probe_layout(struct zarr_meta_cache* self,
   if (!fresh->layout_probed) {
     fresh->layout = probed;
     fresh->layout_probed = 1;
-    wave_pool_observe_blosc_nblocks(self->blosc_nblocks_observer,
-                                    (uint16_t)probed.nblocks);
+    atomic_u16_observe_max(self->blosc_nblocks_observer,
+                           (uint16_t)probed.nblocks);
   }
   *out = fresh->layout;
   platform_mutex_unlock(self->mu);
