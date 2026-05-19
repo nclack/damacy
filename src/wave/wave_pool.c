@@ -64,6 +64,13 @@ wave_pool_init(struct wave_pool* wp,
   wp->n_slots = host_buffer_waves;
   wp->use_gds = (uint8_t)(enable_gds != 0);
   wp->bypass_decode = (uint8_t)(bypass_decode != 0);
+  // Init = 1 (not the structural max) so first-wave fanout doesn't
+  // over-allocate. Safety depends on wave_chunks_eligible: a wave with
+  // any unprobed BLOSC_ZSTD chunk is rejected before prepare_decode_caps,
+  // so chunk_zsubs_upper_bound never reaches the observer-fallback path
+  // on the first wave.
+  atomic_store_explicit(
+    &wp->observed_max_nblocks_per_chunk, 1u, memory_order_relaxed);
 
   // NON_BLOCKING so we don't serialize against the legacy default stream.
   CU(Fail, cuStreamCreate(&wp->stream_h2d, CU_STREAM_NON_BLOCKING));
@@ -336,12 +343,9 @@ CudaFail:
   return DAMACY_CUDA;
 }
 
-// Per-chunk substream upper bound. Uses the probed blosc1 layout when
-// available; falls back to MAX_BLOCKS_PER_CHUNK for unprobed blosc-zstd,
-// 1 for plain zstd, and 0 for fill / raw-memcpy chunks (those don't
-// consume zstd substreams).
 static inline uint32_t
-chunk_zsubs_upper_bound(const struct chunk_plan* c,
+chunk_zsubs_upper_bound(const struct wave_pool* wp,
+                        const struct chunk_plan* c,
                         const struct sample_plan* sp)
 {
   if (c->is_fill || c->codec_id == (uint8_t)CODEC_FILL ||
@@ -350,20 +354,16 @@ chunk_zsubs_upper_bound(const struct chunk_plan* c,
   if (c->codec_id == (uint8_t)CODEC_BLOSC_ZSTD) {
     if (sp->layout_probed)
       return sp->layout.nblocks;
-    return DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK;
+    return (uint32_t)atomic_load_explicit(&wp->observed_max_nblocks_per_chunk,
+                                          memory_order_acquire);
   }
-  // CODEC_ZSTD: one substream per chunk.
   return 1;
 }
 
-// Phase 2: grow per-wave fanout SOA + shared decoder scratch to cover
-// this wave's tight substream upper bound, computed from probed
-// chunk_layouts when available. need_zsubs <=
-// DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE by the damacy_limits static_assert
-// (peel caps n_chunks). Fanout grow is per-wave: the OTHER wave's SOA is
-// a separate allocation and untouched here, so this can run safely
-// while the other wave is in WAVE_H2D / WAVE_ASSEMBLE.
-// decoder_scratch_grow synchronizes stream_decode first.
+// Fanout grow is per-wave (the OTHER wave's SOA is a separate allocation
+// and untouched here), so this can run safely while the other wave is in
+// WAVE_H2D / WAVE_ASSEMBLE. decoder_scratch_grow synchronizes
+// stream_decode first.
 static enum damacy_status
 prepare_decode_caps(struct wave_pool* wp, struct damacy_wave* wave)
 {
@@ -377,7 +377,7 @@ prepare_decode_caps(struct wave_pool* wp, struct damacy_wave* wave)
         &slot->chunk_plans[wave->batch_chunk_offset + i];
       const struct sample_plan* sp =
         &slot->sample_plans[c->sample_idx_in_batch];
-      need_zsubs += chunk_zsubs_upper_bound(c, sp);
+      need_zsubs += chunk_zsubs_upper_bound(wp, c, sp);
     }
   }
   enum damacy_status gs = fanout_grow(&wave->h_zstd_fan,

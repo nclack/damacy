@@ -291,8 +291,8 @@ emit_chunk(const struct emit_ctx* ctx,
 
   // First non-fill chunk for this sample: probe (or fetch cached) the
   // blosc1 chunk layout and stash it on the sample_plan. Probe failure
-  // is non-fatal — downstream falls back to MAX_BLOCKS_PER_CHUNK in
-  // cap calculations.
+  // is non-fatal — downstream uses the observed max nblocks from the
+  // wave pool, fired internally by the meta cache on first probe.
   if (ctx->sp && !ctx->sp->layout_probed) {
     struct chunk_layout cl = { 0 };
     if (zarr_meta_cache_probe_layout(ctx->meta_cache,

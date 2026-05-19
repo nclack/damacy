@@ -72,7 +72,7 @@ extern "C"
     uint8_t fill_value[DAMACY_MAX_DTYPE_BYTES];
     // Per-array blosc1 chunk layout, populated lazily from the meta
     // cache on first non-fill emit. layout_probed = 0 means downstream
-    // should fall back to MAX_BLOCKS_PER_CHUNK in cap calculations.
+    // uses the observed max nblocks from the wave pool.
     struct chunk_layout layout;
     uint8_t layout_probed;
   };

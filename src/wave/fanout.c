@@ -128,8 +128,8 @@ fanout_grow(struct nvcomp_fanout_host* h,
   if (need <= (size_t)*cap)
     return DAMACY_OK;
   size_t new_cap = fanout_next_pow2(need);
-  if (new_cap > (size_t)DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE)
-    new_cap = (size_t)DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE;
+  if (new_cap > WAVE_ZSUBS_STRUCTURAL_MAX)
+    new_cap = WAVE_ZSUBS_STRUCTURAL_MAX;
 
   const uint32_t cur = *cap;
   const uint64_t per_sub = fanout_dev_bytes_per_sub();

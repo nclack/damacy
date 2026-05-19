@@ -1,6 +1,7 @@
 // Compile-time limits shared across damacy's modules.
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 
 // Maximum tensor rank we'll plan over.
@@ -66,43 +67,44 @@ _Static_assert(DAMACY_DEFAULT_READ_OP_MAX_BYTES <= UINT32_MAX,
 // growing. Must be a power of two — io_queue indexes via bitmask.
 #define DAMACY_IO_QUEUE_INITIAL_CAP 512u
 
-// Per-zarr-chunk blosc1 nblocks cap. Sized for typical chunks (~2 MB) at
-// the c-blosc min blocksize of 64 KB → 2 MB / 64 KB = 32. Inputs with
-// more blocks are rejected at parse with DAMACY_DECODE.
+// Per-zarr-chunk blosc1 nblocks cap. Two roles:
+//   (a) parser hard reject — zarr_chunk_layout_probe rejects layouts
+//       with more blocks (DAMACY_DECODE);
+//   (b) bound on kernel smem bstarts/sorted arrays in the parse/emit
+//       kernels.
 #define DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK 32u
+#ifdef __cplusplus
+static_assert(DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK <= UINT16_MAX,
+              "observed_max_nblocks_per_chunk slot is uint16_t");
+#else
+_Static_assert(DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK <= UINT16_MAX,
+               "observed_max_nblocks_per_chunk slot is uint16_t");
+#endif
+
+// Structural ceiling on blosc1 sub-streams across a wave. Caps fanout
+// SOA growth and zstd-decoder batch growth.
+#define WAVE_ZSUBS_STRUCTURAL_MAX                                              \
+  ((size_t)DAMACY_MAX_CHUNKS_PER_WAVE *                                        \
+   (size_t)DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK)
+#ifdef __cplusplus
+static_assert(WAVE_ZSUBS_STRUCTURAL_MAX <= UINT32_MAX,
+              "fanout cap is uint32_t");
+#else
+_Static_assert(WAVE_ZSUBS_STRUCTURAL_MAX <= UINT32_MAX,
+               "fanout cap is uint32_t");
+#endif
 
 // Defensive cap on header.nbytes parsed from a blosc1 chunk. Prevents
 // overflow in the nblocks ceil-div for adversarial inputs.
 #define DAMACY_BLOSC_MAX_CHUNK_UNCOMPRESSED_BYTES (16ull << 20) // 16 MB
 
-// Worst-case substream count per wave for blosc1-zstd: 1 substream per
-// blosc-block. Acts as the hard ceiling for the observe-and-grow runtime
-// cap on the shared zstd decoder + per-wave fanout SOA.
-#define DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE                                    \
-  (DAMACY_MAX_CHUNKS_PER_WAVE * DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK)
-// Per-wave's tight substream upper bound (n_chunks * MAX_BLOCKS_PER_CHUNK)
-// is structurally <= DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE because peel caps
-// n_chunks at DAMACY_MAX_CHUNKS_PER_WAVE. The grow path relies on this so
-// it never has to enforce a runtime ceiling. `static_assert` is a C11
-// keyword in C and works under C++17; works in both translation units.
-#ifdef __cplusplus
-static_assert((uint64_t)DAMACY_MAX_CHUNKS_PER_WAVE *
-                  DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK <=
-                DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE,
-              "wave substream ceiling must cover peel cap");
 // d_block_chunk_map packs chunk_idx into the upper 16 bits; the GPU
 // kernel unpacks via `packed >> 16` and indexes d_chunks/d_sample_plans
 // directly. Raising the cap past 0xFFFFu silently truncates.
+#ifdef __cplusplus
 static_assert(DAMACY_MAX_CHUNKS_PER_WAVE <= 0xFFFFu,
               "DAMACY_MAX_CHUNKS_PER_WAVE must fit in 16 bits");
 #else
-_Static_assert(
-  (uint64_t)DAMACY_MAX_CHUNKS_PER_WAVE* DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK <=
-    DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE,
-  "wave substream ceiling must cover peel cap");
-// d_block_chunk_map packs chunk_idx into the upper 16 bits; the GPU
-// kernel unpacks via `packed >> 16` and indexes d_chunks/d_sample_plans
-// directly. Raising the cap past 0xFFFFu silently truncates.
 _Static_assert(DAMACY_MAX_CHUNKS_PER_WAVE <= 0xFFFFu,
                "DAMACY_MAX_CHUNKS_PER_WAVE must fit in 16 bits");
 #endif

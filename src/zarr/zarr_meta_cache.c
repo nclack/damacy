@@ -3,6 +3,7 @@
 #include "log/log.h"
 #include "platform/platform.h"
 #include "store/store.h"
+#include "util/atomic_max.h"
 #include "util/hash.h"
 #include "util/lru.h"
 #include "util/path_intern.h"
@@ -28,6 +29,7 @@ struct zarr_meta_cache
   struct path_intern* uris; // borrowed; may be NULL
   struct lru* lru;
   struct platform_mutex* mu; // guards layout/layout_probed on cached entries
+  _Atomic(uint16_t)* blosc_nblocks_observer;
 };
 
 static int
@@ -89,6 +91,15 @@ zarr_meta_cache_destroy(struct zarr_meta_cache* self)
   lru_destroy(self->lru);
   platform_mutex_free(self->mu);
   free(self);
+}
+
+void
+zarr_meta_cache_set_blosc_nblocks_observer(struct zarr_meta_cache* self,
+                                           _Atomic(uint16_t)* observer)
+{
+  if (!self)
+    return;
+  self->blosc_nblocks_observer = observer;
 }
 
 enum damacy_status
@@ -214,6 +225,9 @@ zarr_meta_cache_layout_set(struct zarr_meta_cache* self,
   if (!entry->layout_probed) {
     entry->layout = *layout;
     entry->layout_probed = 1;
+    assert(layout->nblocks <= DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK);
+    atomic_u16_observe_max(self->blosc_nblocks_observer,
+                           (uint16_t)layout->nblocks);
   }
   platform_mutex_unlock(self->mu);
   return 0;
@@ -275,6 +289,9 @@ zarr_meta_cache_probe_layout(struct zarr_meta_cache* self,
   if (!fresh->layout_probed) {
     fresh->layout = probed;
     fresh->layout_probed = 1;
+    assert(probed.nblocks <= DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK);
+    atomic_u16_observe_max(self->blosc_nblocks_observer,
+                           (uint16_t)probed.nblocks);
   }
   *out = fresh->layout;
   platform_mutex_unlock(self->mu);

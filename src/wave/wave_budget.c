@@ -170,9 +170,9 @@ decoder_initial_caps(uint64_t dev_per_wave,
 
 // Worst-case GPU footprint for one resolved geometry: assumes both
 // per-wave fanout SOAs and the shared decoder scratch grow all the way
-// to DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE. Used by the resolver so the
-// chosen geometry leaves headroom for observe-and-grow without the
-// grow paths surprise-tripping the budget.
+// to DAMACY_MAX_CHUNKS_PER_WAVE * DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK.
+// Used by the resolver so the chosen geometry leaves headroom for
+// observe-and-grow without the grow paths surprise-tripping the budget.
 static enum damacy_status
 predict_pool_total(uint64_t host_slab_per_wave,
                    uint64_t dev_per_wave,
@@ -186,7 +186,7 @@ predict_pool_total(uint64_t host_slab_per_wave,
   if (s != DAMACY_OK)
     return s;
 
-  const uint64_t zsubs_max = (uint64_t)DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE;
+  const uint64_t zsubs_max = (uint64_t)WAVE_ZSUBS_STRUCTURAL_MAX;
   uint64_t nvcomp_temp_max = 0;
   s = predict_decoder_scratch_bytes(
     zsubs_max, dev_per_wave, max_chunk_uncompressed_bytes, &nvcomp_temp_max);
@@ -302,8 +302,8 @@ decoder_scratch_grow(struct decoder_zstd* decoder,
   if (need <= cur)
     return DAMACY_OK;
   size_t new_cap = fanout_next_pow2(need);
-  if (new_cap > (size_t)DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE)
-    new_cap = (size_t)DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE;
+  if (new_cap > WAVE_ZSUBS_STRUCTURAL_MAX)
+    new_cap = WAVE_ZSUBS_STRUCTURAL_MAX;
 
   uint64_t old_bytes = 0, new_bytes = 0;
   enum damacy_status sp = predict_decoder_scratch_bytes(
