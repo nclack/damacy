@@ -36,9 +36,8 @@ extern "C"
   // Linear scan; for debug asserts on cache-key contracts.
   int path_intern_owns(const struct path_intern* pi, const char* p);
 
-  // Reads the 8-byte header. `s` MUST be a pointer returned by
-  // path_intern_acquire; any other pointer is UB (reads 8 bytes
-  // before the buffer).
+  // Reads a uint64_t header prepended by path_intern_acquire. `s` MUST
+  // be a pointer returned by acquire; any other pointer is UB.
   uint64_t path_intern_hash(const char* s);
 
 #ifdef __cplusplus

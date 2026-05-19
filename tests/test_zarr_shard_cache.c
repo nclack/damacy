@@ -1,6 +1,11 @@
 // Integration test for zarr_shard_cache. Builds a tmpdir-backed fs
 // store, writes a synthetic shard file whose footer is a valid
 // (offset, nbytes) index protected by CRC32C, and exercises the cache.
+//
+// Hit paths below pass raw "foo" literals and create the cache with
+// uris=NULL; correctness relies on the compiler pooling equal literals
+// within a TU. The pointer-identity test exercises path_intern_acquire
+// explicitly.
 
 #include "fixture.h"
 #include "store/store.h"
@@ -352,14 +357,10 @@ test_shard_cache_pointer_identity(void)
   EXPECT(st.counters.misses == 1);
   EXPECT(st.size == 1);
 
-  EXPECT(zarr_shard_cache_get(c,
-                              bar,
-                              path_intern_hash(bar),
-                              &meta,
-                              coord00,
-                              &pin_bar,
-                              &entries,
-                              &n) == DAMACY_OK);
+  EXPECT(
+    zarr_shard_cache_get(
+      c, bar, path_intern_hash(bar), &meta, coord00, &pin_bar, &entries, &n) ==
+    DAMACY_OK);
   zarr_shard_cache_stats_get(c, &st);
   EXPECT(st.counters.misses == 2);
   EXPECT(st.size == 2);
