@@ -350,7 +350,7 @@ chunk_zsubs_upper_bound(const struct wave_pool* wp,
     if (sp->layout_probed)
       return sp->layout.nblocks;
     return (uint32_t)atomic_load_explicit(&wp->observed_max_nblocks_per_chunk,
-                                          memory_order_relaxed);
+                                          memory_order_acquire);
   }
   return 1;
 }
