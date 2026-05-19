@@ -1,80 +1,145 @@
 #include "store/store_fs.h"
 
+#include "log/log.h"
 #include "store/store.h"
+#include "store/store_internal.h"
+#include "util/hash.h"
+#include "util/lru.h"
 #include "util/prelude.h"
 #include "util/strbuf.h"
 
 #include <stdlib.h>
 #include <string.h>
 
-// Locate or open a file for the given key. Returns NULL on failure.
-// Caller does not own the returned handle; the store owns it for its
-// lifetime.
-static platform_file*
-fs_get_file(struct store_fs* fs, const char* key)
+#define FS_FD_CACHE_MAX_PROBE 16u
+
+struct fs_cache_entry
 {
+  char* key;
+  platform_file* file;
+};
+
+static int
+fs_cache_eq(const void* value, const void* probe_key, void* user)
+{
+  (void)user;
+  const struct fs_cache_entry* e = (const struct fs_cache_entry*)value;
+  return strcmp(e->key, (const char*)probe_key) == 0;
+}
+
+static void
+fs_cache_destroy(void* value, void* user)
+{
+  (void)user;
+  struct fs_cache_entry* e = (struct fs_cache_entry*)value;
+  if (!e)
+    return;
+  platform_file_close(e->file);
+  free(e->key);
+  free(e);
+}
+
+platform_file*
+store_fs_acquire(struct store_fs* fs,
+                 const char* key,
+                 struct lru_entry** pin_out)
+{
+  if (pin_out)
+    *pin_out = NULL;
+  if (!fs || !key || !pin_out)
+    return NULL;
+
+  uint64_t hash = hash_fnv1a_str(key);
+
   platform_mutex_lock(fs->cache_mu);
-  for (size_t i = 0; i < fs->n_slots; ++i) {
-    if (strcmp(fs->slots[i].key, key) == 0) {
-      platform_file* f = fs->slots[i].file;
+  {
+    struct lru_entry* hit = lru_get(fs->fd_cache, hash, key);
+    if (hit) {
+      lru_entry_acquire(hit);
+      platform_file* f = ((struct fs_cache_entry*)lru_entry_value(hit))->file;
+      *pin_out = hit;
       platform_mutex_unlock(fs->cache_mu);
       return f;
     }
   }
   platform_mutex_unlock(fs->cache_mu);
 
-  // Compose full path and open outside the lock.
-  struct strbuf path = { 0 };
-  platform_file* f = NULL;
-  CHECK_SILENT(Out, strbuf_join_path(&path, fs->root, key) == 0);
-  f = platform_file_open_read(strbuf_cstr(&path), 0);
-Out:
-  strbuf_free(&path);
-  if (!f)
+  platform_file* opened = NULL;
+  {
+    struct strbuf path = { 0 };
+    CHECK_SILENT(OpenDone, strbuf_join_path(&path, fs->root, key) == 0);
+    opened = platform_file_open_read(strbuf_cstr(&path), 0);
+  OpenDone:
+    strbuf_free(&path);
+  }
+  if (!opened)
     return NULL;
 
-  // Insert into cache; if a concurrent caller raced us, drop ours and reuse
-  // theirs.
-  platform_mutex_lock(fs->cache_mu);
-  for (size_t i = 0; i < fs->n_slots; ++i) {
-    if (strcmp(fs->slots[i].key, key) == 0) {
-      platform_file* winner = fs->slots[i].file;
-      platform_mutex_unlock(fs->cache_mu);
-      platform_file_close(f);
-      return winner;
-    }
+  struct fs_cache_entry* entry =
+    (struct fs_cache_entry*)calloc(1, sizeof(*entry));
+  if (!entry) {
+    platform_file_close(opened);
+    return NULL;
   }
-  if (fs->n_slots == fs->cap_slots) {
-    size_t new_cap = fs->cap_slots ? fs->cap_slots * 2 : 16;
-    struct fs_cache_slot* p = (struct fs_cache_slot*)realloc(
-      fs->slots, new_cap * sizeof(struct fs_cache_slot));
-    if (!p) {
+  entry->file = opened;
+  entry->key = strdup(key);
+  if (!entry->key) {
+    fs_cache_destroy(entry, NULL);
+    return NULL;
+  }
+
+  platform_mutex_lock(fs->cache_mu);
+  {
+    struct lru_entry* existing = lru_peek(fs->fd_cache, hash, key);
+    if (existing) {
+      lru_entry_acquire(existing);
+      platform_file* f =
+        ((struct fs_cache_entry*)lru_entry_value(existing))->file;
+      *pin_out = existing;
       platform_mutex_unlock(fs->cache_mu);
-      platform_file_close(f);
+      fs_cache_destroy(entry, NULL);
+      return f;
+    }
+    struct lru_entry* inserted = lru_put(fs->fd_cache, hash, key, entry);
+    if (!inserted) {
+      // lru_put already destroyed entry via fs_cache_destroy on failure.
+      platform_mutex_unlock(fs->cache_mu);
       return NULL;
     }
-    fs->slots = p;
-    fs->cap_slots = new_cap;
-  }
-  char* dup = strdup(key);
-  if (!dup) {
+    lru_entry_acquire(inserted);
+    platform_file* f =
+      ((struct fs_cache_entry*)lru_entry_value(inserted))->file;
+    *pin_out = inserted;
     platform_mutex_unlock(fs->cache_mu);
-    platform_file_close(f);
-    return NULL;
+    return f;
   }
-  memset(&fs->slots[fs->n_slots], 0, sizeof(struct fs_cache_slot));
-  fs->slots[fs->n_slots].key = dup;
-  fs->slots[fs->n_slots].file = f;
-  fs->n_slots++;
-  platform_mutex_unlock(fs->cache_mu);
-  return f;
 }
 
-// io_queue job context.
+void
+store_fs_release(struct store_fs* fs, struct lru_entry* pin)
+{
+  if (!fs || !pin)
+    return;
+  platform_mutex_lock(fs->cache_mu);
+  lru_entry_release(pin);
+  platform_mutex_unlock(fs->cache_mu);
+}
+
+void
+store_fs_stats_get(struct store_fs* fs, struct lru_stats* out)
+{
+  if (!out)
+    return;
+  platform_mutex_lock(fs->cache_mu);
+  lru_stats_get(fs ? fs->fd_cache : NULL, out);
+  platform_mutex_unlock(fs->cache_mu);
+}
+
 struct fs_read_job
 {
   struct store_fs* fs;
-  char* key; // heap-owned
+  const char* key; // borrowed: planner-interned, outlives the IO
+  struct lru_entry* pin;
   void* dst;
   uint64_t offset;
   size_t len;
@@ -84,9 +149,8 @@ static void
 fs_read_job_fn(void* vctx)
 {
   struct fs_read_job* j = (struct fs_read_job*)vctx;
-  platform_file* f = fs_get_file(j->fs, j->key);
-  if (!f)
-    return; // silently fail; store has no error channel yet
+  platform_file* f =
+    (platform_file*)((struct fs_cache_entry*)lru_entry_value(j->pin))->file;
   (void)platform_file_pread(f, j->dst, j->len, j->offset);
 }
 
@@ -94,7 +158,9 @@ static void
 fs_read_job_free(void* vctx)
 {
   struct fs_read_job* j = (struct fs_read_job*)vctx;
-  free(j->key);
+  if (!j)
+    return;
+  store_fs_release(j->fs, j->pin);
   free(j);
 }
 
@@ -109,29 +175,39 @@ fs_submit(struct store* s, const struct store_read* reads, size_t n)
     return ev;
   }
 
-  // Sentinel: seq == 0 means partial-submit failure. Callers (store_read_many)
-  // detect this and surface an error; without it, a half-submitted batch
-  // would silently leave dst buffers unfilled. On failure we still drain
-  // jobs already in flight so they don't write into caller buffers after
-  // we return.
+  // seq == 0 → partial-submit failure. Without it, a half-submitted
+  // batch would silently leave dst buffers unfilled. On failure we
+  // still drain in-flight jobs so they don't write into caller buffers
+  // after we return.
   for (size_t i = 0; i < n; ++i) {
+    struct lru_entry* pin = NULL;
+    platform_file* f = store_fs_acquire(fs, reads[i].key, &pin);
+    if (!f) {
+      log_warn("store_fs: acquire failed for key=%s; draining batch",
+               reads[i].key ? reads[i].key : "(null)");
+      goto Drain;
+    }
     struct fs_read_job* j =
       (struct fs_read_job*)calloc(1, sizeof(struct fs_read_job));
-    CHECK_SILENT(Drain, j);
+    if (!j) {
+      store_fs_release(fs, pin);
+      goto Drain;
+    }
     j->fs = fs;
-    j->key = strdup(reads[i].key);
+    j->key = reads[i].key;
+    j->pin = pin;
     j->dst = reads[i].dst;
     j->offset = reads[i].offset;
     j->len = reads[i].len;
-    if (!j->key) {
-      free(j);
+    if (io_queue_post(fs->q, fs_read_job_fn, j, fs_read_job_free)) {
+      fs_read_job_free(j);
       goto Drain;
     }
-    if (io_queue_post(fs->q, fs_read_job_fn, j, fs_read_job_free))
-      goto Drain;
   }
-  struct io_event ioev = io_queue_record(fs->q);
-  ev.seq = ioev.seq;
+  {
+    struct io_event ioev = io_queue_record(fs->q);
+    ev.seq = ioev.seq;
+  }
   return ev;
 
 Drain:
@@ -212,29 +288,25 @@ fs_destroy(struct store* s)
   struct store_fs* fs = (struct store_fs*)s;
   if (!fs)
     return;
+  // Drain + destroy io_queue first so in-flight jobs release their
+  // pins before lru_destroy walks the cache.
   if (fs->q) {
     io_event_wait(fs->q, io_queue_record(fs->q));
     io_queue_destroy(fs->q);
   }
-  for (size_t i = 0; i < fs->n_slots; ++i) {
-    free(fs->slots[i].key);
-    platform_file_close(fs->slots[i].file);
-  }
-  free(fs->slots);
+  lru_destroy(fs->fd_cache);
   platform_mutex_free(fs->cache_mu);
   free(fs->root);
   free(fs);
 }
 
-// Helper: free a partially-constructed store_fs from store_fs_create's
-// Fail label. fs->cache_mu is initialized inline before any branch that
-// could send us here, so we can always destroy it.
 static void
 store_fs_free_partial(struct store_fs* fs)
 {
   if (!fs)
     return;
   io_queue_destroy(fs->q);
+  lru_destroy(fs->fd_cache);
   platform_mutex_free(fs->cache_mu);
   free(fs->root);
   free(fs);
@@ -251,12 +323,6 @@ static const struct store_vtable fs_vtable_host = {
   .unmap = fs_unmap,
 };
 
-platform_file*
-store_fs_get_file_external(struct store_fs* fs, const char* key)
-{
-  return fs_get_file(fs, key);
-}
-
 struct store*
 store_fs_create(const struct store_fs_config* cfg)
 {
@@ -272,6 +338,17 @@ store_fs_create(const struct store_fs_config* cfg)
   CHECK_SILENT(Fail, fs->cache_mu);
   fs->root = strdup(cfg->root);
   CHECK_SILENT(Fail, fs->root);
+
+  uint32_t capacity = cfg->fd_cache_capacity
+                        ? cfg->fd_cache_capacity
+                        : store_default_fd_cache_capacity();
+  struct lru_ops ops = {
+    .eq = fs_cache_eq,
+    .destroy = fs_cache_destroy,
+  };
+  fs->fd_cache = lru_create(capacity, FS_FD_CACHE_MAX_PROBE, &ops);
+  CHECK_SILENT(Fail, fs->fd_cache);
+
   fs->q = io_queue_create(cfg->nthreads, cfg->affinity);
   CHECK_SILENT(Fail, fs->q);
 
