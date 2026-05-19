@@ -27,6 +27,7 @@ add_damacy_test(test_damacy_config damacy_config log)
 add_damacy_test(test_lru lru hash)
 add_damacy_test(test_io_queue io_queue log)
 add_damacy_test(test_store_fs store lru hash log)
+target_link_libraries(test_store_fs PRIVATE Threads::Threads)
 add_damacy_test(test_zarr_meta_cache zarr_meta_cache zarr store test_fixture)
 add_damacy_test(test_zarr_shard_cache zarr_shard_cache zarr store test_fixture)
 

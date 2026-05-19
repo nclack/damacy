@@ -234,12 +234,10 @@ fs_gds_free_params_cb(void* userdata)
   if (!ctx)
     return;
   if (ctx->params) {
-    platform_mutex_lock(ctx->g->cache_mu);
     for (size_t i = 0; i < ctx->n; ++i) {
       if (ctx->params[i].pin)
         lru_entry_release(ctx->params[i].pin);
     }
-    platform_mutex_unlock(ctx->g->cache_mu);
     free(ctx->params);
   }
   free(ctx);
@@ -269,6 +267,8 @@ gds_submit_dev(struct store* s, const struct store_read* reads, size_t n)
     return ev;
   ctx->g = g;
   ctx->n = n;
+  // calloc: SubmitFail's drain loop relies on params[i].pin == NULL for
+  // unacquired entries; switching to malloc would silently break it.
   ctx->params = (struct fs_gds_async_params*)calloc(n, sizeof(*ctx->params));
   if (!ctx->params) {
     free(ctx);
@@ -323,12 +323,10 @@ SubmitFail:
   // The host-func callback never ran, so pin-release is ours.
   if (submitted > 0)
     cuStreamSynchronize(stream);
-  platform_mutex_lock(g->cache_mu);
   for (size_t i = 0; i < n; ++i) {
     if (ctx->params[i].pin)
       lru_entry_release(ctx->params[i].pin);
   }
-  platform_mutex_unlock(g->cache_mu);
   free(ctx->params);
   free(ctx);
   return ev;
