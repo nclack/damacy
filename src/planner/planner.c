@@ -4,6 +4,7 @@
 #include "log/log.h"
 #include "planner/coalesce.h"
 #include "planner/group_chunks.h"
+#include "util/hash.h"
 #include "util/path_intern.h"
 #include "util/prelude.h"
 #include "util/strbuf.h"
@@ -12,6 +13,7 @@
 #include "zarr/zarr_shard_cache.h"
 #include "zarr/zarr_shard_index.h"
 
+#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -380,6 +382,8 @@ planner_plan(struct planner* self,
   out->n_chunk_plans = 0;
   out->n_sample_plans = 0;
 
+  // sample->uri is caller-supplied (may not be interned); shard paths
+  // below are planner-interned, so path_intern_hash is only safe there.
   for (uint32_t sample_idx = 0; sample_idx < n_samples; ++sample_idx) {
     const struct damacy_sample* sample = &samples[sample_idx];
     if (!sample->uri) {
@@ -387,7 +391,8 @@ planner_plan(struct planner* self,
       goto Cleanup;
     }
 
-    uint64_t uri_hash = path_intern_hash(sample->uri);
+    uint64_t uri_hash = hash_fnv1a_str(sample->uri);
+    assert(uri_hash == hash_fnv1a_str(sample->uri));
 
     struct zarr_metadata meta;
     enum damacy_status meta_status =

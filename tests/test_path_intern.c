@@ -97,6 +97,7 @@ test_hash_survives_rehash(void)
   }
   EXPECT(pi.cap > cap_at_early);
   EXPECT(path_intern_hash(early) == hash_fnv1a_str("early/key"));
+  EXPECT(strcmp(early, "early/key") == 0);
   path_intern_free(&pi);
   return 0;
 }

@@ -192,6 +192,9 @@ extern "C"
   // shard_path strings are interned by the planner; equal paths share
   // a pointer across all emitted read_ops, and the storage lives until
   // planner_destroy.
+  //
+  // Soft precondition: samples[i].uri should be path_intern_acquire'd;
+  // meta/shard caches use pointer-identity eq and always miss otherwise.
   enum damacy_status planner_plan(struct planner* p,
                                   const struct damacy_sample* samples,
                                   uint32_t n_samples,
