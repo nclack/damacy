@@ -13,9 +13,6 @@
 #include "zarr/zarr_chunk_layout.h" // struct chunk_layout
 #include "zarr/zarr_metadata.h"     // DAMACY_MAX_DTYPE_BYTES
 
-#ifndef __cplusplus
-#include <stdatomic.h>
-#endif
 #include <stddef.h>
 #include <stdint.h>
 
@@ -75,7 +72,7 @@ extern "C"
     uint8_t fill_value[DAMACY_MAX_DTYPE_BYTES];
     // Per-array blosc1 chunk layout, populated lazily from the meta
     // cache on first non-fill emit. layout_probed = 0 means downstream
-    // should fall back to MAX_BLOCKS_PER_CHUNK in cap calculations.
+    // uses the observed max nblocks from the wave pool.
     struct chunk_layout layout;
     uint8_t layout_probed;
   };
@@ -143,11 +140,6 @@ extern "C"
     // request-count vs queue-depth tradeoff: bigger = fewer IOs;
     // smaller = more in-flight requests.
     uint64_t read_op_max_bytes;
-#ifdef __cplusplus
-    void* observed_max_nblocks;
-#else
-  _Atomic(uint16_t)* observed_max_nblocks;
-#endif
   };
 
   struct planner;

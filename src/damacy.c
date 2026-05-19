@@ -676,18 +676,6 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     self->store_host, &self->uris, cfg->tuning.n_shards_meta_cache);
   CHECK(Fail, self->shard_cache);
 
-  struct planner_config pcfg = {
-    .meta_cache = self->meta_cache,
-    .shard_cache = self->shard_cache,
-    .page_alignment = self->page_alignment,
-    .max_chunk_uncompressed_bytes = runtime_chunk_cap,
-    .read_op_max_bytes = resolve_max_read_op_bytes(cfg),
-    .observed_max_nblocks = &self->wave_pool.observed_max_nblocks_per_chunk,
-  };
-  CHECK(Fail, planner_create(&pcfg, &self->planner) == DAMACY_OK);
-  zarr_meta_cache_set_blosc_nblocks_observer(
-    self->meta_cache, &self->wave_pool.observed_max_nblocks_per_chunk);
-
   for (int b = 0; b < 2; ++b)
     CHECK(Fail,
           batch_slot_init(&self->batch_pool.slots[b], cfg->batch_size) == 0);
@@ -696,6 +684,8 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   // Pin the calling thread to the GPU's NUMA node for the duration of
   // wave_pool_init so first-touch of pinned-host slabs + per-wave
   // scratch lands on the right node. Restored immediately after.
+  // Runs before the planner / meta-cache observer wiring below so
+  // the observed_max_nblocks seed (1) is in place before any probe.
   {
     struct platform_cpu_mask saved_aff;
     numa_scope_enter(&self->numa, &saved_aff);
@@ -716,6 +706,17 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   }
   if (want_gds)
     log_info("damacy: compressed reads via cuFile / GDS (skip bulk H2D)");
+
+  struct planner_config pcfg = {
+    .meta_cache = self->meta_cache,
+    .shard_cache = self->shard_cache,
+    .page_alignment = self->page_alignment,
+    .max_chunk_uncompressed_bytes = runtime_chunk_cap,
+    .read_op_max_bytes = resolve_max_read_op_bytes(cfg),
+  };
+  CHECK(Fail, planner_create(&pcfg, &self->planner) == DAMACY_OK);
+  zarr_meta_cache_set_blosc_nblocks_observer(
+    self->meta_cache, &self->wave_pool.observed_max_nblocks_per_chunk);
 
   CHECK(Fail,
         lookahead_init(&self->lookahead,

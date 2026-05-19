@@ -39,13 +39,11 @@ extern "C"
 
   void zarr_meta_cache_destroy(struct zarr_meta_cache* c);
 
-#ifdef __cplusplus
+#ifndef __cplusplus
+  // Wires a slot the cache bumps via atomic_u16_observe_max on every
+  // first probe / layout_set. C-only — atomic types don't cross to C++.
   void zarr_meta_cache_set_blosc_nblocks_observer(struct zarr_meta_cache* c,
-                                                  void* observer);
-#else
-void
-zarr_meta_cache_set_blosc_nblocks_observer(struct zarr_meta_cache* c,
-                                           _Atomic(uint16_t)* observer);
+                                                  _Atomic(uint16_t)* observer);
 #endif
 
   // Look up metadata for the array at `uri` (path within the store). On
