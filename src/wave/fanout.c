@@ -127,11 +127,9 @@ fanout_grow(struct nvcomp_fanout_host* h,
 {
   if (need <= (size_t)*cap)
     return DAMACY_OK;
-  const size_t structural_max = (size_t)DAMACY_MAX_CHUNKS_PER_WAVE *
-                                (size_t)DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK;
   size_t new_cap = fanout_next_pow2(need);
-  if (new_cap > structural_max)
-    new_cap = structural_max;
+  if (new_cap > WAVE_ZSUBS_STRUCTURAL_MAX)
+    new_cap = WAVE_ZSUBS_STRUCTURAL_MAX;
 
   const uint32_t cur = *cap;
   const uint64_t per_sub = fanout_dev_bytes_per_sub();
