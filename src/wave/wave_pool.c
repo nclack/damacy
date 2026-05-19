@@ -937,7 +937,8 @@ wave_pool_peel_submit(struct wave_pool* wp,
 enum damacy_status
 wave_pool_peel_commit(struct wave_pool* wp,
                       struct wave_pool_peel_ticket* t,
-                      struct store_event ev)
+                      struct store_event ev,
+                      int* changed)
 {
   if (t->consumed) {
     log_error("wave: peel_commit called twice on slot %d", t->slot_idx);
@@ -954,10 +955,14 @@ wave_pool_peel_commit(struct wave_pool* wp,
     wp->stats->waves_emitted--;
     wp->stats->chunks_dispatched -= hs->n_chunks;
     slot_release(hs);
+    if (changed)
+      *changed = 1;
     return DAMACY_IO;
   }
   hs->io_event = ev;
   hs->state = SLOT_IO;
+  if (changed)
+    *changed = 1;
   return DAMACY_OK;
 }
 
@@ -1047,7 +1052,9 @@ wave_pool_advance(struct wave_pool* wp, int* changed)
 
   // Pass 3: drive wave state machine. Release slots on bulk_h2d_end
   // (independent of h2d_end) so peel can refill them as early as
-  // possible.
+  // possible. Ordering vs Pass 2 is load-bearing: a wave freed here
+  // only rebinds on the next tick. Running Pass 3 before Pass 2 would
+  // let a same-tick free→bind happen and could compound rollback paths.
   for (int w = 0; w < DAMACY_N_WAVES; ++w) {
     struct damacy_wave* wave = &wp->waves[w];
     switch (wave->state) {

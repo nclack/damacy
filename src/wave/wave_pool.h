@@ -137,8 +137,8 @@ any_slot_free(const struct wave_pool* wp);
 //      decode + assemble, advance to WAVE_ASSEMBLE.
 //   4. WAVE_ASSEMBLE: poll asm_end → finalize.
 // Returns the first non-OK status encountered; the caller (scheduler
-// tick in damacy.c) latches it onto self->failed_status. *changed is
-// OR-set on any slot/wave transition (the scheduler broadcasts iff set).
+// tick in damacy.c) latches it onto self->failed_status. *changed
+// follows the contract documented at damacy_scheduler_step.
 enum damacy_status
 wave_pool_advance(struct wave_pool* wp, int* changed);
 
@@ -168,8 +168,10 @@ wave_pool_peel_submit(struct wave_pool* wp,
 
 // commit: rolls back the reservation on submit failure → DAMACY_IO. The
 // ticket is consumed on first call; a second call is a no-op returning
-// DAMACY_OK so rollback counters can't double-decrement.
+// DAMACY_OK so rollback counters can't double-decrement. *changed
+// follows the contract documented at damacy_scheduler_step.
 enum damacy_status
 wave_pool_peel_commit(struct wave_pool* wp,
                       struct wave_pool_peel_ticket* t,
-                      struct store_event ev);
+                      struct store_event ev,
+                      int* changed);

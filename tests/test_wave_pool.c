@@ -63,7 +63,9 @@ test_peel_commit_rollback_once(void)
                                      .consumed = 0 };
   struct store_event ev = { .seq = 0 };
 
-  EXPECT(wave_pool_peel_commit(&wp, &t, ev) == DAMACY_IO);
+  int changed = 0;
+  EXPECT(wave_pool_peel_commit(&wp, &t, ev, &changed) == DAMACY_IO);
+  EXPECT(changed == 1);
   EXPECT(t.consumed == 1);
   EXPECT(stats.waves_emitted == 0);
   EXPECT(stats.chunks_dispatched == 0);
@@ -72,9 +74,11 @@ test_peel_commit_rollback_once(void)
 
   // Second call must NOT decrement again — that would underflow.
   // Re-entry intentionally trips a log_error; quiet the sink across it.
+  changed = 0;
   damacy_log_set_quiet(1);
-  EXPECT(wave_pool_peel_commit(&wp, &t, ev) == DAMACY_OK);
+  EXPECT(wave_pool_peel_commit(&wp, &t, ev, &changed) == DAMACY_OK);
   damacy_log_set_quiet(0);
+  EXPECT(changed == 0);
   EXPECT(stats.waves_emitted == 0);
   EXPECT(stats.chunks_dispatched == 0);
   EXPECT(batch_pool.slots[0].n_chunks_dispatched == 0);
@@ -97,7 +101,9 @@ test_peel_commit_success_then_recommit(void)
                                      .consumed = 0 };
   struct store_event ev = { .seq = 42 };
 
-  EXPECT(wave_pool_peel_commit(&wp, &t, ev) == DAMACY_OK);
+  int changed = 0;
+  EXPECT(wave_pool_peel_commit(&wp, &t, ev, &changed) == DAMACY_OK);
+  EXPECT(changed == 1);
   EXPECT(t.consumed == 1);
   EXPECT(wp.slots[0].state == SLOT_IO);
   EXPECT(wp.slots[0].io_event.seq == 42);
@@ -108,9 +114,11 @@ test_peel_commit_success_then_recommit(void)
   // Second call: a stray re-commit (e.g. error retry) must not touch state.
   // Re-entry intentionally trips a log_error; quiet the sink across it.
   struct store_event ev2 = { .seq = 0 };
+  changed = 0;
   damacy_log_set_quiet(1);
-  EXPECT(wave_pool_peel_commit(&wp, &t, ev2) == DAMACY_OK);
+  EXPECT(wave_pool_peel_commit(&wp, &t, ev2, &changed) == DAMACY_OK);
   damacy_log_set_quiet(0);
+  EXPECT(changed == 0);
   EXPECT(wp.slots[0].state == SLOT_IO);
   EXPECT(stats.waves_emitted == 1);
   EXPECT(stats.chunks_dispatched == n_chunks);
@@ -138,7 +146,9 @@ test_peel_commit_rolls_back_groups(void)
   };
   struct store_event ev = { .seq = 0 };
 
-  EXPECT(wave_pool_peel_commit(&wp, &t, ev) == DAMACY_IO);
+  int changed = 0;
+  EXPECT(wave_pool_peel_commit(&wp, &t, ev, &changed) == DAMACY_IO);
+  EXPECT(changed == 1);
   EXPECT(batch_pool.slots[0].n_groups_dispatched == 7);
   return 0;
 }
@@ -263,7 +273,9 @@ test_peel_commit_noop_ticket(void)
                                      .n_reads = 0,
                                      .consumed = 0 };
   struct store_event ev = { .seq = 0 };
-  EXPECT(wave_pool_peel_commit(&wp, &t, ev) == DAMACY_OK);
+  int changed = 0;
+  EXPECT(wave_pool_peel_commit(&wp, &t, ev, &changed) == DAMACY_OK);
+  EXPECT(changed == 0);
   EXPECT(stats.waves_emitted == 0);
   EXPECT(stats.chunks_dispatched == 0);
   return 0;
