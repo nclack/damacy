@@ -2,6 +2,9 @@
 
 #include "platform/platform.h"
 
+#include <assert.h>
+#include <stdalign.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,13 +24,14 @@ struct pool
   size_t in_use;
 };
 
-// Round to pointer alignment so the freelist link is always aligned.
 static size_t
 pool_round_slot(size_t elem_size)
 {
-  const size_t a = sizeof(void*);
-  if (elem_size < a)
-    elem_size = a;
+  size_t a = _Alignof(max_align_t);
+  if (a < sizeof(void*))
+    a = sizeof(void*);
+  if (elem_size < sizeof(void*))
+    elem_size = sizeof(void*);
   return (elem_size + a - 1) & ~(a - 1);
 }
 
@@ -107,8 +111,11 @@ pool_free(struct pool* p, void* ptr)
 {
   if (!p || !ptr)
     return;
+  assert((unsigned char*)ptr >= p->storage &&
+         (unsigned char*)ptr < p->storage + p->capacity * p->slot_size);
   struct pool_slot* slot = (struct pool_slot*)ptr;
   platform_mutex_lock(p->mu);
+  assert(p->in_use > 0);
   slot->next = p->head;
   p->head = slot;
   --p->in_use;

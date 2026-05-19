@@ -10,7 +10,8 @@ extern "C"
 
   struct pool;
 
-  // elem_size >= sizeof(void*) so the freelist link fits in a slot.
+  // Slots are sized up to max(elem_size, sizeof(void*)) and rounded to
+  // _Alignof(max_align_t) so any standard scalar type stays aligned.
   struct pool* pool_create(size_t elem_size, size_t capacity);
   void pool_destroy(struct pool* p);
 
