@@ -57,9 +57,6 @@ validate_config(const struct damacy_config* cfg)
   CHECK_SILENT(Invalid, cfg->tuning.n_zarrs_meta_cache > 0);
   CHECK_SILENT(Invalid, cfg->tuning.n_shards_meta_cache > 0);
   CHECK_SILENT(Invalid, damacy_dtype_bpe(cfg->dtype) > 0);
-  CHECK_SILENT(Invalid,
-               cfg->tuning.max_chunk_uncompressed_bytes <=
-                 DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES);
   CHECK_SILENT(Invalid, cfg->sample_rank > 0);
   CHECK_SILENT(Invalid, cfg->sample_rank <= DAMACY_MAX_RANK);
   for (uint8_t d = 0; d < cfg->sample_rank; ++d)
@@ -83,8 +80,6 @@ resolve_max_chunk_uncompressed(const struct damacy_config* cfg)
   uint64_t v = cfg->tuning.max_chunk_uncompressed_bytes;
   if (v == 0)
     v = DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES;
-  if (v > DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES)
-    v = DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES;
   return v;
 }
 

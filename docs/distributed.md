@@ -142,9 +142,11 @@ your kernel — the implicit default-stream sync is gone.
 
 ## Common failures
 
+Multi-rank-specific symptoms. For single-GPU errors
+(`no CUcontext is current`, blocking `pop()`, `BudgetExceeded`,
+`PoolStarved`), see [Troubleshooting](troubleshooting.md).
+
 | symptom | likely cause |
 |---|---|
 | ~1/N throughput, training otherwise looks fine | missing `torch.cuda.set_device(local_rank)`. Damacy warns when `LOCAL_RANK` is set but its bound device disagrees. |
 | `damacy.InvalidArgument` at `Pipeline(cfg)` with "Config.device=N but … current on device M" | `Config(device=N)` and `set_device(M)` were called for different N and M. Make them match. |
-| `damacy.InvalidArgument` ("no CUcontext is current") | `Config.device` not set *and* no CUDA context primed yet. Either pass `device=local_rank` or do a `torch.empty(1, device="cuda")` first. |
-| Pipeline construction succeeds but the first `pop` blocks forever | The push didn't reach the lookahead, or the consumer never frees a slot. The Python wrapper queues overflow on `push`; check `pipeline.pending` and that you're popping at the rate you push. |

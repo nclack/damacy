@@ -167,11 +167,8 @@ def test_dtype_coerce():
 # ---- construction & validation ------------------------------------------
 
 
-def test_oversize_max_chunk_raises_invalid_argument():
-    cfg = dataclasses.replace(
-        _base_config(),
-        max_chunk_uncompressed_bytes=_native.MAX_CHUNK_UNCOMPRESSED_BYTES + 1,
-    )
+def test_invalid_config_raises_invalid_argument():
+    cfg = dataclasses.replace(_base_config(), n_zarrs_meta_cache=0)
     with pytest.raises(InvalidArgument) as excinfo:
         Pipeline(cfg)
     # The base class is still _native.DamacyError so legacy `except
@@ -772,11 +769,8 @@ def test_use_after_close_raises(tiny_zarr):
 
 
 def test_per_status_exceptions_share_base():
-    # Cheap construction-time error: oversize max_chunk → INVAL.
-    cfg = dataclasses.replace(
-        _base_config(),
-        max_chunk_uncompressed_bytes=_native.MAX_CHUNK_UNCOMPRESSED_BYTES + 1,
-    )
+    # Cheap construction-time INVAL.
+    cfg = dataclasses.replace(_base_config(), n_zarrs_meta_cache=0)
     with pytest.raises(DamacyError) as excinfo:
         Pipeline(cfg)
     assert isinstance(excinfo.value, InvalidArgument)

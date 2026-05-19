@@ -77,5 +77,7 @@ markdown_extensions:
 
 nav:
   - Home: index.md
+  - GPU memory budget: budget.md
   - Distributed: distributed.md
+  - Troubleshooting: troubleshooting.md
   - API reference: api.md

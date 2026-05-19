@@ -570,7 +570,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     if (s != DAMACY_OK)
       goto Fail;
     gpu_budget_commit(self->budget, predicted.total);
-    log_info("damacy: resolved geometry from max_gpu_memory_bytes=%llu "
+    log_debug("damacy: resolved geometry from max_gpu_memory_bytes=%llu "
              "(pool_reserve=%llu, resolver_budget=%llu): "
              "host_slab_per_wave=%llu dev_decompressed_per_wave=%llu "
              "initial_nvcomp_temp=%llu predicted_total=%llu",
