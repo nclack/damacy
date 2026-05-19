@@ -331,35 +331,6 @@ SubmitFail:
   return ev;
 }
 
-// Metadata path (shard footers, zarr.json). Inline pread is fine here:
-// small, cold, infrequent. Bulk reads go through submit_dev.
-static struct store_event
-gds_submit(struct store* s, const struct store_read* reads, size_t n)
-{
-  struct store_fs_gds* g = (struct store_fs_gds*)s;
-  struct store_event ev = { 0 };
-  if (n == 0) {
-    ev.seq = GDS_SENTINEL_SEQ;
-    return ev;
-  }
-  for (size_t i = 0; i < n; ++i) {
-    struct lru_entry* pin = fs_gds_acquire(g, reads[i].key);
-    if (!pin)
-      return ev;
-    const struct fs_gds_cache_entry* entry =
-      (const struct fs_gds_cache_entry*)lru_entry_value(pin);
-    int64_t got = platform_file_pread(
-      entry->file, reads[i].dst, reads[i].len, reads[i].offset);
-    platform_mutex_lock(g->cache_mu);
-    lru_entry_release(pin);
-    platform_mutex_unlock(g->cache_mu);
-    if (got < 0 || (size_t)got != reads[i].len)
-      return ev;
-  }
-  ev.seq = GDS_SENTINEL_SEQ;
-  return ev;
-}
-
 static int
 gds_stat(struct store* s, const char* key, uint64_t* out)
 {
@@ -448,7 +419,7 @@ gds_destroy(struct store* s)
 static const struct store_vtable gds_vtable = {
   .destroy = gds_destroy,
   .stat = gds_stat,
-  .submit = gds_submit,
+  .submit = NULL,
   .submit_dev = gds_submit_dev,
   .event_wait = gds_event_wait,
   .event_query = gds_event_query,
