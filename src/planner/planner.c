@@ -7,6 +7,7 @@
 #include "util/path_intern.h"
 #include "util/prelude.h"
 #include "util/strbuf.h"
+#include "wave/blosc_nblocks_observer.h"
 #include "zarr/zarr_meta_cache.h"
 #include "zarr/zarr_metadata.h"
 #include "zarr/zarr_shard_cache.h"
@@ -210,6 +211,7 @@ struct emit_ctx
   // populates ->layout / ->layout_probed on the first non-fill emit.
   struct sample_plan* sp;
   struct zarr_meta_cache* meta_cache;
+  _Atomic(uint16_t)* observed_max_nblocks;
   // per-shard
   const struct zarr_shard_entry* shard_entries;
   uint64_t n_shard_entries;
@@ -304,6 +306,8 @@ emit_chunk(const struct emit_ctx* ctx,
                                      &cl) == 0) {
       ctx->sp->layout = cl;
       ctx->sp->layout_probed = 1;
+      wave_pool_observe_blosc_nblocks(ctx->observed_max_nblocks,
+                                      (uint16_t)cl.nblocks);
     }
   }
 
@@ -482,6 +486,7 @@ planner_plan(struct planner* self,
       .page_alignment_bytes = self->cfg.page_alignment,
       .sp = sp,
       .meta_cache = self->cfg.meta_cache,
+      .observed_max_nblocks = self->cfg.observed_max_nblocks,
     };
 
     // Iterate chunks in [chunk_lo, chunk_hi) row-major.

@@ -682,8 +682,11 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     .page_alignment = self->page_alignment,
     .max_chunk_uncompressed_bytes = runtime_chunk_cap,
     .read_op_max_bytes = resolve_max_read_op_bytes(cfg),
+    .observed_max_nblocks = &self->wave_pool.observed_max_nblocks_per_chunk,
   };
   CHECK(Fail, planner_create(&pcfg, &self->planner) == DAMACY_OK);
+  zarr_meta_cache_set_blosc_nblocks_observer(
+    self->meta_cache, &self->wave_pool.observed_max_nblocks_per_chunk);
 
   for (int b = 0; b < 2; ++b)
     CHECK(Fail,

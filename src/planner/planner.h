@@ -13,6 +13,9 @@
 #include "zarr/zarr_chunk_layout.h" // struct chunk_layout
 #include "zarr/zarr_metadata.h"     // DAMACY_MAX_DTYPE_BYTES
 
+#ifndef __cplusplus
+#include <stdatomic.h>
+#endif
 #include <stddef.h>
 #include <stdint.h>
 
@@ -140,6 +143,11 @@ extern "C"
     // request-count vs queue-depth tradeoff: bigger = fewer IOs;
     // smaller = more in-flight requests.
     uint64_t read_op_max_bytes;
+#ifdef __cplusplus
+    void* observed_max_nblocks;
+#else
+  _Atomic(uint16_t)* observed_max_nblocks;
+#endif
   };
 
   struct planner;
