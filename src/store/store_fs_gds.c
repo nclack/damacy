@@ -331,19 +331,6 @@ SubmitFail:
   return ev;
 }
 
-static int
-gds_stat(struct store* s, const char* key, uint64_t* out)
-{
-  struct store_fs_gds* g = (struct store_fs_gds*)s;
-  struct strbuf path = { 0 };
-  int rc = 1;
-  CHECK_SILENT(Out, strbuf_join_path(&path, g->root, key) == 0);
-  rc = platform_path_size(strbuf_cstr(&path), out);
-Out:
-  strbuf_free(&path);
-  return rc;
-}
-
 static void
 gds_event_wait(struct store* s, struct store_event ev)
 {
@@ -356,46 +343,6 @@ gds_event_query(struct store* s, struct store_event ev)
 {
   (void)s;
   return ev.seq == GDS_SENTINEL_SEQ ? 1 : 0;
-}
-
-static int
-gds_map(struct store* s, const char* key, struct store_view* out)
-{
-  struct store_fs_gds* g = (struct store_fs_gds*)s;
-  struct strbuf path = { 0 };
-  struct platform_file_view* pv = NULL;
-  int rc = 1;
-
-  CHECK_SILENT(Out, strbuf_join_path(&path, g->root, key) == 0);
-  pv = (struct platform_file_view*)calloc(1, sizeof(*pv));
-  CHECK_SILENT(Out, pv);
-  rc = platform_file_map_path(strbuf_cstr(&path), pv);
-  if (rc) {
-    free(pv);
-    pv = NULL;
-    goto Out;
-  }
-  out->data = pv->data;
-  out->len = pv->len;
-  out->backend = pv;
-
-Out:
-  strbuf_free(&path);
-  return rc;
-}
-
-static void
-gds_unmap(struct store* s, struct store_view* view)
-{
-  (void)s;
-  if (!view || !view->backend)
-    return;
-  struct platform_file_view* pv = (struct platform_file_view*)view->backend;
-  platform_file_unmap(pv);
-  free(pv);
-  view->data = NULL;
-  view->len = 0;
-  view->backend = NULL;
 }
 
 static void
@@ -418,13 +365,9 @@ gds_destroy(struct store* s)
 
 static const struct store_vtable gds_vtable = {
   .destroy = gds_destroy,
-  .stat = gds_stat,
-  .submit = NULL,
   .submit_dev = gds_submit_dev,
   .event_wait = gds_event_wait,
   .event_query = gds_event_query,
-  .map = gds_map,
-  .unmap = gds_unmap,
 };
 
 struct store*
