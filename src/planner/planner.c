@@ -13,7 +13,6 @@
 #include "zarr/zarr_shard_cache.h"
 #include "zarr/zarr_shard_index.h"
 
-#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -392,7 +391,6 @@ planner_plan(struct planner* self,
     }
 
     uint64_t uri_hash = hash_fnv1a_str(sample->uri);
-    assert(uri_hash == hash_fnv1a_str(sample->uri));
 
     struct zarr_metadata meta;
     enum damacy_status meta_status =
