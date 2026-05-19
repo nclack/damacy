@@ -4,6 +4,7 @@
 
 #include <assert.h>
 #include <stdalign.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -82,9 +83,27 @@ pool_destroy(struct pool* p)
 {
   if (!p)
     return;
+  assert(p->in_use == 0);
   platform_mutex_free(p->mu);
   free(p->storage);
   free(p);
+}
+
+static bool
+pool_owns_unlocked(const struct pool* p, const void* ptr)
+{
+  if (!p || !ptr || !p->storage)
+    return false;
+  const unsigned char* q = (const unsigned char*)ptr;
+  if (q < p->storage || q >= p->storage + p->capacity * p->slot_size)
+    return false;
+  return ((size_t)(q - p->storage)) % p->slot_size == 0;
+}
+
+bool
+pool_owns(const struct pool* p, const void* ptr)
+{
+  return pool_owns_unlocked(p, ptr);
 }
 
 void*
@@ -111,8 +130,7 @@ pool_free(struct pool* p, void* ptr)
 {
   if (!p || !ptr)
     return;
-  assert((unsigned char*)ptr >= p->storage &&
-         (unsigned char*)ptr < p->storage + p->capacity * p->slot_size);
+  assert(pool_owns_unlocked(p, ptr));
   struct pool_slot* slot = (struct pool_slot*)ptr;
   platform_mutex_lock(p->mu);
   assert(p->in_use > 0);
@@ -123,13 +141,14 @@ pool_free(struct pool* p, void* ptr)
 }
 
 size_t
-pool_in_use(struct pool* p)
+pool_in_use(const struct pool* p)
 {
   if (!p)
     return 0;
-  platform_mutex_lock(p->mu);
-  size_t n = p->in_use;
-  platform_mutex_unlock(p->mu);
+  struct pool* mp = (struct pool*)p;
+  platform_mutex_lock(mp->mu);
+  size_t n = mp->in_use;
+  platform_mutex_unlock(mp->mu);
   return n;
 }
 

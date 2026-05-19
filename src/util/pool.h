@@ -1,6 +1,7 @@
 // Fixed-size object pool. Intrusive LIFO freelist through unused slots.
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -19,7 +20,9 @@ extern "C"
   void* pool_alloc(struct pool* p);
   void pool_free(struct pool* p, void* ptr);
 
-  size_t pool_in_use(struct pool* p);
+  bool pool_owns(const struct pool* p, const void* ptr);
+
+  size_t pool_in_use(const struct pool* p);
   size_t pool_capacity(const struct pool* p);
 
 #ifdef __cplusplus
