@@ -63,6 +63,7 @@ __all__ = [
     "Metric",
     "NativeCudaError",
     "NotFound",
+    "NumaStrategy",
     "OutOfMemory",
     "Pipeline",
     "PoolStarved",
@@ -118,6 +119,59 @@ class Dtype(IntEnum):
         if s in ("bf16", "bfloat16"):
             return cls.BF16
         raise ValueError(f"unknown dtype: {value!r}")
+
+
+class NumaStrategy(IntEnum):
+    """How to pin pinned-host slabs and worker threads to a NUMA node.
+
+    ``AUTO`` resolves the GPU's host-NUMA node from the CUDA driver
+    (sysfs fallback) at create time. ``DISABLED`` is a full no-op.
+    ``PIN_TO`` uses the explicit :attr:`Config.numa_node`.
+
+    All three are silent no-ops when ``libnuma.so.1`` cannot be
+    loaded at runtime; ``AUTO`` is also a no-op on single-node hosts
+    where pinning has nothing to bind against.
+
+    ```pycon
+    >>> NumaStrategy.coerce("auto") is NumaStrategy.AUTO
+    True
+    >>> NumaStrategy.coerce("pin_to") is NumaStrategy.PIN_TO
+    True
+    >>> NumaStrategy.coerce(NumaStrategy.DISABLED) is NumaStrategy.DISABLED
+    True
+    >>> NumaStrategy.coerce("nope")
+    Traceback (most recent call last):
+        ...
+    ValueError: unknown numa strategy: 'nope'
+
+    ```
+    """
+
+    AUTO = _native.NUMA_AUTO
+    DISABLED = _native.NUMA_DISABLED
+    PIN_TO = _native.NUMA_PIN_TO
+
+    @classmethod
+    def coerce(cls, value: str | int | NumaStrategy) -> NumaStrategy:
+        """Accept enum / int / one of ``"auto"`` / ``"disabled"`` / ``"pin_to"``."""
+        if isinstance(value, cls):
+            return value
+        if isinstance(value, int):
+            return cls(value)
+        s = str(value).lower().replace("-", "_")
+        if s == "auto":
+            return cls.AUTO
+        if s == "disabled":
+            return cls.DISABLED
+        if s == "pin_to":
+            return cls.PIN_TO
+        raise ValueError(f"unknown numa strategy: {value!r}")
+
+
+def _gds_to_native(v: bool | None) -> int:
+    if v is None:
+        return _native.GDS_AUTO
+    return _native.GDS_ON if v else _native.GDS_OFF
 
 
 class Status(IntEnum):
@@ -400,6 +454,12 @@ class Config:
         n_shards_meta_cache: LRU cap for shard-index entries.
         max_chunk_uncompressed_bytes: Largest uncompressed chunk size
             the pipeline accepts; 0 selects the C default (512 KB).
+        max_read_op_bytes: Cap on the size of a single coalesced
+            read issued to storage. 0 selects the C default. Tune
+            against your storage tier: small values keep the queue
+            deep and the read pattern fine-grained; large values
+            amortize per-syscall overhead at the cost of latency
+            spikes.
         device: CUDA device index to bind. ``None`` (default) captures
             the current ``CUcontext`` on the calling thread; pass an
             int (e.g. ``local_rank``) to retain that device's primary
@@ -407,6 +467,26 @@ class Config:
         pop_timeout_s: How long :meth:`Pipeline.pop` waits for the
             next batch before raising :class:`PoolStarved`. Defaults
             to 30 seconds; pass ``None`` to wait forever.
+        enable_gds: GPUDirect Storage opt-in. ``True`` forces cuFile
+            reads of compressed bytes straight to device memory,
+            bypassing host-staging slabs; ``False`` forces the
+            host-staging path. ``None`` (default) defers to env
+            ``DAMACY_GDS_ENABLE=1``. Explicit ``True``/``False`` wins
+            over the env var. Requires ``libcufile.so.0`` and a
+            successful ``cuFileDriverOpen`` at create time.
+        numa_strategy: How to pin pinned-host slabs and worker
+            threads to a host-NUMA node. :attr:`NumaStrategy.AUTO`
+            (default) resolves the GPU's host-NUMA node from the
+            CUDA driver. :attr:`NumaStrategy.PIN_TO` uses
+            :attr:`numa_node`. :attr:`NumaStrategy.DISABLED` is a
+            full no-op. All three are silent no-ops when
+            ``libnuma.so.1`` is unavailable at runtime; ``AUTO`` is
+            also a no-op on single-node hosts.
+        numa_node: Explicit host-NUMA node when
+            ``numa_strategy=NumaStrategy.PIN_TO``. Must be ``>= 0``
+            in that mode; must be ``-1`` (default) otherwise — the
+            constructor rejects a node hint paired with a non-PIN_TO
+            strategy rather than silently dropping it.
     """
 
     batch_size: int
@@ -416,11 +496,15 @@ class Config:
     n_zarrs_meta_cache: int
     n_shards_meta_cache: int
     max_chunk_uncompressed_bytes: int
+    max_read_op_bytes: int
     max_gpu_memory_bytes: int
     host_buffer_waves: int
     sample_shape: tuple[int, ...]
     device: int | None
     pop_timeout_s: float | None
+    enable_gds: bool | None
+    numa_strategy: NumaStrategy
+    numa_node: int
 
     def __init__(
         self,
@@ -434,9 +518,13 @@ class Config:
         n_zarrs_meta_cache: int = 64,
         n_shards_meta_cache: int = 256,
         max_chunk_uncompressed_bytes: int = 0,
+        max_read_op_bytes: int = 0,
         host_buffer_waves: int = 0,
         device: int | None = None,
         pop_timeout_s: float | None = 30.0,
+        enable_gds: bool | None = None,
+        numa_strategy: NumaStrategy | str | int = NumaStrategy.AUTO,
+        numa_node: int = -1,
     ) -> None:
         # Custom __init__ rather than __post_init__ so the constructor
         # signature accepts the polymorphic dtype input while reads of
@@ -452,6 +540,8 @@ class Config:
             raise ValueError(f"n_io_threads must be >= 1 (got {n_io_threads})")
         if max_chunk_uncompressed_bytes < 0:
             raise ValueError("max_chunk_uncompressed_bytes must be >= 0")
+        if max_read_op_bytes < 0:
+            raise ValueError("max_read_op_bytes must be >= 0")
         if max_gpu_memory_bytes < 1:
             raise ValueError(
                 f"max_gpu_memory_bytes must be >= 1 (got {max_gpu_memory_bytes})"
@@ -460,6 +550,16 @@ class Config:
             raise ValueError("host_buffer_waves must be >= 0")
         if pop_timeout_s is not None and pop_timeout_s <= 0:
             raise ValueError(f"pop_timeout_s must be > 0 or None (got {pop_timeout_s})")
+        ns = NumaStrategy.coerce(numa_strategy)
+        if ns is NumaStrategy.PIN_TO:
+            if numa_node < 0:
+                raise ValueError(
+                    f"numa_node must be >= 0 when numa_strategy=PIN_TO (got {numa_node})"
+                )
+        elif numa_node != -1:
+            raise ValueError(
+                f"numa_node must be -1 when numa_strategy={ns.name} (got {numa_node})"
+            )
         shape_t = tuple(int(x) for x in sample_shape)
         if not shape_t:
             raise ValueError("sample_shape must be non-empty")
@@ -473,11 +573,15 @@ class Config:
         set_(self, "n_zarrs_meta_cache", n_zarrs_meta_cache)
         set_(self, "n_shards_meta_cache", n_shards_meta_cache)
         set_(self, "max_chunk_uncompressed_bytes", max_chunk_uncompressed_bytes)
+        set_(self, "max_read_op_bytes", max_read_op_bytes)
         set_(self, "max_gpu_memory_bytes", max_gpu_memory_bytes)
         set_(self, "host_buffer_waves", host_buffer_waves)
         set_(self, "sample_shape", shape_t)
         set_(self, "device", device)
         set_(self, "pop_timeout_s", pop_timeout_s)
+        set_(self, "enable_gds", None if enable_gds is None else bool(enable_gds))
+        set_(self, "numa_strategy", ns)
+        set_(self, "numa_node", int(numa_node))
 
 
 @dataclass(frozen=True, slots=True)
@@ -546,7 +650,10 @@ class Stats:
     batches_emitted: int
     batches_truncated: int
     waves_emitted: int
+    chunks_planned: int
+    chunks_to_load: int
     chunks_dispatched: int
+    reads_issued: int
     worker_steps: int
     gpu_bytes_committed: int
 
@@ -571,7 +678,10 @@ class Stats:
             batches_emitted=st["batches_emitted"],
             batches_truncated=st["batches_truncated"],
             waves_emitted=st["waves_emitted"],
+            chunks_planned=st["chunks_planned"],
+            chunks_to_load=st["chunks_to_load"],
             chunks_dispatched=st["chunks_dispatched"],
+            reads_issued=st["reads_issued"],
             worker_steps=st["worker_steps"],
             gpu_bytes_committed=st["gpu_bytes_committed"],
         )
@@ -878,8 +988,12 @@ class Pipeline:
                 max_chunk_uncompressed_bytes=config.max_chunk_uncompressed_bytes,
                 max_gpu_memory_bytes=config.max_gpu_memory_bytes,
                 host_buffer_waves=config.host_buffer_waves,
+                max_read_op_bytes=config.max_read_op_bytes,
                 sample_shape=tuple(config.sample_shape),
                 device=-1 if config.device is None else int(config.device),
+                enable_gds=_gds_to_native(config.enable_gds),
+                numa_strategy=int(config.numa_strategy),
+                numa_node=config.numa_node,
             )
         except _native.DamacyError as exc:
             _reraise_typed(exc)

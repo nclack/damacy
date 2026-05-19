@@ -69,6 +69,10 @@ validate_config(const struct damacy_config* cfg)
                  cfg->tuning.numa_strategy == DAMACY_NUMA_PIN_TO);
   if (cfg->tuning.numa_strategy == DAMACY_NUMA_PIN_TO)
     CHECK_SILENT(Invalid, cfg->tuning.numa_node >= 0);
+  CHECK_SILENT(Invalid,
+               cfg->tuning.enable_gds == DAMACY_GDS_AUTO ||
+                 cfg->tuning.enable_gds == DAMACY_GDS_ON ||
+                 cfg->tuning.enable_gds == DAMACY_GDS_OFF);
   return DAMACY_OK;
 Invalid:
   return DAMACY_INVAL;
@@ -108,12 +112,12 @@ resolve_host_buffer_waves(const struct damacy_config* cfg)
 uint8_t
 resolve_enable_gds(const struct damacy_config* cfg)
 {
-  if (cfg && cfg->tuning.enable_gds)
+  if (cfg->tuning.enable_gds == DAMACY_GDS_ON)
     return 1;
+  if (cfg->tuning.enable_gds == DAMACY_GDS_OFF)
+    return 0;
   const char* e = platform_getenv("DAMACY_GDS_ENABLE");
-  if (e && strcmp(e, "1") == 0)
-    return 1;
-  return 0;
+  return (e && strcmp(e, "1") == 0) ? 1 : 0;
 }
 
 enum damacy_status
