@@ -41,10 +41,12 @@ meta_eq(const void* value, const void* probe_key, void* user)
 static void
 meta_destroy(void* value, void* user)
 {
-  (void)user;
   struct meta_entry* entry = (struct meta_entry*)value;
   if (!entry)
     return;
+  struct zarr_meta_cache* cache = (struct zarr_meta_cache*)user;
+  if (cache && cache->uris && entry->uri)
+    path_intern_release(cache->uris, entry->uri);
   free(entry);
 }
 
@@ -68,6 +70,7 @@ zarr_meta_cache_create(struct store* store,
   struct lru_ops ops = {
     .eq = meta_eq,
     .destroy = meta_destroy,
+    .user = self,
   };
   // hash_ptr (multiplicative finalizer) spreads malloc-arena clustering
   // adequately; observed chain depths stay well under the cap.
@@ -136,7 +139,17 @@ zarr_meta_cache_get(struct zarr_meta_cache* self,
   }
   store_unmap(self->store, &view);
 
-  entry->uri = uri;
+  // Pin the key: without this, the entry survives every caller
+  // dropping refs and dangles on the freed string.
+  if (self->uris) {
+    entry->uri = path_intern_acquire(self->uris, uri);
+    if (!entry->uri) {
+      free(entry);
+      return DAMACY_OOM;
+    }
+  } else {
+    entry->uri = uri;
+  }
 
   platform_mutex_lock(self->mu);
   // Re-check under the lock: another thread may have raced us on the
@@ -147,7 +160,7 @@ zarr_meta_cache_get(struct zarr_meta_cache* self,
   if (existing) {
     *out = ((const struct meta_entry*)lru_entry_value(existing))->meta;
     platform_mutex_unlock(self->mu);
-    meta_destroy(entry, NULL);
+    meta_destroy(entry, self);
     return DAMACY_OK;
   }
   struct lru_entry* inserted = lru_put(self->lru, hash, uri, entry);

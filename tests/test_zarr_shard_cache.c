@@ -331,6 +331,88 @@ test_shard_cache_pointer_identity(void)
   return 0;
 }
 
+// Regression for #114: cache must hold its own path_intern ref so the
+// URI key can't dangle once the caller releases.
+static int
+test_shard_cache_survives_intern_recycle(void)
+{
+  char tmpl[] = "/tmp/damacy_shard_recycle_XXXXXX";
+  char* root = mkdtemp(tmpl);
+  EXPECT(root);
+
+  char path[512];
+  snprintf(path, sizeof path, "%s/foo", root);
+  EXPECT(mkdir(path, 0755) == 0);
+  snprintf(path, sizeof path, "%s/foo/c", root);
+  EXPECT(mkdir(path, 0755) == 0);
+  snprintf(path, sizeof path, "%s/foo/c/0", root);
+  EXPECT(mkdir(path, 0755) == 0);
+  snprintf(path, sizeof path, "%s/foo/c/0/0", root);
+  EXPECT(fixture_write_zero_file(path, 256) == 0);
+
+  struct store_fs_config sc = { .root = root, .nthreads = 1 };
+  struct store* store = store_fs_create(&sc);
+  EXPECT(store);
+
+  struct zarr_metadata meta = {
+    .rank = 2,
+    .shape = { 4, 8 },
+    .inner_chunk_shape = { 2, 4 },
+    .shard_shape = { 2, 4 },
+    .sharded = 0,
+    .index_location_end = 1,
+  };
+
+  struct path_intern uris = { 0 };
+  struct zarr_shard_cache* c = zarr_shard_cache_create(store, &uris, 4);
+  EXPECT(c);
+
+  const char* foo = path_intern_acquire(&uris, "foo");
+  EXPECT(foo);
+
+  const uint64_t coord00[2] = { 0, 0 };
+  const struct zarr_shard_entry* entries = NULL;
+  uint64_t n = 0;
+  struct zarr_shard_pin pin = { 0 };
+  EXPECT(zarr_shard_cache_get(c, foo, &meta, coord00, &pin, &entries, &n) ==
+         DAMACY_OK);
+  zarr_shard_cache_release(c, pin);
+
+  path_intern_release(&uris, foo);
+  EXPECT(path_intern_owns(&uris, foo) == 1);
+
+  char buf[16];
+  const char* churn[20];
+  for (int i = 0; i < 20; ++i) {
+    snprintf(buf, sizeof buf, "u%02d", i);
+    churn[i] = path_intern_acquire(&uris, buf);
+    EXPECT(churn[i]);
+  }
+  for (int i = 0; i < 20; ++i)
+    path_intern_release(&uris, churn[i]);
+
+  const char* foo2 = path_intern_acquire(&uris, "foo");
+  EXPECT(foo2 == foo);
+  struct zarr_shard_pin pin2 = { 0 };
+  EXPECT(zarr_shard_cache_get(c, foo2, &meta, coord00, &pin2, &entries, &n) ==
+         DAMACY_OK);
+  struct zarr_shard_cache_stats st;
+  zarr_shard_cache_stats_get(c, &st);
+  EXPECT(st.counters.hits >= 1);
+  EXPECT(st.counters.misses == 1);
+  EXPECT(st.size == 1);
+  zarr_shard_cache_release(c, pin2);
+  path_intern_release(&uris, foo2);
+
+  zarr_shard_cache_destroy(c);
+  EXPECT(path_intern_owns(&uris, foo) == 0);
+
+  path_intern_free(&uris);
+  store_destroy(store);
+  fixture_rm_tree(root);
+  return 0;
+}
+
 int
 main(void)
 {
@@ -338,6 +420,7 @@ main(void)
   RUN(test_shard_cache_index_start);
   RUN(test_shard_cache_unsharded);
   RUN(test_shard_cache_pointer_identity);
+  RUN(test_shard_cache_survives_intern_recycle);
   log_info("all tests passed");
   return 0;
 }
