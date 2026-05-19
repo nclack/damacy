@@ -163,9 +163,15 @@ class NumaStrategy(IntEnum):
             return cls.AUTO
         if s == "disabled":
             return cls.DISABLED
-        if s in ("pin_to", "pinto"):
+        if s == "pin_to":
             return cls.PIN_TO
         raise ValueError(f"unknown numa strategy: {value!r}")
+
+
+def _gds_to_native(v: bool | None) -> int:
+    if v is None:
+        return _native.GDS_AUTO
+    return _native.GDS_ON if v else _native.GDS_OFF
 
 
 class Status(IntEnum):
@@ -463,15 +469,13 @@ class Config:
         pop_timeout_s: How long :meth:`Pipeline.pop` waits for the
             next batch before raising :class:`PoolStarved`. Defaults
             to 30 seconds; pass ``None`` to wait forever.
-        enable_gds: Opt into GPUDirect Storage. When ``True``, damacy
-            uses cuFile to read compressed bytes from the shard files
-            directly into device memory, bypassing the host-staging
-            slabs. Requires ``libcufile.so.0`` on the host and a
-            successful ``cuFileDriverOpen`` at create time. Defaults
-            to ``False`` (host-staging path). Precedence: the C-side
-            resolver OR-s this with ``DAMACY_GDS_ENABLE=1``, so the
-            env var can force GDS on but cannot force it off when the
-            config has it set.
+        enable_gds: GPUDirect Storage opt-in. ``True`` forces cuFile
+            reads of compressed bytes straight to device memory,
+            bypassing host-staging slabs; ``False`` forces the
+            host-staging path. ``None`` (default) defers to env
+            ``DAMACY_GDS_ENABLE=1``. Explicit ``True``/``False`` wins
+            over the env var. Requires ``libcufile.so.0`` and a
+            successful ``cuFileDriverOpen`` at create time.
         numa_strategy: How to pin pinned-host slabs and worker
             threads to a host-NUMA node. :attr:`NumaStrategy.AUTO`
             (default) resolves the GPU's host-NUMA node from the
@@ -482,9 +486,9 @@ class Config:
             also a no-op on single-node hosts.
         numa_node: Explicit host-NUMA node when
             ``numa_strategy=NumaStrategy.PIN_TO``. Must be ``>= 0``
-            in that mode; normalized to ``-1`` for AUTO/DISABLED so
-            the dataclass attribute reflects what the runtime will
-            see.
+            in that mode; must be ``-1`` (default) otherwise — the
+            constructor rejects a node hint paired with a non-PIN_TO
+            strategy rather than silently dropping it.
     """
 
     batch_size: int
@@ -500,7 +504,7 @@ class Config:
     sample_shape: tuple[int, ...]
     device: int | None
     pop_timeout_s: float | None
-    enable_gds: bool
+    enable_gds: bool | None
     numa_strategy: NumaStrategy
     numa_node: int
 
@@ -520,7 +524,7 @@ class Config:
         host_buffer_waves: int = 0,
         device: int | None = None,
         pop_timeout_s: float | None = 30.0,
-        enable_gds: bool = False,
+        enable_gds: bool | None = None,
         numa_strategy: NumaStrategy | str | int = NumaStrategy.AUTO,
         numa_node: int = -1,
     ) -> None:
@@ -549,9 +553,14 @@ class Config:
         if pop_timeout_s is not None and pop_timeout_s <= 0:
             raise ValueError(f"pop_timeout_s must be > 0 or None (got {pop_timeout_s})")
         ns = NumaStrategy.coerce(numa_strategy)
-        if ns is NumaStrategy.PIN_TO and numa_node < 0:
+        if ns is NumaStrategy.PIN_TO:
+            if numa_node < 0:
+                raise ValueError(
+                    f"numa_node must be >= 0 when numa_strategy=PIN_TO (got {numa_node})"
+                )
+        elif numa_node != -1:
             raise ValueError(
-                f"numa_node must be >= 0 when numa_strategy=PIN_TO (got {numa_node})"
+                f"numa_node must be -1 when numa_strategy={ns.name} (got {numa_node})"
             )
         shape_t = tuple(int(x) for x in sample_shape)
         if not shape_t:
@@ -572,9 +581,9 @@ class Config:
         set_(self, "sample_shape", shape_t)
         set_(self, "device", device)
         set_(self, "pop_timeout_s", pop_timeout_s)
-        set_(self, "enable_gds", bool(enable_gds))
+        set_(self, "enable_gds", None if enable_gds is None else bool(enable_gds))
         set_(self, "numa_strategy", ns)
-        set_(self, "numa_node", int(numa_node) if ns is NumaStrategy.PIN_TO else -1)
+        set_(self, "numa_node", int(numa_node))
 
 
 @dataclass(frozen=True, slots=True)
@@ -984,7 +993,7 @@ class Pipeline:
                 max_read_op_bytes=config.max_read_op_bytes,
                 sample_shape=tuple(config.sample_shape),
                 device=-1 if config.device is None else int(config.device),
-                enable_gds=config.enable_gds,
+                enable_gds=_gds_to_native(config.enable_gds),
                 numa_strategy=int(config.numa_strategy),
                 numa_node=config.numa_node,
             )

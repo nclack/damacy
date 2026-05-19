@@ -637,7 +637,7 @@ test_gds_parity_blosc_zstd(void)
   // GDS path.
   {
     struct damacy_config cfg = mk_cfg(root, 1, 64, 32);
-    cfg.tuning.enable_gds = 1;
+    cfg.tuning.enable_gds = DAMACY_GDS_ON;
     struct damacy* d = NULL;
     EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
     size_t got = 0;

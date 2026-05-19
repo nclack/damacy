@@ -46,6 +46,12 @@ NUMA_AUTO: Final[int]
 NUMA_DISABLED: Final[int]
 NUMA_PIN_TO: Final[int]
 
+# ---- damacy_gds_mode integers -------------------------------------------
+
+GDS_AUTO: Final[int]
+GDS_ON: Final[int]
+GDS_OFF: Final[int]
+
 # ---- exceptions ---------------------------------------------------------
 
 class DamacyError(RuntimeError):
@@ -136,7 +142,7 @@ class Pipeline:
         device: int = -1,
         host_buffer_waves: int = 0,
         max_read_op_bytes: int = 0,
-        enable_gds: bool = False,
+        enable_gds: int = GDS_AUTO,
         numa_strategy: int = NUMA_AUTO,
         numa_node: int = -1,
         bypass_decode: bool = False,

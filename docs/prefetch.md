@@ -20,7 +20,7 @@ Both patterns below do — they hand a CUDA event (or stream) to
 `Batch.release(event=...)`, and damacy waits on it before reusing
 the slot.
 
-## Pattern B — zero-copy with deferred release (preferred)
+## Deferred release (preferred)
 
 No D2D copy. The batch handle is held for the duration of the
 training step; release happens after fwd/bwd has been enqueued on
@@ -42,12 +42,19 @@ batch.release(event=torch.cuda.current_stream())  # no host sync
 caller's stream and tells damacy to wait on it before re-assembling
 into the slot's buffer. The host returns immediately.
 
-Reach for Pattern A instead if you need to free damacy's slot
-before your training step finishes — for example if you're chaining
-many small steps per batch and want maximum overlap on slot reuse,
-or if the consumer can't safely hold the slot for the whole step.
+`torch.cuda.current_stream()` returns the per-thread currently-active
+stream on the current device. By default that's the device's default
+stream; inside a `with torch.cuda.stream(s):` block it returns `s`.
+Call it outside any such block (as above) to capture the stream the
+training step is enqueued on.
 
-## Pattern A — copy onto a dedicated stream
+Reach for the dedicated-copy-stream pattern below instead if you
+need to free damacy's slot before your training step finishes — for
+example if you're chaining many small steps per batch and want
+maximum overlap on slot reuse, or if the consumer can't safely hold
+the slot for the whole step.
+
+## Dedicated copy stream
 
 Use a side stream for the D2D copy so the main stream's fwd/bwd
 overlap with it, and release damacy's slot as soon as the copy is
@@ -79,7 +86,8 @@ pressure.
 
 The fix is to allocate outside the stream block (so the allocator
 uses the default pool) and only the `.copy_` call inside it. This
-is the single most common foot-gun with Pattern A.
+is the single most common foot-gun with the dedicated-stream
+pattern.
 
 ## `release(event=...)` accepts
 

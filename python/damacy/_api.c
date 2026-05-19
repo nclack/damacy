@@ -725,13 +725,13 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   int device = -1;
   unsigned int host_buffer_waves = 0;
   unsigned long long max_read_op_bytes = 0;
-  int enable_gds = 0;
+  int enable_gds = DAMACY_GDS_AUTO;
   int numa_strategy = DAMACY_NUMA_AUTO;
   int numa_node = -1;
   int bypass_decode = 0;
   if (!PyArg_ParseTupleAndKeywords(args,
                                    kw,
-                                   "IIIIIOIKO|iIKpiip",
+                                   "IIIIIOIKO|iIKiiip",
                                    kws,
                                    &batch_size,
                                    &lookahead,
@@ -768,7 +768,7 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
       .max_read_op_bytes = (uint64_t)max_read_op_bytes,
       .max_gpu_memory_bytes = (uint64_t)max_gpu_bytes,
       .host_buffer_waves = (uint8_t)host_buffer_waves,
-      .enable_gds = (uint8_t)enable_gds,
+      .enable_gds = (enum damacy_gds_mode)enable_gds,
       .numa_strategy = (enum damacy_numa_strategy)numa_strategy,
       .numa_node = numa_node,
     },
@@ -1154,6 +1154,13 @@ api_register_types(PyObject* m)
   if (PyModule_AddIntConstant(m, "NUMA_DISABLED", DAMACY_NUMA_DISABLED) < 0)
     return -1;
   if (PyModule_AddIntConstant(m, "NUMA_PIN_TO", DAMACY_NUMA_PIN_TO) < 0)
+    return -1;
+
+  if (PyModule_AddIntConstant(m, "GDS_AUTO", DAMACY_GDS_AUTO) < 0)
+    return -1;
+  if (PyModule_AddIntConstant(m, "GDS_ON", DAMACY_GDS_ON) < 0)
+    return -1;
+  if (PyModule_AddIntConstant(m, "GDS_OFF", DAMACY_GDS_OFF) < 0)
     return -1;
   return 0;
 }

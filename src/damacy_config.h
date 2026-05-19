@@ -30,9 +30,9 @@ resolve_max_read_op_bytes(const struct damacy_config* cfg);
 uint8_t
 resolve_host_buffer_waves(const struct damacy_config* cfg);
 
-// cfg->tuning.enable_gds OR env DAMACY_GDS_ENABLE=1. damacy_create
-// rejects with DAMACY_INVAL when this resolves to 1 but libcufile.so.0
-// is not loadable / cuFileDriverOpen fails.
+// Explicit config (ON/OFF) wins; AUTO defers to DAMACY_GDS_ENABLE=1.
+// damacy_create rejects with DAMACY_INVAL when this resolves to 1 but
+// libcufile.so.0 is not loadable / cuFileDriverOpen fails.
 uint8_t
 resolve_enable_gds(const struct damacy_config* cfg);
 
