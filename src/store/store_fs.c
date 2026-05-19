@@ -125,6 +125,16 @@ store_fs_release(struct store_fs* fs, struct lru_entry* pin)
   platform_mutex_unlock(fs->cache_mu);
 }
 
+void
+store_fs_stats_get(struct store_fs* fs, struct lru_stats* out)
+{
+  if (!out)
+    return;
+  platform_mutex_lock(fs->cache_mu);
+  lru_stats_get(fs ? fs->fd_cache : NULL, out);
+  platform_mutex_unlock(fs->cache_mu);
+}
+
 struct fs_read_job
 {
   struct store_fs* fs;

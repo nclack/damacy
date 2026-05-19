@@ -13,6 +13,7 @@
 
 struct lru;
 struct lru_entry;
+struct lru_stats;
 
 struct store_fs
 {
@@ -31,3 +32,6 @@ store_fs_acquire(struct store_fs* fs,
 
 void
 store_fs_release(struct store_fs* fs, struct lru_entry* pin);
+
+void
+store_fs_stats_get(struct store_fs* fs, struct lru_stats* out);
