@@ -1015,7 +1015,7 @@ bind_slot_to_wave(struct wave_pool* wp, struct damacy_wave* wave, int slot_idx)
 }
 
 enum damacy_status
-wave_pool_advance(struct wave_pool* wp)
+wave_pool_advance(struct wave_pool* wp, int* changed)
 {
   // Pass 1: SLOT_IO → SLOT_READY when IO completes. Fill-only waves
   // (is_fill_wave) skip the IO query — no submission was made.
@@ -1027,6 +1027,7 @@ wave_pool_advance(struct wave_pool* wp)
     if (ready) {
       hs->io_ms = platform_toc(&hs->io_clock) * 1000.0f;
       hs->state = SLOT_READY;
+      *changed = 1;
     }
   }
 
@@ -1041,6 +1042,7 @@ wave_pool_advance(struct wave_pool* wp)
     enum damacy_status s = bind_slot_to_wave(wp, wave, rs);
     if (s != DAMACY_OK)
       return s;
+    *changed = 1;
   }
 
   // Pass 3: drive wave state machine. Release slots on bulk_h2d_end
@@ -1058,6 +1060,7 @@ wave_pool_advance(struct wave_pool* wp)
             slot_release(&wp->slots[wave->bound_slot]);
             wave->bound_slot = -1;
             wave->host_slab = NULL;
+            *changed = 1;
           } else if (qb != CUDA_ERROR_NOT_READY) {
             return DAMACY_CUDA;
           }
@@ -1073,6 +1076,7 @@ wave_pool_advance(struct wave_pool* wp)
           enum damacy_status s = kick_compute(wp, wave);
           if (s != DAMACY_OK)
             return s;
+          *changed = 1;
         } else if (qe != CUDA_ERROR_NOT_READY) {
           return DAMACY_CUDA;
         }
@@ -1083,6 +1087,7 @@ wave_pool_advance(struct wave_pool* wp)
           struct wave_outcome o = finalize_wave(wp, wave);
           batch_slot_consume_chunks(&wp->pool->slots[o.batch_pool_slot],
                                     o.n_chunks_consumed);
+          *changed = 1;
           if (o.status != DAMACY_OK)
             return o.status;
         } else if (qe != CUDA_ERROR_NOT_READY) {

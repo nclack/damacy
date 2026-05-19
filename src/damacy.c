@@ -330,9 +330,9 @@ plan_commit(struct damacy* self,
 // Drains lookahead-planned batches into free host_slab_slots, planning
 // a fresh batch when no FILLING batch has chunks left to peel. Stops
 // when there are no free slots, no batches with work, and no room to
-// plan more.
+// plan more. *changed: OR-set on any plan_commit / peel_commit.
 static enum damacy_status
-kick_peel_into_free_slots(struct damacy* self)
+kick_peel_into_free_slots(struct damacy* self, int* changed)
 {
   for (;;) {
     int target_slot = find_filling_slot_with_work(&self->batch_pool);
@@ -351,6 +351,7 @@ kick_peel_into_free_slots(struct damacy* self)
       enum damacy_status rs = plan_run(self, (uint16_t)free_slot, &plan_ms);
       scheduler_lock(self->sched);
       s = plan_commit(self, (uint16_t)free_slot, rs, plan_ms);
+      *changed = 1;
       if (s != DAMACY_OK)
         return s;
       continue;
@@ -368,6 +369,7 @@ kick_peel_into_free_slots(struct damacy* self)
     struct store_event ev = wave_pool_peel_submit(&self->wave_pool, &t);
     scheduler_lock(self->sched);
     enum damacy_status s = wave_pool_peel_commit(&self->wave_pool, &t, ev);
+    *changed = 1;
     damacy_nvtx_range_pop();
     if (s != DAMACY_OK)
       return s;
@@ -380,7 +382,8 @@ kick_peel_into_free_slots(struct damacy* self)
 // --- scheduler ------------------------------------------------------------
 
 // One scheduler tick, under scheduler_lock. Lazy ctx push on first call.
-// Always returns 1 to broadcast — wakeups are cheap and pop re-checks.
+// Returns 1 only on a real slot/wave/batch/plan transition so the worker
+// skips pthread_cond_broadcast on the (very common) idle tick.
 static int
 damacy_scheduler_step(void* arg)
 {
@@ -391,15 +394,19 @@ damacy_scheduler_step(void* arg)
     self->worker_ctx_pushed = 1;
   }
   self->stats.worker_steps++;
+  // Wake any pop waiter so it can observe the latched error.
   if (self->failed_status != DAMACY_OK)
     return 1;
 
-  enum damacy_status r = wave_pool_advance(&self->wave_pool);
+  int changed = 0;
+  enum damacy_status r = wave_pool_advance(&self->wave_pool, &changed);
   if (r == DAMACY_OK && self->failed_status == DAMACY_OK)
-    r = kick_peel_into_free_slots(self);
-  if (r != DAMACY_OK && self->failed_status == DAMACY_OK)
+    r = kick_peel_into_free_slots(self, &changed);
+  if (r != DAMACY_OK && self->failed_status == DAMACY_OK) {
     self->failed_status = r;
-  return 1;
+    return 1;
+  }
+  return changed;
 }
 
 // --- public API: create / destroy ----------------------------------------
@@ -568,16 +575,16 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
       goto Fail;
     gpu_budget_commit(self->budget, predicted.total);
     log_debug("damacy: resolved geometry from max_gpu_memory_bytes=%llu "
-             "(pool_reserve=%llu, resolver_budget=%llu): "
-             "host_slab_per_wave=%llu dev_decompressed_per_wave=%llu "
-             "initial_nvcomp_temp=%llu predicted_total=%llu",
-             (unsigned long long)max_gpu,
-             (unsigned long long)pool_reserve,
-             (unsigned long long)resolver_budget,
-             (unsigned long long)sizing.host_slab_per_wave,
-             (unsigned long long)sizing.dev_decompressed_per_wave,
-             (unsigned long long)predicted.nvcomp_temp,
-             (unsigned long long)predicted.total);
+              "(pool_reserve=%llu, resolver_budget=%llu): "
+              "host_slab_per_wave=%llu dev_decompressed_per_wave=%llu "
+              "initial_nvcomp_temp=%llu predicted_total=%llu",
+              (unsigned long long)max_gpu,
+              (unsigned long long)pool_reserve,
+              (unsigned long long)resolver_budget,
+              (unsigned long long)sizing.host_slab_per_wave,
+              (unsigned long long)sizing.dev_decompressed_per_wave,
+              (unsigned long long)predicted.nvcomp_temp,
+              (unsigned long long)predicted.total);
     // Resolver guarantees this fits; assert defensively in case the
     // accounting drifts. A breach here is a bug, not user input.
     if (gpu_budget_committed(self->budget) > gpu_budget_max(self->budget)) {
