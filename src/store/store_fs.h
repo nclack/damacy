@@ -14,6 +14,7 @@
 struct lru;
 struct lru_entry;
 struct lru_stats;
+struct pool;
 
 struct store_fs
 {
@@ -23,6 +24,8 @@ struct store_fs
 
   struct platform_mutex* cache_mu;
   struct lru* fd_cache;
+
+  struct pool* job_pool;
 };
 
 platform_file*
