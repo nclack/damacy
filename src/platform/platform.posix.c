@@ -5,6 +5,7 @@
 #include <pthread.h>
 #include <sched.h>
 #include <stdlib.h>
+#include <sys/resource.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -268,4 +269,15 @@ const char*
 platform_getenv(const char* name)
 {
   return getenv(name);
+}
+
+uint64_t
+platform_max_open_files(void)
+{
+  struct rlimit r;
+  if (getrlimit(RLIMIT_NOFILE, &r) != 0)
+    return 0;
+  if (r.rlim_cur == RLIM_INFINITY)
+    return 0;
+  return (uint64_t)r.rlim_cur;
 }

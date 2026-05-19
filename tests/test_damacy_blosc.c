@@ -591,7 +591,7 @@ gds_runtime_available(void)
   char* root = mkdtemp(tmpl);
   if (!root)
     return 0;
-  struct store_fs_config sc = { .root = root, .nthreads = 1 };
+  struct store_fs_gds_config sc = { .root = root };
   struct store* s = store_fs_gds_create(&sc);
   int ok = (s != NULL);
   store_destroy(s);
@@ -637,7 +637,7 @@ test_gds_parity_blosc_zstd(void)
   // GDS path.
   {
     struct damacy_config cfg = mk_cfg(root, 1, 64, 32);
-    cfg.tuning.enable_gds = 1;
+    cfg.tuning.enable_gds = DAMACY_GDS_ON;
     struct damacy* d = NULL;
     EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
     size_t got = 0;

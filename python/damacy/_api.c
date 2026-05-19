@@ -708,6 +708,9 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                          "device",
                          "host_buffer_waves",
                          "max_read_op_bytes",
+                         "enable_gds",
+                         "numa_strategy",
+                         "numa_node",
                          "bypass_decode",
                          NULL };
   unsigned int batch_size = 0;
@@ -722,10 +725,13 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   int device = -1;
   unsigned int host_buffer_waves = 0;
   unsigned long long max_read_op_bytes = 0;
+  int enable_gds = DAMACY_GDS_AUTO;
+  int numa_strategy = DAMACY_NUMA_AUTO;
+  int numa_node = -1;
   int bypass_decode = 0;
   if (!PyArg_ParseTupleAndKeywords(args,
                                    kw,
-                                   "IIIIIOIKO|iIKp",
+                                   "IIIIIOIKO|iIKiiip",
                                    kws,
                                    &batch_size,
                                    &lookahead,
@@ -739,8 +745,25 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                                    &device,
                                    &host_buffer_waves,
                                    &max_read_op_bytes,
+                                   &enable_gds,
+                                   &numa_strategy,
+                                   &numa_node,
                                    &bypass_decode))
     return -1;
+
+  if (enable_gds != DAMACY_GDS_AUTO && enable_gds != DAMACY_GDS_ON &&
+      enable_gds != DAMACY_GDS_OFF) {
+    PyErr_Format(
+      PyExc_ValueError, "enable_gds out of range (got %d)", enable_gds);
+    return -1;
+  }
+  if (numa_strategy != DAMACY_NUMA_AUTO &&
+      numa_strategy != DAMACY_NUMA_DISABLED &&
+      numa_strategy != DAMACY_NUMA_PIN_TO) {
+    PyErr_Format(
+      PyExc_ValueError, "numa_strategy out of range (got %d)", numa_strategy);
+    return -1;
+  }
 
   enum damacy_dtype dt;
   if (parse_dtype(dtype_obj, &dt) != 0)
@@ -759,6 +782,9 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
       .max_read_op_bytes = (uint64_t)max_read_op_bytes,
       .max_gpu_memory_bytes = (uint64_t)max_gpu_bytes,
       .host_buffer_waves = (uint8_t)host_buffer_waves,
+      .enable_gds = (enum damacy_gds_mode)enable_gds,
+      .numa_strategy = (enum damacy_numa_strategy)numa_strategy,
+      .numa_node = numa_node,
     },
     .debug = { .bypass_decode = (uint8_t)(bypass_decode ? 1 : 0) },
   };
@@ -1004,7 +1030,10 @@ Pipeline_stats(PipelineObj* self, PyObject* Py_UNUSED(ignored))
     { "batches_truncated", st.batches_truncated },
     { "waves_emitted", st.waves_emitted },
     { "worker_steps", st.worker_steps },
+    { "chunks_planned", st.chunks_planned },
+    { "chunks_to_load", st.chunks_to_load },
     { "chunks_dispatched", st.chunks_dispatched },
+    { "reads_issued", st.reads_issued },
     { "gpu_bytes_committed", st.gpu_bytes_committed },
   };
   for (size_t i = 0; i < sizeof counters / sizeof counters[0]; ++i)
@@ -1132,6 +1161,20 @@ api_register_types(PyObject* m)
   if (PyModule_AddIntConstant(m, "DTYPE_F32", DAMACY_F32) < 0)
     return -1;
   if (PyModule_AddIntConstant(m, "DTYPE_BF16", DAMACY_BF16) < 0)
+    return -1;
+
+  if (PyModule_AddIntConstant(m, "NUMA_AUTO", DAMACY_NUMA_AUTO) < 0)
+    return -1;
+  if (PyModule_AddIntConstant(m, "NUMA_DISABLED", DAMACY_NUMA_DISABLED) < 0)
+    return -1;
+  if (PyModule_AddIntConstant(m, "NUMA_PIN_TO", DAMACY_NUMA_PIN_TO) < 0)
+    return -1;
+
+  if (PyModule_AddIntConstant(m, "GDS_AUTO", DAMACY_GDS_AUTO) < 0)
+    return -1;
+  if (PyModule_AddIntConstant(m, "GDS_ON", DAMACY_GDS_ON) < 0)
+    return -1;
+  if (PyModule_AddIntConstant(m, "GDS_OFF", DAMACY_GDS_OFF) < 0)
     return -1;
   return 0;
 }

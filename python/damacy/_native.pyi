@@ -36,6 +36,18 @@ STATUS_SHUTDOWN: Final[int]
 DTYPE_F32: Final[int]
 DTYPE_BF16: Final[int]
 
+# ---- damacy_numa_strategy integers --------------------------------------
+
+NUMA_AUTO: Final[int]
+NUMA_DISABLED: Final[int]
+NUMA_PIN_TO: Final[int]
+
+# ---- damacy_gds_mode integers -------------------------------------------
+
+GDS_AUTO: Final[int]
+GDS_ON: Final[int]
+GDS_OFF: Final[int]
+
 # ---- exceptions ---------------------------------------------------------
 
 class DamacyError(RuntimeError):
@@ -122,8 +134,14 @@ class Pipeline:
         dtype: str | int,
         max_chunk_uncompressed_bytes: int,
         max_gpu_memory_bytes: int,
+        sample_shape: tuple[int, ...],
         device: int = -1,
         host_buffer_waves: int = 0,
+        max_read_op_bytes: int = 0,
+        enable_gds: int = GDS_AUTO,
+        numa_strategy: int = NUMA_AUTO,
+        numa_node: int = -1,
+        bypass_decode: bool = False,
     ) -> None: ...
     @property
     def device(self) -> int: ...

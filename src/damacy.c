@@ -61,7 +61,8 @@ struct damacy
   // across wave_pool, batch_pool, and the observe-and-grow paths.
   struct gpu_budget* budget;
 
-  struct store* store;
+  struct store* store_host;
+  struct store* store_gds;
   struct zarr_meta_cache* meta_cache;
   struct zarr_shard_cache* shard_cache;
   struct planner* planner;
@@ -447,8 +448,10 @@ destroy_inner(struct damacy* self, int cuda_skip)
   self->shard_cache = NULL;
   zarr_meta_cache_destroy(self->meta_cache);
   self->meta_cache = NULL;
-  store_destroy(self->store);
-  self->store = NULL;
+  store_destroy(self->store_gds);
+  self->store_gds = NULL;
+  store_destroy(self->store_host);
+  self->store_host = NULL;
   gpu_budget_destroy(self->budget);
   self->budget = NULL;
 }
@@ -617,22 +620,32 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
 
   // Sample.uri is absolute; fs store joins root+key, so empty root is a
   // pass-through.
-  struct store_fs_config sc = {
-    .root = "",
-    .nthreads = (int)cfg->tuning.n_io_threads,
-    .affinity = &self->numa,
-  };
-  self->store = want_gds ? store_fs_gds_create(&sc) : store_fs_create(&sc);
-  if (!self->store) {
-    s = want_gds ? DAMACY_INVAL : DAMACY_OOM;
-    goto Fail;
+  {
+    struct store_fs_config sc = {
+      .root = "",
+      .nthreads = (int)cfg->tuning.n_io_threads,
+      .affinity = &self->numa,
+    };
+    self->store_host = store_fs_create(&sc);
+    CHECK(Fail, self->store_host);
+  }
+  if (want_gds) {
+    struct store_fs_gds_config sc = {
+      .root = "",
+      .fd_cache_capacity = 0,
+    };
+    self->store_gds = store_fs_gds_create(&sc);
+    if (!self->store_gds) {
+      s = DAMACY_INVAL;
+      goto Fail;
+    }
   }
 
   self->meta_cache =
-    zarr_meta_cache_create(self->store, cfg->tuning.n_zarrs_meta_cache);
+    zarr_meta_cache_create(self->store_host, cfg->tuning.n_zarrs_meta_cache);
   CHECK(Fail, self->meta_cache);
   self->shard_cache =
-    zarr_shard_cache_create(self->store, cfg->tuning.n_shards_meta_cache);
+    zarr_shard_cache_create(self->store_host, cfg->tuning.n_shards_meta_cache);
   CHECK(Fail, self->shard_cache);
 
   struct planner_config pcfg = {
@@ -657,7 +670,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     numa_scope_enter(&self->numa, &saved_aff);
     int wp_rc = wave_pool_init(&self->wave_pool,
                                &self->batch_pool,
-                               self->store,
+                               want_gds ? self->store_gds : self->store_host,
                                &self->stats,
                                cfg->dtype,
                                resolve_host_buffer_waves(cfg),

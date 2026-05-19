@@ -23,8 +23,10 @@ target_link_libraries(test_fixture PUBLIC log crc32c zarr)
 # OK/FAIL lines and exit nonzero on failure; ctest captures the exit
 # code. add_damacy_test lives in cmake/Helpers.cmake.
 add_damacy_test(test_json json log)
+add_damacy_test(test_damacy_config damacy_config log)
 add_damacy_test(test_lru lru hash)
 add_damacy_test(test_io_queue io_queue log)
+add_damacy_test(test_store_fs store lru hash log)
 add_damacy_test(test_zarr_meta_cache zarr_meta_cache zarr store test_fixture)
 add_damacy_test(test_zarr_shard_cache zarr_shard_cache zarr store test_fixture)
 
@@ -65,6 +67,9 @@ if(NOT DAMACY_FUZZ)
     add_damacy_test(test_gpu_budget wave_budget log CUDA::cuda_driver)
     add_damacy_test(test_assemble assemble CUDA::cuda_driver CUDA::cudart_static)
     add_damacy_test(test_decoder decoder CUDA::cuda_driver)
+    if(DAMACY_ENABLE_GDS)
+        add_damacy_test(test_store_fs_gds store lru hash log CUDA::cuda_driver)
+    endif()
 endif()
 
 if(DAMACY_FUZZ)

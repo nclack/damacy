@@ -388,6 +388,88 @@ def test_config_validates_eagerly():
         Config(batch_size=1, sample_shape=(), max_gpu_memory_bytes=gpu)
     with pytest.raises(ValueError, match="sample_shape"):
         Config(batch_size=1, sample_shape=(8, 0), max_gpu_memory_bytes=gpu)
+    with pytest.raises(ValueError, match="max_read_op_bytes"):
+        Config(
+            batch_size=1,
+            sample_shape=ss,
+            max_read_op_bytes=-1,
+            max_gpu_memory_bytes=gpu,
+        )
+    with pytest.raises(ValueError, match="numa_node"):
+        Config(
+            batch_size=1,
+            sample_shape=ss,
+            max_gpu_memory_bytes=gpu,
+            numa_strategy="pin_to",
+        )
+    with pytest.raises(ValueError, match="numa_node"):
+        Config(
+            batch_size=1,
+            sample_shape=ss,
+            max_gpu_memory_bytes=gpu,
+            numa_strategy="auto",
+            numa_node=3,
+        )
+
+
+def test_config_numa_defaults_and_coercion():
+    cfg = _base_config()
+    assert cfg.numa_strategy is damacy.NumaStrategy.AUTO
+    assert cfg.numa_node == -1
+    cfg2 = dataclasses.replace(cfg, numa_strategy=damacy.NumaStrategy.DISABLED)
+    assert cfg2.numa_strategy is damacy.NumaStrategy.DISABLED
+    cfg3 = dataclasses.replace(cfg, numa_strategy="pin_to", numa_node=0)
+    assert cfg3.numa_strategy is damacy.NumaStrategy.PIN_TO
+    assert cfg3.numa_node == 0
+
+
+def test_config_enable_gds_tri_state():
+    cfg = _base_config()
+    assert cfg.enable_gds is None  # AUTO default
+    assert dataclasses.replace(cfg, enable_gds=True).enable_gds is True
+    assert dataclasses.replace(cfg, enable_gds=False).enable_gds is False
+
+
+def test_pipeline_accepts_new_config_kwargs(tiny_zarr):
+    _ = tiny_zarr
+    cfg = dataclasses.replace(
+        _base_config(),
+        enable_gds=False,
+        numa_strategy=damacy.NumaStrategy.DISABLED,
+    )
+    with Pipeline(cfg) as d:
+        assert d is not None
+
+
+def test_pipeline_explicit_gds_off_overrides_env(tiny_zarr, monkeypatch):
+    _ = tiny_zarr
+    monkeypatch.setenv("DAMACY_GDS_ENABLE", "1")
+    cfg = dataclasses.replace(_base_config(), enable_gds=False)
+    with Pipeline(cfg) as d:
+        assert d is not None
+
+
+def test_native_pipeline_rejects_out_of_range_enums(tiny_zarr):
+    _ = tiny_zarr
+
+    def _build(**override):
+        return _native.Pipeline(
+            batch_size=1,
+            lookahead_batches=2,
+            n_io_threads=1,
+            n_zarrs_meta_cache=4,
+            n_shards_meta_cache=4,
+            dtype=_native.DTYPE_F32,
+            max_chunk_uncompressed_bytes=0,
+            max_gpu_memory_bytes=1 << 30,
+            sample_shape=(8, 16),
+            **override,
+        )
+
+    with pytest.raises(ValueError, match="enable_gds"):
+        _build(enable_gds=99)
+    with pytest.raises(ValueError, match="numa_strategy"):
+        _build(numa_strategy=99)
 
 
 def test_config_dtype_coerced():
@@ -425,6 +507,19 @@ def test_stats_gpu_bytes_grows_after_first_pop(tiny_zarr):
             pass
         after = d.stats().gpu_bytes_committed
         assert after > before
+
+
+def test_stats_io_planner_counters_advance(tiny_zarr):
+    uri = tiny_zarr
+    with Pipeline(_base_config()) as d:
+        d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
+        with d.pop():
+            pass
+        s = d.stats()
+        assert s.chunks_planned > 0
+        assert s.chunks_to_load > 0
+        assert s.reads_issued > 0
+        assert s.chunks_to_load <= s.chunks_planned
 
 
 # ---- explicit flush / stats_reset --------------------------------------

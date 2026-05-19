@@ -28,9 +28,11 @@ extern "C"
   {
     const char* root; // root directory for keys; not owned
     int nthreads;     // io_queue worker count (>= 1)
-    // Optional NUMA placement plan for the io_queue worker threads.
     // NULL (or node<0) skips affinity.
     const struct numa_resolved* affinity;
+    // 0 → library default. Size against RLIMIT_NOFILE minus headroom for
+    // non-cache fds; the cache holds one fd per entry.
+    uint32_t fd_cache_capacity;
   };
 
   // Create a filesystem-backed store (host-staging only). Returns NULL on

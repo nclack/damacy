@@ -80,6 +80,9 @@ documented only via its `.pyi` stub.
   `max_gpu_memory_bytes`, what it covers, and how to pick a value.
 - [Distributed](distributed.md) — device binding model and torchrun /
   DDP examples.
+- [Async prefetch](prefetch.md) — zero-copy with deferred release
+  for training loops that prefetch the next batch on a background
+  thread.
 - [Troubleshooting](troubleshooting.md) — common errors
   (`PoolStarved`, `BudgetExceeded`, missing CUDA context) and what
   to check first.
