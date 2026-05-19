@@ -61,7 +61,8 @@ struct damacy
   // across wave_pool, batch_pool, and the observe-and-grow paths.
   struct gpu_budget* budget;
 
-  struct store* store;
+  struct store* store_host;
+  struct store* store_gds;
   struct zarr_meta_cache* meta_cache;
   struct zarr_shard_cache* shard_cache;
   struct planner* planner;
@@ -308,11 +309,13 @@ InvalidArg:
   return DAMACY_INVAL;
 }
 
+// *changed (nullable; flush passes NULL): OR-set on every BATCH transition.
 static enum damacy_status
 plan_commit(struct damacy* self,
             uint16_t slot_idx,
             enum damacy_status run_status,
-            float elapsed_ms)
+            float elapsed_ms,
+            int* changed)
 {
   metric_record(&self->stats.plan, elapsed_ms, 0, 0);
   struct damacy_batch_slot* slot = &self->batch_pool.slots[slot_idx];
@@ -323,6 +326,8 @@ plan_commit(struct damacy* self,
     slot->n_samples = 0;
     slot->deferred_release_pending = 0;
     self->failed_status = run_status;
+    if (changed)
+      *changed = 1;
     return run_status;
   }
   slot->n_chunks_dispatched = 0;
@@ -333,6 +338,8 @@ plan_commit(struct damacy* self,
   self->stats.chunks_planned += slot->n_chunks;
   self->stats.chunks_to_load += slot->n_chunks_to_load;
   self->stats.reads_issued += slot->n_loads_issued;
+  if (changed)
+    *changed = 1;
 
   if (slot->n_chunks == 0) {
     // Degenerate batch: zero the output and skip to READY. cuMemsetD8
@@ -360,7 +367,7 @@ plan_commit(struct damacy* self,
 // when there are no free slots, no batches with work, and no room to
 // plan more.
 static enum damacy_status
-kick_peel_into_free_slots(struct damacy* self)
+kick_peel_into_free_slots(struct damacy* self, int* changed)
 {
   for (;;) {
     int target_slot = find_filling_slot_with_work(&self->batch_pool);
@@ -378,7 +385,7 @@ kick_peel_into_free_slots(struct damacy* self)
       float plan_ms = 0.f;
       enum damacy_status rs = plan_run(self, (uint16_t)free_slot, &plan_ms);
       scheduler_lock(self->sched);
-      s = plan_commit(self, (uint16_t)free_slot, rs, plan_ms);
+      s = plan_commit(self, (uint16_t)free_slot, rs, plan_ms, changed);
       if (s != DAMACY_OK)
         return s;
       continue;
@@ -395,7 +402,8 @@ kick_peel_into_free_slots(struct damacy* self)
     scheduler_unlock(self->sched);
     struct store_event ev = wave_pool_peel_submit(&self->wave_pool, &t);
     scheduler_lock(self->sched);
-    enum damacy_status s = wave_pool_peel_commit(&self->wave_pool, &t, ev);
+    enum damacy_status s =
+      wave_pool_peel_commit(&self->wave_pool, &t, ev, changed);
     damacy_nvtx_range_pop();
     if (s != DAMACY_OK)
       return s;
@@ -408,7 +416,9 @@ kick_peel_into_free_slots(struct damacy* self)
 // --- scheduler ------------------------------------------------------------
 
 // One scheduler tick, under scheduler_lock. Lazy ctx push on first call.
-// Always returns 1 to broadcast — wakeups are cheap and pop re-checks.
+// *changed contract (authoritative): every transition site
+// (wave_pool_advance, plan_commit, wave_pool_peel_commit) OR-sets it on
+// a real state transition; the worker broadcasts iff non-zero.
 static int
 damacy_scheduler_step(void* arg)
 {
@@ -419,15 +429,19 @@ damacy_scheduler_step(void* arg)
     self->worker_ctx_pushed = 1;
   }
   self->stats.worker_steps++;
+  // Wake any pop waiter so it can observe the latched error.
   if (self->failed_status != DAMACY_OK)
     return 1;
 
-  enum damacy_status r = wave_pool_advance(&self->wave_pool);
+  int changed = 0;
+  enum damacy_status r = wave_pool_advance(&self->wave_pool, &changed);
   if (r == DAMACY_OK && self->failed_status == DAMACY_OK)
-    r = kick_peel_into_free_slots(self);
-  if (r != DAMACY_OK && self->failed_status == DAMACY_OK)
+    r = kick_peel_into_free_slots(self, &changed);
+  if (r != DAMACY_OK && self->failed_status == DAMACY_OK) {
     self->failed_status = r;
-  return 1;
+    return 1;
+  }
+  return changed;
 }
 
 // --- public API: create / destroy ----------------------------------------
@@ -462,8 +476,10 @@ destroy_inner(struct damacy* self, int cuda_skip)
   self->shard_cache = NULL;
   zarr_meta_cache_destroy(self->meta_cache);
   self->meta_cache = NULL;
-  store_destroy(self->store);
-  self->store = NULL;
+  store_destroy(self->store_gds);
+  self->store_gds = NULL;
+  store_destroy(self->store_host);
+  self->store_host = NULL;
   gpu_budget_destroy(self->budget);
   self->budget = NULL;
 }
@@ -632,22 +648,32 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
 
   // Sample.uri is absolute; fs store joins root+key, so empty root is a
   // pass-through.
-  struct store_fs_config sc = {
-    .root = "",
-    .nthreads = (int)cfg->tuning.n_io_threads,
-    .affinity = &self->numa,
-  };
-  self->store = want_gds ? store_fs_gds_create(&sc) : store_fs_create(&sc);
-  if (!self->store) {
-    s = want_gds ? DAMACY_INVAL : DAMACY_OOM;
-    goto Fail;
+  {
+    struct store_fs_config sc = {
+      .root = "",
+      .nthreads = (int)cfg->tuning.n_io_threads,
+      .affinity = &self->numa,
+    };
+    self->store_host = store_fs_create(&sc);
+    CHECK(Fail, self->store_host);
+  }
+  if (want_gds) {
+    struct store_fs_gds_config sc = {
+      .root = "",
+      .fd_cache_capacity = 0,
+    };
+    self->store_gds = store_fs_gds_create(&sc);
+    if (!self->store_gds) {
+      s = DAMACY_INVAL;
+      goto Fail;
+    }
   }
 
   self->meta_cache = zarr_meta_cache_create(
-    self->store, &self->uris, cfg->tuning.n_zarrs_meta_cache);
+    self->store_host, &self->uris, cfg->tuning.n_zarrs_meta_cache);
   CHECK(Fail, self->meta_cache);
   self->shard_cache = zarr_shard_cache_create(
-    self->store, &self->uris, cfg->tuning.n_shards_meta_cache);
+    self->store_host, &self->uris, cfg->tuning.n_shards_meta_cache);
   CHECK(Fail, self->shard_cache);
 
   struct planner_config pcfg = {
@@ -672,7 +698,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     numa_scope_enter(&self->numa, &saved_aff);
     int wp_rc = wave_pool_init(&self->wave_pool,
                                &self->batch_pool,
-                               self->store,
+                               want_gds ? self->store_gds : self->store_host,
                                &self->stats,
                                cfg->dtype,
                                resolve_host_buffer_waves(cfg),
@@ -996,7 +1022,7 @@ damacy_flush(struct damacy* self)
     float plan_ms = 0.f;
     enum damacy_status rs = plan_run(self, (uint16_t)free_slot, &plan_ms);
     scheduler_lock(self->sched);
-    r = plan_commit(self, (uint16_t)free_slot, rs, plan_ms);
+    r = plan_commit(self, (uint16_t)free_slot, rs, plan_ms, NULL);
     if (r != DAMACY_OK)
       goto Done;
     self->stats.batches_truncated++;

@@ -39,6 +39,15 @@ extern "C"
     DAMACY_NUMA_PIN_TO,
   };
 
+  // AUTO defers to env DAMACY_GDS_ENABLE=1; ON/OFF override env. AUTO=0
+  // so designated-init callers get the env-controlled default.
+  enum damacy_gds_mode
+  {
+    DAMACY_GDS_AUTO = 0,
+    DAMACY_GDS_ON,
+    DAMACY_GDS_OFF,
+  };
+
   enum damacy_status
   {
     DAMACY_OK = 0,
@@ -120,8 +129,8 @@ extern "C"
     int numa_node;
     // GPUDirect Storage: cuFile reads compressed bytes straight to GPU.
     // Requires libcufile.so.0 and a successful cuFileDriverOpen at
-    // damacy_create. DAMACY_GDS_ENABLE=1 in the env forces this on.
-    uint8_t enable_gds;
+    // damacy_create.
+    enum damacy_gds_mode enable_gds;
   };
 
   // Measurement/profiling switches. None of these should be set in

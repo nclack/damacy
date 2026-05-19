@@ -63,6 +63,9 @@ extern "C"
 
   const char* platform_getenv(const char* name);
 
+  // Soft RLIMIT_NOFILE (or equivalent). 0 = unknown / unbounded.
+  uint64_t platform_max_open_files(void);
+
 #ifdef __cplusplus
 }
 #endif

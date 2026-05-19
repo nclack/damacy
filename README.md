@@ -83,6 +83,11 @@ with damacy.Pipeline(cfg) as p:
             ...                        # train step
 ```
 
+For training loops that prefetch the next batch on a background
+thread, see [Async prefetch](https://nclack.github.io/damacy/prefetch/)
+— zero-copy with deferred release, plus the dedicated-copy-stream
+variant.
+
 ## Zarr support
 
 Damacy reads zarr v3 (sharded and non-sharded). What's recognized today:
@@ -112,12 +117,13 @@ Damacy links only the essentials. Optional features dlopen their backends lazily
 |---|---|---|---|
 | `libcuda.so.1` | always | nothing — damacy cannot run without it | NVIDIA driver install (`/run/opengl-driver/lib`, `/usr/lib/x86_64-linux-gnu`, …) |
 | `libnuma.so.1` | optional | NUMA pinning of pinned-host slabs + io_queue / scheduler threads (single-socket hosts: no effect) | `dlopen` via dynamic loader (`LD_LIBRARY_PATH`, `ld.so.cache`) |
-| `libcufile.so.0` | optional | `damacy_config.enable_gds = 1` — direct read of compressed chunks into device memory via NVIDIA GPUDirect Storage | `dlopen` via dynamic loader; ships with the CUDA toolkit and with nvidia-fs. Requires a build with `-DDAMACY_ENABLE_GDS=ON` (default OFF) |
+| `libcufile.so.0` | optional | `damacy_config.enable_gds = DAMACY_GDS_ON` — direct read of compressed chunks into device memory via NVIDIA GPUDirect Storage | `dlopen` via dynamic loader; ships with the CUDA toolkit and with nvidia-fs. Requires a build with `-DDAMACY_ENABLE_GDS=ON` (default OFF) |
 | `libmount.so.1`, `libudev.so.1` | required *if and only if* using GDS | cuFile dlopen's these at driver init even in compat mode | dynamic loader |
 
 GDS notes:
 
-- Build with `cmake -DDAMACY_ENABLE_GDS=ON` to link the cuFile backend. The default-OFF build still accepts `enable_gds = 1` but `damacy_create` returns `DAMACY_INVAL` (no silent fallback).
+- Build with `cmake -DDAMACY_ENABLE_GDS=ON` to link the cuFile backend. The default-OFF build still accepts `enable_gds = DAMACY_GDS_ON` but `damacy_create` returns `DAMACY_INVAL` (no silent fallback).
+- `enable_gds = DAMACY_GDS_AUTO` (default, the value from designated-init) defers to env `DAMACY_GDS_ENABLE=1`; explicit `DAMACY_GDS_ON` / `DAMACY_GDS_OFF` override the env.
 - On hosts without nvidia-fs, point `CUFILE_ENV_PATH_JSON` at a JSON with `{"properties":{"allow_compat_mode":true}}` to enable cuFile compat mode — reads go through cuFile's host-bounce buffer instead of DMA. Useful for correctness testing on consumer GPUs.
 - If libcufile can't be loaded or `cuFileDriverOpen` fails, `damacy_create` returns `DAMACY_INVAL`.
 
