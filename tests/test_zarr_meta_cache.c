@@ -6,6 +6,7 @@
 #include "store/store.h"
 #include "util/hash.h"
 #include "util/path_intern.h"
+#include "zarr/zarr_chunk_layout.h"
 #include "zarr/zarr_meta_cache.h"
 #include "zarr/zarr_metadata.h"
 
@@ -281,6 +282,71 @@ test_meta_cache_pointer_identity(void)
   return 0;
 }
 
+// A wrong hash on layout_get / layout_set misses silently (the bucket
+// is keyed by (hash, ptr)). Pin down the contract so a future
+// regression in the hash plumbing is loud.
+static int
+test_meta_cache_layout_hash_keying(void)
+{
+  char tmpl[] = "/tmp/damacy_meta_layout_hash_XXXXXX";
+  char* root = mkdtemp(tmpl);
+  EXPECT(root);
+
+  char path[512];
+  snprintf(path, sizeof path, "%s/foo", root);
+  EXPECT(mkdir(path, 0755) == 0);
+  snprintf(path, sizeof path, "%s/foo/zarr.json", root);
+  EXPECT(fixture_write_file(path, MINIMAL_ZARR_JSON) == 0);
+
+  struct store_fs_config sc = { .root = root, .nthreads = 1 };
+  struct store* store = store_fs_create(&sc);
+  EXPECT(store);
+
+  struct zarr_meta_cache* c = zarr_meta_cache_create(store, NULL, 4);
+  EXPECT(c);
+
+  uint64_t foo_hash = hash_fnv1a_str("foo");
+  uint64_t wrong_hash = foo_hash ^ 0xdeadbeefULL;
+
+  struct zarr_metadata m = { 0 };
+  EXPECT(zarr_meta_cache_get(c, "foo", foo_hash, &m) == DAMACY_OK);
+
+  struct chunk_layout cl = {
+    .codec_id = 1,
+    .typesize = 4,
+    .blocksize = 256,
+    .nbytes = 1024,
+    .nblocks = 4,
+    .shuffle = 1,
+  };
+  EXPECT(zarr_meta_cache_layout_set(c, "foo", foo_hash, &cl) == 0);
+
+  {
+    struct chunk_layout got = { 0 };
+    EXPECT(zarr_meta_cache_layout_get(c, "foo", foo_hash, &got) == 0);
+    EXPECT(got.typesize == 4);
+    EXPECT(got.blocksize == 256);
+  }
+
+  {
+    struct chunk_layout got = { 0 };
+    EXPECT(zarr_meta_cache_layout_get(c, "foo", wrong_hash, &got) != 0);
+  }
+
+  struct chunk_layout cl2 = { .typesize = 99 };
+  EXPECT(zarr_meta_cache_layout_set(c, "foo", wrong_hash, &cl2) != 0);
+  {
+    struct chunk_layout got = { 0 };
+    EXPECT(zarr_meta_cache_layout_get(c, "foo", foo_hash, &got) == 0);
+    EXPECT(got.typesize == 4);
+  }
+
+  zarr_meta_cache_destroy(c);
+  store_destroy(store);
+  fixture_rm_tree(root);
+  return 0;
+}
+
 int
 main(void)
 {
@@ -288,6 +354,7 @@ main(void)
   RUN(test_meta_cache_unsharded);
   RUN(test_meta_cache_index_start);
   RUN(test_meta_cache_pointer_identity);
+  RUN(test_meta_cache_layout_hash_keying);
   log_info("all tests passed");
   return 0;
 }
