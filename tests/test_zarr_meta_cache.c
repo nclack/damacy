@@ -4,6 +4,7 @@
 
 #include "fixture.h"
 #include "store/store.h"
+#include "util/path_intern.h"
 #include "zarr/zarr_meta_cache.h"
 #include "zarr/zarr_metadata.h"
 
@@ -95,7 +96,7 @@ test_meta_cache(void)
   struct store* store = store_fs_create(&sc);
   EXPECT(store);
 
-  struct zarr_meta_cache* c = zarr_meta_cache_create(store, 4);
+  struct zarr_meta_cache* c = zarr_meta_cache_create(store, NULL, 4);
   EXPECT(c);
 
   // First get: miss → load → return.
@@ -156,7 +157,7 @@ test_meta_cache_unsharded(void)
   struct store* store = store_fs_create(&sc);
   EXPECT(store);
 
-  struct zarr_meta_cache* c = zarr_meta_cache_create(store, 4);
+  struct zarr_meta_cache* c = zarr_meta_cache_create(store, NULL, 4);
   EXPECT(c);
 
   struct zarr_metadata m = { 0 };
@@ -193,7 +194,7 @@ test_meta_cache_index_start(void)
   struct store* store = store_fs_create(&sc);
   EXPECT(store);
 
-  struct zarr_meta_cache* c = zarr_meta_cache_create(store, 4);
+  struct zarr_meta_cache* c = zarr_meta_cache_create(store, NULL, 4);
   EXPECT(c);
 
   struct zarr_metadata m = { 0 };
@@ -207,6 +208,9 @@ test_meta_cache_index_start(void)
   return 0;
 }
 
+// Drives the cache through a path_intern so the ownership assert fires
+// on non-interned keys; verifies that re-interning the same string
+// produces a hit (same pointer) and a different string a miss.
 static int
 test_meta_cache_pointer_identity(void)
 {
@@ -219,39 +223,49 @@ test_meta_cache_pointer_identity(void)
   EXPECT(mkdir(path, 0755) == 0);
   snprintf(path, sizeof path, "%s/foo/zarr.json", root);
   EXPECT(fixture_write_file(path, MINIMAL_ZARR_JSON) == 0);
+  snprintf(path, sizeof path, "%s/bar", root);
+  EXPECT(mkdir(path, 0755) == 0);
+  snprintf(path, sizeof path, "%s/bar/zarr.json", root);
+  EXPECT(fixture_write_file(path, MINIMAL_ZARR_JSON) == 0);
 
   struct store_fs_config sc = { .root = root, .nthreads = 1 };
   struct store* store = store_fs_create(&sc);
   EXPECT(store);
 
-  struct zarr_meta_cache* c = zarr_meta_cache_create(store, 4);
+  struct path_intern uris = { 0 };
+  struct zarr_meta_cache* c = zarr_meta_cache_create(store, &uris, 4);
   EXPECT(c);
 
-  char* uri_a = strdup("foo");
-  char* uri_b = strdup("foo");
-  EXPECT(uri_a && uri_b);
-  EXPECT(uri_a != uri_b);
+  const char* foo_a = path_intern_acquire(&uris, "foo");
+  const char* foo_b = path_intern_acquire(&uris, "foo");
+  const char* bar = path_intern_acquire(&uris, "bar");
+  EXPECT(foo_a && foo_b && bar);
+  EXPECT(foo_a == foo_b);
+  EXPECT(foo_a != bar);
 
   struct zarr_metadata m = { 0 };
-  EXPECT(zarr_meta_cache_get(c, uri_a, &m) == DAMACY_OK);
+  EXPECT(zarr_meta_cache_get(c, foo_a, &m) == DAMACY_OK);
   struct zarr_meta_cache_stats st;
   zarr_meta_cache_stats_get(c, &st);
   EXPECT(st.counters.misses == 1);
   EXPECT(st.size == 1);
 
-  EXPECT(zarr_meta_cache_get(c, uri_b, &m) == DAMACY_OK);
-  zarr_meta_cache_stats_get(c, &st);
-  EXPECT(st.counters.misses == 2);
-  EXPECT(st.counters.hits == 0);
-  EXPECT(st.size == 2);
-
-  EXPECT(zarr_meta_cache_get(c, uri_a, &m) == DAMACY_OK);
+  EXPECT(zarr_meta_cache_get(c, foo_b, &m) == DAMACY_OK);
   zarr_meta_cache_stats_get(c, &st);
   EXPECT(st.counters.hits == 1);
+  EXPECT(st.counters.misses == 1);
+  EXPECT(st.size == 1);
 
-  free(uri_a);
-  free(uri_b);
+  EXPECT(zarr_meta_cache_get(c, bar, &m) == DAMACY_OK);
+  zarr_meta_cache_stats_get(c, &st);
+  EXPECT(st.counters.misses == 2);
+  EXPECT(st.size == 2);
+
+  path_intern_release(&uris, foo_a);
+  path_intern_release(&uris, foo_b);
+  path_intern_release(&uris, bar);
   zarr_meta_cache_destroy(c);
+  path_intern_free(&uris);
   store_destroy(store);
   fixture_rm_tree(root);
   return 0;

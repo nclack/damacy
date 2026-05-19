@@ -177,7 +177,7 @@ test_meta_cache_layout_roundtrip(void)
   struct store_fs_config sc = { .root = root, .nthreads = 1 };
   struct store* store = store_fs_create(&sc);
   EXPECT(store);
-  struct zarr_meta_cache* c = zarr_meta_cache_create(store, 4);
+  struct zarr_meta_cache* c = zarr_meta_cache_create(store, NULL, 4);
   EXPECT(c);
   struct zarr_metadata m = { 0 };
   EXPECT(zarr_meta_cache_get(c, "foo", &m) == DAMACY_OK);
@@ -238,9 +238,9 @@ test_planner_populates_layout_blosc_zstd(void)
   struct store_fs_config sc = { .root = root, .nthreads = 1 };
   struct store* store = store_fs_create(&sc);
   EXPECT(store);
-  struct zarr_meta_cache* meta = zarr_meta_cache_create(store, 4);
+  struct zarr_meta_cache* meta = zarr_meta_cache_create(store, NULL, 4);
   EXPECT(meta);
-  struct zarr_shard_cache* shards = zarr_shard_cache_create(store, 4);
+  struct zarr_shard_cache* shards = zarr_shard_cache_create(store, NULL, 4);
   EXPECT(shards);
   struct planner_config pcfg = {
     .meta_cache = meta,
@@ -312,9 +312,9 @@ test_planner_skips_layout_for_zstd(void)
   struct store_fs_config sc = { .root = root, .nthreads = 1 };
   struct store* store = store_fs_create(&sc);
   EXPECT(store);
-  struct zarr_meta_cache* meta = zarr_meta_cache_create(store, 4);
+  struct zarr_meta_cache* meta = zarr_meta_cache_create(store, NULL, 4);
   EXPECT(meta);
-  struct zarr_shard_cache* shards = zarr_shard_cache_create(store, 4);
+  struct zarr_shard_cache* shards = zarr_shard_cache_create(store, NULL, 4);
   EXPECT(shards);
   struct planner_config pcfg = {
     .meta_cache = meta,

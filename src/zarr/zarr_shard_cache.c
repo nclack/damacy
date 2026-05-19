@@ -6,6 +6,7 @@
 #include "store/store.h"
 #include "util/hash.h"
 #include "util/lru.h"
+#include "util/path_intern.h"
 #include "util/prelude.h"
 #include "util/strbuf.h"
 #include "zarr/zarr_metadata.h"
@@ -33,7 +34,8 @@ struct shard_probe
 
 struct zarr_shard_cache
 {
-  struct store* store; // borrowed
+  struct store* store;      // borrowed
+  struct path_intern* uris; // borrowed; may be NULL
   struct lru* lru;
   struct platform_mutex* mu; // guards lru_get / lru_put / lru_stats_get
 };
@@ -75,7 +77,9 @@ shard_destroy(void* value, void* user)
 }
 
 struct zarr_shard_cache*
-zarr_shard_cache_create(struct store* store, uint32_t capacity)
+zarr_shard_cache_create(struct store* store,
+                        struct path_intern* uris,
+                        uint32_t capacity)
 {
   struct zarr_shard_cache* self = NULL;
 
@@ -85,11 +89,15 @@ zarr_shard_cache_create(struct store* store, uint32_t capacity)
   self = (struct zarr_shard_cache*)calloc(1, sizeof(*self));
   CHECK(Error, self);
   self->store = store;
+  self->uris = uris;
 
   struct lru_ops ops = {
     .eq = shard_eq,
     .destroy = shard_destroy,
   };
+  // hash_combine over (hash_ptr(uri), hash_fnv1a(shard_coord)) — the
+  // multiplicative URI hash and content coord hash mix well; observed
+  // chain depths stay well under the cap.
   self->lru = lru_create(capacity, 16, &ops);
   CHECK(Error, self->lru);
   self->mu = platform_mutex_new();
@@ -128,7 +136,8 @@ zarr_shard_cache_get(struct zarr_shard_cache* self,
   CHECK_SILENT(Invalid, out_pin);
   CHECK_SILENT(Invalid, out_entries);
   CHECK_SILENT(Invalid, out_n_entries);
-  assert(uri && "zarr_shard_cache_get: uri must be a path_intern pointer");
+  assert((!self->uris || path_intern_owns(self->uris, uri)) &&
+         "zarr_shard_cache_get: uri must be a path_intern pointer");
   out_pin->opaque = NULL;
   if (meta->rank == 0 || meta->rank > DAMACY_MAX_RANK) {
     *out_entries = NULL;

@@ -4,6 +4,7 @@
 
 #include "fixture.h"
 #include "store/store.h"
+#include "util/path_intern.h"
 #include "zarr/zarr_metadata.h"
 #include "zarr/zarr_shard_cache.h"
 #include "zarr/zarr_shard_index.h"
@@ -54,7 +55,7 @@ test_shard_cache(void)
     .index_location_end = 1,
   };
 
-  struct zarr_shard_cache* c = zarr_shard_cache_create(store, 4);
+  struct zarr_shard_cache* c = zarr_shard_cache_create(store, NULL, 4);
   EXPECT(c);
 
   const uint64_t coord00[2] = { 0, 0 };
@@ -148,7 +149,7 @@ test_shard_cache_index_start(void)
     .index_location_end = 0,
   };
 
-  struct zarr_shard_cache* c = zarr_shard_cache_create(store, 4);
+  struct zarr_shard_cache* c = zarr_shard_cache_create(store, NULL, 4);
   EXPECT(c);
 
   const uint64_t coord00[2] = { 0, 0 };
@@ -206,7 +207,7 @@ test_shard_cache_unsharded(void)
     .index_location_end = 1,
   };
 
-  struct zarr_shard_cache* c = zarr_shard_cache_create(store, 4);
+  struct zarr_shard_cache* c = zarr_shard_cache_create(store, NULL, 4);
   EXPECT(c);
 
   const uint64_t coord00[2] = { 0, 0 };
@@ -239,15 +240,14 @@ test_shard_cache_unsharded(void)
   return 0;
 }
 
+// Same shape as the meta-cache pointer-identity test: drive the shard
+// cache through a real path_intern and verify hit-by-pointer-identity.
 static int
 test_shard_cache_pointer_identity(void)
 {
   char tmpl[] = "/tmp/damacy_shard_pid_XXXXXX";
   char* root = mkdtemp(tmpl);
   EXPECT(root);
-
-  const uint64_t offsets[1] = { 0 };
-  const uint64_t nbytes[1] = { 64 };
 
   char path[512];
   snprintf(path, sizeof path, "%s/foo", root);
@@ -257,6 +257,14 @@ test_shard_cache_pointer_identity(void)
   snprintf(path, sizeof path, "%s/foo/c/0", root);
   EXPECT(mkdir(path, 0755) == 0);
   snprintf(path, sizeof path, "%s/foo/c/0/0", root);
+  EXPECT(fixture_write_zero_file(path, 256) == 0);
+  snprintf(path, sizeof path, "%s/bar", root);
+  EXPECT(mkdir(path, 0755) == 0);
+  snprintf(path, sizeof path, "%s/bar/c", root);
+  EXPECT(mkdir(path, 0755) == 0);
+  snprintf(path, sizeof path, "%s/bar/c/0", root);
+  EXPECT(mkdir(path, 0755) == 0);
+  snprintf(path, sizeof path, "%s/bar/c/0/0", root);
   EXPECT(fixture_write_zero_file(path, 256) == 0);
 
   struct store_fs_config sc = { .root = root, .nthreads = 1 };
@@ -271,42 +279,53 @@ test_shard_cache_pointer_identity(void)
     .sharded = 0,
     .index_location_end = 1,
   };
-  (void)offsets;
-  (void)nbytes;
 
-  struct zarr_shard_cache* c = zarr_shard_cache_create(store, 4);
+  struct path_intern uris = { 0 };
+  struct zarr_shard_cache* c = zarr_shard_cache_create(store, &uris, 4);
   EXPECT(c);
 
-  char* uri_a = strdup("foo");
-  char* uri_b = strdup("foo");
-  EXPECT(uri_a && uri_b);
-  EXPECT(uri_a != uri_b);
+  const char* foo_a = path_intern_acquire(&uris, "foo");
+  const char* foo_b = path_intern_acquire(&uris, "foo");
+  const char* bar = path_intern_acquire(&uris, "bar");
+  EXPECT(foo_a && foo_b && bar);
+  EXPECT(foo_a == foo_b);
+  EXPECT(foo_a != bar);
 
   const uint64_t coord00[2] = { 0, 0 };
   const struct zarr_shard_entry* entries = NULL;
   uint64_t n = 0;
   struct zarr_shard_pin pin_a = { 0 };
   struct zarr_shard_pin pin_b = { 0 };
+  struct zarr_shard_pin pin_bar = { 0 };
 
-  EXPECT(zarr_shard_cache_get(c, uri_a, &meta, coord00, &pin_a, &entries, &n) ==
+  EXPECT(zarr_shard_cache_get(c, foo_a, &meta, coord00, &pin_a, &entries, &n) ==
          DAMACY_OK);
   struct zarr_shard_cache_stats st;
   zarr_shard_cache_stats_get(c, &st);
   EXPECT(st.counters.misses == 1);
   EXPECT(st.size == 1);
 
-  EXPECT(zarr_shard_cache_get(c, uri_b, &meta, coord00, &pin_b, &entries, &n) ==
+  EXPECT(zarr_shard_cache_get(c, foo_b, &meta, coord00, &pin_b, &entries, &n) ==
+         DAMACY_OK);
+  zarr_shard_cache_stats_get(c, &st);
+  EXPECT(st.counters.hits == 1);
+  EXPECT(st.counters.misses == 1);
+  EXPECT(st.size == 1);
+
+  EXPECT(zarr_shard_cache_get(c, bar, &meta, coord00, &pin_bar, &entries, &n) ==
          DAMACY_OK);
   zarr_shard_cache_stats_get(c, &st);
   EXPECT(st.counters.misses == 2);
-  EXPECT(st.counters.hits == 0);
   EXPECT(st.size == 2);
 
   zarr_shard_cache_release(c, pin_a);
   zarr_shard_cache_release(c, pin_b);
-  free(uri_a);
-  free(uri_b);
+  zarr_shard_cache_release(c, pin_bar);
+  path_intern_release(&uris, foo_a);
+  path_intern_release(&uris, foo_b);
+  path_intern_release(&uris, bar);
   zarr_shard_cache_destroy(c);
+  path_intern_free(&uris);
   store_destroy(store);
   fixture_rm_tree(root);
   return 0;

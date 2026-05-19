@@ -165,9 +165,9 @@ fixture_init_with_json(struct fixture* f,
   struct store_fs_config sc = { .root = f->root, .nthreads = 1 };
   f->store = store_fs_create(&sc);
   EXPECT(f->store);
-  f->meta = zarr_meta_cache_create(f->store, 4);
+  f->meta = zarr_meta_cache_create(f->store, NULL, 4);
   EXPECT(f->meta);
-  f->shards = zarr_shard_cache_create(f->store, 4);
+  f->shards = zarr_shard_cache_create(f->store, NULL, 4);
   EXPECT(f->shards);
   struct planner_config pcfg = {
     .meta_cache = f->meta,
@@ -576,9 +576,9 @@ test_missing_shard_becomes_fill(void)
   struct store_fs_config sc = { .root = root, .nthreads = 1 };
   struct store* store = store_fs_create(&sc);
   EXPECT(store);
-  struct zarr_meta_cache* meta = zarr_meta_cache_create(store, 4);
+  struct zarr_meta_cache* meta = zarr_meta_cache_create(store, NULL, 4);
   EXPECT(meta);
-  struct zarr_shard_cache* shards = zarr_shard_cache_create(store, 4);
+  struct zarr_shard_cache* shards = zarr_shard_cache_create(store, NULL, 4);
   EXPECT(shards);
   struct planner_config pcfg = {
     .meta_cache = meta,
@@ -915,9 +915,9 @@ fixture_init_unsharded(struct fixture* f, const uint32_t* chunk_bytes_2x2)
   struct store_fs_config sc = { .root = f->root, .nthreads = 1 };
   f->store = store_fs_create(&sc);
   EXPECT(f->store);
-  f->meta = zarr_meta_cache_create(f->store, 4);
+  f->meta = zarr_meta_cache_create(f->store, NULL, 4);
   EXPECT(f->meta);
-  f->shards = zarr_shard_cache_create(f->store, 4);
+  f->shards = zarr_shard_cache_create(f->store, NULL, 4);
   EXPECT(f->shards);
   struct planner_config pcfg = {
     .meta_cache = f->meta,
@@ -1060,9 +1060,9 @@ test_sharded_index_start(void)
   struct store_fs_config sc = { .root = f.root, .nthreads = 1 };
   f.store = store_fs_create(&sc);
   EXPECT(f.store);
-  f.meta = zarr_meta_cache_create(f.store, 4);
+  f.meta = zarr_meta_cache_create(f.store, NULL, 4);
   EXPECT(f.meta);
-  f.shards = zarr_shard_cache_create(f.store, 4);
+  f.shards = zarr_shard_cache_create(f.store, NULL, 4);
   EXPECT(f.shards);
   struct planner_config pcfg = {
     .meta_cache = f.meta,

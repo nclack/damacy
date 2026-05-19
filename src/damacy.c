@@ -179,7 +179,9 @@ push_one(struct damacy* self, const struct damacy_sample* sample)
   if (sample->aabb.rank == 0 || sample->aabb.rank > DAMACY_MAX_RANK)
     return DAMACY_RANK;
 
-  // lookahead_push takes its own ref so this release is balanced.
+  // First of two refs on `interned_uri`: this one is released at
+  // Cleanup. The second is taken by lookahead_push and travels with the
+  // sample-slot until plan_reserve clears it.
   const char* interned_uri = path_intern_acquire(&self->uris, sample->uri);
   if (!interned_uri)
     return DAMACY_OOM;
@@ -219,6 +221,8 @@ push_one(struct damacy* self, const struct damacy_sample* sample)
   status = DAMACY_OK;
 
 Cleanup:
+  // Releases the push_one acquire. The lookahead_push acquire (taken
+  // only on the success path) is released later by sample_slot_clear.
   path_intern_release(&self->uris, interned_uri);
   return status;
 }
@@ -639,11 +643,11 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     goto Fail;
   }
 
-  self->meta_cache =
-    zarr_meta_cache_create(self->store, cfg->tuning.n_zarrs_meta_cache);
+  self->meta_cache = zarr_meta_cache_create(
+    self->store, &self->uris, cfg->tuning.n_zarrs_meta_cache);
   CHECK(Fail, self->meta_cache);
-  self->shard_cache =
-    zarr_shard_cache_create(self->store, cfg->tuning.n_shards_meta_cache);
+  self->shard_cache = zarr_shard_cache_create(
+    self->store, &self->uris, cfg->tuning.n_shards_meta_cache);
   CHECK(Fail, self->shard_cache);
 
   struct planner_config pcfg = {

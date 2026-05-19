@@ -113,7 +113,7 @@ test_meta_cache_concurrent(void)
   // Cache cap > N_URIS so we exercise the hit path (which mutates LRU
   // order via list_promote) most of the time. A short prewarm seeds the
   // entries on the main thread.
-  struct zarr_meta_cache* c = zarr_meta_cache_create(store, 16);
+  struct zarr_meta_cache* c = zarr_meta_cache_create(store, NULL, 16);
   EXPECT(c);
   for (int i = 0; i < N_URIS; ++i) {
     struct zarr_metadata m = { 0 };
@@ -216,12 +216,12 @@ test_shard_cache_concurrent(void)
   struct store* store = store_fs_create(&sc);
   EXPECT(store);
 
-  struct zarr_meta_cache* mc = zarr_meta_cache_create(store, 16);
+  struct zarr_meta_cache* mc = zarr_meta_cache_create(store, NULL, 16);
   EXPECT(mc);
   struct zarr_metadata meta = { 0 };
   EXPECT(zarr_meta_cache_get(mc, "zarr_a", &meta) == DAMACY_OK);
 
-  struct zarr_shard_cache* sc_cache = zarr_shard_cache_create(store, 16);
+  struct zarr_shard_cache* sc_cache = zarr_shard_cache_create(store, NULL, 16);
   EXPECT(sc_cache);
 
   // Prewarm the entry so workers hit the cache path.
@@ -305,7 +305,8 @@ test_meta_cache_eviction_concurrent(void)
   struct store* store = store_fs_create(&sc);
   EXPECT(store);
 
-  struct zarr_meta_cache* c = zarr_meta_cache_create(store, META_EVICT_CAP);
+  struct zarr_meta_cache* c =
+    zarr_meta_cache_create(store, NULL, META_EVICT_CAP);
   EXPECT(c);
 
   struct meta_evict_args w = { .meta_cache = c };
@@ -413,13 +414,13 @@ test_shard_cache_pin_under_eviction(void)
   struct store* store = store_fs_create(&sc);
   EXPECT(store);
 
-  struct zarr_meta_cache* mc = zarr_meta_cache_create(store, 16);
+  struct zarr_meta_cache* mc = zarr_meta_cache_create(store, NULL, 16);
   EXPECT(mc);
   struct zarr_metadata meta = { 0 };
   EXPECT(zarr_meta_cache_get(mc, "zarr_a", &meta) == DAMACY_OK);
 
   struct zarr_shard_cache* sc_cache =
-    zarr_shard_cache_create(store, SHARD_EVICT_CAP);
+    zarr_shard_cache_create(store, NULL, SHARD_EVICT_CAP);
   EXPECT(sc_cache);
 
   struct shard_evict_args w = { .shard_cache = sc_cache,
