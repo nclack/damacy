@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779115446034,
+  "lastUpdate": 1779201301185,
   "repoUrl": "https://github.com/nclack/damacy",
   "entries": {
     "damacy timings": [
@@ -1865,6 +1865,88 @@ window.BENCHMARK_DATA = {
           {
             "name": "damacy/mixed/assemble.ms_avg",
             "value": 1.8075,
+            "unit": "ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Nathan Clack",
+            "username": "nclack",
+            "email": "nclack@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "2b898b1db0ade02d2eba511876ab328e19ccc277",
+          "message": "Remove MAX_CHUNK_UNCOMPRESSED_BYTES (#92)\n\nThe compile-time `DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES` (2 MB) was a\nredundant validation guard: no kernel array depended on it, the parser\nalready has its own cap (`DAMACY_BLOSC_MAX_CHUNK_UNCOMPRESSED_BYTES`, 16\nMB), and the resolver derives actual sizing from `max_gpu_memory_bytes`.\nA user passing an oversize `max_chunk_uncompressed_bytes` still gets a\nclear `InvalidArgument` from `Pipeline(cfg)` via the existing\n`validate_config` checks, just on a different field — there is no value\nin exposing a private 2 MB ceiling as a public Python constant.\n\nRemoved:\n- C macro + the `<=` check in `validate_config` and the matching clamp\nin `resolve_max_chunk_uncompressed`.\n- The `MAX_CHUNK_UNCOMPRESSED_BYTES` export in `_native.c` and its\n`.pyi` declaration.\n- C test `test_chunk_cap_too_high` and the two Python tests that built a\nconfig with `_native.MAX_CHUNK_UNCOMPRESSED_BYTES + 1`. The Python tests\nwere rewritten around a different INVAL trigger (`n_zarrs_meta_cache=0`)\nso the exception-mapping coverage stays intact.\n\n`DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES` (the 0-default) and the\nparser's `DAMACY_BLOSC_MAX_CHUNK_UNCOMPRESSED_BYTES` are unrelated and\nleft alone.\n\nKey file: `src/damacy_config.c`.",
+          "timestamp": "2026-05-19T02:44:38Z",
+          "url": "https://github.com/nclack/damacy/commit/2b898b1db0ade02d2eba511876ab328e19ccc277"
+        },
+        "date": 1779201299105,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "damacy/default/init",
+            "value": 91.737,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/time_to_first_batch",
+            "value": 1156.86,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/wall",
+            "value": 8553.81,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/io.ms_avg",
+            "value": 3.00191,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/h2d.ms_avg",
+            "value": 3.85077,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/assemble.ms_avg",
+            "value": 1.63593,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/init",
+            "value": 92.0802,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/time_to_first_batch",
+            "value": 219.071,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/wall",
+            "value": 8759.89,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/io.ms_avg",
+            "value": 3.06062,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/h2d.ms_avg",
+            "value": 3.92402,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/assemble.ms_avg",
+            "value": 1.82911,
             "unit": "ms"
           }
         ]
