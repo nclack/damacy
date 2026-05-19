@@ -92,6 +92,7 @@ pool_destroy(struct pool* p)
 static bool
 pool_owns_unlocked(const struct pool* p, const void* ptr)
 {
+  // storage is immutable after pool_create; no lock needed.
   if (!p || !ptr || !p->storage)
     return false;
   const unsigned char* q = (const unsigned char*)ptr;
@@ -141,14 +142,13 @@ pool_free(struct pool* p, void* ptr)
 }
 
 size_t
-pool_in_use(const struct pool* p)
+pool_in_use(struct pool* p)
 {
   if (!p)
     return 0;
-  struct pool* mp = (struct pool*)p;
-  platform_mutex_lock(mp->mu);
-  size_t n = mp->in_use;
-  platform_mutex_unlock(mp->mu);
+  platform_mutex_lock(p->mu);
+  size_t n = p->in_use;
+  platform_mutex_unlock(p->mu);
   return n;
 }
 

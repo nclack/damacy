@@ -314,6 +314,7 @@ store_fs_free_partial(struct store_fs* fs)
 {
   if (!fs)
     return;
+  // No jobs posted on the error path; io_queue_destroy drain suffices.
   io_queue_destroy(fs->q);
   pool_destroy(fs->job_pool);
   lru_destroy(fs->fd_cache);
@@ -362,6 +363,8 @@ store_fs_create(const struct store_fs_config* cfg)
   fs->q = io_queue_create(cfg->nthreads, cfg->affinity);
   CHECK_SILENT(Fail, fs->q);
 
+  // Pool covers the common case (ring at initial cap); past that, fs_submit
+  // falls back to calloc.
   fs->job_pool =
     pool_create(sizeof(struct fs_read_job), DAMACY_IO_QUEUE_INITIAL_CAP);
   CHECK_SILENT(Fail, fs->job_pool);
