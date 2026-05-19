@@ -1,6 +1,7 @@
 // Compile-time limits shared across damacy's modules.
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 
 // Maximum tensor rank we'll plan over.
@@ -72,12 +73,26 @@ _Static_assert(DAMACY_DEFAULT_READ_OP_MAX_BYTES <= UINT32_MAX,
 //   (b) bound on kernel smem bstarts/sorted arrays in the parse/emit
 //       kernels.
 #define DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK 32u
+#ifdef __cplusplus
+static_assert(DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK <= UINT16_MAX,
+              "observed_max_nblocks_per_chunk slot is uint16_t");
+#else
+_Static_assert(DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK <= UINT16_MAX,
+               "observed_max_nblocks_per_chunk slot is uint16_t");
+#endif
 
 // Structural ceiling on blosc1 sub-streams across a wave. Caps fanout
 // SOA growth and zstd-decoder batch growth.
 #define WAVE_ZSUBS_STRUCTURAL_MAX                                              \
   ((size_t)DAMACY_MAX_CHUNKS_PER_WAVE *                                        \
    (size_t)DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK)
+#ifdef __cplusplus
+static_assert(WAVE_ZSUBS_STRUCTURAL_MAX <= UINT32_MAX,
+              "fanout cap is uint32_t");
+#else
+_Static_assert(WAVE_ZSUBS_STRUCTURAL_MAX <= UINT32_MAX,
+               "fanout cap is uint32_t");
+#endif
 
 // Defensive cap on header.nbytes parsed from a blosc1 chunk. Prevents
 // overflow in the nblocks ceil-div for adversarial inputs.

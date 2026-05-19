@@ -225,6 +225,7 @@ zarr_meta_cache_layout_set(struct zarr_meta_cache* self,
   if (!entry->layout_probed) {
     entry->layout = *layout;
     entry->layout_probed = 1;
+    assert(layout->nblocks <= DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK);
     atomic_u16_observe_max(self->blosc_nblocks_observer,
                            (uint16_t)layout->nblocks);
   }
@@ -288,6 +289,7 @@ zarr_meta_cache_probe_layout(struct zarr_meta_cache* self,
   if (!fresh->layout_probed) {
     fresh->layout = probed;
     fresh->layout_probed = 1;
+    assert(probed.nblocks <= DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK);
     atomic_u16_observe_max(self->blosc_nblocks_observer,
                            (uint16_t)probed.nblocks);
   }
