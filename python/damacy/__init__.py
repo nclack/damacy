@@ -448,6 +448,8 @@ class Config:
         n_shards_meta_cache: LRU cap for shard-index entries.
         max_chunk_uncompressed_bytes: Largest uncompressed chunk size
             the pipeline accepts; 0 selects the C default (512 KB).
+            Values exceeding :data:`MAX_CHUNK_UNCOMPRESSED_BYTES` are
+            rejected at create.
         max_read_op_bytes: Cap on the size of a single coalesced
             read issued to storage. 0 selects the C default. Tune
             against your storage tier: small values keep the queue
@@ -465,9 +467,11 @@ class Config:
             uses cuFile to read compressed bytes from the shard files
             directly into device memory, bypassing the host-staging
             slabs. Requires ``libcufile.so.0`` on the host and a
-            successful ``cuFileDriverOpen`` at create time;
-            ``DAMACY_GDS_ENABLE=1`` in the environment also forces
-            this on. Defaults to ``False`` (host-staging path).
+            successful ``cuFileDriverOpen`` at create time. Defaults
+            to ``False`` (host-staging path). Precedence: the C-side
+            resolver OR-s this with ``DAMACY_GDS_ENABLE=1``, so the
+            env var can force GDS on but cannot force it off when the
+            config has it set.
         numa_strategy: How to pin pinned-host slabs and worker
             threads to a host-NUMA node. :attr:`NumaStrategy.AUTO`
             (default) resolves the GPU's host-NUMA node from the
@@ -478,7 +482,9 @@ class Config:
             also a no-op on single-node hosts.
         numa_node: Explicit host-NUMA node when
             ``numa_strategy=NumaStrategy.PIN_TO``. Must be ``>= 0``
-            in that mode. Ignored otherwise.
+            in that mode; normalized to ``-1`` for AUTO/DISABLED so
+            the dataclass attribute reflects what the runtime will
+            see.
     """
 
     batch_size: int
@@ -568,7 +574,7 @@ class Config:
         set_(self, "pop_timeout_s", pop_timeout_s)
         set_(self, "enable_gds", bool(enable_gds))
         set_(self, "numa_strategy", ns)
-        set_(self, "numa_node", int(numa_node))
+        set_(self, "numa_node", int(numa_node) if ns is NumaStrategy.PIN_TO else -1)
 
 
 @dataclass(frozen=True, slots=True)

@@ -137,7 +137,7 @@ class Pipeline:
         host_buffer_waves: int = 0,
         max_read_op_bytes: int = 0,
         enable_gds: bool = False,
-        numa_strategy: int = ...,
+        numa_strategy: int = NUMA_AUTO,
         numa_node: int = -1,
         bypass_decode: bool = False,
     ) -> None: ...

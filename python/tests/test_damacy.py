@@ -455,6 +455,19 @@ def test_stats_gpu_bytes_grows_after_first_pop(tiny_zarr):
         assert after > before
 
 
+def test_stats_io_planner_counters_advance(tiny_zarr):
+    uri = tiny_zarr
+    with Pipeline(_base_config()) as d:
+        d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
+        with d.pop():
+            pass
+        s = d.stats()
+        assert s.chunks_planned > 0
+        assert s.chunks_to_load > 0
+        assert s.reads_issued > 0
+        assert s.chunks_to_load <= s.chunks_planned
+
+
 # ---- explicit flush / stats_reset --------------------------------------
 
 

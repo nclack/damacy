@@ -768,7 +768,7 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
       .max_read_op_bytes = (uint64_t)max_read_op_bytes,
       .max_gpu_memory_bytes = (uint64_t)max_gpu_bytes,
       .host_buffer_waves = (uint8_t)host_buffer_waves,
-      .enable_gds = (uint8_t)(enable_gds ? 1 : 0),
+      .enable_gds = (uint8_t)enable_gds,
       .numa_strategy = (enum damacy_numa_strategy)numa_strategy,
       .numa_node = numa_node,
     },
