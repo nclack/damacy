@@ -239,12 +239,86 @@ test_shard_cache_unsharded(void)
   return 0;
 }
 
+static int
+test_shard_cache_pointer_identity(void)
+{
+  char tmpl[] = "/tmp/damacy_shard_pid_XXXXXX";
+  char* root = mkdtemp(tmpl);
+  EXPECT(root);
+
+  const uint64_t offsets[1] = { 0 };
+  const uint64_t nbytes[1] = { 64 };
+
+  char path[512];
+  snprintf(path, sizeof path, "%s/foo", root);
+  EXPECT(mkdir(path, 0755) == 0);
+  snprintf(path, sizeof path, "%s/foo/c", root);
+  EXPECT(mkdir(path, 0755) == 0);
+  snprintf(path, sizeof path, "%s/foo/c/0", root);
+  EXPECT(mkdir(path, 0755) == 0);
+  snprintf(path, sizeof path, "%s/foo/c/0/0", root);
+  EXPECT(fixture_write_zero_file(path, 256) == 0);
+
+  struct store_fs_config sc = { .root = root, .nthreads = 1 };
+  struct store* store = store_fs_create(&sc);
+  EXPECT(store);
+
+  struct zarr_metadata meta = {
+    .rank = 2,
+    .shape = { 4, 8 },
+    .inner_chunk_shape = { 2, 4 },
+    .shard_shape = { 2, 4 },
+    .sharded = 0,
+    .index_location_end = 1,
+  };
+  (void)offsets;
+  (void)nbytes;
+
+  struct zarr_shard_cache* c = zarr_shard_cache_create(store, 4);
+  EXPECT(c);
+
+  char* uri_a = strdup("foo");
+  char* uri_b = strdup("foo");
+  EXPECT(uri_a && uri_b);
+  EXPECT(uri_a != uri_b);
+
+  const uint64_t coord00[2] = { 0, 0 };
+  const struct zarr_shard_entry* entries = NULL;
+  uint64_t n = 0;
+  struct zarr_shard_pin pin_a = { 0 };
+  struct zarr_shard_pin pin_b = { 0 };
+
+  EXPECT(zarr_shard_cache_get(c, uri_a, &meta, coord00, &pin_a, &entries, &n) ==
+         DAMACY_OK);
+  struct zarr_shard_cache_stats st;
+  zarr_shard_cache_stats_get(c, &st);
+  EXPECT(st.counters.misses == 1);
+  EXPECT(st.size == 1);
+
+  EXPECT(zarr_shard_cache_get(c, uri_b, &meta, coord00, &pin_b, &entries, &n) ==
+         DAMACY_OK);
+  zarr_shard_cache_stats_get(c, &st);
+  EXPECT(st.counters.misses == 2);
+  EXPECT(st.counters.hits == 0);
+  EXPECT(st.size == 2);
+
+  zarr_shard_cache_release(c, pin_a);
+  zarr_shard_cache_release(c, pin_b);
+  free(uri_a);
+  free(uri_b);
+  zarr_shard_cache_destroy(c);
+  store_destroy(store);
+  fixture_rm_tree(root);
+  return 0;
+}
+
 int
 main(void)
 {
   RUN(test_shard_cache);
   RUN(test_shard_cache_index_start);
   RUN(test_shard_cache_unsharded);
+  RUN(test_shard_cache_pointer_identity);
   log_info("all tests passed");
   return 0;
 }

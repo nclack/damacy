@@ -11,12 +11,13 @@
 #include "zarr/zarr_metadata.h"
 #include "zarr/zarr_shard_index.h"
 
+#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 
 struct shard_entry
 {
-  char* uri; // owned, NUL-terminated
+  const char* uri; // interned; not owned
   uint8_t rank;
   uint64_t shard_coord[DAMACY_MAX_RANK];
   uint64_t n_entries;
@@ -40,7 +41,7 @@ struct zarr_shard_cache
 static uint64_t
 shard_hash(const char* uri, const uint64_t* shard_coord, uint8_t rank)
 {
-  uint64_t uri_hash = hash_fnv1a_str(uri);
+  uint64_t uri_hash = hash_ptr(uri);
   uint64_t coord_hash =
     hash_fnv1a(shard_coord, (size_t)rank * sizeof(uint64_t));
   return hash_combine(uri_hash, coord_hash);
@@ -54,7 +55,7 @@ shard_eq(const void* value, const void* probe_key, void* user)
   const struct shard_probe* probe = (const struct shard_probe*)probe_key;
   if (entry->rank != probe->rank)
     return 0;
-  if (strcmp(entry->uri, probe->uri) != 0)
+  if (entry->uri != probe->uri)
     return 0;
   for (uint8_t d = 0; d < entry->rank; ++d)
     if (entry->shard_coord[d] != probe->shard_coord[d])
@@ -69,7 +70,6 @@ shard_destroy(void* value, void* user)
   struct shard_entry* entry = (struct shard_entry*)value;
   if (!entry)
     return;
-  free(entry->uri);
   free(entry->entries);
   free(entry);
 }
@@ -128,6 +128,7 @@ zarr_shard_cache_get(struct zarr_shard_cache* self,
   CHECK_SILENT(Invalid, out_pin);
   CHECK_SILENT(Invalid, out_entries);
   CHECK_SILENT(Invalid, out_n_entries);
+  assert(uri && "zarr_shard_cache_get: uri must be a path_intern pointer");
   out_pin->opaque = NULL;
   if (meta->rank == 0 || meta->rank > DAMACY_MAX_RANK) {
     *out_entries = NULL;
@@ -240,12 +241,7 @@ zarr_shard_cache_get(struct zarr_shard_cache* self,
     free(entries);
     return DAMACY_OOM;
   }
-  entry->uri = strdup(uri);
-  if (!entry->uri) {
-    free(entry);
-    free(entries);
-    return DAMACY_OOM;
-  }
+  entry->uri = uri;
   entry->rank = meta->rank;
   for (uint8_t d = 0; d < meta->rank; ++d)
     entry->shard_coord[d] = shard_coord[d];

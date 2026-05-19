@@ -2,6 +2,10 @@
 // a store). Each cached entry holds the parsed `zarr_metadata` struct
 // and the URI string used to fetch it.
 //
+// CONTRACT: URI keys are compared by pointer identity. Callers MUST
+// pass a path_intern-acquired pointer; a raw strdup will miss every
+// lookup and pollute the LRU.
+//
 // The cache borrows the store; the caller must keep the store alive for
 // at least as long as the cache.
 #pragma once

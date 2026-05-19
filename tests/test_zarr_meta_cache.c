@@ -207,12 +207,63 @@ test_meta_cache_index_start(void)
   return 0;
 }
 
+static int
+test_meta_cache_pointer_identity(void)
+{
+  char tmpl[] = "/tmp/damacy_meta_pid_XXXXXX";
+  char* root = mkdtemp(tmpl);
+  EXPECT(root);
+
+  char path[512];
+  snprintf(path, sizeof path, "%s/foo", root);
+  EXPECT(mkdir(path, 0755) == 0);
+  snprintf(path, sizeof path, "%s/foo/zarr.json", root);
+  EXPECT(fixture_write_file(path, MINIMAL_ZARR_JSON) == 0);
+
+  struct store_fs_config sc = { .root = root, .nthreads = 1 };
+  struct store* store = store_fs_create(&sc);
+  EXPECT(store);
+
+  struct zarr_meta_cache* c = zarr_meta_cache_create(store, 4);
+  EXPECT(c);
+
+  char* uri_a = strdup("foo");
+  char* uri_b = strdup("foo");
+  EXPECT(uri_a && uri_b);
+  EXPECT(uri_a != uri_b);
+
+  struct zarr_metadata m = { 0 };
+  EXPECT(zarr_meta_cache_get(c, uri_a, &m) == DAMACY_OK);
+  struct zarr_meta_cache_stats st;
+  zarr_meta_cache_stats_get(c, &st);
+  EXPECT(st.counters.misses == 1);
+  EXPECT(st.size == 1);
+
+  EXPECT(zarr_meta_cache_get(c, uri_b, &m) == DAMACY_OK);
+  zarr_meta_cache_stats_get(c, &st);
+  EXPECT(st.counters.misses == 2);
+  EXPECT(st.counters.hits == 0);
+  EXPECT(st.size == 2);
+
+  EXPECT(zarr_meta_cache_get(c, uri_a, &m) == DAMACY_OK);
+  zarr_meta_cache_stats_get(c, &st);
+  EXPECT(st.counters.hits == 1);
+
+  free(uri_a);
+  free(uri_b);
+  zarr_meta_cache_destroy(c);
+  store_destroy(store);
+  fixture_rm_tree(root);
+  return 0;
+}
+
 int
 main(void)
 {
   RUN(test_meta_cache);
   RUN(test_meta_cache_unsharded);
   RUN(test_meta_cache_index_start);
+  RUN(test_meta_cache_pointer_identity);
   log_info("all tests passed");
   return 0;
 }

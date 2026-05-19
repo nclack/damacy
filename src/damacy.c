@@ -179,24 +179,48 @@ push_one(struct damacy* self, const struct damacy_sample* sample)
   if (sample->aabb.rank == 0 || sample->aabb.rank > DAMACY_MAX_RANK)
     return DAMACY_RANK;
 
+  // lookahead_push takes its own ref so this release is balanced.
+  const char* interned_uri = path_intern_acquire(&self->uris, sample->uri);
+  if (!interned_uri)
+    return DAMACY_OOM;
+  struct damacy_sample interned_sample = *sample;
+  interned_sample.uri = interned_uri;
+
+  enum damacy_status status;
   struct zarr_metadata meta;
   enum damacy_status ms =
-    zarr_meta_cache_get(self->meta_cache, sample->uri, &meta);
-  if (ms != DAMACY_OK)
-    return ms;
+    zarr_meta_cache_get(self->meta_cache, interned_uri, &meta);
+  if (ms != DAMACY_OK) {
+    status = ms;
+    goto Cleanup;
+  }
 
-  if (!cast_path_supported(self->cfg.dtype, meta.dtype))
-    return DAMACY_DTYPE;
-  if (sample->aabb.rank != meta.rank)
-    return DAMACY_RANK;
-  if (sample->aabb.rank != self->cfg.sample_rank)
-    return DAMACY_RANK;
-  if (!sample_aabb_extents_match_cfg(&self->cfg, &sample->aabb))
-    return DAMACY_INVAL;
+  if (!cast_path_supported(self->cfg.dtype, meta.dtype)) {
+    status = DAMACY_DTYPE;
+    goto Cleanup;
+  }
+  if (interned_sample.aabb.rank != meta.rank) {
+    status = DAMACY_RANK;
+    goto Cleanup;
+  }
+  if (interned_sample.aabb.rank != self->cfg.sample_rank) {
+    status = DAMACY_RANK;
+    goto Cleanup;
+  }
+  if (!sample_aabb_extents_match_cfg(&self->cfg, &interned_sample.aabb)) {
+    status = DAMACY_INVAL;
+    goto Cleanup;
+  }
 
-  if (lookahead_push(&self->lookahead, sample))
-    return DAMACY_OOM;
-  return DAMACY_OK;
+  if (lookahead_push(&self->lookahead, &interned_sample)) {
+    status = DAMACY_OOM;
+    goto Cleanup;
+  }
+  status = DAMACY_OK;
+
+Cleanup:
+  path_intern_release(&self->uris, interned_uri);
+  return status;
 }
 
 // --- plan: reserve [locked] → run [unlocked] → commit [locked] -------------
@@ -568,16 +592,16 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
       goto Fail;
     gpu_budget_commit(self->budget, predicted.total);
     log_debug("damacy: resolved geometry from max_gpu_memory_bytes=%llu "
-             "(pool_reserve=%llu, resolver_budget=%llu): "
-             "host_slab_per_wave=%llu dev_decompressed_per_wave=%llu "
-             "initial_nvcomp_temp=%llu predicted_total=%llu",
-             (unsigned long long)max_gpu,
-             (unsigned long long)pool_reserve,
-             (unsigned long long)resolver_budget,
-             (unsigned long long)sizing.host_slab_per_wave,
-             (unsigned long long)sizing.dev_decompressed_per_wave,
-             (unsigned long long)predicted.nvcomp_temp,
-             (unsigned long long)predicted.total);
+              "(pool_reserve=%llu, resolver_budget=%llu): "
+              "host_slab_per_wave=%llu dev_decompressed_per_wave=%llu "
+              "initial_nvcomp_temp=%llu predicted_total=%llu",
+              (unsigned long long)max_gpu,
+              (unsigned long long)pool_reserve,
+              (unsigned long long)resolver_budget,
+              (unsigned long long)sizing.host_slab_per_wave,
+              (unsigned long long)sizing.dev_decompressed_per_wave,
+              (unsigned long long)predicted.nvcomp_temp,
+              (unsigned long long)predicted.total);
     // Resolver guarantees this fits; assert defensively in case the
     // accounting drifts. A breach here is a bug, not user input.
     if (gpu_budget_committed(self->budget) > gpu_budget_max(self->budget)) {

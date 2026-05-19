@@ -1,5 +1,10 @@
 // LRU cache of parsed zarr v3 shard indices, keyed by (uri, shard_coord).
 //
+// CONTRACT: the URI portion of the key is compared by pointer identity.
+// Callers MUST pass a path_intern-acquired pointer for `uri`; a raw
+// strdup will miss every lookup and pollute the LRU. `shard_coord` stays
+// content-keyed.
+//
 // The cache borrows the store; the caller must keep the store alive for
 // at least as long as the cache. Metadata for each array (shard layout,
 // index location) is passed in by the caller so this layer doesn't
