@@ -2,6 +2,7 @@
 
 #include "log/log.h"
 #include "store/store.h"
+#include "store/store_internal.h"
 #include "util/hash.h"
 #include "util/lru.h"
 #include "util/prelude.h"
@@ -10,7 +11,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define FS_FD_CACHE_DEFAULT_CAPACITY 256u
 #define FS_FD_CACHE_MAX_PROBE 16u
 
 struct fs_cache_entry
@@ -56,8 +56,7 @@ store_fs_acquire(struct store_fs* fs,
     struct lru_entry* hit = lru_get(fs->fd_cache, hash, key);
     if (hit) {
       lru_entry_acquire(hit);
-      platform_file* f =
-        ((struct fs_cache_entry*)lru_entry_value(hit))->file;
+      platform_file* f = ((struct fs_cache_entry*)lru_entry_value(hit))->file;
       *pin_out = hit;
       platform_mutex_unlock(fs->cache_mu);
       return f;
@@ -140,9 +139,8 @@ static void
 fs_read_job_fn(void* vctx)
 {
   struct fs_read_job* j = (struct fs_read_job*)vctx;
-  platform_file* f = (platform_file*)((struct fs_cache_entry*)lru_entry_value(
-                                        j->pin))
-                       ->file;
+  platform_file* f =
+    (platform_file*)((struct fs_cache_entry*)lru_entry_value(j->pin))->file;
   (void)platform_file_pread(f, j->dst, j->len, j->offset);
 }
 
@@ -315,17 +313,6 @@ static const struct store_vtable fs_vtable_host = {
   .unmap = fs_unmap,
 };
 
-platform_file*
-store_fs_get_file_external(struct store_fs* fs, const char* key)
-{
-  // GDS holds its own libcufile handle ref on the fd, so returning the
-  // borrowed pointer without keeping our pin is safe until #95 lands.
-  struct lru_entry* pin = NULL;
-  platform_file* f = store_fs_acquire(fs, key, &pin);
-  store_fs_release(fs, pin);
-  return f;
-}
-
 struct store*
 store_fs_create(const struct store_fs_config* cfg)
 {
@@ -342,8 +329,9 @@ store_fs_create(const struct store_fs_config* cfg)
   fs->root = strdup(cfg->root);
   CHECK_SILENT(Fail, fs->root);
 
-  uint32_t capacity = cfg->fd_cache_capacity ? cfg->fd_cache_capacity
-                                             : FS_FD_CACHE_DEFAULT_CAPACITY;
+  uint32_t capacity = cfg->fd_cache_capacity
+                        ? cfg->fd_cache_capacity
+                        : store_default_fd_cache_capacity();
   struct lru_ops ops = {
     .eq = fs_cache_eq,
     .destroy = fs_cache_destroy,
