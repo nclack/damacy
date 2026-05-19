@@ -684,8 +684,9 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   // Pin the calling thread to the GPU's NUMA node for the duration of
   // wave_pool_init so first-touch of pinned-host slabs + per-wave
   // scratch lands on the right node. Restored immediately after.
-  // Runs before the planner / meta-cache observer wiring below so
-  // the observed_max_nblocks seed (1) is in place before any probe.
+  // observer wired before scheduler_create — the worker thread can't
+  // probe until then, so the NULL window on blosc_nblocks_observer is
+  // unreachable.
   {
     struct platform_cpu_mask saved_aff;
     numa_scope_enter(&self->numa, &saved_aff);
