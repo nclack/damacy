@@ -93,7 +93,7 @@ struct fs_gds_cache_entry
 struct store_fs_gds
 {
   struct store base;
-  char* root;
+  char* root;       // owned
   void* gds_stream; // CUstream as void*
   uint8_t driver_opened;
   struct platform_mutex* cache_mu;
@@ -348,6 +348,9 @@ gds_event_query(struct store* s, struct store_event ev)
   return ev.seq == GDS_SENTINEL_SEQ ? 1 : 0;
 }
 
+// Also reached from store_fs_gds_create's Fail label on partial
+// construction; every member is calloc-zeroed and every freed callee is
+// NULL-safe.
 static void
 gds_destroy(struct store* s)
 {
@@ -419,6 +422,21 @@ Fail:
   else
     g_libcufile.cuFileDriverClose();
   return NULL;
+}
+
+void
+store_fs_gds_stats_get(struct store* s, struct lru_stats* out)
+{
+  if (!out)
+    return;
+  if (!s) {
+    lru_stats_get(NULL, out);
+    return;
+  }
+  struct store_fs_gds* g = (struct store_fs_gds*)s;
+  platform_mutex_lock(g->cache_mu);
+  lru_stats_get(g->cache, out);
+  platform_mutex_unlock(g->cache_mu);
 }
 
 void
