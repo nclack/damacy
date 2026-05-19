@@ -180,24 +180,52 @@ push_one(struct damacy* self, const struct damacy_sample* sample)
   if (sample->aabb.rank == 0 || sample->aabb.rank > DAMACY_MAX_RANK)
     return DAMACY_RANK;
 
+  // First of two refs on `interned_uri`: this one is released at
+  // Cleanup. The second is taken by lookahead_push and travels with the
+  // sample-slot until plan_reserve clears it.
+  const char* interned_uri = path_intern_acquire(&self->uris, sample->uri);
+  if (!interned_uri)
+    return DAMACY_OOM;
+  struct damacy_sample interned_sample = *sample;
+  interned_sample.uri = interned_uri;
+
+  enum damacy_status status;
   struct zarr_metadata meta;
   enum damacy_status ms =
-    zarr_meta_cache_get(self->meta_cache, sample->uri, &meta);
-  if (ms != DAMACY_OK)
-    return ms;
+    zarr_meta_cache_get(self->meta_cache, interned_uri, &meta);
+  if (ms != DAMACY_OK) {
+    status = ms;
+    goto Cleanup;
+  }
 
-  if (!cast_path_supported(self->cfg.dtype, meta.dtype))
-    return DAMACY_DTYPE;
-  if (sample->aabb.rank != meta.rank)
-    return DAMACY_RANK;
-  if (sample->aabb.rank != self->cfg.sample_rank)
-    return DAMACY_RANK;
-  if (!sample_aabb_extents_match_cfg(&self->cfg, &sample->aabb))
-    return DAMACY_INVAL;
+  if (!cast_path_supported(self->cfg.dtype, meta.dtype)) {
+    status = DAMACY_DTYPE;
+    goto Cleanup;
+  }
+  if (interned_sample.aabb.rank != meta.rank) {
+    status = DAMACY_RANK;
+    goto Cleanup;
+  }
+  if (interned_sample.aabb.rank != self->cfg.sample_rank) {
+    status = DAMACY_RANK;
+    goto Cleanup;
+  }
+  if (!sample_aabb_extents_match_cfg(&self->cfg, &interned_sample.aabb)) {
+    status = DAMACY_INVAL;
+    goto Cleanup;
+  }
 
-  if (lookahead_push(&self->lookahead, sample))
-    return DAMACY_OOM;
-  return DAMACY_OK;
+  if (lookahead_push(&self->lookahead, &interned_sample)) {
+    status = DAMACY_OOM;
+    goto Cleanup;
+  }
+  status = DAMACY_OK;
+
+Cleanup:
+  // Releases the push_one acquire. The lookahead_push acquire (taken
+  // only on the success path) is released later by sample_slot_clear.
+  path_intern_release(&self->uris, interned_uri);
+  return status;
 }
 
 // --- plan: reserve [locked] → run [unlocked] → commit [locked] -------------
@@ -641,11 +669,11 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     }
   }
 
-  self->meta_cache =
-    zarr_meta_cache_create(self->store_host, cfg->tuning.n_zarrs_meta_cache);
+  self->meta_cache = zarr_meta_cache_create(
+    self->store_host, &self->uris, cfg->tuning.n_zarrs_meta_cache);
   CHECK(Fail, self->meta_cache);
-  self->shard_cache =
-    zarr_shard_cache_create(self->store_host, cfg->tuning.n_shards_meta_cache);
+  self->shard_cache = zarr_shard_cache_create(
+    self->store_host, &self->uris, cfg->tuning.n_shards_meta_cache);
   CHECK(Fail, self->shard_cache);
 
   struct planner_config pcfg = {

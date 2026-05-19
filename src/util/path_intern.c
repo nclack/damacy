@@ -142,3 +142,14 @@ path_intern_release(struct path_intern* pi, const char* s)
 End:
   return;
 }
+
+int
+path_intern_owns(const struct path_intern* pi, const char* p)
+{
+  if (!pi || !p)
+    return 0;
+  for (size_t i = 0; i < pi->cap; ++i)
+    if (pi->slots[i].str == p)
+      return 1;
+  return 0;
+}

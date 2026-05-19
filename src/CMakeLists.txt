@@ -172,12 +172,12 @@ add_src_lib(zarr_chunk_layout SOURCES zarr/zarr_chunk_layout.h zarr/zarr_chunk_l
 # damacy.h is header-included for the damacy_status enum; no link needed
 # (no symbols referenced).
 add_src_lib(zarr_meta_cache SOURCES zarr/zarr_meta_cache.h zarr/zarr_meta_cache.c
-    LINKS zarr zarr_chunk_layout lru store strbuf hash log
+    LINKS zarr zarr_chunk_layout lru store strbuf hash path_intern log
 )
 
 # damacy-side shard index cache (LRU around zarr_shard_index_parse).
 add_src_lib(zarr_shard_cache SOURCES zarr/zarr_shard_cache.h zarr/zarr_shard_cache.c
-    LINKS zarr lru store strbuf hash log
+    LINKS zarr lru store strbuf hash path_intern log
 )
 
 # Planner: samples + cached metadata → page-aligned read_ops + chunk_plans.

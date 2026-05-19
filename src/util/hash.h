@@ -32,6 +32,10 @@ extern "C"
   // low bits adequately for use as a hash table key.
   uint64_t hash_combine(uint64_t a, uint64_t b);
 
+  // Caller must use stable/interned pointers; pointer-identity defines
+  // equality.
+  uint64_t hash_ptr(const void* p);
+
 #ifdef __cplusplus
 }
 #endif

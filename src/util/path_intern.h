@@ -32,6 +32,9 @@ extern "C"
   // pointer identity, not string content.
   void path_intern_release(struct path_intern* pi, const char* s);
 
+  // Linear scan; for debug asserts on cache-key contracts.
+  int path_intern_owns(const struct path_intern* pi, const char* p);
+
 #ifdef __cplusplus
 }
 #endif

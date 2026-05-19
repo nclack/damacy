@@ -31,6 +31,15 @@ hash_fnv1a_str(const char* s)
 }
 
 uint64_t
+hash_ptr(const void* p)
+{
+  uint64_t x = (uint64_t)(uintptr_t)p;
+  x *= 0x9e3779b97f4a7c15ull;
+  x ^= x >> 32;
+  return x;
+}
+
+uint64_t
 hash_combine(uint64_t a, uint64_t b)
 {
   // Murmur-like finalizer applied to the combination.
