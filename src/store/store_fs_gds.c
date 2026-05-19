@@ -4,7 +4,6 @@
 #include "platform/platform.h"
 #include "platform/platform_io.h"
 #include "store/store.h"
-#include "store/store_fs.h"
 #include "util/hash.h"
 #include "util/lru.h"
 #include "util/prelude.h"
@@ -106,8 +105,7 @@ static int
 fs_gds_entry_eq(const void* value, const void* probe_key, void* user)
 {
   (void)user;
-  const struct fs_gds_cache_entry* e =
-    (const struct fs_gds_cache_entry*)value;
+  const struct fs_gds_cache_entry* e = (const struct fs_gds_cache_entry*)value;
   return strcmp(e->key, (const char*)probe_key) == 0;
 }
 
@@ -160,8 +158,7 @@ fs_gds_acquire(struct store_fs_gds* g, const char* key)
     descr.handle.fd = fd;
     CUfileError_t e = g_libcufile.cuFileHandleRegister(&h, &descr);
     if (e.err != CU_FILE_SUCCESS) {
-      log_error(
-        "cuFileHandleRegister(%s) failed: err=%d", key, (int)e.err);
+      log_error("cuFileHandleRegister(%s) failed: err=%d", key, (int)e.err);
       h = NULL;
       goto Fail;
     }
@@ -273,8 +270,7 @@ gds_submit_dev(struct store* s, const struct store_read* reads, size_t n)
     return ev;
   ctx->g = g;
   ctx->n = n;
-  ctx->params =
-    (struct fs_gds_async_params*)calloc(n, sizeof(*ctx->params));
+  ctx->params = (struct fs_gds_async_params*)calloc(n, sizeof(*ctx->params));
   if (!ctx->params) {
     free(ctx);
     return ev;
@@ -352,8 +348,8 @@ gds_submit(struct store* s, const struct store_read* reads, size_t n)
       return ev;
     const struct fs_gds_cache_entry* entry =
       (const struct fs_gds_cache_entry*)lru_entry_value(pin);
-    int64_t got =
-      platform_file_pread(entry->file, reads[i].dst, reads[i].len, reads[i].offset);
+    int64_t got = platform_file_pread(
+      entry->file, reads[i].dst, reads[i].len, reads[i].offset);
     platform_mutex_lock(g->cache_mu);
     lru_entry_release(pin);
     platform_mutex_unlock(g->cache_mu);
@@ -473,8 +469,8 @@ store_fs_gds_create(const struct store_fs_gds_config* cfg)
   {
     CUfileError_t e = g_libcufile.cuFileDriverOpen();
     if (e.err != CU_FILE_SUCCESS) {
-      log_error(
-        "cuFileDriverOpen failed (err=%d); GDS unavailable", (int)e.err);
+      log_error("cuFileDriverOpen failed (err=%d); GDS unavailable",
+                (int)e.err);
       return NULL;
     }
   }

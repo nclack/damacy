@@ -23,6 +23,30 @@ extern "C"
 
   struct store;
   struct numa_resolved;
+  struct store_read;
+  struct store_event;
+  struct store_view;
+
+  struct store_vtable
+  {
+    void (*destroy)(struct store* s);
+    int (*stat)(struct store* s, const char* key, uint64_t* out);
+    struct store_event (*submit)(struct store* s,
+                                 const struct store_read* reads,
+                                 size_t n);
+    struct store_event (*submit_dev)(struct store* s,
+                                     const struct store_read* reads,
+                                     size_t n);
+    void (*event_wait)(struct store* s, struct store_event ev);
+    int (*event_query)(struct store* s, struct store_event ev);
+    int (*map)(struct store* s, const char* key, struct store_view* out);
+    void (*unmap)(struct store* s, struct store_view* view);
+  };
+
+  struct store
+  {
+    const struct store_vtable* vt;
+  };
 
   struct store_fs_config
   {
