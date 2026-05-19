@@ -64,8 +64,12 @@ test_exhaustion_returns_null(void)
   EXPECT(recycled == slots[1]);
 
   EXPECT(pool_alloc(p) == NULL);
-  for (int i = 0; i < 3; ++i)
+  for (int i = 0; i < 3; ++i) {
+    if (i == 1)
+      continue; // recycled == slots[1], freed below
     pool_free(p, slots[i]);
+  }
+  pool_free(p, recycled);
   pool_destroy(p);
   return 0;
 }
