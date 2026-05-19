@@ -21,6 +21,7 @@ import torch
 
 cfg = damacy.Config(
     batch_size=8,
+    sample_shape=(64, 256, 256),
     max_gpu_memory_bytes=1 << 30,
     dtype="bf16",
 )
@@ -31,9 +32,9 @@ samples = [
 
 with damacy.Pipeline(cfg) as d:
     d.push(samples)
-    for batch in d.batches(len(samples) // cfg.batch_size):
-        with batch as t:
-            x = torch.from_dlpack(t)
+    for _ in range(len(samples) // cfg.batch_size):
+        with d.pop() as batch:
+            x = torch.from_dlpack(batch)
             ...  # train step
 ```
 
@@ -43,6 +44,30 @@ users can call `damacy._native.cuda_init_primary()` once. For
 multi-GPU setups, see [Distributed](distributed.md) for the device
 binding model and a torchrun example.
 
+## Concepts
+
+You hand damacy a stream of `Sample`s; it returns a stream of
+`Batch`es, each one a device tensor of shape
+`(batch_size, *sample_shape)`.
+
+- A **`Sample`** is one crop request: a zarr URI plus an `aabb`
+  (axis-aligned bounding box) given as a list of `(start, stop)`
+  tuples — one per spatial axis. Every `aabb` must produce the same
+  per-sample shape, and that shape is `Config.sample_shape`.
+- A **`Pipeline`** is a streaming context. You `push` an iterable
+  of samples (lazy generators are fine — and recommended for long
+  runs) and call `pop()` to block for the next ready batch.
+- A **`Batch`** is a DLPack-ready handle to a GPU-resident tensor.
+  Use it inside a `with` block so damacy can reclaim the slot when
+  you're done.
+
+`batch_size`, `sample_shape`, and `max_gpu_memory_bytes` are required
+on `Config`; everything else has a sensible default. The assemble
+kernel casts heterogeneous source dtypes
+(`u8`/`u16`/`i16`/`u32`/`i32`/`f16`/`f32`) to the configured
+destination `dtype` (`f32` or `bf16`) on the way out, so your zarrs
+do not need to match it.
+
 ## Public surface
 
 The published API lives entirely under the top-level `damacy` package.
@@ -51,11 +76,16 @@ documented only via its `.pyi` stub.
 
 - [API reference](api.md) — `Pipeline`, `Config`, `Sample`, `Batch`, the
   exception hierarchy, and the `Stats`/`Metric` value types.
+- [GPU memory budget](budget.md) — how to think about
+  `max_gpu_memory_bytes`, what it covers, and how to pick a value.
 - [Distributed](distributed.md) — device binding model and torchrun /
   DDP examples.
 - [Async prefetch](prefetch.md) — zero-copy with deferred release
   for training loops that prefetch the next batch on a background
   thread.
+- [Troubleshooting](troubleshooting.md) — common errors
+  (`PoolStarved`, `BudgetExceeded`, missing CUDA context) and what
+  to check first.
 
 ## Performance dashboards
 
@@ -68,14 +98,3 @@ Continuous benchmark history (auto-published from
 - [Throughput](https://nclack.github.io/damacy/throughput/) — bigger is better
 - [Timings](https://nclack.github.io/damacy/timings/) — smaller is better
 
-## Design notes
-
-- A single in-flight **wave** is processed at a time; output batches are
-  double-buffered so the consumer can overlap training compute with the
-  next wave's decompression and assembly.
-- Resource caps (host pinned-buffer pool, device decompress-scratch
-  pool, GPU memory) are fixed at `Pipeline(...)` construction; nothing
-  grows after that.
-- The assemble kernel casts heterogeneous source dtypes
-  (`u8`/`u16`/`i16`/`u32`/`i32`/`f16`/`f32`) to the configured
-  destination dtype (`f32` or `bf16`) on the way out.

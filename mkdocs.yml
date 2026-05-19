@@ -77,6 +77,8 @@ markdown_extensions:
 
 nav:
   - Home: index.md
+  - GPU memory budget: budget.md
   - Distributed: distributed.md
   - Async prefetch: prefetch.md
+  - Troubleshooting: troubleshooting.md
   - API reference: api.md

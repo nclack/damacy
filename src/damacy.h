@@ -109,8 +109,7 @@ extern "C"
     // Required — no default; a value too small for the requested
     // geometry returns DAMACY_BUDGET from damacy_create.
     uint64_t max_gpu_memory_bytes;
-    // 0 → DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES; capped at
-    // DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES.
+    // 0 → DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES.
     uint32_t max_chunk_uncompressed_bytes;
     // 0 → DAMACY_DEFAULT_READ_OP_MAX_BYTES.
     uint64_t max_read_op_bytes;

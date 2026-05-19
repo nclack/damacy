@@ -7,10 +7,6 @@ from typing import Any, Final
 
 __version__: Final[str]
 
-# ---- compile-time ceilings ----------------------------------------------
-
-MAX_CHUNK_UNCOMPRESSED_BYTES: Final[int]
-
 # ---- log-level constants (mirror damacy_log.h) --------------------------
 
 LOG_TRACE: Final[int]

@@ -48,7 +48,11 @@ The full public surface of the `damacy` package.
 
 ::: damacy.OutOfMemory
 
+::: damacy.BudgetExceeded
+
 ::: damacy.ShutdownError
+
+::: damacy.PoolStarved
 
 ## Logging
 
