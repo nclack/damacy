@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779115449306,
+  "lastUpdate": 1779201337334,
   "repoUrl": "https://github.com/nclack/damacy",
   "entries": {
     "damacy throughput": [
@@ -575,6 +575,38 @@ window.BENCHMARK_DATA = {
           {
             "name": "damacy/mixed/throughput",
             "value": 6209.06,
+            "unit": "MB/s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Nathan Clack",
+            "username": "nclack",
+            "email": "nclack@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "2b898b1db0ade02d2eba511876ab328e19ccc277",
+          "message": "Remove MAX_CHUNK_UNCOMPRESSED_BYTES (#92)\n\nThe compile-time `DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES` (2 MB) was a\nredundant validation guard: no kernel array depended on it, the parser\nalready has its own cap (`DAMACY_BLOSC_MAX_CHUNK_UNCOMPRESSED_BYTES`, 16\nMB), and the resolver derives actual sizing from `max_gpu_memory_bytes`.\nA user passing an oversize `max_chunk_uncompressed_bytes` still gets a\nclear `InvalidArgument` from `Pipeline(cfg)` via the existing\n`validate_config` checks, just on a different field — there is no value\nin exposing a private 2 MB ceiling as a public Python constant.\n\nRemoved:\n- C macro + the `<=` check in `validate_config` and the matching clamp\nin `resolve_max_chunk_uncompressed`.\n- The `MAX_CHUNK_UNCOMPRESSED_BYTES` export in `_native.c` and its\n`.pyi` declaration.\n- C test `test_chunk_cap_too_high` and the two Python tests that built a\nconfig with `_native.MAX_CHUNK_UNCOMPRESSED_BYTES + 1`. The Python tests\nwere rewritten around a different INVAL trigger (`n_zarrs_meta_cache=0`)\nso the exception-mapping coverage stays intact.\n\n`DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES` (the 0-default) and the\nparser's `DAMACY_BLOSC_MAX_CHUNK_UNCOMPRESSED_BYTES` are unrelated and\nleft alone.\n\nKey file: `src/damacy_config.c`.",
+          "timestamp": "2026-05-19T02:44:38Z",
+          "url": "https://github.com/nclack/damacy/commit/2b898b1db0ade02d2eba511876ab328e19ccc277"
+        },
+        "date": 1779201303975,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "damacy/default/throughput",
+            "value": 6276.39,
+            "unit": "MB/s"
+          },
+          {
+            "name": "damacy/mixed/throughput",
+            "value": 6128.74,
             "unit": "MB/s"
           }
         ]
