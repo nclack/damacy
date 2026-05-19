@@ -16,15 +16,6 @@
 // shards are ~1 GB.
 #define DAMACY_MAX_SHARD_BYTES (1ull << 46)
 
-// Hard ceiling on per-substream uncompressed bytes. Compile-time max for
-// kernel array sizing (smem bstarts/sorted in the parse + emit kernels)
-// and the upper bound the runtime config's max_chunk_uncompressed_bytes
-// can request. Real nvcomp scratch is sized off the runtime config (see
-// wave_init); 2 MB lets users opt into 1–4 MB chunks if they configure
-// max_gpu_memory_bytes accordingly. Chunks exceeding the runtime cap
-// are rejected at the planner with DAMACY_INVAL.
-#define DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES (2ull << 20) // 2 MB
-
 // Default for damacy_config.max_chunk_uncompressed_bytes when the user
 // leaves it at 0. Matches the pre-runtime-cap behaviour and keeps the
 // 8 GB-class GPU budget viable out of the box.
@@ -75,18 +66,13 @@ _Static_assert(DAMACY_DEFAULT_READ_OP_MAX_BYTES <= UINT32_MAX,
 // growing. Must be a power of two — io_queue indexes via bitmask.
 #define DAMACY_IO_QUEUE_INITIAL_CAP 512u
 
-// Per-zarr-chunk blosc1 nblocks cap. Derivation:
-//   max chunk uncompressed = DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES (2 MB)
-//   blosc encoder min blocksize = 64 KB (compute_blocksize floor for
-//                                        splittable codecs, c-blosc)
-//   ⇒ worst-case nblocks = 2 MB / 64 KB = 32.
-// Inputs with more blocks are rejected at parse with DAMACY_DECODE.
+// Per-zarr-chunk blosc1 nblocks cap. Sized for typical chunks (~2 MB) at
+// the c-blosc min blocksize of 64 KB → 2 MB / 64 KB = 32. Inputs with
+// more blocks are rejected at parse with DAMACY_DECODE.
 #define DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK 32u
 
 // Defensive cap on header.nbytes parsed from a blosc1 chunk. Prevents
-// overflow in the nblocks ceil-div for adversarial inputs, independent
-// of the runtime DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES cap (which gates
-// the planner, not the parser).
+// overflow in the nblocks ceil-div for adversarial inputs.
 #define DAMACY_BLOSC_MAX_CHUNK_UNCOMPRESSED_BYTES (16ull << 20) // 16 MB
 
 // Worst-case substream count per wave for blosc1-zstd: 1 substream per

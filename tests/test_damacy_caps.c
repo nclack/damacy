@@ -8,8 +8,6 @@
 //   test_oversize_chunk_rejected    — set chunk cap below the inner-chunk
 //                                     uncompressed size; planner returns
 //                                     DAMACY_BUDGET via damacy_pop
-//   test_chunk_cap_too_high         — value > compile-time ceiling rejected
-//                                     at create with DAMACY_INVAL
 //   test_gpu_budget_too_small       — max_gpu_memory_bytes set absurdly
 //                                     low; create returns DAMACY_BUDGET
 //   test_chunk_cap_shrinks_nvcomp   — smaller runtime cap → smaller nvcomp
@@ -143,24 +141,6 @@ test_oversize_chunk_rejected(void)
   EXPECT(damacy_pop(d, &b) == DAMACY_BUDGET);
 
   damacy_destroy(d);
-  fixture_rm_tree(root);
-  return 0;
-}
-
-// Values above DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES (the kernel-array
-// ceiling) must be rejected at create — no pipeline state has been set
-// up at the failure point.
-static int
-test_chunk_cap_too_high(void)
-{
-  char root[64];
-  EXPECT(mkdtemp_root(root, sizeof root) == 0);
-  struct damacy_config cfg = mk_cfg(root, 1, 8, 16);
-  cfg.tuning.max_chunk_uncompressed_bytes =
-    (uint32_t)DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES + 1u;
-  struct damacy* d = NULL;
-  EXPECT(damacy_create(&cfg, &d) == DAMACY_INVAL);
-  EXPECT(d == NULL);
   fixture_rm_tree(root);
   return 0;
 }
@@ -419,7 +399,6 @@ main(void)
   EXPECT(cuda_init_primary() == 0);
   RUN(test_create_default_caps);
   RUN(test_oversize_chunk_rejected);
-  RUN(test_chunk_cap_too_high);
   RUN(test_gpu_budget_too_small);
   RUN(test_chunk_cap_shrinks_nvcomp);
   RUN(test_config_describe);

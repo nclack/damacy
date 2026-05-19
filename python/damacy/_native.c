@@ -226,14 +226,6 @@ module_exec(PyObject* m)
       return -1;
   }
 
-  // Compile-time ceilings the test suite (and callers) compare against
-  // when sizing damacy_config.max_chunk_uncompressed_bytes.
-  if (PyModule_AddIntConstant(m,
-                              "MAX_CHUNK_UNCOMPRESSED_BYTES",
-                              (long long)DAMACY_MAX_CHUNK_UNCOMPRESSED_BYTES) <
-      0)
-    return -1;
-
   // Quiet the default C stderr sink — Python users want logging.* to be
   // authoritative. Callers can flip this back with set_log_quiet(False).
   damacy_log_set_quiet(1);

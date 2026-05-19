@@ -400,8 +400,6 @@ class Config:
         n_shards_meta_cache: LRU cap for shard-index entries.
         max_chunk_uncompressed_bytes: Largest uncompressed chunk size
             the pipeline accepts; 0 selects the C default (512 KB).
-            Values exceeding :data:`MAX_CHUNK_UNCOMPRESSED_BYTES` are
-            rejected at create.
         device: CUDA device index to bind. ``None`` (default) captures
             the current ``CUcontext`` on the calling thread; pass an
             int (e.g. ``local_rank``) to retain that device's primary
