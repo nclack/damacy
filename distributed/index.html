@@ -16,7 +16,7 @@
         <link rel="prev" href="../budget/">
       
       
-        <link rel="next" href="../troubleshooting/">
+        <link rel="next" href="../prefetch/">
       
       
         
@@ -420,6 +420,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#numa-placement" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        NUMA placement
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#cuda-streams" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -445,6 +456,33 @@
   
 </nav>
       
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../prefetch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Async prefetch
+  
+
+    
+  </span>
+  
+  
+
+      </a>
     </li>
   
 
@@ -567,6 +605,17 @@
     <span class="md-ellipsis">
       
         Sizing per rank
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#numa-placement" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        NUMA placement
       
     </span>
   </a>
@@ -745,6 +794,23 @@ deterministic and disjoint.</p>
 filesystem, object store). When stacking multiple ranks on one GPU
 (uncommon, but valid), divide <code>max_gpu_memory_bytes</code> so the per-GPU
 total fits within the device.</p>
+<h2 id="numa-placement">NUMA placement<a class="headerlink" href="#numa-placement" title="Permanent link">&para;</a></h2>
+<p>On multi-socket hosts, <code>Config.numa_strategy</code> controls where damacy
+pins its pinned-host slabs and worker threads:</p>
+<ul>
+<li><code>NumaStrategy.AUTO</code> (default) resolves the GPU's host-NUMA node
+  from the CUDA driver and pins everything there. On single-node
+  hosts the strategy is a no-op.</li>
+<li><code>NumaStrategy.PIN_TO</code> plus <code>numa_node=N</code> forces pinning to node
+  <code>N</code>. Use this when AUTO can't resolve a node (no sysfs topology
+  available) or when you want each rank explicitly pinned to a
+  specific socket.</li>
+<li><code>NumaStrategy.DISABLED</code> skips all NUMA work, including the
+  driver query at create time.</li>
+</ul>
+<p>All three are silent no-ops if <code>libnuma.so.1</code> cannot be loaded at
+runtime; damacy logs the no-op reason and falls back to whatever
+the OS scheduler picks.</p>
 <h2 id="cuda-streams">CUDA streams<a class="headerlink" href="#cuda-streams" title="Permanent link">&para;</a></h2>
 <p>DLPack handles synchronization. <code>torch.from_dlpack(batch)</code> records
 an event on damacy's output stream and makes the consuming PyTorch
