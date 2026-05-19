@@ -36,8 +36,9 @@ extern "C"
   // Linear scan; for debug asserts on cache-key contracts.
   int path_intern_owns(const struct path_intern* pi, const char* p);
 
-  // O(1) accessor — reads the precomputed FNV-1a hash from the
-  // 8-byte header immediately preceding the interned string.
+  // Reads the 8-byte header. `s` MUST be a pointer returned by
+  // path_intern_acquire; any other pointer is UB (reads 8 bytes
+  // before the buffer).
   uint64_t path_intern_hash(const char* s);
 
 #ifdef __cplusplus

@@ -3,8 +3,8 @@
 #include "log/log.h"
 #include "store/store.h"
 #include "store/store_internal.h"
+#include "util/hash.h"
 #include "util/lru.h"
-#include "util/path_intern.h"
 #include "util/prelude.h"
 #include "util/strbuf.h"
 
@@ -42,7 +42,6 @@ fs_cache_destroy(void* value, void* user)
 platform_file*
 store_fs_acquire(struct store_fs* fs,
                  const char* key,
-                 uint64_t hash,
                  struct lru_entry** pin_out)
 {
   if (pin_out)
@@ -50,6 +49,7 @@ store_fs_acquire(struct store_fs* fs,
   if (!fs || !key || !pin_out)
     return NULL;
 
+  uint64_t hash = hash_fnv1a_str(key);
   platform_mutex_lock(fs->cache_mu);
   {
     struct lru_entry* hit = lru_get(fs->fd_cache, hash, key);
@@ -180,8 +180,7 @@ fs_submit(struct store* s, const struct store_read* reads, size_t n)
   // after we return.
   for (size_t i = 0; i < n; ++i) {
     struct lru_entry* pin = NULL;
-    platform_file* f =
-      store_fs_acquire(fs, reads[i].key, path_intern_hash(reads[i].key), &pin);
+    platform_file* f = store_fs_acquire(fs, reads[i].key, &pin);
     if (!f) {
       log_warn("store_fs: acquire failed for key=%s; draining batch",
                reads[i].key ? reads[i].key : "(null)");

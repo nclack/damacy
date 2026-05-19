@@ -5,8 +5,8 @@
 #include "platform/platform_io.h"
 #include "store/store.h"
 #include "store/store_internal.h"
+#include "util/hash.h"
 #include "util/lru.h"
-#include "util/path_intern.h"
 #include "util/prelude.h"
 #include "util/strbuf.h"
 
@@ -125,8 +125,9 @@ fs_gds_entry_destroy(void* value, void* user)
 }
 
 static struct lru_entry*
-fs_gds_acquire(struct store_fs_gds* g, const char* key, uint64_t hash)
+fs_gds_acquire(struct store_fs_gds* g, const char* key)
 {
+  uint64_t hash = hash_fnv1a_str(key);
   platform_mutex_lock(g->cache_mu);
   struct lru_entry* hit = lru_get(g->cache, hash, key);
   if (hit) {
@@ -275,8 +276,7 @@ gds_submit_dev(struct store* s, const struct store_read* reads, size_t n)
 
   size_t submitted = 0;
   for (size_t i = 0; i < n; ++i) {
-    struct lru_entry* pin =
-      fs_gds_acquire(g, reads[i].key, path_intern_hash(reads[i].key));
+    struct lru_entry* pin = fs_gds_acquire(g, reads[i].key);
     if (!pin) {
       // Reads 0..i-1 are already queued on the stream; tell SubmitFail
       // to drain before freeing params (cuFile holds raw pointers).

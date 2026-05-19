@@ -25,12 +25,9 @@ struct store_fs
   struct lru* fd_cache;
 };
 
-// `hash` is the FNV-1a hash of `key`; pass path_intern_hash(key) when
-// `key` is interned to skip per-call rehashing.
 platform_file*
 store_fs_acquire(struct store_fs* fs,
                  const char* key,
-                 uint64_t hash,
                  struct lru_entry** pin_out);
 
 void
