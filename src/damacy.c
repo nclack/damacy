@@ -468,7 +468,6 @@ destroy_inner(struct damacy* self, int cuda_skip)
   self->batch_samples = NULL;
   lookahead_destroy(&self->lookahead);
   batch_pool_destroy(&self->batch_pool, cuda_skip);
-  path_intern_free(&self->uris);
 
   planner_destroy(self->planner);
   self->planner = NULL;
@@ -476,6 +475,7 @@ destroy_inner(struct damacy* self, int cuda_skip)
   self->shard_cache = NULL;
   zarr_meta_cache_destroy(self->meta_cache);
   self->meta_cache = NULL;
+  path_intern_free(&self->uris);
   store_destroy(self->store_gds);
   self->store_gds = NULL;
   store_destroy(self->store_host);

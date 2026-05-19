@@ -68,10 +68,12 @@ shard_eq(const void* value, const void* probe_key, void* user)
 static void
 shard_destroy(void* value, void* user)
 {
-  (void)user;
   struct shard_entry* entry = (struct shard_entry*)value;
   if (!entry)
     return;
+  struct zarr_shard_cache* cache = (struct zarr_shard_cache*)user;
+  if (cache && cache->uris && entry->uri)
+    path_intern_release(cache->uris, entry->uri);
   free(entry->entries);
   free(entry);
 }
@@ -94,6 +96,7 @@ zarr_shard_cache_create(struct store* store,
   struct lru_ops ops = {
     .eq = shard_eq,
     .destroy = shard_destroy,
+    .user = self,
   };
   // hash_combine over (hash_ptr(uri), hash_fnv1a(shard_coord)) — the
   // multiplicative URI hash and content coord hash mix well; observed
@@ -250,7 +253,18 @@ zarr_shard_cache_get(struct zarr_shard_cache* self,
     free(entries);
     return DAMACY_OOM;
   }
-  entry->uri = uri;
+  // Pin the key: without this, the entry survives every caller
+  // dropping refs and dangles on the freed string.
+  if (self->uris) {
+    entry->uri = path_intern_acquire(self->uris, uri);
+    if (!entry->uri) {
+      free(entry);
+      free(entries);
+      return DAMACY_OOM;
+    }
+  } else {
+    entry->uri = uri;
+  }
   entry->rank = meta->rank;
   for (uint8_t d = 0; d < meta->rank; ++d)
     entry->shard_coord[d] = shard_coord[d];
@@ -264,7 +278,7 @@ zarr_shard_cache_get(struct zarr_shard_cache* self,
   // miss/hit and doesn't promote.
   struct lru_entry* existing = lru_peek(self->lru, hash, &probe);
   if (existing) {
-    shard_destroy(entry, NULL);
+    shard_destroy(entry, self);
     lru_entry_acquire(existing);
     const struct shard_entry* held =
       (const struct shard_entry*)lru_entry_value(existing);

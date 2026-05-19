@@ -271,6 +271,66 @@ test_meta_cache_pointer_identity(void)
   return 0;
 }
 
+// Regression for #114: cache must hold its own path_intern ref so the
+// URI key can't dangle once the caller releases.
+static int
+test_meta_cache_survives_intern_recycle(void)
+{
+  char tmpl[] = "/tmp/damacy_meta_recycle_XXXXXX";
+  char* root = mkdtemp(tmpl);
+  EXPECT(root);
+
+  char path[512];
+  snprintf(path, sizeof path, "%s/foo", root);
+  EXPECT(mkdir(path, 0755) == 0);
+  snprintf(path, sizeof path, "%s/foo/zarr.json", root);
+  EXPECT(fixture_write_file(path, MINIMAL_ZARR_JSON) == 0);
+
+  struct store_fs_config sc = { .root = root, .nthreads = 1 };
+  struct store* store = store_fs_create(&sc);
+  EXPECT(store);
+
+  struct path_intern uris = { 0 };
+  struct zarr_meta_cache* c = zarr_meta_cache_create(store, &uris, 4);
+  EXPECT(c);
+
+  const char* foo = path_intern_acquire(&uris, "foo");
+  EXPECT(foo);
+  struct zarr_metadata m = { 0 };
+  EXPECT(zarr_meta_cache_get(c, foo, &m) == DAMACY_OK);
+
+  path_intern_release(&uris, foo);
+  EXPECT(path_intern_owns(&uris, foo) == 1);
+
+  char buf[16];
+  const char* churn[20];
+  for (int i = 0; i < 20; ++i) {
+    snprintf(buf, sizeof buf, "u%02d", i);
+    churn[i] = path_intern_acquire(&uris, buf);
+    EXPECT(churn[i]);
+  }
+  for (int i = 0; i < 20; ++i)
+    path_intern_release(&uris, churn[i]);
+
+  const char* foo2 = path_intern_acquire(&uris, "foo");
+  EXPECT(foo2 == foo);
+  EXPECT(zarr_meta_cache_get(c, foo2, &m) == DAMACY_OK);
+  struct zarr_meta_cache_stats st;
+  zarr_meta_cache_stats_get(c, &st);
+  EXPECT(st.counters.hits >= 1);
+  EXPECT(st.counters.misses == 1);
+  EXPECT(st.size == 1);
+  path_intern_release(&uris, foo2);
+
+  zarr_meta_cache_destroy(c);
+  EXPECT(path_intern_owns(&uris, foo) == 0);
+
+  path_intern_free(&uris);
+  store_destroy(store);
+  fixture_rm_tree(root);
+  return 0;
+}
+
 int
 main(void)
 {
@@ -278,6 +338,7 @@ main(void)
   RUN(test_meta_cache_unsharded);
   RUN(test_meta_cache_index_start);
   RUN(test_meta_cache_pointer_identity);
+  RUN(test_meta_cache_survives_intern_recycle);
   log_info("all tests passed");
   return 0;
 }
