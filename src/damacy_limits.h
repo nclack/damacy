@@ -73,6 +73,12 @@ _Static_assert(DAMACY_DEFAULT_READ_OP_MAX_BYTES <= UINT32_MAX,
 //       kernels.
 #define DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK 32u
 
+// Structural ceiling on blosc1 sub-streams across a wave. Caps fanout
+// SOA growth and zstd-decoder batch growth.
+#define WAVE_ZSUBS_STRUCTURAL_MAX                                              \
+  ((size_t)DAMACY_MAX_CHUNKS_PER_WAVE *                                        \
+   (size_t)DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK)
+
 // Defensive cap on header.nbytes parsed from a blosc1 chunk. Prevents
 // overflow in the nblocks ceil-div for adversarial inputs.
 #define DAMACY_BLOSC_MAX_CHUNK_UNCOMPRESSED_BYTES (16ull << 20) // 16 MB

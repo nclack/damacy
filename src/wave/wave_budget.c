@@ -186,8 +186,7 @@ predict_pool_total(uint64_t host_slab_per_wave,
   if (s != DAMACY_OK)
     return s;
 
-  const uint64_t zsubs_max = (uint64_t)DAMACY_MAX_CHUNKS_PER_WAVE *
-                             (uint64_t)DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK;
+  const uint64_t zsubs_max = (uint64_t)WAVE_ZSUBS_STRUCTURAL_MAX;
   uint64_t nvcomp_temp_max = 0;
   s = predict_decoder_scratch_bytes(
     zsubs_max, dev_per_wave, max_chunk_uncompressed_bytes, &nvcomp_temp_max);
@@ -302,11 +301,9 @@ decoder_scratch_grow(struct decoder_zstd* decoder,
   }
   if (need <= cur)
     return DAMACY_OK;
-  const size_t structural_max = (size_t)DAMACY_MAX_CHUNKS_PER_WAVE *
-                                (size_t)DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK;
   size_t new_cap = fanout_next_pow2(need);
-  if (new_cap > structural_max)
-    new_cap = structural_max;
+  if (new_cap > WAVE_ZSUBS_STRUCTURAL_MAX)
+    new_cap = WAVE_ZSUBS_STRUCTURAL_MAX;
 
   uint64_t old_bytes = 0, new_bytes = 0;
   enum damacy_status sp = predict_decoder_scratch_bytes(
