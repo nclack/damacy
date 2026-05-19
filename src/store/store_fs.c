@@ -122,9 +122,7 @@ store_fs_release(struct store_fs* fs, struct lru_entry* pin)
 {
   if (!fs || !pin)
     return;
-  platform_mutex_lock(fs->cache_mu);
   lru_entry_release(pin);
-  platform_mutex_unlock(fs->cache_mu);
 }
 
 void
