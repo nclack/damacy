@@ -65,7 +65,7 @@ def test_native_damacy_error_carries_status_and_what():
             n_zarrs_meta_cache=4,
             n_shards_meta_cache=4,
             dtype="f32",
-            max_chunk_uncompressed_bytes=0,
+            max_chunk_uncompressed_bytes=512 << 10,
             max_gpu_memory_bytes=0,
             sample_shape=(8, 16),
         )
