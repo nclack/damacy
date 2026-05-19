@@ -7,7 +7,6 @@
 #include "util/path_intern.h"
 #include "util/prelude.h"
 #include "util/strbuf.h"
-#include "wave/blosc_nblocks_observer.h"
 #include "zarr/zarr_meta_cache.h"
 #include "zarr/zarr_metadata.h"
 #include "zarr/zarr_shard_cache.h"
@@ -211,7 +210,6 @@ struct emit_ctx
   // populates ->layout / ->layout_probed on the first non-fill emit.
   struct sample_plan* sp;
   struct zarr_meta_cache* meta_cache;
-  _Atomic(uint16_t)* observed_max_nblocks;
   // per-shard
   const struct zarr_shard_entry* shard_entries;
   uint64_t n_shard_entries;
@@ -293,8 +291,8 @@ emit_chunk(const struct emit_ctx* ctx,
 
   // First non-fill chunk for this sample: probe (or fetch cached) the
   // blosc1 chunk layout and stash it on the sample_plan. Probe failure
-  // is non-fatal — downstream falls back to MAX_BLOCKS_PER_CHUNK in
-  // cap calculations.
+  // is non-fatal — downstream uses the observed max nblocks from the
+  // wave pool, fired internally by the meta cache on first probe.
   if (ctx->sp && !ctx->sp->layout_probed) {
     struct chunk_layout cl = { 0 };
     if (zarr_meta_cache_probe_layout(ctx->meta_cache,
@@ -306,8 +304,6 @@ emit_chunk(const struct emit_ctx* ctx,
                                      &cl) == 0) {
       ctx->sp->layout = cl;
       ctx->sp->layout_probed = 1;
-      wave_pool_observe_blosc_nblocks(ctx->observed_max_nblocks,
-                                      (uint16_t)cl.nblocks);
     }
   }
 
@@ -486,7 +482,6 @@ planner_plan(struct planner* self,
       .page_alignment_bytes = self->cfg.page_alignment,
       .sp = sp,
       .meta_cache = self->cfg.meta_cache,
-      .observed_max_nblocks = self->cfg.observed_max_nblocks,
     };
 
     // Iterate chunks in [chunk_lo, chunk_hi) row-major.
