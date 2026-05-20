@@ -31,6 +31,7 @@ add_src_lib(json_writer SOURCES util/json_writer.c util/json_writer.h LINKS strb
 add_src_lib(crc32c SOURCES util/crc32c.c util/crc32c.h LINKS platform)
 add_src_lib(hash   SOURCES util/hash.c   util/hash.h)
 add_src_lib(lru    SOURCES util/lru.c    util/lru.h LINKS log)
+add_src_lib(pool   SOURCES util/pool.c   util/pool.h LINKS log platform)
 add_src_lib(path_intern SOURCES util/path_intern.c util/path_intern.h LINKS hash)
 
 # Platform abstraction (posix-only for now; chucky-style platform-split lives here).
@@ -145,7 +146,7 @@ add_cuda_lib(wave_pool SOURCES wave/wave_pool.h wave/wave_pool.c
 # independent cuFile-backed store. DAMACY_ENABLE_GDS=OFF links the stub
 # (store_fs_gds_create returns NULL); runtime GDS opt-in then fails INVAL.
 add_src_lib(store SOURCES store/store.h store/store_internal.h store/store.c store/store_fs.h store/store_fs.c
-    LINKS io_queue platform_io strbuf log lru hash
+    LINKS io_queue platform_io strbuf log lru pool hash
 )
 if(NOT DAMACY_FUZZ AND DAMACY_ENABLE_GDS)
     target_sources(store PRIVATE store/store_fs_gds.h store/store_fs_gds.c)

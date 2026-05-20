@@ -1,10 +1,12 @@
 #include "store/store_fs.h"
 
+#include "damacy_limits.h"
 #include "log/log.h"
 #include "store/store.h"
 #include "store/store_internal.h"
 #include "util/hash.h"
 #include "util/lru.h"
+#include "util/pool.h"
 #include "util/prelude.h"
 #include "util/strbuf.h"
 
@@ -160,8 +162,9 @@ fs_read_job_free(void* vctx)
   struct fs_read_job* j = (struct fs_read_job*)vctx;
   if (!j)
     return;
-  store_fs_release(j->fs, j->pin);
-  free(j);
+  struct store_fs* fs = j->fs;
+  store_fs_release(fs, j->pin);
+  pool_free(fs->job_pool, j);
 }
 
 static struct store_event
@@ -187,9 +190,10 @@ fs_submit(struct store* s, const struct store_read* reads, size_t n)
                reads[i].key ? reads[i].key : "(null)");
       goto Drain;
     }
-    struct fs_read_job* j =
-      (struct fs_read_job*)calloc(1, sizeof(struct fs_read_job));
+    struct fs_read_job* j = (struct fs_read_job*)pool_alloc(fs->job_pool);
     if (!j) {
+      log_warn("store_fs: job_pool exhausted (cap=%zu); draining batch",
+               pool_capacity(fs->job_pool));
       store_fs_release(fs, pin);
       goto Drain;
     }
@@ -288,12 +292,14 @@ fs_destroy(struct store* s)
   struct store_fs* fs = (struct store_fs*)s;
   if (!fs)
     return;
-  // Drain + destroy io_queue first so in-flight jobs release their
-  // pins before lru_destroy walks the cache.
+  // io_event_wait drains the ring so every job's ctx_free (which calls
+  // pool_free and releases pins) has run before we tear down the pool
+  // and lru. io_queue_destroy does not drain queued jobs itself.
   if (fs->q) {
     io_event_wait(fs->q, io_queue_record(fs->q));
     io_queue_destroy(fs->q);
   }
+  pool_destroy(fs->job_pool);
   lru_destroy(fs->fd_cache);
   platform_mutex_free(fs->cache_mu);
   free(fs->root);
@@ -305,7 +311,9 @@ store_fs_free_partial(struct store_fs* fs)
 {
   if (!fs)
     return;
+  // No jobs posted yet; in_use is 0, so pool_destroy's assert holds.
   io_queue_destroy(fs->q);
+  pool_destroy(fs->job_pool);
   lru_destroy(fs->fd_cache);
   platform_mutex_free(fs->cache_mu);
   free(fs->root);
@@ -351,6 +359,13 @@ store_fs_create(const struct store_fs_config* cfg)
 
   fs->q = io_queue_create(cfg->nthreads, cfg->affinity);
   CHECK_SILENT(Fail, fs->q);
+
+  // Sized to the io_queue ring's initial cap. The ring grows past this
+  // only under heavy burst; in that regime fs_submit fails (seq==0) and
+  // the caller drains, rather than spilling to a second allocator.
+  fs->job_pool =
+    pool_create(sizeof(struct fs_read_job), DAMACY_IO_QUEUE_INITIAL_CAP);
+  CHECK_SILENT(Fail, fs->job_pool);
 
   return &fs->base;
 
