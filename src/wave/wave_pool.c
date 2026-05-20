@@ -65,10 +65,10 @@ wave_pool_init(struct wave_pool* wp,
   wp->use_gds = (uint8_t)(enable_gds != 0);
   wp->bypass_decode = (uint8_t)(bypass_decode != 0);
   // Init = 1 (not the structural max) so first-wave fanout doesn't
-  // over-allocate. Safety depends on wave_chunks_eligible: a wave with
-  // any unprobed BLOSC_ZSTD chunk is rejected before prepare_decode_caps,
-  // so chunk_zsubs_upper_bound never reaches the observer-fallback path
-  // on the first wave.
+  // over-allocate. Safety depends on kick_h2d running wave_chunks_eligible
+  // before prepare_decode_caps: a wave with any unprobed BLOSC_ZSTD chunk
+  // is rejected first, so chunk_zsubs_upper_bound never reaches the
+  // observer-fallback path on the first wave.
   atomic_store_explicit(
     &wp->observed_max_nblocks_per_chunk, 1u, memory_order_relaxed);
 
@@ -544,10 +544,7 @@ kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
     goto Error;
 
   needs_end_record = 1;
-  s = prepare_decode_caps(wp, wave);
-  if (s != DAMACY_OK)
-    goto Error;
-
+  // Order matters: see observed_max_nblocks_per_chunk init in wave_pool_init.
   if (!wave_chunks_eligible(wp, wave)) {
     // Probe gap (e.g. all-fill preceding waves never seeded the layout
     // cache) or unsupported dont_split=0 — not garbage in compressed
@@ -557,6 +554,10 @@ kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
     s = DAMACY_INVAL;
     goto Error;
   }
+  s = prepare_decode_caps(wp, wave);
+  if (s != DAMACY_OK)
+    goto Error;
+
   build_gpu_parse_chunks(wp, wave);
   needs_end_record = 0; // gpu_parse records h2d_end itself
   s = gpu_parse(wp, wave);
