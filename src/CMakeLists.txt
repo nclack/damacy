@@ -77,10 +77,8 @@ add_src_lib(damacy_config SOURCES damacy_config.h damacy_config.c
     LINKS dtype log platform
 )
 
-# Push-side ring of pending samples. Holds interned URI refs; drain
-# transfers each ref to the planner's sample-slot array.
 add_src_lib(lookahead SOURCES lookahead/lookahead.h lookahead/lookahead.c
-    LINKS path_intern log
+    LINKS log
 )
 
 # Runtime GPU-memory committer: tracks bytes committed against a
@@ -168,16 +166,14 @@ add_src_lib(zarr_chunk_layout SOURCES zarr/zarr_chunk_layout.h zarr/zarr_chunk_l
     LINKS zarr store log
 )
 
-# damacy-side metadata cache (LRU around zarr_metadata_parse).
 # damacy.h is header-included for the damacy_status enum; no link needed
 # (no symbols referenced).
 add_src_lib(zarr_meta_cache SOURCES zarr/zarr_meta_cache.h zarr/zarr_meta_cache.c
-    LINKS zarr zarr_chunk_layout lru store strbuf hash path_intern log
+    LINKS zarr zarr_chunk_layout lru store strbuf hash log
 )
 
-# damacy-side shard index cache (LRU around zarr_shard_index_parse).
 add_src_lib(zarr_shard_cache SOURCES zarr/zarr_shard_cache.h zarr/zarr_shard_cache.c
-    LINKS zarr lru store strbuf hash path_intern log
+    LINKS zarr lru store strbuf hash log
 )
 
 # Planner: samples + cached metadata → page-aligned read_ops + chunk_plans.

@@ -1,15 +1,3 @@
-// LRU cache of parsed zarr v3 array metadata, keyed by URI (path within
-// a store). Each cached entry holds the parsed `zarr_metadata` struct
-// and the URI string used to fetch it.
-//
-// CONTRACT: URI keys are compared by pointer identity, not strcmp. The
-// caller MUST pass a path_intern-acquired pointer; a raw strdup will
-// miss every lookup and pollute the LRU. The contract is not statically
-// enforced — `const char*` can't distinguish interned from non-interned.
-// When `uris` is supplied to _create, the cache asserts ownership in
-// debug builds; under NDEBUG the asserts vanish.
-//
-// The cache borrows the store and `uris`; both must outlive the cache.
 #pragma once
 
 #include "damacy.h"   // damacy_status
@@ -24,14 +12,10 @@ extern "C"
 {
 #endif
 
-  struct path_intern;
   struct store;
   struct zarr_meta_cache;
 
-  // `uris` is the path_intern that owns every URI key; pass NULL to
-  // disable the debug-only ownership assertion (legacy tests).
   struct zarr_meta_cache* zarr_meta_cache_create(struct store* store,
-                                                 struct path_intern* uris,
                                                  uint32_t capacity);
 
   void zarr_meta_cache_destroy(struct zarr_meta_cache* c);
