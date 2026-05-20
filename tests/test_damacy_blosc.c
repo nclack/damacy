@@ -17,7 +17,7 @@
 //                                         keeps the grow inside the cap
 //   test_layout_probe_avoids_decoder_grow
 //                                       — with the planner's chunk_layout
-//                                         probe, need_zsubs is computed
+//                                         probe, need_substreams is computed
 //                                         from probed nblocks; the
 //                                         single-block fixture stays
 //                                         under the initial cap and the
@@ -344,7 +344,7 @@ test_multi_wave_per_batch(void)
 
 // Single wave with > 32 chunks forces both the per-wave fanout SOA and
 // the pool-shared decoder scratch to grow past
-// DAMACY_BLOSC_ZSTD_INITIAL_BATCH_CAP (1024). need_zsubs = n_chunks *
+// DAMACY_BLOSC_ZSTD_INITIAL_BATCH_CAP (1024). need_substreams = n_chunks *
 // MAX_BLOCKS_PER_CHUNK = 64 * 32 = 2048 > 1024 triggers both grows in
 // kick_h2d. Regression for the per-wave-fanout corruption bug: in the
 // pre-fix code, growing wave A's fanout reallocated wave B's fanout in
@@ -487,7 +487,7 @@ test_grow_inside_tight_budget(void)
 // With the planner's chunk_layout probe in place, the per-wave
 // substream count is computed from the probed nblocks rather than
 // MAX_BLOCKS_PER_CHUNK. This 256-byte-chunk fixture has nblocks=1, so
-// need_zsubs (64) stays under the initial 1024-cap and the
+// need_substreams (64) stays under the initial 1024-cap and the
 // decoder/fanout grow paths do NOT fire — even with the budget
 // inflated to leave only 1 MB headroom. The pop succeeds.
 //
@@ -526,8 +526,8 @@ test_layout_probe_avoids_decoder_grow(void)
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
   // Pre-fix: the decoder grow's ~7 MB delta from 1024 → 2048
-  // substreams (driven by need_zsubs = n_chunks * MAX_BLOCKS) tripped
-  // OOM here. Post-fix: probed nblocks = 1, need_zsubs = 64, no grow.
+  // substreams (driven by need_substreams = n_chunks * MAX_BLOCKS) tripped
+  // OOM here. Post-fix: probed nblocks = 1, need_substreams = 64, no grow.
   const uint64_t headroom = 1ull << 20;
   (void)damacy_set_gpu_bytes_committed_for_test(
     d, cfg.tuning.max_gpu_memory_bytes - headroom);

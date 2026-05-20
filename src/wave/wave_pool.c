@@ -96,14 +96,15 @@ wave_pool_init(struct wave_pool* wp,
   // Initial floor for the shared decoder; decoder_scratch_grow bumps
   // it lazily when a wave's substream count exceeds the current cap.
   // Per-wave fanout SOAs grow independently via fanout_grow.
-  size_t zsubs = 0, zstd_per = 0, total_uncompressed = 0;
+  size_t substreams = 0, zstd_per = 0, total_uncompressed = 0;
   decoder_initial_caps(max_chunks_per_wave,
                        dev_per_wave,
                        max_chunk_uncompressed_bytes,
-                       &zsubs,
+                       &substreams,
                        &zstd_per,
                        &total_uncompressed);
-  wp->zstd_decoder = decoder_zstd_create(zsubs, zstd_per, total_uncompressed);
+  wp->zstd_decoder =
+    decoder_zstd_create(substreams, zstd_per, total_uncompressed);
   CHECK(Fail, wp->zstd_decoder);
 
   // GDS-only slots skip the pinned-host alloc; non-GDS slots skip the
@@ -352,9 +353,9 @@ CudaFail:
 }
 
 static inline enum damacy_status
-chunk_zsubs_upper_bound(const struct chunk_plan* c,
-                        const struct sample_plan* sp,
-                        uint32_t* out)
+chunk_substreams_upper_bound(const struct chunk_plan* c,
+                             const struct sample_plan* sp,
+                             uint32_t* out)
 {
   if (c->is_fill || c->codec_id == (uint8_t)CODEC_FILL ||
       c->codec_id == (uint8_t)CODEC_NONE) {
@@ -379,7 +380,7 @@ static enum damacy_status
 prepare_decode_caps(struct wave_pool* wp, struct damacy_wave* wave)
 {
   struct damacy_batch_slot* slot = &wp->pool->slots[wave->batch_pool_slot];
-  size_t need_zsubs = 0;
+  size_t need_substreams = 0;
   // bypass_decode flips every chunk to is_fill at build time, so the
   // wave needs zero zstd substream scratch.
   if (!wp->bypass_decode) {
@@ -389,20 +390,20 @@ prepare_decode_caps(struct wave_pool* wp, struct damacy_wave* wave)
       const struct sample_plan* sp =
         &slot->sample_plans[c->sample_idx_in_batch];
       uint32_t n = 0;
-      enum damacy_status zs = chunk_zsubs_upper_bound(c, sp, &n);
+      enum damacy_status zs = chunk_substreams_upper_bound(c, sp, &n);
       if (zs != DAMACY_OK) {
         log_error("prepare_decode_caps: chunk %u failed substream upper "
                   "bound (gate-vs-sizer contract violated)",
                   i);
         return zs;
       }
-      need_zsubs += n;
+      need_substreams += n;
     }
   }
   enum damacy_status gs = fanout_grow(&wave->h_zstd_fan,
                                       &wave->zstd_fan,
                                       &wave->fanout_cap,
-                                      need_zsubs,
+                                      need_substreams,
                                       wp->max_substreams_per_wave,
                                       wp->budget);
   if (gs != DAMACY_OK)
@@ -414,7 +415,7 @@ prepare_decode_caps(struct wave_pool* wp, struct damacy_wave* wave)
                               wp->dev_per_wave,
                               wp->max_chunk_uncompressed_bytes,
                               wp->budget,
-                              need_zsubs);
+                              need_substreams);
 }
 
 // GPU parse: upload inputs (parse_chunks, assemble_chunks,

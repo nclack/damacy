@@ -64,11 +64,11 @@ wave_init(struct damacy_wave* wave,
   CU(Error, cuMemAlloc(&dptr, (size_t)cap * sizeof(uint32_t)));
   wave->d_blosc_chunk_indices = (uint32_t*)(uintptr_t)dptr;
   {
-    const size_t zsubs_max = max_substreams_per_wave;
+    const size_t substreams_max = max_substreams_per_wave;
     CU(Error,
        cuMemAllocHost((void**)&wave->h_block_chunk_map,
-                      zsubs_max * sizeof(uint32_t)));
-    CU(Error, cuMemAlloc(&dptr, zsubs_max * sizeof(uint32_t)));
+                      substreams_max * sizeof(uint32_t)));
+    CU(Error, cuMemAlloc(&dptr, substreams_max * sizeof(uint32_t)));
   }
   wave->d_block_chunk_map = (uint32_t*)(uintptr_t)dptr;
   // Bitset: one bit per wave-local chunk index, rounded to uint32_t words.
@@ -85,10 +85,10 @@ wave_init(struct damacy_wave* wave,
 
   // Initial per-wave fanout cap — kick_h2d grows this wave's SOA when
   // n_chunks * MAX_BLOCKS exceeds it. Independent of the other wave.
-  const size_t zsubs = DAMACY_BLOSC_ZSTD_INITIAL_BATCH_CAP;
-  if (fanout_alloc_pinned(&wave->h_zstd_fan, &wave->zstd_fan, zsubs))
+  const size_t substreams = DAMACY_BLOSC_ZSTD_INITIAL_BATCH_CAP;
+  if (fanout_alloc_pinned(&wave->h_zstd_fan, &wave->zstd_fan, substreams))
     goto Error;
-  wave->fanout_cap = (uint32_t)zsubs;
+  wave->fanout_cap = (uint32_t)substreams;
 
   CU(Error,
      cuMemAllocHost((void**)&wave->h_memcpy_ops,
