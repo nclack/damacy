@@ -306,9 +306,8 @@ zarr_shard_cache_release(struct zarr_shard_cache* self,
   CHECK(Fail, self);
   if (!pin.opaque)
     return;
-  platform_mutex_lock(self->mu);
+  // Per-entry refcount is atomic; no cache_mu needed. See store_fs_release.
   lru_entry_release((struct lru_entry*)pin.opaque);
-  platform_mutex_unlock(self->mu);
   return;
 Fail:
   return;

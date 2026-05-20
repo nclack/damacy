@@ -6,6 +6,7 @@
 #include "util/lru.h"
 
 #include <pthread.h>
+#include <sched.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -160,14 +161,13 @@ test_pin_saturation(void)
   return 0;
 }
 
-// store_fs_release is the only lock-free lru_entry_release call site
-// (zarr_*_cache_release takes the cache mutex). This exercises that path
-// against concurrent acquire/eviction; under TSan it surfaces any missing
-// happens-before between release and the eviction-gating acquire reads.
+// Under TSan, surfaces missing happens-before between lock-free release and
+// the eviction-gating acquire reads.
 #define CONTEND_KEYS 32u
 #define CONTEND_CAP 4u
 #define CONTEND_THREADS 4
 #define CONTEND_ITERS 4000
+#define CONTEND_MAX_RETRIES 1000
 
 struct contend_args
 {
@@ -183,10 +183,15 @@ contend_worker(void* arg)
     char key[32];
     snprintf(key, sizeof key, "k%u", (unsigned)(i % CONTEND_KEYS));
     struct lru_entry* pin = NULL;
-    if (store_fs_acquire(w->fs, key, &pin)) {
-      atomic_fetch_add(&w->ok_count, 1);
-      store_fs_release(w->fs, pin);
+    for (int attempts = 0; attempts < CONTEND_MAX_RETRIES; ++attempts) {
+      if (store_fs_acquire(w->fs, key, &pin))
+        break;
+      sched_yield();
     }
+    if (!pin)
+      return NULL;
+    atomic_fetch_add(&w->ok_count, 1);
+    store_fs_release(w->fs, pin);
   }
   return NULL;
 }

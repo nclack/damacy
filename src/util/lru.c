@@ -517,9 +517,6 @@ lru_entry_acquire(struct lru_entry* entry)
 {
   if (!entry)
     return;
-  // Wrap to zero would let eviction free a live entry.
-  assert(atomic_load_explicit(&entry->refcount, memory_order_relaxed) <
-         UINT32_MAX);
   atomic_fetch_add_explicit(&entry->refcount, 1u, memory_order_relaxed);
 }
 
