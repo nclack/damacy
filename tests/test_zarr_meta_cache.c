@@ -4,7 +4,6 @@
 
 #include "fixture.h"
 #include "store/store.h"
-#include "util/path_intern.h"
 #include "zarr/zarr_meta_cache.h"
 #include "zarr/zarr_metadata.h"
 
@@ -96,7 +95,7 @@ test_meta_cache(void)
   struct store* store = store_fs_create(&sc);
   EXPECT(store);
 
-  struct zarr_meta_cache* c = zarr_meta_cache_create(store, NULL, 4);
+  struct zarr_meta_cache* c = zarr_meta_cache_create(store, 4);
   EXPECT(c);
 
   // First get: miss → load → return.
@@ -157,7 +156,7 @@ test_meta_cache_unsharded(void)
   struct store* store = store_fs_create(&sc);
   EXPECT(store);
 
-  struct zarr_meta_cache* c = zarr_meta_cache_create(store, NULL, 4);
+  struct zarr_meta_cache* c = zarr_meta_cache_create(store, 4);
   EXPECT(c);
 
   struct zarr_metadata m = { 0 };
@@ -194,7 +193,7 @@ test_meta_cache_index_start(void)
   struct store* store = store_fs_create(&sc);
   EXPECT(store);
 
-  struct zarr_meta_cache* c = zarr_meta_cache_create(store, NULL, 4);
+  struct zarr_meta_cache* c = zarr_meta_cache_create(store, 4);
   EXPECT(c);
 
   struct zarr_metadata m = { 0 };
@@ -208,13 +207,10 @@ test_meta_cache_index_start(void)
   return 0;
 }
 
-// Drives the cache through a path_intern so the ownership assert fires
-// on non-interned keys; verifies that re-interning the same string
-// produces a hit (same pointer) and a different string a miss.
 static int
-test_meta_cache_pointer_identity(void)
+test_meta_cache_content_keyed(void)
 {
-  char tmpl[] = "/tmp/damacy_meta_pid_XXXXXX";
+  char tmpl[] = "/tmp/damacy_meta_content_XXXXXX";
   char* root = mkdtemp(tmpl);
   EXPECT(root);
 
@@ -232,16 +228,14 @@ test_meta_cache_pointer_identity(void)
   struct store* store = store_fs_create(&sc);
   EXPECT(store);
 
-  struct path_intern uris = { 0 };
-  struct zarr_meta_cache* c = zarr_meta_cache_create(store, &uris, 4);
+  struct zarr_meta_cache* c = zarr_meta_cache_create(store, 4);
   EXPECT(c);
 
-  const char* foo_a = path_intern_acquire(&uris, "foo");
-  const char* foo_b = path_intern_acquire(&uris, "foo");
-  const char* bar = path_intern_acquire(&uris, "bar");
-  EXPECT(foo_a && foo_b && bar);
-  EXPECT(foo_a == foo_b);
-  EXPECT(foo_a != bar);
+  char foo_a[16];
+  char foo_b[16];
+  snprintf(foo_a, sizeof foo_a, "foo");
+  snprintf(foo_b, sizeof foo_b, "foo");
+  EXPECT(&foo_a[0] != &foo_b[0]);
 
   struct zarr_metadata m = { 0 };
   EXPECT(zarr_meta_cache_get(c, foo_a, &m) == DAMACY_OK);
@@ -256,16 +250,19 @@ test_meta_cache_pointer_identity(void)
   EXPECT(st.counters.misses == 1);
   EXPECT(st.size == 1);
 
-  EXPECT(zarr_meta_cache_get(c, bar, &m) == DAMACY_OK);
+  foo_a[0] = 'x';
+  EXPECT(zarr_meta_cache_get(c, "foo", &m) == DAMACY_OK);
+  zarr_meta_cache_stats_get(c, &st);
+  EXPECT(st.counters.hits == 2);
+  EXPECT(st.counters.misses == 1);
+  EXPECT(st.size == 1);
+
+  EXPECT(zarr_meta_cache_get(c, "bar", &m) == DAMACY_OK);
   zarr_meta_cache_stats_get(c, &st);
   EXPECT(st.counters.misses == 2);
   EXPECT(st.size == 2);
 
-  path_intern_release(&uris, foo_a);
-  path_intern_release(&uris, foo_b);
-  path_intern_release(&uris, bar);
   zarr_meta_cache_destroy(c);
-  path_intern_free(&uris);
   store_destroy(store);
   fixture_rm_tree(root);
   return 0;
@@ -277,7 +274,7 @@ main(void)
   RUN(test_meta_cache);
   RUN(test_meta_cache_unsharded);
   RUN(test_meta_cache_index_start);
-  RUN(test_meta_cache_pointer_identity);
+  RUN(test_meta_cache_content_keyed);
   log_info("all tests passed");
   return 0;
 }
