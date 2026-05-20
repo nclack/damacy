@@ -13,8 +13,8 @@ extern "C"
   // Slots are sized up to max(elem_size, sizeof(void*)) and rounded to
   // _Alignof(max_align_t) so any standard scalar type stays aligned.
   struct pool* pool_create(size_t elem_size, size_t capacity);
-  // Caller must ensure no concurrent alloc/free; not thread-safe with respect
-  // to other pool operations.
+  // Not safe to call concurrently with pool_alloc or pool_free.
+  // pool_alloc/pool_free are themselves thread-safe.
   void pool_destroy(struct pool* p);
 
   // NULL on exhaustion.

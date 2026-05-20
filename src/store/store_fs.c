@@ -311,7 +311,7 @@ store_fs_free_partial(struct store_fs* fs)
 {
   if (!fs)
     return;
-  // No jobs posted on the error path; io_queue_destroy drain suffices.
+  // No jobs posted yet; in_use is 0, so pool_destroy's assert holds.
   io_queue_destroy(fs->q);
   pool_destroy(fs->job_pool);
   lru_destroy(fs->fd_cache);
