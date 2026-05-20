@@ -49,10 +49,14 @@ _Static_assert(DAMACY_DEFAULT_READ_OP_MAX_BYTES <= UINT32_MAX,
 // pinned host memory.
 #define DAMACY_MAX_HOST_BUFFER_WAVES 8
 
-// Wave cap. Decoupled from the per-batch cap below: nvcomp temp scratch
-// is sized as MAX_CHUNKS_PER_WAVE × runtime_chunk_cap (× 2 waves), so we
-// keep this small and let large batches split across multiple waves.
-#define DAMACY_MAX_CHUNKS_PER_WAVE 512u
+// Default for damacy_tuning.max_chunks_per_wave. nvcomp temp scratch is
+// sized as max_chunks_per_wave × runtime_chunk_cap (× 2 waves) so the
+// default stays small and large batches split across multiple waves.
+#define DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE 512u
+
+// Hard upper bound on damacy_tuning.max_chunks_per_wave: d_block_chunk_map
+// packs chunk_idx into the upper 16 bits.
+#define DAMACY_HARD_MAX_CHUNKS_PER_WAVE 0xFFFFu
 
 // Per-batch hard cap. Bounds the planner output and the assemble
 // metadata buffer.
@@ -63,49 +67,19 @@ _Static_assert(DAMACY_DEFAULT_READ_OP_MAX_BYTES <= UINT32_MAX,
 // workload demonstrates need.
 #define DAMACY_MAX_IO_THREADS 32u
 
-// Sized to absorb one full wave (DAMACY_MAX_CHUNKS_PER_WAVE) without
-// growing. Must be a power of two — io_queue indexes via bitmask.
+// Sized to absorb one full default wave without growing. Must be a power
+// of two — io_queue indexes via bitmask.
 #define DAMACY_IO_QUEUE_INITIAL_CAP 512u
 
-// Per-zarr-chunk blosc1 nblocks cap. Two roles:
-//   (a) parser hard reject — zarr_chunk_layout_probe rejects layouts
-//       with more blocks (DAMACY_DECODE);
-//   (b) bound on kernel smem bstarts/sorted arrays in the parse/emit
-//       kernels.
-#define DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK 32u
-
-// Structural ceiling on blosc1 sub-streams across a wave. Caps fanout
-// SOA growth and zstd-decoder batch growth.
-#define WAVE_ZSUBS_STRUCTURAL_MAX                                              \
-  ((size_t)DAMACY_MAX_CHUNKS_PER_WAVE *                                        \
-   (size_t)DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK)
-#ifdef __cplusplus
-static_assert(WAVE_ZSUBS_STRUCTURAL_MAX <= UINT32_MAX,
-              "fanout cap is uint32_t");
-#else
-_Static_assert(WAVE_ZSUBS_STRUCTURAL_MAX <= UINT32_MAX,
-               "fanout cap is uint32_t");
-#endif
+// Default for damacy_tuning.max_substreams_per_chunk. Parser rejects
+// blosc1 layouts with more sub-streams (DAMACY_DECODE).
+#define DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK 32u
 
 // Defensive cap on header.nbytes parsed from a blosc1 chunk. Prevents
 // overflow in the nblocks ceil-div for adversarial inputs.
 #define DAMACY_BLOSC_MAX_CHUNK_UNCOMPRESSED_BYTES (16ull << 20) // 16 MB
 
-// d_block_chunk_map packs chunk_idx into the upper 16 bits; the GPU
-// kernel unpacks via `packed >> 16` and indexes d_chunks/d_sample_plans
-// directly. Raising the cap past 0xFFFFu silently truncates.
-#ifdef __cplusplus
-static_assert(DAMACY_MAX_CHUNKS_PER_WAVE <= 0xFFFFu,
-              "DAMACY_MAX_CHUNKS_PER_WAVE must fit in 16 bits");
-#else
-_Static_assert(DAMACY_MAX_CHUNKS_PER_WAVE <= 0xFFFFu,
-               "DAMACY_MAX_CHUNKS_PER_WAVE must fit in 16 bits");
-#endif
 // Initial substream-batch cap for the pool-shared zstd decoder + per-wave
-// fanout SOAs. Sized off a typical wave (hundreds of substreams) rather
-// than the hard ceiling above; grows on demand when a wave's actual
-// substream count exceeds the current cap.
+// fanout SOAs. Sized off a typical wave (hundreds of substreams);
+// grows on demand when a wave's actual substream count exceeds the cap.
 #define DAMACY_BLOSC_ZSTD_INITIAL_BATCH_CAP 1024u
-// Memcpy + (bit)unshuffle ops cap: every chunk could be MEMCPY/SHUFFLE'd.
-#define DAMACY_MAX_BLOSC_MEMCPY_OPS_PER_WAVE DAMACY_MAX_CHUNKS_PER_WAVE
-#define DAMACY_MAX_BLOSC_SHUFFLE_OPS_PER_WAVE DAMACY_MAX_CHUNKS_PER_WAVE

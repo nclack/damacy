@@ -172,6 +172,8 @@ fixture_init_with_json(struct fixture* f,
   struct planner_config pcfg = {
     .meta_cache = f->meta,
     .shard_cache = f->shards,
+    .max_chunks_per_wave = DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE,
+    .max_substreams_per_chunk = DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK,
     .page_alignment = PAGE,
     .read_op_max_bytes = UINT64_MAX,
   };
@@ -583,6 +585,8 @@ test_missing_shard_becomes_fill(void)
   struct planner_config pcfg = {
     .meta_cache = meta,
     .shard_cache = shards,
+    .max_chunks_per_wave = DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE,
+    .max_substreams_per_chunk = DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK,
     .page_alignment = PAGE,
     .read_op_max_bytes = UINT64_MAX,
   };
@@ -922,6 +926,8 @@ fixture_init_unsharded(struct fixture* f, const uint32_t* chunk_bytes_2x2)
   struct planner_config pcfg = {
     .meta_cache = f->meta,
     .shard_cache = f->shards,
+    .max_chunks_per_wave = DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE,
+    .max_substreams_per_chunk = DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK,
     .page_alignment = PAGE,
     .read_op_max_bytes = UINT64_MAX,
   };
@@ -1067,6 +1073,8 @@ test_sharded_index_start(void)
   struct planner_config pcfg = {
     .meta_cache = f.meta,
     .shard_cache = f.shards,
+    .max_chunks_per_wave = DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE,
+    .max_substreams_per_chunk = DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK,
     .page_alignment = PAGE,
     .read_op_max_bytes = UINT64_MAX,
   };

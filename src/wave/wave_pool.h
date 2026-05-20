@@ -34,6 +34,11 @@ struct wave_pool
   struct host_slab_slot slots[DAMACY_MAX_HOST_BUFFER_WAVES];
   uint8_t n_slots;
 
+  // max_substreams_per_wave = max_chunks_per_wave * max_substreams_per_chunk.
+  uint32_t max_chunks_per_wave;
+  uint16_t max_substreams_per_chunk;
+  uint32_t max_substreams_per_wave;
+
   // stream_decode: nvcomp decode + status_reduce. stream_post:
   // everything past ev.decode_done — gated cross-stream so wave N's
   // tail overlaps wave N+1's decode.
@@ -103,6 +108,8 @@ wave_pool_init(struct wave_pool* wp,
                struct damacy_stats* stats,
                enum damacy_dtype dtype,
                uint8_t host_buffer_waves,
+               uint32_t max_chunks_per_wave,
+               uint16_t max_substreams_per_chunk,
                uint64_t host_slab_per_wave,
                uint64_t dev_decompressed_per_wave,
                uint64_t max_chunk_uncompressed_bytes,

@@ -41,7 +41,7 @@ struct host_slab_slot
   uint32_t batch_chunk_offset;
   uint32_t n_chunks;
 
-  struct store_read* store_reads; // capacity DAMACY_MAX_CHUNKS_PER_WAVE
+  struct store_read* store_reads; // capacity = wave_pool.max_chunks_per_wave
   struct store_event io_event;
   uint8_t is_fill_wave; // 1 if every chunk in this slot is a fill chunk
                         // (no IO submitted); polling skips io_event entirely.
@@ -61,7 +61,10 @@ struct host_slab_slot
 // buffer (used when the CUDA context is no longer valid) but releases
 // the heap.
 int
-slot_init(struct host_slab_slot* slot, uint64_t host_cap, uint64_t dev_cap);
+slot_init(struct host_slab_slot* slot,
+          uint32_t max_chunks_per_wave,
+          uint64_t host_cap,
+          uint64_t dev_cap);
 
 void
 slot_destroy(struct host_slab_slot* slot, int cuda_skip);

@@ -499,6 +499,8 @@ class Config:
     max_read_op_bytes: int
     max_gpu_memory_bytes: int
     host_buffer_waves: int
+    max_chunks_per_wave: int
+    max_substreams_per_chunk: int
     sample_shape: tuple[int, ...]
     device: int | None
     pop_timeout_s: float | None
@@ -520,6 +522,8 @@ class Config:
         max_chunk_uncompressed_bytes: int = 0,
         max_read_op_bytes: int = 0,
         host_buffer_waves: int = 0,
+        max_chunks_per_wave: int = 0,
+        max_substreams_per_chunk: int = 0,
         device: int | None = None,
         pop_timeout_s: float | None = 30.0,
         enable_gds: bool | None = None,
@@ -548,6 +552,10 @@ class Config:
             )
         if host_buffer_waves < 0:
             raise ValueError("host_buffer_waves must be >= 0")
+        if max_chunks_per_wave < 0:
+            raise ValueError("max_chunks_per_wave must be >= 0")
+        if max_substreams_per_chunk < 0:
+            raise ValueError("max_substreams_per_chunk must be >= 0")
         if pop_timeout_s is not None and pop_timeout_s <= 0:
             raise ValueError(f"pop_timeout_s must be > 0 or None (got {pop_timeout_s})")
         ns = NumaStrategy.coerce(numa_strategy)
@@ -576,6 +584,8 @@ class Config:
         set_(self, "max_read_op_bytes", max_read_op_bytes)
         set_(self, "max_gpu_memory_bytes", max_gpu_memory_bytes)
         set_(self, "host_buffer_waves", host_buffer_waves)
+        set_(self, "max_chunks_per_wave", max_chunks_per_wave)
+        set_(self, "max_substreams_per_chunk", max_substreams_per_chunk)
         set_(self, "sample_shape", shape_t)
         set_(self, "device", device)
         set_(self, "pop_timeout_s", pop_timeout_s)
@@ -989,6 +999,8 @@ class Pipeline:
                 max_gpu_memory_bytes=config.max_gpu_memory_bytes,
                 host_buffer_waves=config.host_buffer_waves,
                 max_read_op_bytes=config.max_read_op_bytes,
+                max_chunks_per_wave=config.max_chunks_per_wave,
+                max_substreams_per_chunk=config.max_substreams_per_chunk,
                 sample_shape=tuple(config.sample_shape),
                 device=-1 if config.device is None else int(config.device),
                 enable_gds=_gds_to_native(config.enable_gds),

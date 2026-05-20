@@ -30,6 +30,15 @@ resolve_max_read_op_bytes(const struct damacy_config* cfg);
 uint8_t
 resolve_host_buffer_waves(const struct damacy_config* cfg);
 
+// 0 → DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE; clamped to
+// DAMACY_HARD_MAX_CHUNKS_PER_WAVE.
+uint32_t
+resolve_max_chunks_per_wave(const struct damacy_config* cfg);
+
+// 0 → DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK.
+uint16_t
+resolve_max_substreams_per_chunk(const struct damacy_config* cfg);
+
 // Explicit config (ON/OFF) wins; AUTO defers to DAMACY_GDS_ENABLE=1.
 // damacy_create rejects with DAMACY_INVAL when this resolves to 1 but
 // libcufile.so.0 is not loadable / cuFileDriverOpen fails.

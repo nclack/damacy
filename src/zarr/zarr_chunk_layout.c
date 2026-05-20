@@ -22,6 +22,7 @@ zarr_chunk_layout_probe(struct store* s,
                         uint64_t first_chunk_off,
                         uint32_t first_chunk_cbytes,
                         uint8_t codec_id,
+                        uint16_t max_substreams_per_chunk,
                         struct chunk_layout* out)
 {
   CHECK_SILENT(Fail, s);
@@ -58,7 +59,7 @@ zarr_chunk_layout_probe(struct store* s,
   if (typesize == 0 || typesize > 8u)
     return 1;
   uint32_t nblocks = nbytes / blocksize + (nbytes % blocksize != 0u);
-  if (nblocks > DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK)
+  if (nblocks > max_substreams_per_chunk)
     return 1;
 
   *out = (struct chunk_layout){

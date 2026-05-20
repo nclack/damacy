@@ -123,13 +123,14 @@ fanout_grow(struct nvcomp_fanout_host* h,
             struct nvcomp_fanout* d,
             uint32_t* cap,
             size_t need,
+            uint32_t max_substreams_per_wave,
             struct gpu_budget* budget)
 {
   if (need <= (size_t)*cap)
     return DAMACY_OK;
   size_t new_cap = fanout_next_pow2(need);
-  if (new_cap > WAVE_ZSUBS_STRUCTURAL_MAX)
-    new_cap = WAVE_ZSUBS_STRUCTURAL_MAX;
+  if (new_cap > max_substreams_per_wave)
+    new_cap = max_substreams_per_wave;
 
   const uint32_t cur = *cap;
   const uint64_t per_sub = fanout_dev_bytes_per_sub();

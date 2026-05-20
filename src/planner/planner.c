@@ -210,6 +210,7 @@ struct emit_ctx
   // populates ->layout / ->layout_probed on the first non-fill emit.
   struct sample_plan* sp;
   struct zarr_meta_cache* meta_cache;
+  uint16_t max_substreams_per_chunk;
   // per-shard
   const struct zarr_shard_entry* shard_entries;
   uint64_t n_shard_entries;
@@ -291,8 +292,8 @@ emit_chunk(const struct emit_ctx* ctx,
 
   // First non-fill chunk for this sample: probe (or fetch cached) the
   // blosc1 chunk layout and stash it on the sample_plan. Probe failure
-  // is non-fatal — downstream uses the observed max nblocks from the
-  // wave pool, fired internally by the meta cache on first probe.
+  // here leaves layout_probed=0; the wave-eligibility gate rejects the
+  // wave so prepare_decode_caps never sizes against unprobed chunks.
   if (ctx->sp && !ctx->sp->layout_probed) {
     struct chunk_layout cl = { 0 };
     if (zarr_meta_cache_probe_layout(ctx->meta_cache,
@@ -301,6 +302,7 @@ emit_chunk(const struct emit_ctx* ctx,
                                      entry->offset,
                                      (uint32_t)entry->nbytes,
                                      ctx->codec_id,
+                                     ctx->max_substreams_per_chunk,
                                      &cl) == 0) {
       ctx->sp->layout = cl;
       ctx->sp->layout_probed = 1;
@@ -482,6 +484,7 @@ planner_plan(struct planner* self,
       .page_alignment_bytes = self->cfg.page_alignment,
       .sp = sp,
       .meta_cache = self->cfg.meta_cache,
+      .max_substreams_per_chunk = self->cfg.max_substreams_per_chunk,
     };
 
     // Iterate chunks in [chunk_lo, chunk_hi) row-major.
@@ -582,8 +585,11 @@ planner_plan(struct planner* self,
     status = planner_ensure_scratch(self, out->n_read_ops);
     if (status != DAMACY_OK)
       goto Cleanup;
-    status = coalesce_chunks(
-      out, self->cfg.read_op_max_bytes, self->scratch_u32, self->scratch_ops);
+    status = coalesce_chunks(out,
+                             self->cfg.read_op_max_bytes,
+                             self->cfg.max_chunks_per_wave,
+                             self->scratch_u32,
+                             self->scratch_ops);
     if (status != DAMACY_OK)
       goto Cleanup;
     if (out->n_read_ops + 1u > 3u * self->scratch_u32_cap) {

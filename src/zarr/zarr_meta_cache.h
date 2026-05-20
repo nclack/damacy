@@ -66,6 +66,7 @@ extern "C"
                                    uint64_t first_chunk_off,
                                    uint32_t first_chunk_cbytes,
                                    uint8_t codec_id,
+                                   uint16_t max_substreams_per_chunk,
                                    struct chunk_layout* out);
 
   struct zarr_meta_cache_stats

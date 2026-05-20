@@ -69,10 +69,10 @@ test_chunk_cap_shrinks_nvcomp_temp(void)
 {
   // Same buffer sizes, only the per-chunk cap differs. The smaller cap
   // bounds nvcomp's per-substream allocation, so .nvcomp_temp shrinks.
-  // dev buffer is sized so big_cap's per-wave decompressed arena (128 MB)
-  // exceeds small_cap's cap_worst (DAMACY_MAX_CHUNKS_PER_WAVE *
-  // max_chunk_uncompressed_bytes = 512 * 64 KB = 32 MB), so the per-
-  // substream cap actually moves nvcomp's scratch.
+  // dev buffer is sized so big_cap's per-wave decompressed arena
+  // exceeds small_cap's chunks_cap_bytes (max_chunks_per_wave ×
+  // max_chunk_uncompressed_bytes), so the per-substream cap actually
+  // moves nvcomp's scratch.
   struct damacy_config small_cap = mk_cfg(64ull << 10);
   struct damacy_config big_cap = mk_cfg(1ull << 20);
   struct gpu_budget_breakdown small = { 0 }, big = { 0 };

@@ -140,6 +140,11 @@ extern "C"
     // request-count vs queue-depth tradeoff: bigger = fewer IOs;
     // smaller = more in-flight requests.
     uint64_t read_op_max_bytes;
+    // Coalesce caps each leader group at this many chunks (matches
+    // wave_pool.max_chunks_per_wave).
+    uint32_t max_chunks_per_wave;
+    // Parser rejects blosc1 chunks with more sub-streams (DAMACY_DECODE).
+    uint16_t max_substreams_per_chunk;
   };
 
   struct planner;

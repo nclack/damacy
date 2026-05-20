@@ -196,15 +196,11 @@ zarr_meta_cache_layout_set(struct zarr_meta_cache* self,
   }
   struct meta_entry* entry = (struct meta_entry*)lru_entry_value(hit);
   if (!entry->layout_probed) {
-    CHECK(Unlock, layout->nblocks <= DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK);
     entry->layout = *layout;
     entry->layout_probed = 1;
   }
   platform_mutex_unlock(self->cache_lock);
   return 0;
-Unlock:
-  platform_mutex_unlock(self->cache_lock);
-  return 1;
 }
 
 int
@@ -214,6 +210,7 @@ zarr_meta_cache_probe_layout(struct zarr_meta_cache* self,
                              uint64_t first_chunk_off,
                              uint32_t first_chunk_cbytes,
                              uint8_t codec_id,
+                             uint16_t max_substreams_per_chunk,
                              struct chunk_layout* out)
 {
   if (!self || !uri || !shard_path || !out)
@@ -240,6 +237,7 @@ zarr_meta_cache_probe_layout(struct zarr_meta_cache* self,
                               first_chunk_off,
                               first_chunk_cbytes,
                               codec_id,
+                              max_substreams_per_chunk,
                               &probed))
     return 1;
 
@@ -251,16 +249,12 @@ zarr_meta_cache_probe_layout(struct zarr_meta_cache* self,
   }
   struct meta_entry* fresh = (struct meta_entry*)lru_entry_value(hit);
   if (!fresh->layout_probed) {
-    CHECK(Unlock, probed.nblocks <= DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK);
     fresh->layout = probed;
     fresh->layout_probed = 1;
   }
   *out = fresh->layout;
   platform_mutex_unlock(self->cache_lock);
   return 0;
-Unlock:
-  platform_mutex_unlock(self->cache_lock);
-  return 1;
 }
 
 void

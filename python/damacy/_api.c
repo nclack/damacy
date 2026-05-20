@@ -708,6 +708,8 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                          "device",
                          "host_buffer_waves",
                          "max_read_op_bytes",
+                         "max_chunks_per_wave",
+                         "max_substreams_per_chunk",
                          "enable_gds",
                          "numa_strategy",
                          "numa_node",
@@ -725,13 +727,15 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   int device = -1;
   unsigned int host_buffer_waves = 0;
   unsigned long long max_read_op_bytes = 0;
+  unsigned int max_chunks_per_wave = 0;
+  unsigned int max_substreams_per_chunk = 0;
   int enable_gds = DAMACY_GDS_AUTO;
   int numa_strategy = DAMACY_NUMA_AUTO;
   int numa_node = -1;
   int bypass_decode = 0;
   if (!PyArg_ParseTupleAndKeywords(args,
                                    kw,
-                                   "IIIIIOIKO|iIKiiip",
+                                   "IIIIIOIKO|iIKIIiiip",
                                    kws,
                                    &batch_size,
                                    &lookahead,
@@ -745,6 +749,8 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                                    &device,
                                    &host_buffer_waves,
                                    &max_read_op_bytes,
+                                   &max_chunks_per_wave,
+                                   &max_substreams_per_chunk,
                                    &enable_gds,
                                    &numa_strategy,
                                    &numa_node,
@@ -782,6 +788,8 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
       .max_read_op_bytes = (uint64_t)max_read_op_bytes,
       .max_gpu_memory_bytes = (uint64_t)max_gpu_bytes,
       .host_buffer_waves = (uint8_t)host_buffer_waves,
+      .max_chunks_per_wave = (uint32_t)max_chunks_per_wave,
+      .max_substreams_per_chunk = (uint16_t)max_substreams_per_chunk,
       .enable_gds = (enum damacy_gds_mode)enable_gds,
       .numa_strategy = (enum damacy_numa_strategy)numa_strategy,
       .numa_node = numa_node,

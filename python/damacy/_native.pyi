@@ -138,6 +138,8 @@ class Pipeline:
         device: int = -1,
         host_buffer_waves: int = 0,
         max_read_op_bytes: int = 0,
+        max_chunks_per_wave: int = 0,
+        max_substreams_per_chunk: int = 0,
         enable_gds: int = GDS_AUTO,
         numa_strategy: int = NUMA_AUTO,
         numa_node: int = -1,

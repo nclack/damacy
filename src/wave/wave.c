@@ -13,6 +13,8 @@
 
 int
 wave_init(struct damacy_wave* wave,
+          uint32_t max_chunks_per_wave,
+          uint32_t max_substreams_per_wave,
           uint64_t slot_cap_bytes,
           uint64_t dev_decompressed_bytes,
           int enable_gds)
@@ -35,7 +37,7 @@ wave_init(struct damacy_wave* wave,
   CU(Error, cuMemAlloc(&dptr, dev_decompressed_bytes));
   wave->dev_decompressed = (void*)(uintptr_t)dptr;
 
-  uint32_t cap = DAMACY_MAX_CHUNKS_PER_WAVE;
+  uint32_t cap = max_chunks_per_wave;
   CU(Error,
      cuMemAllocHost((void**)&wave->h_blosc1_totals,
                     sizeof(struct blosc1_totals)));
@@ -62,7 +64,7 @@ wave_init(struct damacy_wave* wave,
   CU(Error, cuMemAlloc(&dptr, (size_t)cap * sizeof(uint32_t)));
   wave->d_blosc_chunk_indices = (uint32_t*)(uintptr_t)dptr;
   {
-    const size_t zsubs_max = WAVE_ZSUBS_STRUCTURAL_MAX;
+    const size_t zsubs_max = max_substreams_per_wave;
     CU(Error,
        cuMemAllocHost((void**)&wave->h_block_chunk_map,
                       zsubs_max * sizeof(uint32_t)));
@@ -90,12 +92,8 @@ wave_init(struct damacy_wave* wave,
 
   CU(Error,
      cuMemAllocHost((void**)&wave->h_memcpy_ops,
-                    DAMACY_MAX_BLOSC_MEMCPY_OPS_PER_WAVE *
-                      sizeof(struct gpu_memcpy_op)));
-  CU(Error,
-     cuMemAlloc(&dptr,
-                DAMACY_MAX_BLOSC_MEMCPY_OPS_PER_WAVE *
-                  sizeof(struct gpu_memcpy_op)));
+                    (size_t)cap * sizeof(struct gpu_memcpy_op)));
+  CU(Error, cuMemAlloc(&dptr, (size_t)cap * sizeof(struct gpu_memcpy_op)));
   wave->d_memcpy_ops = (struct gpu_memcpy_op*)(uintptr_t)dptr;
 
   CU(Error, cuEventCreate(&wave->ev.h2d_start, CU_EVENT_DEFAULT));

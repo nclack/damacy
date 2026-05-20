@@ -162,7 +162,7 @@ struct reserve_fixture
   struct damacy_batch_pool pool;
   struct damacy_stats stats;
   uint8_t host_buf[8192];
-  struct store_read store_reads[DAMACY_MAX_CHUNKS_PER_WAVE];
+  struct store_read store_reads[DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE];
   struct read_op read_ops[8];
   struct chunk_plan chunk_plans[8];
   struct read_op_group groups[4];
@@ -178,6 +178,7 @@ init_reserve_fixture(struct reserve_fixture* f,
   f->wp.stats = &f->stats;
   f->wp.n_slots = 1;
   f->wp.use_gds = 0;
+  f->wp.max_chunks_per_wave = DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE;
   f->wp.waves[0].dev_decompressed_cap = dev_cap;
   f->wp.slots[0].state = SLOT_FREE;
   f->wp.slots[0].cap = host_cap;

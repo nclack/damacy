@@ -563,9 +563,17 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   }
   const uint64_t resolver_budget = max_gpu - pool_reserve;
 
+  const uint32_t resolved_max_chunks_per_wave =
+    resolve_max_chunks_per_wave(cfg);
+  const uint16_t resolved_max_substreams_per_chunk =
+    resolve_max_substreams_per_chunk(cfg);
   struct wave_pool_sizing sizing = { 0 };
-  s = wave_pool_resolve_sizing(
-    resolver_budget, runtime_chunk_cap, cfg->batch_size, &sizing);
+  s = wave_pool_resolve_sizing(resolved_max_chunks_per_wave,
+                               resolved_max_substreams_per_chunk,
+                               resolver_budget,
+                               runtime_chunk_cap,
+                               cfg->batch_size,
+                               &sizing);
   if (s != DAMACY_OK)
     goto Fail;
   {
@@ -659,6 +667,8 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
                                &self->stats,
                                cfg->dtype,
                                resolve_host_buffer_waves(cfg),
+                               resolved_max_chunks_per_wave,
+                               resolved_max_substreams_per_chunk,
                                sizing.host_slab_per_wave,
                                sizing.dev_decompressed_per_wave,
                                runtime_chunk_cap,
@@ -677,6 +687,8 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     .page_alignment = self->page_alignment,
     .max_chunk_uncompressed_bytes = runtime_chunk_cap,
     .read_op_max_bytes = resolve_max_read_op_bytes(cfg),
+    .max_chunks_per_wave = resolved_max_chunks_per_wave,
+    .max_substreams_per_chunk = resolved_max_substreams_per_chunk,
   };
   CHECK(Fail, planner_create(&pcfg, &self->planner) == DAMACY_OK);
 
@@ -1130,8 +1142,13 @@ damacy_config_describe(const struct damacy_config* cfg)
            (unsigned)cfg->batch_size);
 
   struct wave_pool_sizing sizing = { 0 };
-  enum damacy_status rs = wave_pool_resolve_sizing(
-    resolver_budget, runtime_chunk_cap, cfg->batch_size, &sizing);
+  enum damacy_status rs =
+    wave_pool_resolve_sizing(resolve_max_chunks_per_wave(cfg),
+                             resolve_max_substreams_per_chunk(cfg),
+                             resolver_budget,
+                             runtime_chunk_cap,
+                             cfg->batch_size,
+                             &sizing);
   if (rs != DAMACY_OK) {
     log_info("damacy_config_describe: wave_pool_resolve_sizing failed (%s)",
              damacy_status_str(rs));

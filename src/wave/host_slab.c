@@ -7,7 +7,10 @@
 #include <string.h>
 
 int
-slot_init(struct host_slab_slot* slot, uint64_t host_cap, uint64_t dev_cap)
+slot_init(struct host_slab_slot* slot,
+          uint32_t max_chunks_per_wave,
+          uint64_t host_cap,
+          uint64_t dev_cap)
 {
   memset(slot, 0, sizeof(*slot));
   // Logical cap is the same regardless of where the bytes land.
@@ -22,7 +25,7 @@ slot_init(struct host_slab_slot* slot, uint64_t host_cap, uint64_t dev_cap)
       goto Error;
     slot->dev_buf = (void*)(uintptr_t)dptr;
   }
-  slot->store_reads = (struct store_read*)calloc(DAMACY_MAX_CHUNKS_PER_WAVE,
+  slot->store_reads = (struct store_read*)calloc((size_t)max_chunks_per_wave,
                                                  sizeof(struct store_read));
   if (!slot->store_reads)
     goto Error;
