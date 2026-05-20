@@ -4,7 +4,6 @@
 #include "platform/platform.h"
 #include "util/prelude.h"
 
-#include <assert.h>
 #include <stdalign.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -82,7 +81,8 @@ pool_destroy(struct pool* p)
 {
   if (!p)
     return;
-  assert(p->in_use == 0);
+  CHECK(Cleanup, p->in_use == 0);
+Cleanup:
   platform_mutex_free(p->mu);
   free(p->storage);
   free(p);
