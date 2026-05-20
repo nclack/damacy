@@ -3,7 +3,6 @@
 #include "log/log.h"
 #include "util/prelude.h"
 
-#include <assert.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -185,8 +184,8 @@ slot_clear(struct lru* self, uint32_t slot_idx)
 
 // Refcount ordering: every eviction-gating read (index_insert_robin,
 // index_erase, evict_lru_tail, lru_put's replace path) uses acquire to
-// pair with lru_entry_release's lock-free acq_rel decrement. Acquires-
-// from-zero run under the caller's mutex and use relaxed.
+// pair with lru_entry_release's lock-free CAS decrement. Bumps run
+// under the caller's mutex and use relaxed.
 
 // Robin-hood insert. Pinned entries (refcount > 0) are immovable; we
 // probe past them without considering them for swap. Returns LRU_NIL on
@@ -379,17 +378,25 @@ lru_destroy(struct lru* self)
 {
   if (!self)
     return;
+  // Pin pointers held by callers point into self->slots; freeing that
+  // array would dangle them. If any pin is outstanding, leak everything.
+  uint32_t pinned = 0;
   for (struct lru_list* node = self->lru_order.next; node != &self->lru_order;
        node = node->next) {
-    struct lru_entry* entry = link_to_entry(node);
-    // Caller contract: all pin-holders (workers, host callbacks) must have
-    // drained before destroy. Catches imbalanced acquire/release.
-    assert(atomic_load_explicit(&entry->refcount, memory_order_relaxed) == 0);
-    self->ops.destroy(entry->value, self->ops.user);
+    if (atomic_load_explicit(&link_to_entry(node)->refcount,
+                             memory_order_acquire) > 0)
+      ++pinned;
   }
+  CHECK(Leak, pinned == 0);
+  for (struct lru_list* node = self->lru_order.next; node != &self->lru_order;
+       node = node->next)
+    self->ops.destroy(link_to_entry(node)->value, self->ops.user);
   free(self->slots);
   free(self->index.cells);
   free(self);
+  return;
+Leak:
+  return;
 }
 
 struct lru_entry*
@@ -513,7 +520,7 @@ lru_entry_value(const struct lru_entry* entry)
 }
 
 void
-lru_entry_acquire(struct lru_entry* entry)
+lru_entry_acquire_locked(struct lru_entry* entry)
 {
   if (!entry)
     return;
@@ -525,11 +532,22 @@ lru_entry_release(struct lru_entry* entry)
 {
   if (!entry)
     return;
-  uint32_t prev =
-    atomic_fetch_sub_explicit(&entry->refcount, 1u, memory_order_acq_rel);
-  // Catches double-release before underflow.
-  assert(prev > 0u);
-  (void)prev;
+  // CAS loop instead of fetch_sub so a double-release no-ops with a log
+  // rather than wrapping refcount to UINT32_MAX (which would pin the
+  // entry forever in release builds).
+  uint32_t cur = atomic_load_explicit(&entry->refcount, memory_order_relaxed);
+  for (;;) {
+    if (cur == 0) {
+      log_error("lru_entry_release: double release");
+      return;
+    }
+    if (atomic_compare_exchange_weak_explicit(&entry->refcount,
+                                              &cur,
+                                              cur - 1u,
+                                              memory_order_acq_rel,
+                                              memory_order_relaxed))
+      return;
+  }
 }
 
 void

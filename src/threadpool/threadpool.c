@@ -31,7 +31,7 @@ struct threadpool
   alignas(THREADPOOL_CACHELINE) atomic_size_t_t dynamic_progress;
   alignas(THREADPOOL_CACHELINE) atomic_int_t stop;
 
-  struct platform_mutex* mu;
+  struct platform_mutex* lock;
   struct platform_cond* cv;
   struct worker* workers;
   int nworkers;
@@ -62,12 +62,12 @@ worker_main(void* arg)
 
     if (epoch == last_epoch &&
         !atomic_load_explicit(&p->stop, memory_order_acquire)) {
-      platform_mutex_lock(p->mu);
+      platform_mutex_lock(p->lock);
       while ((epoch = atomic_load_explicit(&p->epoch, memory_order_acquire)) ==
                last_epoch &&
              !atomic_load_explicit(&p->stop, memory_order_acquire))
-        platform_cond_wait(p->cv, p->mu);
-      platform_mutex_unlock(p->mu);
+        platform_cond_wait(p->cv, p->lock);
+      platform_mutex_unlock(p->lock);
     }
 
     if (atomic_load_explicit(&p->stop, memory_order_acquire))
@@ -91,10 +91,10 @@ dispatch(struct threadpool* p, pool_task_fn fn, void* ctx)
   p->task_ctx = ctx;
   atomic_store_explicit(&p->threads_to_sync, p->nworkers, memory_order_relaxed);
 
-  platform_mutex_lock(p->mu);
+  platform_mutex_lock(p->lock);
   atomic_fetch_add_explicit(&p->epoch, 1, memory_order_release);
   platform_cond_broadcast(p->cv);
-  platform_mutex_unlock(p->mu);
+  platform_mutex_unlock(p->lock);
 
   fn(0, ctx);
 
@@ -112,7 +112,7 @@ threadpool_free_partial(struct threadpool* p)
     return;
   free(p->workers);
   platform_cond_free(p->cv);
-  platform_mutex_free(p->mu);
+  platform_mutex_free(p->lock);
   free(p);
 }
 
@@ -134,9 +134,9 @@ threadpool_new(int nthreads)
   if (nthreads == 0)
     return p;
 
-  p->mu = platform_mutex_new();
+  p->lock = platform_mutex_new();
   p->cv = platform_cond_new();
-  CHECK_SILENT(Fail, p->mu);
+  CHECK_SILENT(Fail, p->lock);
   CHECK_SILENT(Fail, p->cv);
 
   p->workers = (struct worker*)calloc((size_t)nthreads, sizeof(struct worker));
@@ -148,9 +148,9 @@ threadpool_new(int nthreads)
     p->workers[i].thread = platform_thread_start(worker_main, &p->workers[i]);
     if (!p->workers[i].thread) {
       atomic_store_explicit(&p->stop, 1, memory_order_release);
-      platform_mutex_lock(p->mu);
+      platform_mutex_lock(p->lock);
       platform_cond_broadcast(p->cv);
-      platform_mutex_unlock(p->mu);
+      platform_mutex_unlock(p->lock);
       for (int j = 0; j < i; ++j)
         platform_thread_join(p->workers[j].thread);
       goto Fail;
@@ -172,14 +172,14 @@ threadpool_free(struct threadpool* p)
 
   if (p->nworkers > 0) {
     atomic_store_explicit(&p->stop, 1, memory_order_release);
-    platform_mutex_lock(p->mu);
+    platform_mutex_lock(p->lock);
     platform_cond_broadcast(p->cv);
-    platform_mutex_unlock(p->mu);
+    platform_mutex_unlock(p->lock);
     for (int i = 0; i < p->nworkers; ++i)
       platform_thread_join(p->workers[i].thread);
     free(p->workers);
     platform_cond_free(p->cv);
-    platform_mutex_free(p->mu);
+    platform_mutex_free(p->lock);
   }
   free(p);
 }

@@ -24,7 +24,7 @@ struct zarr_meta_cache
 {
   struct store* store;
   struct lru* lru;
-  struct platform_mutex* mu;
+  struct platform_mutex* cache_lock;
 };
 
 static int
@@ -57,8 +57,8 @@ zarr_meta_cache_create(struct store* store, uint32_t capacity)
   self = (struct zarr_meta_cache*)calloc(1, sizeof(*self));
   CHECK(Error, self);
   self->store = store;
-  self->mu = platform_mutex_new();
-  CHECK(Error, self->mu);
+  self->cache_lock = platform_mutex_new();
+  CHECK(Error, self->cache_lock);
 
   struct lru_ops ops = {
     .eq = meta_eq,
@@ -80,7 +80,7 @@ zarr_meta_cache_destroy(struct zarr_meta_cache* self)
   if (!self)
     return;
   lru_destroy(self->lru);
-  platform_mutex_free(self->mu);
+  platform_mutex_free(self->cache_lock);
   free(self);
 }
 
@@ -94,14 +94,14 @@ zarr_meta_cache_get(struct zarr_meta_cache* self,
   CHECK_SILENT(Invalid, out);
 
   uint64_t hash = hash_fnv1a_str(uri);
-  platform_mutex_lock(self->mu);
+  platform_mutex_lock(self->cache_lock);
   struct lru_entry* hit = lru_get(self->lru, hash, uri);
   if (hit) {
     *out = ((const struct meta_entry*)lru_entry_value(hit))->meta;
-    platform_mutex_unlock(self->mu);
+    platform_mutex_unlock(self->cache_lock);
     return DAMACY_OK;
   }
-  platform_mutex_unlock(self->mu);
+  platform_mutex_unlock(self->cache_lock);
 
   struct strbuf key = { 0 };
   if (strbuf_join_path(&key, uri, "zarr.json")) {
@@ -133,22 +133,22 @@ zarr_meta_cache_get(struct zarr_meta_cache* self,
     return DAMACY_OOM;
   }
 
-  platform_mutex_lock(self->mu);
+  platform_mutex_lock(self->cache_lock);
   // lru_peek doesn't count as a hit/miss and doesn't promote MRU.
   struct lru_entry* existing = lru_peek(self->lru, hash, uri);
   if (existing) {
     *out = ((const struct meta_entry*)lru_entry_value(existing))->meta;
-    platform_mutex_unlock(self->mu);
+    platform_mutex_unlock(self->cache_lock);
     meta_destroy(entry, NULL);
     return DAMACY_OK;
   }
   struct lru_entry* inserted = lru_put(self->lru, hash, uri, entry);
   if (!inserted) {
-    platform_mutex_unlock(self->mu);
+    platform_mutex_unlock(self->cache_lock);
     return DAMACY_OOM;
   }
   *out = ((const struct meta_entry*)lru_entry_value(inserted))->meta;
-  platform_mutex_unlock(self->mu);
+  platform_mutex_unlock(self->cache_lock);
   return DAMACY_OK;
 
 Invalid:
@@ -166,7 +166,7 @@ zarr_meta_cache_layout_get(struct zarr_meta_cache* self,
     return 1;
   memset(out, 0, sizeof *out);
   uint64_t hash = hash_fnv1a_str(uri);
-  platform_mutex_lock(self->mu);
+  platform_mutex_lock(self->cache_lock);
   struct lru_entry* hit = lru_get(self->lru, hash, uri);
   int rc = 1;
   if (hit) {
@@ -176,7 +176,7 @@ zarr_meta_cache_layout_get(struct zarr_meta_cache* self,
       rc = 0;
     }
   }
-  platform_mutex_unlock(self->mu);
+  platform_mutex_unlock(self->cache_lock);
   return rc;
 }
 
@@ -188,10 +188,10 @@ zarr_meta_cache_layout_set(struct zarr_meta_cache* self,
   if (!self || !uri || !layout)
     return 1;
   uint64_t hash = hash_fnv1a_str(uri);
-  platform_mutex_lock(self->mu);
+  platform_mutex_lock(self->cache_lock);
   struct lru_entry* hit = lru_get(self->lru, hash, uri);
   if (!hit) {
-    platform_mutex_unlock(self->mu);
+    platform_mutex_unlock(self->cache_lock);
     return 1;
   }
   struct meta_entry* entry = (struct meta_entry*)lru_entry_value(hit);
@@ -199,7 +199,7 @@ zarr_meta_cache_layout_set(struct zarr_meta_cache* self,
     entry->layout = *layout;
     entry->layout_probed = 1;
   }
-  platform_mutex_unlock(self->mu);
+  platform_mutex_unlock(self->cache_lock);
   return 0;
 }
 
@@ -215,20 +215,20 @@ zarr_meta_cache_probe_layout(struct zarr_meta_cache* self,
   if (!self || !uri || !shard_path || !out)
     return 1;
   uint64_t hash = hash_fnv1a_str(uri);
-  platform_mutex_lock(self->mu);
+  platform_mutex_lock(self->cache_lock);
   struct lru_entry* hit = lru_get(self->lru, hash, uri);
   if (!hit) {
-    platform_mutex_unlock(self->mu);
+    platform_mutex_unlock(self->cache_lock);
     return 1;
   }
   const struct meta_entry* entry =
     (const struct meta_entry*)lru_entry_value(hit);
   if (entry->layout_probed) {
     *out = entry->layout;
-    platform_mutex_unlock(self->mu);
+    platform_mutex_unlock(self->cache_lock);
     return 0;
   }
-  platform_mutex_unlock(self->mu);
+  platform_mutex_unlock(self->cache_lock);
 
   struct chunk_layout probed = { 0 };
   if (zarr_chunk_layout_probe(self->store,
@@ -239,10 +239,10 @@ zarr_meta_cache_probe_layout(struct zarr_meta_cache* self,
                               &probed))
     return 1;
 
-  platform_mutex_lock(self->mu);
+  platform_mutex_lock(self->cache_lock);
   hit = lru_peek(self->lru, hash, uri);
   if (!hit) {
-    platform_mutex_unlock(self->mu);
+    platform_mutex_unlock(self->cache_lock);
     return 1;
   }
   struct meta_entry* fresh = (struct meta_entry*)lru_entry_value(hit);
@@ -251,7 +251,7 @@ zarr_meta_cache_probe_layout(struct zarr_meta_cache* self,
     fresh->layout_probed = 1;
   }
   *out = fresh->layout;
-  platform_mutex_unlock(self->mu);
+  platform_mutex_unlock(self->cache_lock);
   return 0;
 }
 
@@ -263,10 +263,10 @@ zarr_meta_cache_stats_get(const struct zarr_meta_cache* self,
     return;
   struct lru_stats stats;
   if (self)
-    platform_mutex_lock(self->mu);
+    platform_mutex_lock(self->cache_lock);
   lru_stats_get(self ? self->lru : NULL, &stats);
   if (self)
-    platform_mutex_unlock(self->mu);
+    platform_mutex_unlock(self->cache_lock);
   *out = (struct zarr_meta_cache_stats){
     .counters = stats.counters,
     .size = stats.size,

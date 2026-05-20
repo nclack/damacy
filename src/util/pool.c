@@ -18,7 +18,7 @@ struct pool_slot
 
 struct pool
 {
-  struct platform_mutex* mu;
+  struct platform_mutex* lock;
   unsigned char* storage;
   struct pool_slot* head;
   size_t slot_size;
@@ -56,8 +56,8 @@ pool_create(size_t elem_size, size_t capacity)
   p->storage = (unsigned char*)calloc(capacity, p->slot_size);
   CHECK(Fail, p->storage);
 
-  p->mu = platform_mutex_new();
-  CHECK(Fail, p->mu);
+  p->lock = platform_mutex_new();
+  CHECK(Fail, p->lock);
 
   for (size_t i = 0; i + 1 < capacity; ++i) {
     struct pool_slot* s = (struct pool_slot*)(p->storage + i * p->slot_size);
@@ -84,7 +84,7 @@ pool_destroy(struct pool* p)
   // Outstanding slots are interior pointers into p->storage; freeing it
   // would dangle them. Leak everything instead so live callers stay safe.
   CHECK(Leak, p->in_use == 0);
-  platform_mutex_free(p->mu);
+  platform_mutex_free(p->lock);
   free(p->storage);
   free(p);
   return;
@@ -110,13 +110,13 @@ pool_alloc(struct pool* p)
   if (!p)
     return NULL;
   struct pool_slot* slot = NULL;
-  platform_mutex_lock(p->mu);
+  platform_mutex_lock(p->lock);
   if (p->head) {
     slot = p->head;
     p->head = slot->next;
     ++p->in_use;
   }
-  platform_mutex_unlock(p->mu);
+  platform_mutex_unlock(p->lock);
   if (!slot)
     return NULL;
   memset(slot, 0, p->slot_size);
@@ -130,13 +130,13 @@ pool_free(struct pool* p, void* ptr)
     return;
   CHECK(End, pool_owns_unlocked(p, ptr));
   struct pool_slot* slot = (struct pool_slot*)ptr;
-  platform_mutex_lock(p->mu);
+  platform_mutex_lock(p->lock);
   CHECK(Unlock, p->in_use > 0);
   slot->next = p->head;
   p->head = slot;
   --p->in_use;
 Unlock:
-  platform_mutex_unlock(p->mu);
+  platform_mutex_unlock(p->lock);
 End:
   return;
 }
@@ -146,9 +146,9 @@ pool_in_use(struct pool* p)
 {
   if (!p)
     return 0;
-  platform_mutex_lock(p->mu);
+  platform_mutex_lock(p->lock);
   size_t n = p->in_use;
-  platform_mutex_unlock(p->mu);
+  platform_mutex_unlock(p->lock);
   return n;
 }
 

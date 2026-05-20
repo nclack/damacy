@@ -22,7 +22,7 @@ struct store_fs
   char* root; // owned
   struct io_queue* q;
 
-  struct platform_mutex* cache_mu;
+  struct platform_mutex* cache_lock;
   struct lru* fd_cache;
 
   struct pool* job_pool;

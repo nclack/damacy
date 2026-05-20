@@ -96,7 +96,7 @@ struct store_fs_gds
   char* root;       // owned
   void* gds_stream; // CUstream as void*
   uint8_t driver_opened;
-  struct platform_mutex* cache_mu;
+  struct platform_mutex* cache_lock;
   struct lru* cache;
 };
 
@@ -129,14 +129,14 @@ fs_gds_acquire(struct store_fs_gds* g, const char* key)
 {
   uint64_t hash = hash_fnv1a_str(key);
 
-  platform_mutex_lock(g->cache_mu);
+  platform_mutex_lock(g->cache_lock);
   struct lru_entry* hit = lru_get(g->cache, hash, key);
   if (hit) {
-    lru_entry_acquire(hit);
-    platform_mutex_unlock(g->cache_mu);
+    lru_entry_acquire_locked(hit);
+    platform_mutex_unlock(g->cache_lock);
     return hit;
   }
-  platform_mutex_unlock(g->cache_mu);
+  platform_mutex_unlock(g->cache_lock);
 
   struct strbuf path = { 0 };
   platform_file* f = NULL;
@@ -171,12 +171,12 @@ fs_gds_acquire(struct store_fs_gds* g, const char* key)
   entry->file = f;
   entry->handle = h;
 
-  platform_mutex_lock(g->cache_mu);
+  platform_mutex_lock(g->cache_lock);
   {
     struct lru_entry* existing = lru_peek(g->cache, hash, key);
     if (existing) {
-      lru_entry_acquire(existing);
-      platform_mutex_unlock(g->cache_mu);
+      lru_entry_acquire_locked(existing);
+      platform_mutex_unlock(g->cache_lock);
       fs_gds_entry_destroy(entry, NULL);
       strbuf_free(&path);
       return existing;
@@ -184,12 +184,12 @@ fs_gds_acquire(struct store_fs_gds* g, const char* key)
     struct lru_entry* inserted = lru_put(g->cache, hash, key, entry);
     if (!inserted) {
       // lru_put already invoked fs_gds_entry_destroy on `entry`.
-      platform_mutex_unlock(g->cache_mu);
+      platform_mutex_unlock(g->cache_lock);
       strbuf_free(&path);
       return NULL;
     }
-    lru_entry_acquire(inserted);
-    platform_mutex_unlock(g->cache_mu);
+    lru_entry_acquire_locked(inserted);
+    platform_mutex_unlock(g->cache_lock);
     strbuf_free(&path);
     return inserted;
   }
@@ -360,7 +360,7 @@ gds_destroy(struct store* s)
   if (g->gds_stream)
     cuStreamSynchronize((CUstream)g->gds_stream);
   lru_destroy(g->cache);
-  platform_mutex_free(g->cache_mu);
+  platform_mutex_free(g->cache_lock);
   if (g->driver_opened && g_libcufile.cuFileDriverClose)
     g_libcufile.cuFileDriverClose();
   free(g->root);
@@ -399,8 +399,8 @@ store_fs_gds_create(const struct store_fs_gds_config* cfg)
   g->driver_opened = 1;
   g->root = strdup(cfg->root);
   CHECK_SILENT(Fail, g->root);
-  g->cache_mu = platform_mutex_new();
-  CHECK_SILENT(Fail, g->cache_mu);
+  g->cache_lock = platform_mutex_new();
+  CHECK_SILENT(Fail, g->cache_lock);
   {
     uint32_t cap = cfg->fd_cache_capacity ? cfg->fd_cache_capacity
                                           : store_default_fd_cache_capacity();
@@ -432,9 +432,9 @@ store_fs_gds_stats_get(struct store* s, struct lru_stats* out)
     return;
   }
   struct store_fs_gds* g = (struct store_fs_gds*)s;
-  platform_mutex_lock(g->cache_mu);
+  platform_mutex_lock(g->cache_lock);
   lru_stats_get(g->cache, out);
-  platform_mutex_unlock(g->cache_mu);
+  platform_mutex_unlock(g->cache_lock);
 }
 
 void

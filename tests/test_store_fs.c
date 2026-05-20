@@ -6,7 +6,6 @@
 #include "util/lru.h"
 
 #include <pthread.h>
-#include <sched.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -162,12 +161,13 @@ test_pin_saturation(void)
 }
 
 // Under TSan, surfaces missing happens-before between lock-free release and
-// the eviction-gating acquire reads.
+// the eviction-gating acquire reads. CAP > THREADS guarantees a thread can
+// never see all slots pinned by peers (each holds at most one pin), so
+// acquire always succeeds without retry.
 #define CONTEND_KEYS 32u
-#define CONTEND_CAP 4u
 #define CONTEND_THREADS 4
+#define CONTEND_CAP (CONTEND_THREADS + 1u)
 #define CONTEND_ITERS 4000
-#define CONTEND_MAX_RETRIES 1000
 
 struct contend_args
 {
@@ -183,12 +183,7 @@ contend_worker(void* arg)
     char key[32];
     snprintf(key, sizeof key, "k%u", (unsigned)(i % CONTEND_KEYS));
     struct lru_entry* pin = NULL;
-    for (int attempts = 0; attempts < CONTEND_MAX_RETRIES; ++attempts) {
-      if (store_fs_acquire(w->fs, key, &pin))
-        break;
-      sched_yield();
-    }
-    if (!pin)
+    if (!store_fs_acquire(w->fs, key, &pin) || !pin)
       return NULL;
     atomic_fetch_add(&w->ok_count, 1);
     store_fs_release(w->fs, pin);
