@@ -160,10 +160,7 @@ test_pin_saturation(void)
   return 0;
 }
 
-// Under TSan, surfaces missing happens-before between lock-free release and
-// the eviction-gating acquire reads. CAP > THREADS guarantees a thread can
-// never see all slots pinned by peers (each holds at most one pin), so
-// acquire always succeeds without retry.
+// CAP > THREADS so acquire never blocks on pin saturation.
 #define CONTEND_KEYS 32u
 #define CONTEND_THREADS 4
 #define CONTEND_CAP (CONTEND_THREADS + 1u)
