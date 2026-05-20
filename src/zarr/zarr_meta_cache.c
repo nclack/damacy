@@ -10,7 +10,6 @@
 #include "util/strbuf.h"
 #include "zarr/zarr_metadata.h"
 
-#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -208,14 +207,17 @@ zarr_meta_cache_layout_set(struct zarr_meta_cache* self,
   }
   struct meta_entry* entry = (struct meta_entry*)lru_entry_value(hit);
   if (!entry->layout_probed) {
+    CHECK(Unlock, layout->nblocks <= DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK);
     entry->layout = *layout;
     entry->layout_probed = 1;
-    assert(layout->nblocks <= DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK);
     atomic_u16_observe_max(self->blosc_nblocks_observer,
                            (uint16_t)layout->nblocks);
   }
   platform_mutex_unlock(self->cache_lock);
   return 0;
+Unlock:
+  platform_mutex_unlock(self->cache_lock);
+  return 1;
 }
 
 int
@@ -262,15 +264,18 @@ zarr_meta_cache_probe_layout(struct zarr_meta_cache* self,
   }
   struct meta_entry* fresh = (struct meta_entry*)lru_entry_value(hit);
   if (!fresh->layout_probed) {
+    CHECK(Unlock, probed.nblocks <= DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK);
     fresh->layout = probed;
     fresh->layout_probed = 1;
-    assert(probed.nblocks <= DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK);
     atomic_u16_observe_max(self->blosc_nblocks_observer,
                            (uint16_t)probed.nblocks);
   }
   *out = fresh->layout;
   platform_mutex_unlock(self->cache_lock);
   return 0;
+Unlock:
+  platform_mutex_unlock(self->cache_lock);
+  return 1;
 }
 
 void
