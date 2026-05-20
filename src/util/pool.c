@@ -81,11 +81,15 @@ pool_destroy(struct pool* p)
 {
   if (!p)
     return;
-  CHECK(Cleanup, p->in_use == 0);
-Cleanup:
+  // Outstanding slots are interior pointers into p->storage; freeing it
+  // would dangle them. Leak everything instead so live callers stay safe.
+  CHECK(Leak, p->in_use == 0);
   platform_mutex_free(p->mu);
   free(p->storage);
   free(p);
+  return;
+Leak:
+  return;
 }
 
 static bool
