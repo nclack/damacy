@@ -13,10 +13,10 @@
 #pragma once
 
 #ifdef __cplusplus
-_Static_assert(0,
-               "zarr_meta_cache.h is C-only (atomic observer slot uses "
-               "_Atomic). For C++/CUDA TUs, forward-declare "
-               "`struct zarr_meta_cache` instead.");
+static_assert(0,
+              "zarr_meta_cache.h is C-only (atomic observer slot uses "
+              "_Atomic). For C++/CUDA TUs, forward-declare "
+              "`struct zarr_meta_cache` instead.");
 #endif
 
 #include "damacy.h"   // damacy_status
