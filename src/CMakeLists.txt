@@ -31,7 +31,7 @@ add_src_lib(json_writer SOURCES util/json_writer.c util/json_writer.h LINKS strb
 add_src_lib(crc32c SOURCES util/crc32c.c util/crc32c.h LINKS platform)
 add_src_lib(hash   SOURCES util/hash.c   util/hash.h)
 add_src_lib(lru    SOURCES util/lru.c    util/lru.h LINKS log)
-add_src_lib(pool   SOURCES util/pool.c   util/pool.h LINKS platform)
+add_src_lib(pool   SOURCES util/pool.c   util/pool.h LINKS log platform)
 add_src_lib(path_intern SOURCES util/path_intern.c util/path_intern.h LINKS hash)
 
 # Platform abstraction (posix-only for now; chucky-style platform-split lives here).

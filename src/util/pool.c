@@ -1,6 +1,8 @@
 #include "util/pool.h"
 
+#include "log/log.h"
 #include "platform/platform.h"
+#include "util/prelude.h"
 
 #include <assert.h>
 #include <stdalign.h>
@@ -89,9 +91,7 @@ pool_destroy(struct pool* p)
   free(p);
 }
 
-// Only used by pool_free's assert; marked unused so NDEBUG builds compile
-// clean.
-__attribute__((unused)) static bool
+static bool
 pool_owns_unlocked(const struct pool* p, const void* ptr)
 {
   // storage is immutable after pool_create; no lock needed.
@@ -127,14 +127,17 @@ pool_free(struct pool* p, void* ptr)
 {
   if (!p || !ptr)
     return;
-  assert(pool_owns_unlocked(p, ptr));
+  CHECK(End, pool_owns_unlocked(p, ptr));
   struct pool_slot* slot = (struct pool_slot*)ptr;
   platform_mutex_lock(p->mu);
-  assert(p->in_use > 0);
+  CHECK(Unlock, p->in_use > 0);
   slot->next = p->head;
   p->head = slot;
   --p->in_use;
+Unlock:
   platform_mutex_unlock(p->mu);
+End:
+  return;
 }
 
 size_t
