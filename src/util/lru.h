@@ -84,10 +84,12 @@ extern "C"
   // Stable value pointer for the entry.
   void* lru_entry_value(const struct lru_entry* e);
 
-  // Refcount-pinning. Pinned entries are skipped during eviction
-  // selection. Acquire / release must be balanced; releasing more than
-  // acquiring is undefined.
-  void lru_entry_acquire(struct lru_entry* e);
+  // Refcount-pinning. Pinned entries are skipped during eviction.
+  // Acquire/release must be balanced. _locked must be called under the
+  // same external mutex that gates lru_get/lru_put/lru_destroy — the
+  // mutex is what serializes the 0->1 transition against eviction.
+  // Release is lock-free and may run outside that mutex.
+  void lru_entry_acquire_locked(struct lru_entry* e);
   void lru_entry_release(struct lru_entry* e);
 
   // Cumulative event counters. Embedded in lru_stats; also the type

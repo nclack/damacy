@@ -34,7 +34,7 @@ struct zarr_shard_cache
 {
   struct store* store;
   struct lru* lru;
-  struct platform_mutex* mu;
+  struct platform_mutex* cache_lock;
 };
 
 static uint64_t
@@ -92,8 +92,8 @@ zarr_shard_cache_create(struct store* store, uint32_t capacity)
   };
   self->lru = lru_create(capacity, 16, &ops);
   CHECK(Error, self->lru);
-  self->mu = platform_mutex_new();
-  CHECK(Error, self->mu);
+  self->cache_lock = platform_mutex_new();
+  CHECK(Error, self->cache_lock);
 
   return self;
 
@@ -107,7 +107,7 @@ zarr_shard_cache_destroy(struct zarr_shard_cache* self)
 {
   if (!self)
     return;
-  platform_mutex_free(self->mu);
+  platform_mutex_free(self->cache_lock);
   lru_destroy(self->lru);
   free(self);
 }
@@ -148,19 +148,19 @@ zarr_shard_cache_get(struct zarr_shard_cache* self,
   // atomic with the lookup — eviction selection won't touch a slot
   // whose refcount > 0, so once we hold the pin the (entries,
   // n_entries) pair stays valid until release.
-  platform_mutex_lock(self->mu);
+  platform_mutex_lock(self->cache_lock);
   struct lru_entry* hit = lru_get(self->lru, hash, &probe);
   if (hit) {
-    lru_entry_acquire(hit);
+    lru_entry_acquire_locked(hit);
     const struct shard_entry* entry =
       (const struct shard_entry*)lru_entry_value(hit);
     *out_entries = entry->entries;
     *out_n_entries = entry->n_entries;
     out_pin->opaque = hit;
-    platform_mutex_unlock(self->mu);
+    platform_mutex_unlock(self->cache_lock);
     return DAMACY_OK;
   }
-  platform_mutex_unlock(self->mu);
+  platform_mutex_unlock(self->cache_lock);
 
   uint64_t n_inner_per_shard = 0;
   if (zarr_metadata_inner_per_shard(meta, NULL, &n_inner_per_shard))
@@ -252,7 +252,7 @@ zarr_shard_cache_get(struct zarr_shard_cache* self,
   entry->n_entries = n_inner_per_shard;
   entry->entries = entries;
 
-  platform_mutex_lock(self->mu);
+  platform_mutex_lock(self->cache_lock);
   // Re-check under the lock: another thread may have raced us on the
   // same probe key while we were doing the unlocked I/O. If so, drop
   // our duplicate and return the winner. lru_peek doesn't count as a
@@ -260,28 +260,28 @@ zarr_shard_cache_get(struct zarr_shard_cache* self,
   struct lru_entry* existing = lru_peek(self->lru, hash, &probe);
   if (existing) {
     shard_destroy(entry, NULL);
-    lru_entry_acquire(existing);
+    lru_entry_acquire_locked(existing);
     const struct shard_entry* held =
       (const struct shard_entry*)lru_entry_value(existing);
     *out_entries = held->entries;
     *out_n_entries = held->n_entries;
     out_pin->opaque = existing;
-    platform_mutex_unlock(self->mu);
+    platform_mutex_unlock(self->cache_lock);
     return DAMACY_OK;
   }
   struct lru_entry* inserted = lru_put(self->lru, hash, &probe, entry);
   if (!inserted) {
     // lru_put already destroyed entry via shard_destroy.
-    platform_mutex_unlock(self->mu);
+    platform_mutex_unlock(self->cache_lock);
     return DAMACY_OOM;
   }
-  lru_entry_acquire(inserted);
+  lru_entry_acquire_locked(inserted);
   const struct shard_entry* held =
     (const struct shard_entry*)lru_entry_value(inserted);
   *out_entries = held->entries;
   *out_n_entries = held->n_entries;
   out_pin->opaque = inserted;
-  platform_mutex_unlock(self->mu);
+  platform_mutex_unlock(self->cache_lock);
   return DAMACY_OK;
 
 Invalid:
@@ -301,9 +301,8 @@ zarr_shard_cache_release(struct zarr_shard_cache* self,
   CHECK(Fail, self);
   if (!pin.opaque)
     return;
-  platform_mutex_lock(self->mu);
+  // Per-entry refcount is atomic; no cache_lock needed. See store_fs_release.
   lru_entry_release((struct lru_entry*)pin.opaque);
-  platform_mutex_unlock(self->mu);
   return;
 Fail:
   return;
@@ -317,10 +316,10 @@ zarr_shard_cache_stats_get(struct zarr_shard_cache* self,
     return;
   struct lru_stats stats;
   if (self)
-    platform_mutex_lock(self->mu);
+    platform_mutex_lock(self->cache_lock);
   lru_stats_get(self ? self->lru : NULL, &stats);
   if (self)
-    platform_mutex_unlock(self->mu);
+    platform_mutex_unlock(self->cache_lock);
   *out = (struct zarr_shard_cache_stats){
     .counters = stats.counters,
     .size = stats.size,
