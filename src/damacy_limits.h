@@ -73,13 +73,6 @@ _Static_assert(DAMACY_DEFAULT_READ_OP_MAX_BYTES <= UINT32_MAX,
 //   (b) bound on kernel smem bstarts/sorted arrays in the parse/emit
 //       kernels.
 #define DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK 32u
-#ifdef __cplusplus
-static_assert(DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK <= UINT16_MAX,
-              "observed_max_nblocks_per_chunk slot is uint16_t");
-#else
-_Static_assert(DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK <= UINT16_MAX,
-               "observed_max_nblocks_per_chunk slot is uint16_t");
-#endif
 
 // Structural ceiling on blosc1 sub-streams across a wave. Caps fanout
 // SOA growth and zstd-decoder batch growth.

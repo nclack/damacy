@@ -7,7 +7,6 @@
 #include "zarr/zarr_meta_cache.h"
 #include "zarr/zarr_metadata.h"
 
-#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -269,113 +268,6 @@ test_meta_cache_content_keyed(void)
   return 0;
 }
 
-// Verifies the observer slot advances monotonically through
-// layout_set, ignores smaller nblocks, ignores nblocks=0 (short-circuit
-// in atomic_u16_observe_max), and tolerates a NULL observer.
-static int
-test_meta_cache_blosc_nblocks_observer(void)
-{
-  char tmpl[] = "/tmp/damacy_meta_observer_XXXXXX";
-  char* root = mkdtemp(tmpl);
-  EXPECT(root);
-
-  const char* names[] = { "a", "b", "c", "d", "e" };
-  for (size_t i = 0; i < sizeof names / sizeof names[0]; ++i) {
-    char path[512];
-    snprintf(path, sizeof path, "%s/%s", root, names[i]);
-    EXPECT(mkdir(path, 0755) == 0);
-    snprintf(path, sizeof path, "%s/%s/zarr.json", root, names[i]);
-    EXPECT(fixture_write_file(path, MINIMAL_ZARR_JSON) == 0);
-  }
-
-  struct store_fs_config sc = { .root = root, .nthreads = 1 };
-  struct store* store = store_fs_create(&sc);
-  EXPECT(store);
-  struct zarr_meta_cache* c = zarr_meta_cache_create(store, 8);
-  EXPECT(c);
-
-  _Atomic(uint16_t) slot;
-  atomic_store_explicit(&slot, 1u, memory_order_relaxed);
-  zarr_meta_cache_set_blosc_nblocks_observer(c, &slot);
-
-  // layout_set is first-writer-wins per entry, so each step uses a
-  // distinct URI.
-  for (size_t i = 0; i < sizeof names / sizeof names[0]; ++i) {
-    struct zarr_metadata m = { 0 };
-    EXPECT(zarr_meta_cache_get(c, names[i], &m) == DAMACY_OK);
-  }
-
-  {
-    struct chunk_layout cl = { .codec_id = (uint8_t)CODEC_BLOSC_ZSTD,
-                               .typesize = 4,
-                               .blocksize = 256,
-                               .nbytes = 1024,
-                               .nblocks = 4,
-                               .shuffle = 1 };
-    EXPECT(zarr_meta_cache_layout_set(c, "a", &cl) == 0);
-    EXPECT(atomic_load_explicit(&slot, memory_order_acquire) == 4u);
-  }
-
-  {
-    struct chunk_layout cl = { .codec_id = (uint8_t)CODEC_BLOSC_ZSTD,
-                               .typesize = 4,
-                               .blocksize = 256,
-                               .nbytes = 1024,
-                               .nblocks = 2,
-                               .shuffle = 1 };
-    EXPECT(zarr_meta_cache_layout_set(c, "b", &cl) == 0);
-    EXPECT(atomic_load_explicit(&slot, memory_order_acquire) == 4u);
-  }
-
-  {
-    struct chunk_layout cl = { .codec_id = (uint8_t)CODEC_BLOSC_ZSTD,
-                               .typesize = 4,
-                               .blocksize = 256,
-                               .nbytes = 1024,
-                               .nblocks = DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK,
-                               .shuffle = 1 };
-    EXPECT(zarr_meta_cache_layout_set(c, "c", &cl) == 0);
-    EXPECT(atomic_load_explicit(&slot, memory_order_acquire) ==
-           DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK);
-  }
-
-  {
-    // atomic_u16_observe_max short-circuits on value==0; the helper is
-    // defensive even though a real probe rejects nblocks==0 upstream.
-    struct chunk_layout cl = { .codec_id = (uint8_t)CODEC_BLOSC_ZSTD,
-                               .typesize = 4,
-                               .blocksize = 256,
-                               .nbytes = 1024,
-                               .nblocks = 0,
-                               .shuffle = 1 };
-    EXPECT(zarr_meta_cache_layout_set(c, "d", &cl) == 0);
-    EXPECT(atomic_load_explicit(&slot, memory_order_acquire) ==
-           DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK);
-  }
-
-  zarr_meta_cache_set_blosc_nblocks_observer(c, NULL);
-
-  {
-    // Drive layout_set through the unprobed entry "e" so the
-    // atomic_u16_observe_max NULL-slot early-return is exercised at
-    // runtime, not just at teardown.
-    struct chunk_layout cl = { .codec_id = (uint8_t)CODEC_BLOSC_ZSTD,
-                               .typesize = 4,
-                               .blocksize = 256,
-                               .nbytes = 1024,
-                               .nblocks = 8,
-                               .shuffle = 1 };
-    EXPECT(zarr_meta_cache_layout_set(c, "e", &cl) == 0);
-    EXPECT(atomic_load_explicit(&slot, memory_order_acquire) ==
-           DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK);
-  }
-
-  zarr_meta_cache_destroy(c);
-  store_destroy(store);
-  fixture_rm_tree(root);
-  return 0;
-}
-
 int
 main(void)
 {
@@ -383,7 +275,6 @@ main(void)
   RUN(test_meta_cache_unsharded);
   RUN(test_meta_cache_index_start);
   RUN(test_meta_cache_content_keyed);
-  RUN(test_meta_cache_blosc_nblocks_observer);
   log_info("all tests passed");
   return 0;
 }

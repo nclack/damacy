@@ -64,13 +64,6 @@ wave_pool_init(struct wave_pool* wp,
   wp->n_slots = host_buffer_waves;
   wp->use_gds = (uint8_t)(enable_gds != 0);
   wp->bypass_decode = (uint8_t)(bypass_decode != 0);
-  // Init = 1 (not the structural max) so first-wave fanout doesn't
-  // over-allocate. Safety depends on kick_h2d running wave_chunks_eligible
-  // before prepare_decode_caps: a wave with any unprobed BLOSC_ZSTD chunk
-  // is rejected first, so chunk_zsubs_upper_bound never reaches the
-  // observer-fallback path on the first wave.
-  atomic_store_explicit(
-    &wp->observed_max_nblocks_per_chunk, 1u, memory_order_relaxed);
 
   // NON_BLOCKING so we don't serialize against the legacy default stream.
   CU(Fail, cuStreamCreate(&wp->stream_h2d, CU_STREAM_NON_BLOCKING));
@@ -343,21 +336,24 @@ CudaFail:
   return DAMACY_CUDA;
 }
 
-static inline uint32_t
-chunk_zsubs_upper_bound(const struct wave_pool* wp,
-                        const struct chunk_plan* c,
-                        const struct sample_plan* sp)
+static inline enum damacy_status
+chunk_zsubs_upper_bound(const struct chunk_plan* c,
+                        const struct sample_plan* sp,
+                        uint32_t* out)
 {
   if (c->is_fill || c->codec_id == (uint8_t)CODEC_FILL ||
-      c->codec_id == (uint8_t)CODEC_NONE)
-    return 0;
-  if (c->codec_id == (uint8_t)CODEC_BLOSC_ZSTD) {
-    if (sp->layout_probed)
-      return sp->layout.nblocks;
-    return (uint32_t)atomic_load_explicit(&wp->observed_max_nblocks_per_chunk,
-                                          memory_order_acquire);
+      c->codec_id == (uint8_t)CODEC_NONE) {
+    *out = 0;
+    return DAMACY_OK;
   }
-  return 1;
+  if (c->codec_id == (uint8_t)CODEC_BLOSC_ZSTD) {
+    if (!sp->layout_probed)
+      return DAMACY_INVAL;
+    *out = sp->layout.nblocks;
+    return DAMACY_OK;
+  }
+  *out = 1;
+  return DAMACY_OK;
 }
 
 // Fanout grow is per-wave (the OTHER wave's SOA is a separate allocation
@@ -377,7 +373,15 @@ prepare_decode_caps(struct wave_pool* wp, struct damacy_wave* wave)
         &slot->chunk_plans[wave->batch_chunk_offset + i];
       const struct sample_plan* sp =
         &slot->sample_plans[c->sample_idx_in_batch];
-      need_zsubs += chunk_zsubs_upper_bound(wp, c, sp);
+      uint32_t n = 0;
+      enum damacy_status zs = chunk_zsubs_upper_bound(c, sp, &n);
+      if (zs != DAMACY_OK) {
+        log_error("prepare_decode_caps: chunk %u failed substream upper "
+                  "bound (gate-vs-sizer contract violated)",
+                  i);
+        return zs;
+      }
+      need_zsubs += n;
     }
   }
   enum damacy_status gs = fanout_grow(&wave->h_zstd_fan,
@@ -544,7 +548,6 @@ kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
     goto Error;
 
   needs_end_record = 1;
-  // Order matters: see observed_max_nblocks_per_chunk init in wave_pool_init.
   if (!wave_chunks_eligible(wp, wave)) {
     // Probe gap (e.g. all-fill preceding waves never seeded the layout
     // cache) or unsupported dont_split=0 — not garbage in compressed
