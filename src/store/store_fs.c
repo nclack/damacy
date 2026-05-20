@@ -164,10 +164,7 @@ fs_read_job_free(void* vctx)
     return;
   struct store_fs* fs = j->fs;
   store_fs_release(fs, j->pin);
-  if (pool_owns(fs->job_pool, j))
-    pool_free(fs->job_pool, j);
-  else
-    free(j);
+  pool_free(fs->job_pool, j);
 }
 
 static struct store_event
@@ -194,9 +191,9 @@ fs_submit(struct store* s, const struct store_read* reads, size_t n)
       goto Drain;
     }
     struct fs_read_job* j = (struct fs_read_job*)pool_alloc(fs->job_pool);
-    if (!j)
-      j = (struct fs_read_job*)calloc(1, sizeof(*j));
     if (!j) {
+      log_warn("store_fs: job_pool exhausted (cap=%zu); draining batch",
+               pool_capacity(fs->job_pool));
       store_fs_release(fs, pin);
       goto Drain;
     }
@@ -363,8 +360,9 @@ store_fs_create(const struct store_fs_config* cfg)
   fs->q = io_queue_create(cfg->nthreads, cfg->affinity);
   CHECK_SILENT(Fail, fs->q);
 
-  // Pool covers the common case (ring at initial cap); past that, fs_submit
-  // falls back to calloc.
+  // Sized to the io_queue ring's initial cap. The ring grows past this
+  // only under heavy burst; in that regime fs_submit fails (seq==0) and
+  // the caller drains, rather than spilling to a second allocator.
   fs->job_pool =
     pool_create(sizeof(struct fs_read_job), DAMACY_IO_QUEUE_INITIAL_CAP);
   CHECK_SILENT(Fail, fs->job_pool);

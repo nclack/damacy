@@ -89,7 +89,9 @@ pool_destroy(struct pool* p)
   free(p);
 }
 
-static bool
+// Only used by pool_free's assert; marked unused so NDEBUG builds compile
+// clean.
+__attribute__((unused)) static bool
 pool_owns_unlocked(const struct pool* p, const void* ptr)
 {
   // storage is immutable after pool_create; no lock needed.
@@ -99,12 +101,6 @@ pool_owns_unlocked(const struct pool* p, const void* ptr)
   if (q < p->storage || q >= p->storage + p->capacity * p->slot_size)
     return false;
   return ((size_t)(q - p->storage)) % p->slot_size == 0;
-}
-
-bool
-pool_owns(const struct pool* p, const void* ptr)
-{
-  return pool_owns_unlocked(p, ptr);
 }
 
 void*

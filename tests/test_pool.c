@@ -145,39 +145,6 @@ test_contention(void)
   return 0;
 }
 
-static int
-test_owns(void)
-{
-  struct pool* p = pool_create(sizeof(struct thing), 4);
-  EXPECT(p);
-
-  EXPECT(!pool_owns(p, NULL));
-  EXPECT(!pool_owns(NULL, p));
-
-  void* a = pool_alloc(p);
-  void* b = pool_alloc(p);
-  EXPECT(pool_owns(p, a));
-  EXPECT(pool_owns(p, b));
-
-  EXPECT(!pool_owns(p, (unsigned char*)a + 1));
-
-  void* external = calloc(1, sizeof(struct thing));
-  EXPECT(external);
-  EXPECT(!pool_owns(p, external));
-  free(external);
-
-  struct thing on_stack;
-  EXPECT(!pool_owns(p, &on_stack));
-
-  pool_free(p, a);
-  pool_free(p, b);
-  // Freelist slots still belong to the pool.
-  EXPECT(pool_owns(p, a));
-
-  pool_destroy(p);
-  return 0;
-}
-
 // pool_destroy asserts in_use == 0. We cannot portably observe an assert
 // firing inside this process, so this test documents the contract by
 // allocating and freeing the slot before teardown. The companion negative
@@ -203,7 +170,6 @@ main(void)
   RUN(test_exhaustion_returns_null);
   RUN(test_destroy_null_safe);
   RUN(test_create_rejects_bad_args);
-  RUN(test_owns);
   RUN(test_destroy_requires_empty);
   RUN(test_contention);
   return 0;
