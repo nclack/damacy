@@ -53,18 +53,18 @@ store_fs_acquire(struct store_fs* fs,
 
   uint64_t hash = hash_fnv1a_str(key);
 
-  platform_mutex_lock(fs->cache_mu);
+  platform_mutex_lock(fs->cache_lock);
   {
     struct lru_entry* hit = lru_get(fs->fd_cache, hash, key);
     if (hit) {
-      lru_entry_acquire(hit);
+      lru_entry_acquire_locked(hit);
       platform_file* f = ((struct fs_cache_entry*)lru_entry_value(hit))->file;
       *pin_out = hit;
-      platform_mutex_unlock(fs->cache_mu);
+      platform_mutex_unlock(fs->cache_lock);
       return f;
     }
   }
-  platform_mutex_unlock(fs->cache_mu);
+  platform_mutex_unlock(fs->cache_lock);
 
   platform_file* opened = NULL;
   {
@@ -90,29 +90,29 @@ store_fs_acquire(struct store_fs* fs,
     return NULL;
   }
 
-  platform_mutex_lock(fs->cache_mu);
+  platform_mutex_lock(fs->cache_lock);
   {
     struct lru_entry* existing = lru_peek(fs->fd_cache, hash, key);
     if (existing) {
-      lru_entry_acquire(existing);
+      lru_entry_acquire_locked(existing);
       platform_file* f =
         ((struct fs_cache_entry*)lru_entry_value(existing))->file;
       *pin_out = existing;
-      platform_mutex_unlock(fs->cache_mu);
+      platform_mutex_unlock(fs->cache_lock);
       fs_cache_destroy(entry, NULL);
       return f;
     }
     struct lru_entry* inserted = lru_put(fs->fd_cache, hash, key, entry);
     if (!inserted) {
       // lru_put already destroyed entry via fs_cache_destroy on failure.
-      platform_mutex_unlock(fs->cache_mu);
+      platform_mutex_unlock(fs->cache_lock);
       return NULL;
     }
-    lru_entry_acquire(inserted);
+    lru_entry_acquire_locked(inserted);
     platform_file* f =
       ((struct fs_cache_entry*)lru_entry_value(inserted))->file;
     *pin_out = inserted;
-    platform_mutex_unlock(fs->cache_mu);
+    platform_mutex_unlock(fs->cache_lock);
     return f;
   }
 }
@@ -122,9 +122,7 @@ store_fs_release(struct store_fs* fs, struct lru_entry* pin)
 {
   if (!fs || !pin)
     return;
-  platform_mutex_lock(fs->cache_mu);
   lru_entry_release(pin);
-  platform_mutex_unlock(fs->cache_mu);
 }
 
 void
@@ -132,9 +130,9 @@ store_fs_stats_get(struct store_fs* fs, struct lru_stats* out)
 {
   if (!out)
     return;
-  platform_mutex_lock(fs->cache_mu);
+  platform_mutex_lock(fs->cache_lock);
   lru_stats_get(fs ? fs->fd_cache : NULL, out);
-  platform_mutex_unlock(fs->cache_mu);
+  platform_mutex_unlock(fs->cache_lock);
 }
 
 struct fs_read_job
@@ -301,7 +299,7 @@ fs_destroy(struct store* s)
   }
   pool_destroy(fs->job_pool);
   lru_destroy(fs->fd_cache);
-  platform_mutex_free(fs->cache_mu);
+  platform_mutex_free(fs->cache_lock);
   free(fs->root);
   free(fs);
 }
@@ -315,7 +313,7 @@ store_fs_free_partial(struct store_fs* fs)
   io_queue_destroy(fs->q);
   pool_destroy(fs->job_pool);
   lru_destroy(fs->fd_cache);
-  platform_mutex_free(fs->cache_mu);
+  platform_mutex_free(fs->cache_lock);
   free(fs->root);
   free(fs);
 }
@@ -342,8 +340,8 @@ store_fs_create(const struct store_fs_config* cfg)
   fs = (struct store_fs*)calloc(1, sizeof(*fs));
   CHECK_SILENT(Fail, fs);
   fs->base.vt = &fs_vtable_host;
-  fs->cache_mu = platform_mutex_new();
-  CHECK_SILENT(Fail, fs->cache_mu);
+  fs->cache_lock = platform_mutex_new();
+  CHECK_SILENT(Fail, fs->cache_lock);
   fs->root = strdup(cfg->root);
   CHECK_SILENT(Fail, fs->root);
 

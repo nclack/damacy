@@ -6,23 +6,21 @@
 #include "store/store.h"
 #include "util/hash.h"
 #include "util/lru.h"
-#include "util/path_intern.h"
 #include "util/prelude.h"
 #include "util/strbuf.h"
 #include "zarr/zarr_metadata.h"
 #include "zarr/zarr_shard_index.h"
 
-#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 
 struct shard_entry
 {
-  const char* uri; // interned; not owned
+  char* uri;
   uint8_t rank;
   uint64_t shard_coord[DAMACY_MAX_RANK];
   uint64_t n_entries;
-  struct zarr_shard_entry* entries; // owned; n_entries elements
+  struct zarr_shard_entry* entries;
 };
 
 struct shard_probe
@@ -34,16 +32,15 @@ struct shard_probe
 
 struct zarr_shard_cache
 {
-  struct store* store;      // borrowed
-  struct path_intern* uris; // borrowed; may be NULL
+  struct store* store;
   struct lru* lru;
-  struct platform_mutex* mu; // guards lru_get / lru_put / lru_stats_get
+  struct platform_mutex* cache_lock;
 };
 
 static uint64_t
 shard_hash(const char* uri, const uint64_t* shard_coord, uint8_t rank)
 {
-  uint64_t uri_hash = hash_ptr(uri);
+  uint64_t uri_hash = hash_fnv1a_str(uri);
   uint64_t coord_hash =
     hash_fnv1a(shard_coord, (size_t)rank * sizeof(uint64_t));
   return hash_combine(uri_hash, coord_hash);
@@ -57,7 +54,7 @@ shard_eq(const void* value, const void* probe_key, void* user)
   const struct shard_probe* probe = (const struct shard_probe*)probe_key;
   if (entry->rank != probe->rank)
     return 0;
-  if (entry->uri != probe->uri)
+  if (strcmp(entry->uri, probe->uri) != 0)
     return 0;
   for (uint8_t d = 0; d < entry->rank; ++d)
     if (entry->shard_coord[d] != probe->shard_coord[d])
@@ -72,14 +69,13 @@ shard_destroy(void* value, void* user)
   struct shard_entry* entry = (struct shard_entry*)value;
   if (!entry)
     return;
+  free(entry->uri);
   free(entry->entries);
   free(entry);
 }
 
 struct zarr_shard_cache*
-zarr_shard_cache_create(struct store* store,
-                        struct path_intern* uris,
-                        uint32_t capacity)
+zarr_shard_cache_create(struct store* store, uint32_t capacity)
 {
   struct zarr_shard_cache* self = NULL;
 
@@ -89,19 +85,15 @@ zarr_shard_cache_create(struct store* store,
   self = (struct zarr_shard_cache*)calloc(1, sizeof(*self));
   CHECK(Error, self);
   self->store = store;
-  self->uris = uris;
 
   struct lru_ops ops = {
     .eq = shard_eq,
     .destroy = shard_destroy,
   };
-  // hash_combine over (hash_ptr(uri), hash_fnv1a(shard_coord)) — the
-  // multiplicative URI hash and content coord hash mix well; observed
-  // chain depths stay well under the cap.
   self->lru = lru_create(capacity, 16, &ops);
   CHECK(Error, self->lru);
-  self->mu = platform_mutex_new();
-  CHECK(Error, self->mu);
+  self->cache_lock = platform_mutex_new();
+  CHECK(Error, self->cache_lock);
 
   return self;
 
@@ -115,7 +107,7 @@ zarr_shard_cache_destroy(struct zarr_shard_cache* self)
 {
   if (!self)
     return;
-  platform_mutex_free(self->mu);
+  platform_mutex_free(self->cache_lock);
   lru_destroy(self->lru);
   free(self);
 }
@@ -136,8 +128,6 @@ zarr_shard_cache_get(struct zarr_shard_cache* self,
   CHECK_SILENT(Invalid, out_pin);
   CHECK_SILENT(Invalid, out_entries);
   CHECK_SILENT(Invalid, out_n_entries);
-  assert((!self->uris || path_intern_owns(self->uris, uri)) &&
-         "zarr_shard_cache_get: uri must be a path_intern pointer");
   out_pin->opaque = NULL;
   if (meta->rank == 0 || meta->rank > DAMACY_MAX_RANK) {
     *out_entries = NULL;
@@ -158,19 +148,19 @@ zarr_shard_cache_get(struct zarr_shard_cache* self,
   // atomic with the lookup — eviction selection won't touch a slot
   // whose refcount > 0, so once we hold the pin the (entries,
   // n_entries) pair stays valid until release.
-  platform_mutex_lock(self->mu);
+  platform_mutex_lock(self->cache_lock);
   struct lru_entry* hit = lru_get(self->lru, hash, &probe);
   if (hit) {
-    lru_entry_acquire(hit);
+    lru_entry_acquire_locked(hit);
     const struct shard_entry* entry =
       (const struct shard_entry*)lru_entry_value(hit);
     *out_entries = entry->entries;
     *out_n_entries = entry->n_entries;
     out_pin->opaque = hit;
-    platform_mutex_unlock(self->mu);
+    platform_mutex_unlock(self->cache_lock);
     return DAMACY_OK;
   }
-  platform_mutex_unlock(self->mu);
+  platform_mutex_unlock(self->cache_lock);
 
   uint64_t n_inner_per_shard = 0;
   if (zarr_metadata_inner_per_shard(meta, NULL, &n_inner_per_shard))
@@ -250,14 +240,19 @@ zarr_shard_cache_get(struct zarr_shard_cache* self,
     free(entries);
     return DAMACY_OOM;
   }
-  entry->uri = uri;
+  entry->uri = strdup(uri);
+  if (!entry->uri) {
+    free(entry);
+    free(entries);
+    return DAMACY_OOM;
+  }
   entry->rank = meta->rank;
   for (uint8_t d = 0; d < meta->rank; ++d)
     entry->shard_coord[d] = shard_coord[d];
   entry->n_entries = n_inner_per_shard;
   entry->entries = entries;
 
-  platform_mutex_lock(self->mu);
+  platform_mutex_lock(self->cache_lock);
   // Re-check under the lock: another thread may have raced us on the
   // same probe key while we were doing the unlocked I/O. If so, drop
   // our duplicate and return the winner. lru_peek doesn't count as a
@@ -265,28 +260,28 @@ zarr_shard_cache_get(struct zarr_shard_cache* self,
   struct lru_entry* existing = lru_peek(self->lru, hash, &probe);
   if (existing) {
     shard_destroy(entry, NULL);
-    lru_entry_acquire(existing);
+    lru_entry_acquire_locked(existing);
     const struct shard_entry* held =
       (const struct shard_entry*)lru_entry_value(existing);
     *out_entries = held->entries;
     *out_n_entries = held->n_entries;
     out_pin->opaque = existing;
-    platform_mutex_unlock(self->mu);
+    platform_mutex_unlock(self->cache_lock);
     return DAMACY_OK;
   }
   struct lru_entry* inserted = lru_put(self->lru, hash, &probe, entry);
   if (!inserted) {
     // lru_put already destroyed entry via shard_destroy.
-    platform_mutex_unlock(self->mu);
+    platform_mutex_unlock(self->cache_lock);
     return DAMACY_OOM;
   }
-  lru_entry_acquire(inserted);
+  lru_entry_acquire_locked(inserted);
   const struct shard_entry* held =
     (const struct shard_entry*)lru_entry_value(inserted);
   *out_entries = held->entries;
   *out_n_entries = held->n_entries;
   out_pin->opaque = inserted;
-  platform_mutex_unlock(self->mu);
+  platform_mutex_unlock(self->cache_lock);
   return DAMACY_OK;
 
 Invalid:
@@ -306,9 +301,8 @@ zarr_shard_cache_release(struct zarr_shard_cache* self,
   CHECK(Fail, self);
   if (!pin.opaque)
     return;
-  platform_mutex_lock(self->mu);
+  // Per-entry refcount is atomic; no cache_lock needed. See store_fs_release.
   lru_entry_release((struct lru_entry*)pin.opaque);
-  platform_mutex_unlock(self->mu);
   return;
 Fail:
   return;
@@ -322,10 +316,10 @@ zarr_shard_cache_stats_get(struct zarr_shard_cache* self,
     return;
   struct lru_stats stats;
   if (self)
-    platform_mutex_lock(self->mu);
+    platform_mutex_lock(self->cache_lock);
   lru_stats_get(self ? self->lru : NULL, &stats);
   if (self)
-    platform_mutex_unlock(self->mu);
+    platform_mutex_unlock(self->cache_lock);
   *out = (struct zarr_shard_cache_stats){
     .counters = stats.counters,
     .size = stats.size,

@@ -1,15 +1,3 @@
-// LRU cache of parsed zarr v3 shard indices, keyed by (uri, shard_coord).
-//
-// CONTRACT: the URI portion of the key is compared by pointer identity,
-// not strcmp. Callers MUST pass a path_intern-acquired pointer for
-// `uri`; a raw strdup will miss every lookup and pollute the LRU.
-// `shard_coord` stays content-keyed. The contract is not statically
-// enforced — `const char*` can't distinguish interned from non-interned.
-// Pass `uris` to _create to enable debug-only ownership assertions.
-//
-// The cache borrows the store and `uris`; both must outlive the cache.
-// Metadata for each array (shard layout, index location) is passed in
-// by the caller so this layer doesn't reach into the metadata cache.
 #pragma once
 
 #include "damacy.h"   // damacy_status
@@ -24,7 +12,6 @@ extern "C"
 {
 #endif
 
-  struct path_intern;
   struct store;
   struct zarr_shard_cache;
 
@@ -39,7 +26,6 @@ extern "C"
   };
 
   struct zarr_shard_cache* zarr_shard_cache_create(struct store* store,
-                                                   struct path_intern* uris,
                                                    uint32_t capacity);
 
   void zarr_shard_cache_destroy(struct zarr_shard_cache* c);

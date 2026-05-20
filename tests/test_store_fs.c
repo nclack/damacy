@@ -5,6 +5,8 @@
 #include "store/store_fs.h"
 #include "util/lru.h"
 
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -158,11 +160,76 @@ test_pin_saturation(void)
   return 0;
 }
 
+// CAP > THREADS so acquire never blocks on pin saturation.
+#define CONTEND_KEYS 32u
+#define CONTEND_THREADS 4
+#define CONTEND_CAP (CONTEND_THREADS + 1u)
+#define CONTEND_ITERS 4000
+
+struct contend_args
+{
+  struct store_fs* fs;
+  atomic_int ok_count;
+};
+
+static void*
+contend_worker(void* arg)
+{
+  struct contend_args* w = (struct contend_args*)arg;
+  for (int i = 0; i < CONTEND_ITERS; ++i) {
+    char key[32];
+    snprintf(key, sizeof key, "k%u", (unsigned)(i % CONTEND_KEYS));
+    struct lru_entry* pin = NULL;
+    if (!store_fs_acquire(w->fs, key, &pin) || !pin)
+      return NULL;
+    atomic_fetch_add(&w->ok_count, 1);
+    store_fs_release(w->fs, pin);
+  }
+  return NULL;
+}
+
+static int
+test_lock_free_release_under_contention(void)
+{
+  char root[] = "/tmp/damacy_store_fs_contend_XXXXXX";
+  EXPECT(mkdtemp(root));
+  EXPECT(setup_files(root, CONTEND_KEYS) == 0);
+
+  struct store_fs_config sc = {
+    .root = root,
+    .nthreads = 1,
+    .fd_cache_capacity = CONTEND_CAP,
+  };
+  struct store* store = store_fs_create(&sc);
+  EXPECT(store);
+  struct store_fs* fs = (struct store_fs*)store;
+
+  struct contend_args w = { .fs = fs };
+  atomic_init(&w.ok_count, 0);
+
+  pthread_t threads[CONTEND_THREADS];
+  for (int t = 0; t < CONTEND_THREADS; ++t)
+    EXPECT(pthread_create(&threads[t], NULL, contend_worker, &w) == 0);
+  for (int t = 0; t < CONTEND_THREADS; ++t)
+    EXPECT(pthread_join(threads[t], NULL) == 0);
+
+  EXPECT(atomic_load(&w.ok_count) == CONTEND_THREADS * CONTEND_ITERS);
+
+  struct lru_stats stats;
+  store_fs_stats_get(fs, &stats);
+  EXPECT(stats.counters.evictions > 0);
+  EXPECT(stats.pinned == 0);
+
+  store_destroy(store);
+  return 0;
+}
+
 int
 main(void)
 {
   RUN(test_bounded_eviction);
   RUN(test_hit_path);
   RUN(test_pin_saturation);
+  RUN(test_lock_free_release_under_contention);
   return 0;
 }

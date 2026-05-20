@@ -3,6 +3,7 @@
 #include "log/log.h"
 #include "util/prelude.h"
 
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -28,7 +29,7 @@ struct lru_entry
 {
   uint64_t hash;
   void* value;
-  uint32_t refcount;
+  _Atomic uint32_t refcount;
   struct lru_list link;
 };
 
@@ -181,6 +182,11 @@ slot_clear(struct lru* self, uint32_t slot_idx)
 
 // --- index helpers -------------------------------------------------------
 
+// Refcount ordering: every eviction-gating read (index_insert_robin,
+// index_erase, evict_lru_tail, lru_put's replace path) uses acquire to
+// pair with lru_entry_release's lock-free CAS decrement. Bumps run
+// under the caller's mutex and use relaxed.
+
 // Robin-hood insert. Pinned entries (refcount > 0) are immovable; we
 // probe past them without considering them for swap. Returns LRU_NIL on
 // success, or the index of the orphaned slot on cap-exceed. The orphan
@@ -198,8 +204,8 @@ index_insert_robin(struct lru* self, uint32_t slot_to_insert)
         self->index.max_probe_observed = probe;
       return LRU_NIL;
     }
-    // Pinned entries are immovable; never swap with them.
-    if (self->slots[incumbent].refcount == 0) {
+    if (atomic_load_explicit(&self->slots[incumbent].refcount,
+                             memory_order_acquire) == 0) {
       uint32_t incumbent_ideal = ideal_cell(self, self->slots[incumbent].hash);
       uint32_t incumbent_probe = probe_dist(self, cell_idx, incumbent_ideal);
       if (probe > incumbent_probe) {
@@ -229,7 +235,8 @@ index_erase(struct lru* self, uint32_t cell_idx)
       self->index.cells[cell_idx] = LRU_NIL;
       return;
     }
-    if (self->slots[next_slot].refcount > 0) {
+    if (atomic_load_explicit(&self->slots[next_slot].refcount,
+                             memory_order_acquire) > 0) {
       // Pinned entries don't move; leave a gap at `cell_idx`.
       self->index.cells[cell_idx] = LRU_NIL;
       return;
@@ -307,7 +314,7 @@ evict_lru_tail(struct lru* self)
   for (struct lru_list* node = self->lru_order.prev; node != &self->lru_order;
        node = node->prev) {
     struct lru_entry* entry = link_to_entry(node);
-    if (entry->refcount == 0) {
+    if (atomic_load_explicit(&entry->refcount, memory_order_acquire) == 0) {
       evict_slot(self, entry_to_slot_idx(self, entry));
       return 0;
     }
@@ -371,13 +378,25 @@ lru_destroy(struct lru* self)
 {
   if (!self)
     return;
+  // Pin pointers held by callers point into self->slots; freeing that
+  // array would dangle them. If any pin is outstanding, leak everything.
+  uint32_t pinned = 0;
   for (struct lru_list* node = self->lru_order.next; node != &self->lru_order;
        node = node->next) {
-    self->ops.destroy(link_to_entry(node)->value, self->ops.user);
+    if (atomic_load_explicit(&link_to_entry(node)->refcount,
+                             memory_order_acquire) > 0)
+      ++pinned;
   }
+  CHECK(Leak, pinned == 0);
+  for (struct lru_list* node = self->lru_order.next; node != &self->lru_order;
+       node = node->next)
+    self->ops.destroy(link_to_entry(node)->value, self->ops.user);
   free(self->slots);
   free(self->index.cells);
   free(self);
+  return;
+Leak:
+  return;
 }
 
 struct lru_entry*
@@ -421,7 +440,8 @@ lru_put(struct lru* self, uint64_t hash, const void* probe_key, void* value)
   uint32_t cell_idx = index_lookup(self, hash, probe_key);
   if (cell_idx != LRU_NIL) {
     uint32_t slot_idx = self->index.cells[cell_idx];
-    if (self->slots[slot_idx].refcount > 0) {
+    if (atomic_load_explicit(&self->slots[slot_idx].refcount,
+                             memory_order_acquire) > 0) {
       // Pinned entry can't be replaced — would invalidate the pin.
       self->counters.put_failures++;
       self->ops.destroy(value, self->ops.user);
@@ -447,7 +467,8 @@ lru_put(struct lru* self, uint64_t hash, const void* probe_key, void* value)
   }
   self->slots[new_slot].hash = hash;
   self->slots[new_slot].value = value;
-  self->slots[new_slot].refcount = 0;
+  atomic_store_explicit(
+    &self->slots[new_slot].refcount, 0, memory_order_relaxed);
 
   // 3. Robin-hood insert. On cap-exceed, evict and retry. The orphan
   //    is whoever ended up unplaced — could be new_slot or a previously-
@@ -499,17 +520,34 @@ lru_entry_value(const struct lru_entry* entry)
 }
 
 void
-lru_entry_acquire(struct lru_entry* entry)
+lru_entry_acquire_locked(struct lru_entry* entry)
 {
-  if (entry)
-    entry->refcount++;
+  if (!entry)
+    return;
+  atomic_fetch_add_explicit(&entry->refcount, 1u, memory_order_relaxed);
 }
 
 void
 lru_entry_release(struct lru_entry* entry)
 {
-  if (entry && entry->refcount > 0)
-    entry->refcount--;
+  if (!entry)
+    return;
+  // CAS loop instead of fetch_sub so a double-release no-ops with a log
+  // rather than wrapping refcount to UINT32_MAX (which would pin the
+  // entry forever in release builds).
+  uint32_t cur = atomic_load_explicit(&entry->refcount, memory_order_relaxed);
+  for (;;) {
+    if (cur == 0) {
+      log_error("lru_entry_release: double release");
+      return;
+    }
+    if (atomic_compare_exchange_weak_explicit(&entry->refcount,
+                                              &cur,
+                                              cur - 1u,
+                                              memory_order_acq_rel,
+                                              memory_order_relaxed))
+      return;
+  }
 }
 
 void
@@ -521,7 +559,8 @@ lru_stats_get(const struct lru* self, struct lru_stats* out)
   for (const struct lru_list* node = self->lru_order.next;
        node != &self->lru_order;
        node = node->next) {
-    if (link_to_entry_const(node)->refcount > 0)
+    if (atomic_load_explicit(&link_to_entry_const(node)->refcount,
+                             memory_order_relaxed) > 0)
       ++n_pinned;
   }
   *out = (struct lru_stats){

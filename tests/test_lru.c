@@ -147,7 +147,7 @@ test_pinning_skips_eviction(void)
   lru_put(l, hash_fnv1a_str("c"), "c", sval_new("c"));
 
   // Pin "a" — it's the LRU tail.
-  lru_entry_acquire(ea);
+  lru_entry_acquire_locked(ea);
 
   // Insert "d": eviction must skip pinned "a", evict "b" instead.
   lru_put(l, hash_fnv1a_str("d"), "d", sval_new("d"));
@@ -173,8 +173,8 @@ test_pinning_all_pinned_returns_null(void)
 
   struct lru_entry* ea = lru_put(l, hash_fnv1a_str("a"), "a", sval_new("a"));
   struct lru_entry* eb = lru_put(l, hash_fnv1a_str("b"), "b", sval_new("b"));
-  lru_entry_acquire(ea);
-  lru_entry_acquire(eb);
+  lru_entry_acquire_locked(ea);
+  lru_entry_acquire_locked(eb);
 
   // Insert "c": cannot evict; both pinned. lru_put must return NULL and
   // destroy our value.

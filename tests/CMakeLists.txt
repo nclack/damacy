@@ -28,6 +28,7 @@ add_damacy_test(test_lru lru hash)
 add_damacy_test(test_pool pool log platform Threads::Threads)
 add_damacy_test(test_io_queue io_queue log)
 add_damacy_test(test_store_fs store lru hash log)
+target_link_libraries(test_store_fs PRIVATE Threads::Threads)
 add_damacy_test(test_zarr_meta_cache zarr_meta_cache zarr store test_fixture)
 add_damacy_test(test_zarr_shard_cache zarr_shard_cache zarr store test_fixture)
 
@@ -50,7 +51,7 @@ add_damacy_test(test_coalesce planner path_intern log)
 add_damacy_test(test_path_intern path_intern hash log)
 add_damacy_test(test_group_chunks planner log)
 add_damacy_test(test_chunk_layout planner zarr_chunk_layout zarr_meta_cache zarr_shard_cache zarr store path_intern test_fixture)
-add_damacy_test(test_lookahead lookahead path_intern log)
+add_damacy_test(test_lookahead lookahead log)
 add_damacy_test(test_scheduler scheduler platform log)
 
 # End-to-end smoke test: requires CUDA + nvCOMP, so guarded against

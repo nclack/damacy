@@ -4,7 +4,6 @@
 
 #include "fixture.h"
 #include "store/store.h"
-#include "util/path_intern.h"
 #include "zarr/zarr_metadata.h"
 #include "zarr/zarr_shard_cache.h"
 #include "zarr/zarr_shard_index.h"
@@ -55,7 +54,7 @@ test_shard_cache(void)
     .index_location_end = 1,
   };
 
-  struct zarr_shard_cache* c = zarr_shard_cache_create(store, NULL, 4);
+  struct zarr_shard_cache* c = zarr_shard_cache_create(store, 4);
   EXPECT(c);
 
   const uint64_t coord00[2] = { 0, 0 };
@@ -149,7 +148,7 @@ test_shard_cache_index_start(void)
     .index_location_end = 0,
   };
 
-  struct zarr_shard_cache* c = zarr_shard_cache_create(store, NULL, 4);
+  struct zarr_shard_cache* c = zarr_shard_cache_create(store, 4);
   EXPECT(c);
 
   const uint64_t coord00[2] = { 0, 0 };
@@ -207,7 +206,7 @@ test_shard_cache_unsharded(void)
     .index_location_end = 1,
   };
 
-  struct zarr_shard_cache* c = zarr_shard_cache_create(store, NULL, 4);
+  struct zarr_shard_cache* c = zarr_shard_cache_create(store, 4);
   EXPECT(c);
 
   const uint64_t coord00[2] = { 0, 0 };
@@ -240,12 +239,10 @@ test_shard_cache_unsharded(void)
   return 0;
 }
 
-// Same shape as the meta-cache pointer-identity test: drive the shard
-// cache through a real path_intern and verify hit-by-pointer-identity.
 static int
-test_shard_cache_pointer_identity(void)
+test_shard_cache_content_keyed(void)
 {
-  char tmpl[] = "/tmp/damacy_shard_pid_XXXXXX";
+  char tmpl[] = "/tmp/damacy_shard_content_XXXXXX";
   char* root = mkdtemp(tmpl);
   EXPECT(root);
 
@@ -280,16 +277,14 @@ test_shard_cache_pointer_identity(void)
     .index_location_end = 1,
   };
 
-  struct path_intern uris = { 0 };
-  struct zarr_shard_cache* c = zarr_shard_cache_create(store, &uris, 4);
+  struct zarr_shard_cache* c = zarr_shard_cache_create(store, 4);
   EXPECT(c);
 
-  const char* foo_a = path_intern_acquire(&uris, "foo");
-  const char* foo_b = path_intern_acquire(&uris, "foo");
-  const char* bar = path_intern_acquire(&uris, "bar");
-  EXPECT(foo_a && foo_b && bar);
-  EXPECT(foo_a == foo_b);
-  EXPECT(foo_a != bar);
+  char foo_a[16];
+  char foo_b[16];
+  snprintf(foo_a, sizeof foo_a, "foo");
+  snprintf(foo_b, sizeof foo_b, "foo");
+  EXPECT(&foo_a[0] != &foo_b[0]);
 
   const uint64_t coord00[2] = { 0, 0 };
   const struct zarr_shard_entry* entries = NULL;
@@ -312,8 +307,18 @@ test_shard_cache_pointer_identity(void)
   EXPECT(st.counters.misses == 1);
   EXPECT(st.size == 1);
 
-  EXPECT(zarr_shard_cache_get(c, bar, &meta, coord00, &pin_bar, &entries, &n) ==
-         DAMACY_OK);
+  foo_a[0] = 'x';
+  struct zarr_shard_pin pin_post = { 0 };
+  EXPECT(zarr_shard_cache_get(
+           c, "foo", &meta, coord00, &pin_post, &entries, &n) == DAMACY_OK);
+  zarr_shard_cache_stats_get(c, &st);
+  EXPECT(st.counters.hits == 2);
+  EXPECT(st.counters.misses == 1);
+  EXPECT(st.size == 1);
+  zarr_shard_cache_release(c, pin_post);
+
+  EXPECT(zarr_shard_cache_get(
+           c, "bar", &meta, coord00, &pin_bar, &entries, &n) == DAMACY_OK);
   zarr_shard_cache_stats_get(c, &st);
   EXPECT(st.counters.misses == 2);
   EXPECT(st.size == 2);
@@ -321,11 +326,7 @@ test_shard_cache_pointer_identity(void)
   zarr_shard_cache_release(c, pin_a);
   zarr_shard_cache_release(c, pin_b);
   zarr_shard_cache_release(c, pin_bar);
-  path_intern_release(&uris, foo_a);
-  path_intern_release(&uris, foo_b);
-  path_intern_release(&uris, bar);
   zarr_shard_cache_destroy(c);
-  path_intern_free(&uris);
   store_destroy(store);
   fixture_rm_tree(root);
   return 0;
@@ -337,7 +338,7 @@ main(void)
   RUN(test_shard_cache);
   RUN(test_shard_cache_index_start);
   RUN(test_shard_cache_unsharded);
-  RUN(test_shard_cache_pointer_identity);
+  RUN(test_shard_cache_content_keyed);
   log_info("all tests passed");
   return 0;
 }
