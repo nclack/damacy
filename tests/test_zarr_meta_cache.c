@@ -281,7 +281,7 @@ test_meta_cache_blosc_nblocks_observer(void)
   char* root = mkdtemp(tmpl);
   EXPECT(root);
 
-  const char* names[] = { "a", "b", "c", "d" };
+  const char* names[] = { "a", "b", "c", "d", "e" };
   for (size_t i = 0; i < sizeof names / sizeof names[0]; ++i) {
     char path[512];
     snprintf(path, sizeof path, "%s/%s", root, names[i]);
@@ -356,6 +356,21 @@ test_meta_cache_blosc_nblocks_observer(void)
   }
 
   zarr_meta_cache_set_blosc_nblocks_observer(c, NULL);
+
+  {
+    // Drive layout_set through the unprobed entry "e" so the
+    // atomic_u16_observe_max NULL-slot early-return is exercised at
+    // runtime, not just at teardown.
+    struct chunk_layout cl = { .codec_id = (uint8_t)CODEC_BLOSC_ZSTD,
+                               .typesize = 4,
+                               .blocksize = 256,
+                               .nbytes = 1024,
+                               .nblocks = 8,
+                               .shuffle = 1 };
+    EXPECT(zarr_meta_cache_layout_set(c, "e", &cl) == 0);
+    EXPECT(atomic_load_explicit(&slot, memory_order_acquire) ==
+           DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK);
+  }
 
   zarr_meta_cache_destroy(c);
   store_destroy(store);
