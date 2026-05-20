@@ -41,27 +41,24 @@ pool_round_slot(size_t elem_size)
 struct pool*
 pool_create(size_t elem_size, size_t capacity)
 {
-  if (elem_size == 0 || capacity == 0)
-    return NULL;
+  struct pool* p = NULL;
+  CHECK(Fail, elem_size > 0);
+  CHECK(Fail, capacity > 0);
 
-  struct pool* p = (struct pool*)calloc(1, sizeof(*p));
-  if (!p)
-    return NULL;
+  p = (struct pool*)calloc(1, sizeof(*p));
+  CHECK(Fail, p);
 
   p->slot_size = pool_round_slot(elem_size);
   p->capacity = capacity;
 
   // Overflow guard on the multiply.
-  if (p->slot_size != 0 && capacity > (SIZE_MAX / p->slot_size))
-    goto Fail;
+  CHECK(Fail, p->slot_size == 0 || capacity <= (SIZE_MAX / p->slot_size));
 
   p->storage = (unsigned char*)calloc(capacity, p->slot_size);
-  if (!p->storage)
-    goto Fail;
+  CHECK(Fail, p->storage);
 
   p->mu = platform_mutex_new();
-  if (!p->mu)
-    goto Fail;
+  CHECK(Fail, p->mu);
 
   for (size_t i = 0; i + 1 < capacity; ++i) {
     struct pool_slot* s = (struct pool_slot*)(p->storage + i * p->slot_size);
