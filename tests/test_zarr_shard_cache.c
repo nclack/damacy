@@ -307,6 +307,16 @@ test_shard_cache_content_keyed(void)
   EXPECT(st.counters.misses == 1);
   EXPECT(st.size == 1);
 
+  foo_a[0] = 'x';
+  struct zarr_shard_pin pin_post = { 0 };
+  EXPECT(zarr_shard_cache_get(
+           c, "foo", &meta, coord00, &pin_post, &entries, &n) == DAMACY_OK);
+  zarr_shard_cache_stats_get(c, &st);
+  EXPECT(st.counters.hits == 2);
+  EXPECT(st.counters.misses == 1);
+  EXPECT(st.size == 1);
+  zarr_shard_cache_release(c, pin_post);
+
   EXPECT(zarr_shard_cache_get(
            c, "bar", &meta, coord00, &pin_bar, &entries, &n) == DAMACY_OK);
   zarr_shard_cache_stats_get(c, &st);

@@ -235,7 +235,6 @@ static enum damacy_status
 plan_run(struct damacy* self, uint16_t slot_idx, float* out_elapsed_ms)
 {
   struct damacy_batch_slot* slot = &self->batch_pool.slots[slot_idx];
-  // PLANNING => prior read_ops retired; planner_plan resets the intern.
   CHECK(InvalidArg, slot->state == BATCH_PLANNING);
   struct planner_output plan_out = {
     .read_ops = slot->read_ops,

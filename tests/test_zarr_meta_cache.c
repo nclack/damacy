@@ -250,6 +250,13 @@ test_meta_cache_content_keyed(void)
   EXPECT(st.counters.misses == 1);
   EXPECT(st.size == 1);
 
+  foo_a[0] = 'x';
+  EXPECT(zarr_meta_cache_get(c, "foo", &m) == DAMACY_OK);
+  zarr_meta_cache_stats_get(c, &st);
+  EXPECT(st.counters.hits == 2);
+  EXPECT(st.counters.misses == 1);
+  EXPECT(st.size == 1);
+
   EXPECT(zarr_meta_cache_get(c, "bar", &m) == DAMACY_OK);
   zarr_meta_cache_stats_get(c, &st);
   EXPECT(st.counters.misses == 2);
