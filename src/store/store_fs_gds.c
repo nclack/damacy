@@ -28,6 +28,8 @@ typedef CUfileError_t (*pfn_cuFileReadAsync)(CUfileHandle_t,
                                              off_t*,
                                              ssize_t*,
                                              CUstream);
+typedef CUfileError_t (*pfn_cuFileStreamRegister)(CUstream, unsigned);
+typedef CUfileError_t (*pfn_cuFileStreamDeregister)(CUstream);
 
 // platform_call_once establishes a happens-before edge so unsynchronized
 // reads of g_libcufile.* are safe afterward. dlopen handle leaked at
@@ -39,6 +41,10 @@ static struct
   pfn_cuFileHandleRegister cuFileHandleRegister;
   pfn_cuFileHandleDeregister cuFileHandleDeregister;
   pfn_cuFileReadAsync cuFileReadAsync;
+  // Optional: warms per-stream state so the first cuFileReadAsync
+  // doesn't race compat-mode lazy init (issue #118).
+  pfn_cuFileStreamRegister cuFileStreamRegister;
+  pfn_cuFileStreamDeregister cuFileStreamDeregister;
 } g_libcufile;
 
 #define DLSYM_BIND(handle, table, sym)                                         \
@@ -63,6 +69,8 @@ libcufile_once_init(void)
   DLSYM_BIND(h, g_libcufile, cuFileHandleRegister);
   DLSYM_BIND(h, g_libcufile, cuFileHandleDeregister);
   DLSYM_BIND(h, g_libcufile, cuFileReadAsync);
+  DLSYM_BIND(h, g_libcufile, cuFileStreamRegister);
+  DLSYM_BIND(h, g_libcufile, cuFileStreamDeregister);
   if (!g_libcufile.cuFileDriverOpen || !g_libcufile.cuFileDriverClose ||
       !g_libcufile.cuFileHandleRegister ||
       !g_libcufile.cuFileHandleDeregister || !g_libcufile.cuFileReadAsync) {
@@ -71,6 +79,18 @@ libcufile_once_init(void)
     platform_dlclose(h);
     memset(&g_libcufile, 0, sizeof(g_libcufile));
     return;
+  }
+  // Register-without-Deregister would silently leak per-stream state.
+  if (!g_libcufile.cuFileStreamRegister ||
+      !g_libcufile.cuFileStreamDeregister) {
+    if (g_libcufile.cuFileStreamRegister || g_libcufile.cuFileStreamDeregister)
+      log_warn("cuFile: only one of cuFileStreamRegister/Deregister "
+               "resolved; disabling both to avoid leaking per-stream "
+               "state on this libcufile");
+    g_libcufile.cuFileStreamRegister = NULL;
+    g_libcufile.cuFileStreamDeregister = NULL;
+    log_warn("cuFile: stream register/deregister unavailable in "
+             "libcufile.so.0; #118 compat-mode race may recur");
   }
   g_libcufile_ok = 1;
 }
@@ -439,9 +459,12 @@ gds_destroy(struct store* s)
   if (!g)
     return;
   // Drain in-flight host-funcs so a late pin-release can't land on a
-  // freed mutex.
-  if (g->gds_stream)
+  // freed mutex. cufile docs: deregister must precede cuStreamDestroy.
+  if (g->gds_stream) {
     cuStreamSynchronize((CUstream)g->gds_stream);
+    if (g_libcufile.cuFileStreamDeregister)
+      g_libcufile.cuFileStreamDeregister((CUstream)g->gds_stream);
+  }
   lru_destroy(g->cache);
   platform_mutex_free(g->cache_lock);
   if (g->driver_opened && g_libcufile.cuFileDriverClose)
@@ -527,5 +550,23 @@ store_fs_gds_set_stream(struct store* s, void* stream)
   if (!s)
     return;
   struct store_fs_gds* g = (struct store_fs_gds*)s;
+  if (g->gds_stream == stream)
+    return;
+  if (g->gds_stream && g_libcufile.cuFileStreamDeregister)
+    g_libcufile.cuFileStreamDeregister((CUstream)g->gds_stream);
+  g->gds_stream = NULL;
+  if (!stream)
+    return;
+  if (g_libcufile.cuFileStreamRegister) {
+    CUfileError_t e = g_libcufile.cuFileStreamRegister((CUstream)stream, 0);
+    if (e.err != CU_FILE_SUCCESS) {
+      // Leaving gds_stream non-NULL would reproduce issue #118: the next
+      // cuFileReadAsync would run on a stream cuFile thinks is cold.
+      log_error("cuFileStreamRegister failed: err=%d; GDS submit_dev "
+                "disabled until set_stream succeeds",
+                (int)e.err);
+      return;
+    }
+  }
   g->gds_stream = stream;
 }
