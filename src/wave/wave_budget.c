@@ -235,8 +235,8 @@ wave_pool_resolve_sizing(uint32_t max_chunks_per_wave,
                          uint32_t batch_size,
                          struct wave_pool_sizing* out)
 {
-  const uint32_t max_substreams_per_wave =
-    (uint32_t)max_chunks_per_wave * (uint32_t)max_substreams_per_chunk;
+  const uint32_t max_substreams_per_wave = damacy_max_substreams_per_wave(
+    max_chunks_per_wave, max_substreams_per_chunk);
   // Smallest viable geometry: hold at least one chunk at the runtime
   // cap per wave. host_slab_per_wave needs to fit a compressed chunk;
   // the dev arena holds it uncompressed. Use max_chunk_uncompressed_bytes

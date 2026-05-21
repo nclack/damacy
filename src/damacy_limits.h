@@ -98,3 +98,9 @@ _Static_assert(DAMACY_HARD_MAX_SUBSTREAMS_PER_WAVE_U64 <= UINT32_MAX,
 // fanout SOAs. Sized off a typical wave (hundreds of substreams);
 // grows on demand when a wave's actual substream count exceeds the cap.
 #define DAMACY_BLOSC_ZSTD_INITIAL_BATCH_CAP 1024u
+
+static inline uint32_t
+damacy_max_substreams_per_wave(uint32_t chunks, uint32_t substreams_per_chunk)
+{
+  return (uint32_t)((uint64_t)chunks * (uint64_t)substreams_per_chunk);
+}
