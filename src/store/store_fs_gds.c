@@ -308,6 +308,8 @@ gds_submit_dev(struct store* s, const struct store_read* reads, size_t n)
     return ev;
   }
   atomic_init(&ctx->done->rc, 2);
+  atomic_init(&ctx->done->flag, 0);
+  atomic_init(&ctx->done->claimed, 0);
 
   size_t submitted = 0;
   for (size_t i = 0; i < n; ++i) {
