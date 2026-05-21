@@ -28,6 +28,8 @@ typedef CUfileError_t (*pfn_cuFileReadAsync)(CUfileHandle_t,
                                              off_t*,
                                              ssize_t*,
                                              CUstream);
+typedef CUfileError_t (*pfn_cuFileStreamRegister)(CUstream, unsigned);
+typedef CUfileError_t (*pfn_cuFileStreamDeregister)(CUstream);
 
 // platform_call_once establishes a happens-before edge so unsynchronized
 // reads of g_libcufile.* are safe afterward. dlopen handle leaked at
@@ -39,6 +41,10 @@ static struct
   pfn_cuFileHandleRegister cuFileHandleRegister;
   pfn_cuFileHandleDeregister cuFileHandleDeregister;
   pfn_cuFileReadAsync cuFileReadAsync;
+  // Optional: warms per-stream state so the first cuFileReadAsync
+  // doesn't race compat-mode lazy init (issue #118).
+  pfn_cuFileStreamRegister cuFileStreamRegister;
+  pfn_cuFileStreamDeregister cuFileStreamDeregister;
 } g_libcufile;
 
 #define DLSYM_BIND(handle, table, sym)                                         \
@@ -63,6 +69,8 @@ libcufile_once_init(void)
   DLSYM_BIND(h, g_libcufile, cuFileHandleRegister);
   DLSYM_BIND(h, g_libcufile, cuFileHandleDeregister);
   DLSYM_BIND(h, g_libcufile, cuFileReadAsync);
+  DLSYM_BIND(h, g_libcufile, cuFileStreamRegister);
+  DLSYM_BIND(h, g_libcufile, cuFileStreamDeregister);
   if (!g_libcufile.cuFileDriverOpen || !g_libcufile.cuFileDriverClose ||
       !g_libcufile.cuFileHandleRegister ||
       !g_libcufile.cuFileHandleDeregister || !g_libcufile.cuFileReadAsync) {
@@ -442,6 +450,9 @@ gds_destroy(struct store* s)
   // freed mutex.
   if (g->gds_stream)
     cuStreamSynchronize((CUstream)g->gds_stream);
+  // cufile docs: deregister must precede cuStreamDestroy.
+  if (g->gds_stream && g_libcufile.cuFileStreamDeregister)
+    g_libcufile.cuFileStreamDeregister((CUstream)g->gds_stream);
   lru_destroy(g->cache);
   platform_mutex_free(g->cache_lock);
   if (g->driver_opened && g_libcufile.cuFileDriverClose)
@@ -527,5 +538,12 @@ store_fs_gds_set_stream(struct store* s, void* stream)
   if (!s)
     return;
   struct store_fs_gds* g = (struct store_fs_gds*)s;
+  if (g->gds_stream && g_libcufile.cuFileStreamDeregister)
+    g_libcufile.cuFileStreamDeregister((CUstream)g->gds_stream);
   g->gds_stream = stream;
+  if (stream && g_libcufile.cuFileStreamRegister) {
+    CUfileError_t e = g_libcufile.cuFileStreamRegister((CUstream)stream, 0);
+    if (e.err != CU_FILE_SUCCESS)
+      log_error("cuFileStreamRegister failed: err=%d", (int)e.err);
+  }
 }
