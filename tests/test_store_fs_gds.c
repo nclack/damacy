@@ -9,7 +9,6 @@
 #include "util/lru.h"
 
 #include <cuda.h>
-#include <sched.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -92,14 +91,6 @@ test_submit_fail_releases_pins(void)
   return 0;
 }
 
-static void CUDA_CB
-host_barrier_spin(void* user)
-{
-  _Atomic int* flag = (_Atomic int*)user;
-  while (!atomic_load_explicit(flag, memory_order_acquire))
-    sched_yield();
-}
-
 static int
 write_n(const char* path, size_t n)
 {
@@ -119,9 +110,9 @@ write_n(const char* path, size_t n)
   return w == n ? 0 : 1;
 }
 
-// Park stream_h2d behind a host-barrier so cuFileReadAsync is queued
-// but not retired; store_event_query must report not-ready in that
-// window. Without the barrier the test is racy.
+// cuStreamWaitValue32 gates the stream from CPU memory; a spinning
+// host callback would risk deadlock against fs_gds_free_params_cb on
+// driver pools sized to one.
 static int
 test_event_query_reflects_completion(void)
 {
@@ -156,13 +147,20 @@ test_event_query_reflects_completion(void)
 
   CUstream stream = NULL;
   EXPECT(cuStreamCreate(&stream, CU_STREAM_NON_BLOCKING) == CUDA_SUCCESS);
-  store_fs_gds_set_stream(s, (void*)stream);
+  store_fs_gds_set_stream(s, stream);
 
   CUdeviceptr dbuf = 0;
   EXPECT(cuMemAlloc(&dbuf, PAYLOAD) == CUDA_SUCCESS);
 
-  _Atomic int unblock = 0;
-  EXPECT(cuLaunchHostFunc(stream, host_barrier_spin, &unblock) == CUDA_SUCCESS);
+  uint32_t* gate_host = NULL;
+  EXPECT(cuMemHostAlloc((void**)&gate_host,
+                        sizeof(*gate_host),
+                        CU_MEMHOSTALLOC_DEVICEMAP) == CUDA_SUCCESS);
+  *gate_host = 0;
+  CUdeviceptr gate_dev = 0;
+  EXPECT(cuMemHostGetDevicePointer(&gate_dev, gate_host, 0) == CUDA_SUCCESS);
+  EXPECT(cuStreamWaitValue32(stream, gate_dev, 1u, CU_STREAM_WAIT_VALUE_EQ) ==
+         CUDA_SUCCESS);
 
   struct store_read read = {
     .key = "blob",
@@ -175,11 +173,12 @@ test_event_query_reflects_completion(void)
 
   EXPECT(store_event_query(s, ev) == 0);
 
-  atomic_store_explicit(&unblock, 1, memory_order_release);
+  atomic_store_explicit((_Atomic uint32_t*)gate_host, 1u, memory_order_release);
   EXPECT(cuStreamSynchronize(stream) == CUDA_SUCCESS);
 
   EXPECT(store_event_query(s, ev) == 1);
 
+  cuMemFreeHost(gate_host);
   cuMemFree(dbuf);
   store_destroy(s);
   cuStreamDestroy(stream);
