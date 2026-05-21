@@ -380,15 +380,20 @@ fs_gds_try_claim(struct fs_gds_done* d)
     fs_gds_done_drop(d);
 }
 
+// Spin on the per-batch flag; cuStreamSynchronize would drain unrelated
+// concurrent submits on the same stream and kill IO/compute overlap.
 static void
 gds_event_wait(struct store* s, struct store_event ev)
 {
-  struct store_fs_gds* g = (struct store_fs_gds*)s;
-  if (!g || ev.seq != GDS_SENTINEL_SEQ)
+  (void)s;
+  if (ev.seq != GDS_SENTINEL_SEQ)
     return;
-  if (g->gds_stream)
-    cuStreamSynchronize((CUstream)g->gds_stream);
-  fs_gds_try_claim((struct fs_gds_done*)ev.impl);
+  struct fs_gds_done* d = (struct fs_gds_done*)ev.impl;
+  if (!d)
+    return;
+  while (!atomic_load_explicit(&d->flag, memory_order_acquire))
+    platform_cpu_pause();
+  fs_gds_try_claim(d);
 }
 
 static int
