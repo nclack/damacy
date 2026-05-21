@@ -135,6 +135,8 @@ wave_pool_destroy(struct wave_pool* wp, int cuda_skip)
     wave_destroy(&wp->waves[w], cuda_skip);
   for (uint8_t s = 0; s < wp->n_slots; ++s) {
     struct host_slab_slot* hs = &wp->slots[s];
+    // is_fill_wave never attaches a backend ref; relies on impl=NULL
+    // guard inside store_event_discard.
     if (hs->state == SLOT_IO && wp->store)
       store_event_discard(wp->store, hs->io_event);
     slot_destroy(hs, cuda_skip);
