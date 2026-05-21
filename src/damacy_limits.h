@@ -78,14 +78,15 @@ _Static_assert(DAMACY_DEFAULT_READ_OP_MAX_BYTES <= UINT32_MAX,
 // Bounded so the product with HARD_MAX_CHUNKS_PER_WAVE fits uint32
 // (max_substreams_per_wave).
 #define DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK 0xFFFFu
+
+#define DAMACY_HARD_MAX_SUBSTREAMS_PER_WAVE_U64                                \
+  ((uint64_t)DAMACY_HARD_MAX_CHUNKS_PER_WAVE *                                 \
+   (uint64_t)DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK)
 #ifdef __cplusplus
-static_assert((uint64_t)DAMACY_HARD_MAX_CHUNKS_PER_WAVE *
-                  (uint64_t)DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK <=
-                UINT32_MAX,
+static_assert(DAMACY_HARD_MAX_SUBSTREAMS_PER_WAVE_U64 <= UINT32_MAX,
               "max_substreams_per_wave must fit in uint32");
 #else
-_Static_assert((uint64_t)DAMACY_HARD_MAX_CHUNKS_PER_WAVE*(uint64_t)
-                   DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK <= UINT32_MAX,
+_Static_assert(DAMACY_HARD_MAX_SUBSTREAMS_PER_WAVE_U64 <= UINT32_MAX,
                "max_substreams_per_wave must fit in uint32");
 #endif
 
