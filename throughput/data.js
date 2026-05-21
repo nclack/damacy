@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779201337334,
+  "lastUpdate": 1779373691982,
   "repoUrl": "https://github.com/nclack/damacy",
   "entries": {
     "damacy throughput": [
@@ -607,6 +607,38 @@ window.BENCHMARK_DATA = {
           {
             "name": "damacy/mixed/throughput",
             "value": 6128.74,
+            "unit": "MB/s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Nathan Clack",
+            "username": "nclack",
+            "email": "nclack@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "67de5190f37f1b02098b2b5fafcea22352a1d264",
+          "message": "lru: atomic refcount, unlock release path (#111)\n\n## What\n\nMake the per-entry refcount atomic and drop the cache mutex from the\nrelease path. Acquire still takes the mutex — incrementing from zero has\nto be serialized against the eviction scan, which reads refcounts to\ndecide what's safe to evict.\n\n## Why\n\nThe refcount is a per-entry counter. It was under the cache mutex only\nbecause the field lived inside the entry struct, not because the value\nneeded that lock.\n\n## Results\n\nNot a lot of measured performance change on my laptop. The change is\nstill worth landing for cleaner refcount semantics and for the new\ncontention test that exercises the release path under concurrency, but\ndon't expect this workload to get faster.\n\n## Key file\n\n`src/util/lru.c` — refcount, acquire/release, eviction reads.\n\nCloses #108.",
+          "timestamp": "2026-05-20T17:14:02Z",
+          "url": "https://github.com/nclack/damacy/commit/67de5190f37f1b02098b2b5fafcea22352a1d264"
+        },
+        "date": 1779373691244,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "damacy/default/throughput",
+            "value": 6293.96,
+            "unit": "MB/s"
+          },
+          {
+            "name": "damacy/mixed/throughput",
+            "value": 6178.07,
             "unit": "MB/s"
           }
         ]
