@@ -33,6 +33,7 @@ extern "C"
   //   read_op_scratch: >= out->n_read_ops slots
   enum damacy_status coalesce_chunks(struct planner_output* out,
                                      uint64_t read_op_max_bytes,
+                                     uint32_t max_chunks_per_wave,
                                      uint32_t* u32_scratch,
                                      struct read_op* read_op_scratch);
 

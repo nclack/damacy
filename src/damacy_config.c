@@ -109,6 +109,28 @@ resolve_host_buffer_waves(const struct damacy_config* cfg)
   return v;
 }
 
+uint32_t
+resolve_max_chunks_per_wave(const struct damacy_config* cfg)
+{
+  uint32_t v = cfg->tuning.max_chunks_per_wave;
+  if (v == 0)
+    v = DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE;
+  if (v > DAMACY_HARD_MAX_CHUNKS_PER_WAVE)
+    v = DAMACY_HARD_MAX_CHUNKS_PER_WAVE;
+  return v;
+}
+
+uint32_t
+resolve_max_substreams_per_chunk(const struct damacy_config* cfg)
+{
+  uint32_t v = cfg->tuning.max_substreams_per_chunk;
+  if (v == 0)
+    v = DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK;
+  if (v > DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK)
+    v = DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK;
+  return v;
+}
+
 uint8_t
 resolve_enable_gds(const struct damacy_config* cfg)
 {

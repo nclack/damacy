@@ -7,6 +7,7 @@
 enum damacy_status
 coalesce_chunks(struct planner_output* out,
                 uint64_t read_op_max_bytes,
+                uint32_t max_chunks_per_wave,
                 uint32_t* u32_scratch,
                 struct read_op* read_op_scratch)
 {
@@ -55,7 +56,7 @@ coalesce_chunks(struct planner_output* out,
       if (curr->shard_path == leader->shard_path &&
           curr->file_offset >= leader->file_offset &&
           curr->file_offset <= leader_end &&
-          leader_chunks < DAMACY_MAX_CHUNKS_PER_WAVE) {
+          leader_chunks < max_chunks_per_wave) {
         uint64_t fused_end = curr_end > leader_end ? curr_end : leader_end;
         uint64_t fused_size = fused_end - leader->file_offset;
         if (fused_size <= read_op_max_bytes && fused_size <= UINT32_MAX)

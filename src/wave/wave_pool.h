@@ -34,6 +34,10 @@ struct wave_pool
   struct host_slab_slot slots[DAMACY_MAX_HOST_BUFFER_WAVES];
   uint8_t n_slots;
 
+  // max_substreams_per_wave = max_chunks_per_wave * max_substreams_per_chunk.
+  uint32_t max_chunks_per_wave;
+  uint32_t max_substreams_per_wave;
+
   // stream_decode: nvcomp decode + status_reduce. stream_post:
   // everything past ev.decode_done — gated cross-stream so wave N's
   // tail overlaps wave N+1's decode.
@@ -103,6 +107,8 @@ wave_pool_init(struct wave_pool* wp,
                struct damacy_stats* stats,
                enum damacy_dtype dtype,
                uint8_t host_buffer_waves,
+               uint32_t max_chunks_per_wave,
+               uint32_t max_substreams_per_chunk,
                uint64_t host_slab_per_wave,
                uint64_t dev_decompressed_per_wave,
                uint64_t max_chunk_uncompressed_bytes,
@@ -175,3 +181,13 @@ wave_pool_peel_commit(struct wave_pool* wp,
                       struct wave_pool_peel_ticket* t,
                       struct store_event ev,
                       int* changed);
+
+// DAMACY_INVAL on unprobed BLOSC_ZSTD documents the wave-eligibility
+// gate's contract; wave_chunks_eligible is the only legitimate caller.
+// Exposed for gate-contract testing; internal otherwise.
+struct chunk_plan;
+struct sample_plan;
+enum damacy_status
+chunk_substreams_upper_bound(const struct chunk_plan* c,
+                             const struct sample_plan* sp,
+                             uint32_t* out);

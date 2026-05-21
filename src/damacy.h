@@ -117,6 +117,11 @@ extern "C"
     // DAMACY_DEFAULT_HOST_BUFFER_WAVES. Clamped to
     // [DAMACY_N_WAVES, DAMACY_MAX_HOST_BUFFER_WAVES].
     uint8_t host_buffer_waves;
+    // 0 → DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE. Clamped to 0xFFFFu.
+    uint32_t max_chunks_per_wave;
+    // 0 → DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK. Clamped to
+    // DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK.
+    uint32_t max_substreams_per_chunk;
 
     uint32_t n_io_threads;
 

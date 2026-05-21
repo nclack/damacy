@@ -13,6 +13,8 @@
 
 int
 wave_init(struct damacy_wave* wave,
+          uint32_t max_chunks_per_wave,
+          uint32_t max_substreams_per_wave,
           uint64_t slot_cap_bytes,
           uint64_t dev_decompressed_bytes,
           int enable_gds)
@@ -35,7 +37,7 @@ wave_init(struct damacy_wave* wave,
   CU(Error, cuMemAlloc(&dptr, dev_decompressed_bytes));
   wave->dev_decompressed = (void*)(uintptr_t)dptr;
 
-  uint32_t cap = DAMACY_MAX_CHUNKS_PER_WAVE;
+  uint32_t cap = max_chunks_per_wave;
   CU(Error,
      cuMemAllocHost((void**)&wave->h_blosc1_totals,
                     sizeof(struct blosc1_totals)));
@@ -61,11 +63,13 @@ wave_init(struct damacy_wave* wave,
                     (size_t)cap * sizeof(uint32_t)));
   CU(Error, cuMemAlloc(&dptr, (size_t)cap * sizeof(uint32_t)));
   wave->d_blosc_chunk_indices = (uint32_t*)(uintptr_t)dptr;
-  CU(Error,
-     cuMemAllocHost((void**)&wave->h_block_chunk_map,
-                    DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE * sizeof(uint32_t)));
-  CU(Error,
-     cuMemAlloc(&dptr, DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE * sizeof(uint32_t)));
+  {
+    const size_t substreams_max = max_substreams_per_wave;
+    CU(Error,
+       cuMemAllocHost((void**)&wave->h_block_chunk_map,
+                      substreams_max * sizeof(uint32_t)));
+    CU(Error, cuMemAlloc(&dptr, substreams_max * sizeof(uint32_t)));
+  }
   wave->d_block_chunk_map = (uint32_t*)(uintptr_t)dptr;
   // Bitset: one bit per wave-local chunk index, rounded to uint32_t words.
   CU(Error, cuMemAlloc(&dptr, (size_t)((cap + 31u) / 32u) * sizeof(uint32_t)));
@@ -81,19 +85,15 @@ wave_init(struct damacy_wave* wave,
 
   // Initial per-wave fanout cap — kick_h2d grows this wave's SOA when
   // n_chunks * MAX_BLOCKS exceeds it. Independent of the other wave.
-  const size_t zsubs = DAMACY_BLOSC_ZSTD_INITIAL_BATCH_CAP;
-  if (fanout_alloc_pinned(&wave->h_zstd_fan, &wave->zstd_fan, zsubs))
+  const size_t substreams = DAMACY_BLOSC_ZSTD_INITIAL_BATCH_CAP;
+  if (fanout_alloc_pinned(&wave->h_zstd_fan, &wave->zstd_fan, substreams))
     goto Error;
-  wave->fanout_cap = (uint32_t)zsubs;
+  wave->fanout_cap = (uint32_t)substreams;
 
   CU(Error,
      cuMemAllocHost((void**)&wave->h_memcpy_ops,
-                    DAMACY_MAX_BLOSC_MEMCPY_OPS_PER_WAVE *
-                      sizeof(struct gpu_memcpy_op)));
-  CU(Error,
-     cuMemAlloc(&dptr,
-                DAMACY_MAX_BLOSC_MEMCPY_OPS_PER_WAVE *
-                  sizeof(struct gpu_memcpy_op)));
+                    (size_t)cap * sizeof(struct gpu_memcpy_op)));
+  CU(Error, cuMemAlloc(&dptr, (size_t)cap * sizeof(struct gpu_memcpy_op)));
   wave->d_memcpy_ops = (struct gpu_memcpy_op*)(uintptr_t)dptr;
 
   CU(Error, cuEventCreate(&wave->ev.h2d_start, CU_EVENT_DEFAULT));

@@ -33,11 +33,20 @@ def make_compressors(codec: str, dtype: np.dtype):
         return []
     if codec == "zstd":
         return [ZstdCodec(level=3, checksum=False)]
-    if codec == "blosc-zstd":
+    # blosc-zstd-l<N>: clevel N; lower clevels split into smaller blocks.
+    blosc_prefix = "blosc-zstd"
+    if codec.startswith(blosc_prefix):
+        suffix = codec[len(blosc_prefix) :]
+        if suffix == "":
+            clevel = 3
+        elif suffix.startswith("-l"):
+            clevel = int(suffix[2:])
+        else:
+            raise SystemExit(f"unknown --codec {codec!r}")
         return [
             BloscCodec(
                 cname=BloscCname.zstd,
-                clevel=3,
+                clevel=clevel,
                 shuffle=BloscShuffle.shuffle,
                 typesize=int(dtype.itemsize),
             )
@@ -71,8 +80,7 @@ def main() -> int:
     ap.add_argument(
         "--codec",
         default="zstd",
-        choices=["none", "zstd", "blosc-zstd"],
-        help="inner codec inside the sharding wrapper",
+        help="inner codec: none | zstd | blosc-zstd | blosc-zstd-l<N>",
     )
     args = ap.parse_args()
 

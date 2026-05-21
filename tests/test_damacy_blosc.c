@@ -17,7 +17,7 @@
 //                                         keeps the grow inside the cap
 //   test_layout_probe_avoids_decoder_grow
 //                                       — with the planner's chunk_layout
-//                                         probe, need_zsubs is computed
+//                                         probe, need_substreams is computed
 //                                         from probed nblocks; the
 //                                         single-block fixture stays
 //                                         under the initial cap and the
@@ -342,20 +342,14 @@ test_multi_wave_per_batch(void)
   return 0;
 }
 
-// Single wave with > 32 chunks forces both the per-wave fanout SOA and
-// the pool-shared decoder scratch to grow past
-// DAMACY_BLOSC_ZSTD_INITIAL_BATCH_CAP (1024). need_zsubs = n_chunks *
-// MAX_BLOCKS_PER_CHUNK = 64 * 32 = 2048 > 1024 triggers both grows in
-// kick_h2d. Regression for the per-wave-fanout corruption bug: in the
-// pre-fix code, growing wave A's fanout reallocated wave B's fanout in
-// lockstep — corrupting any in-flight H2D of B's SOA. The new
-// per-wave-allocation design prevents this.
-//
-// 256×32 uint16 zarr with 8×16 inner chunks => 32×2 = 64 chunks per
-// sample. Two batches are pushed back-to-back so both waves of the
-// pool are kept in flight simultaneously (lookahead_batches=2,
-// batch_size=1). Each wave independently triggers its own fanout
-// grow + the shared decoder grow on first dispatch.
+// Regression for the per-wave-fanout corruption bug: pre-fix, growing
+// wave A's fanout reallocated wave B's fanout in lockstep, corrupting
+// any in-flight H2D of B's SOA. Fixture: 65 inner chunks × 16 blocks
+// each = 1040 substreams per wave > DAMACY_BLOSC_ZSTD_INITIAL_BATCH_CAP
+// (1024), forcing both the per-wave fanout SOA and the pool-shared
+// decoder scratch to grow on first dispatch. clevel=1 splits each
+// 512 KB inner chunk into 16 blocks. Two batches keep both waves in
+// flight simultaneously (lookahead_batches=2, batch_size=1).
 static int
 test_wave_grows_substream_cap(void)
 {
@@ -363,66 +357,61 @@ test_wave_grows_substream_cap(void)
   EXPECT(mkdtemp_root(root, sizeof root) == 0);
   char p[256];
   snprintf(p, sizeof p, "%s/foo", root);
-  int64_t shape[2] = { 256, 32 }, inner[2] = { 8, 16 }, shard[2] = { 256, 32 };
+  const int64_t H = 512, W = 33280;
+  int64_t shape[2] = { H, W }, inner[2] = { 512, 512 }, shard[2] = { H, W };
   EXPECT(fixture_write_zarr_codec(
-           p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
+           p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd-l1") == 0);
 
-  // 1 GiB per-wave geometry easily holds 64 chunks (256 B decompressed
-  // each).
   struct damacy_config cfg = {
     .batch_size = 1,
     .lookahead_batches = 2,
     .dtype = DAMACY_F32,
-    .sample_shape = { 256, 32 },
+    .sample_shape = { H, W },
     .sample_rank = 2,
     .device = -1,
     .tuning = {
       .n_io_threads = 1,
       .n_zarrs_meta_cache = 4,
       .n_shards_meta_cache = 4,
+      .max_chunk_uncompressed_bytes = 1ull << 20,
       .max_gpu_memory_bytes = 1ull << 30,
     },
   };
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
-  // Push two samples in one slice so the lookahead can keep both
-  // batches in flight; this is what gets the second wave into
-  // WAVE_H2D/WAVE_ASSEMBLE concurrently with the first wave's grow.
   struct damacy_sample s[2];
   for (int i = 0; i < 2; ++i)
-    s[i] = mk_sample(p, 0, 256, 0, 32);
+    s[i] = mk_sample(p, 0, H, 0, W);
   struct damacy_sample_slice slice = { .beg = s, .end = s + 2 };
   struct damacy_push_result pr = damacy_push(d, slice);
   EXPECT(pr.status == DAMACY_OK);
 
-  // Pop both batches and verify content.
   for (int iter = 0; iter < 2; ++iter) {
     struct damacy_batch* b = NULL;
     EXPECT(damacy_pop(d, &b) == DAMACY_OK);
     struct damacy_batch_info info;
     damacy_batch_info(b, &info);
     EXPECT(info.shape[0] == 1);
-    EXPECT(info.shape[1] == 256);
-    EXPECT(info.shape[2] == 32);
-    float* out = (float*)calloc(256 * 32, sizeof(float));
+    EXPECT(info.shape[1] == H);
+    EXPECT(info.shape[2] == W);
+    float* out = (float*)calloc((size_t)(H * W), sizeof(float));
     EXPECT(out);
     EXPECT(cudaMemcpy(out,
                       info.device_ptr,
-                      256 * 32 * sizeof(float),
+                      (size_t)(H * W) * sizeof(float),
                       cudaMemcpyDeviceToHost) == cudaSuccess);
-    for (int y = 0; y < 256; ++y)
-      for (int x = 0; x < 32; ++x)
-        EXPECT(out[y * 32 + x] == expected_f32_from_u16_2d(y, x, 32, 0));
+    for (int64_t y = 0; y < H; ++y)
+      for (int64_t x = 0; x < W; ++x)
+        EXPECT(out[y * W + x] == expected_f32_from_u16_2d(y, x, W, 0));
     free(out);
     damacy_release(d, b);
   }
 
-  // 2 batches × 64 chunks each.
   struct damacy_stats st;
   damacy_stats_get(d, &st);
   EXPECT(st.batches_emitted == 2);
-  EXPECT(st.chunks_dispatched == 2 * 64);
+  EXPECT(st.chunks_dispatched == 2 * 65);
 
   damacy_destroy(d);
   fixture_rm_tree(root);
@@ -487,7 +476,7 @@ test_grow_inside_tight_budget(void)
 // With the planner's chunk_layout probe in place, the per-wave
 // substream count is computed from the probed nblocks rather than
 // MAX_BLOCKS_PER_CHUNK. This 256-byte-chunk fixture has nblocks=1, so
-// need_zsubs (64) stays under the initial 1024-cap and the
+// need_substreams (64) stays under the initial 1024-cap and the
 // decoder/fanout grow paths do NOT fire — even with the budget
 // inflated to leave only 1 MB headroom. The pop succeeds.
 //
@@ -526,8 +515,8 @@ test_layout_probe_avoids_decoder_grow(void)
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
   // Pre-fix: the decoder grow's ~7 MB delta from 1024 → 2048
-  // substreams (driven by need_zsubs = n_chunks * MAX_BLOCKS) tripped
-  // OOM here. Post-fix: probed nblocks = 1, need_zsubs = 64, no grow.
+  // substreams (driven by need_substreams = n_chunks * MAX_BLOCKS) tripped
+  // OOM here. Post-fix: probed nblocks = 1, need_substreams = 64, no grow.
   const uint64_t headroom = 1ull << 20;
   (void)damacy_set_gpu_bytes_committed_for_test(
     d, cfg.tuning.max_gpu_memory_bytes - headroom);

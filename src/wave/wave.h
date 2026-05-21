@@ -148,6 +148,8 @@ struct damacy_wave
 // to slot->dev_buf at bind time.
 int
 wave_init(struct damacy_wave* wave,
+          uint32_t max_chunks_per_wave,
+          uint32_t max_substreams_per_wave,
           uint64_t slot_cap_bytes,
           uint64_t dev_decompressed_bytes,
           int enable_gds);
