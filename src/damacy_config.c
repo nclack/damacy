@@ -126,6 +126,8 @@ resolve_max_substreams_per_chunk(const struct damacy_config* cfg)
   uint16_t v = cfg->tuning.max_substreams_per_chunk;
   if (v == 0)
     v = (uint16_t)DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK;
+  if (v > DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK)
+    v = (uint16_t)DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK;
   return v;
 }
 

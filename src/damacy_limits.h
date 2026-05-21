@@ -75,6 +75,20 @@ _Static_assert(DAMACY_DEFAULT_READ_OP_MAX_BYTES <= UINT32_MAX,
 // blosc1 layouts with more sub-streams (DAMACY_DECODE).
 #define DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK 32u
 
+// Bounded so the product with HARD_MAX_CHUNKS_PER_WAVE fits uint32
+// (max_substreams_per_wave).
+#define DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK 0xFFFFu
+#ifdef __cplusplus
+static_assert((uint64_t)DAMACY_HARD_MAX_CHUNKS_PER_WAVE *
+                  (uint64_t)DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK <=
+                UINT32_MAX,
+              "max_substreams_per_wave must fit in uint32");
+#else
+_Static_assert((uint64_t)DAMACY_HARD_MAX_CHUNKS_PER_WAVE*(uint64_t)
+                   DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK <= UINT32_MAX,
+               "max_substreams_per_wave must fit in uint32");
+#endif
+
 // Defensive cap on header.nbytes parsed from a blosc1 chunk. Prevents
 // overflow in the nblocks ceil-div for adversarial inputs.
 #define DAMACY_BLOSC_MAX_CHUNK_UNCOMPRESSED_BYTES (16ull << 20) // 16 MB

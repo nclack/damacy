@@ -35,7 +35,8 @@ resolve_host_buffer_waves(const struct damacy_config* cfg);
 uint32_t
 resolve_max_chunks_per_wave(const struct damacy_config* cfg);
 
-// 0 → DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK.
+// 0 → DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK; clamped to
+// DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK.
 uint16_t
 resolve_max_substreams_per_chunk(const struct damacy_config* cfg);
 
