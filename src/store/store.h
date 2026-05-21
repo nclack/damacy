@@ -85,10 +85,12 @@ extern "C"
   int store_supports_gds(struct store* s);
 
   // Block until all reads up to and including ev.seq have completed.
+  // Reclaims the backend ref in `ev`; do not call event_discard after.
   void store_event_wait(struct store* s, struct store_event ev);
 
   // Non-blocking variant of store_event_wait. Returns non-zero if every
-  // read up to ev.seq has completed.
+  // read up to ev.seq has completed. A non-zero return reclaims the
+  // backend ref in `ev`; do not call event_discard after.
   int store_event_query(struct store* s, struct store_event ev);
 
   // Release `ev` without waiting on completion. Required if neither
