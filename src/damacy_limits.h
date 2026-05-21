@@ -67,8 +67,8 @@ _Static_assert(DAMACY_DEFAULT_READ_OP_MAX_BYTES <= UINT32_MAX,
 // workload demonstrates need.
 #define DAMACY_MAX_IO_THREADS 32u
 
-// Sized to absorb one full default wave without growing. Must be a power
-// of two — io_queue indexes via bitmask.
+// Matches DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE. Must be a power of two —
+// io_queue indexes via bitmask.
 #define DAMACY_IO_QUEUE_INITIAL_CAP 512u
 
 // Default for damacy_tuning.max_substreams_per_chunk. Parser rejects
