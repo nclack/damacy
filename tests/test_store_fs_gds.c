@@ -194,9 +194,9 @@ test_event_query_reflects_completion(void)
   return 0;
 }
 
-// cuStreamDestroy errors if cuFile still holds the stream, so the
-// post-destroy returns are the real assertion that set_stream replace
-// and detach paths deregister.
+// cuFile docs require cuFileStreamDeregister before cuStreamDestroy; the
+// post-destroy cuStreamDestroy below relies on libcufile returning an
+// error otherwise.
 static int
 test_set_stream_replace_and_destroy(void)
 {
@@ -237,6 +237,37 @@ test_set_stream_replace_and_destroy(void)
   return 0;
 }
 
+static int
+test_destroy_deregisters_active_stream(void)
+{
+  if (cuda_init_primary()) {
+    log_info("test_store_fs_gds: no CUDA device; skipping");
+    return 0;
+  }
+
+  char root[] = "/tmp/damacy_store_fs_gds_XXXXXX";
+  EXPECT(mkdtemp(root));
+
+  struct store_fs_gds_config cfg = {
+    .root = root,
+    .fd_cache_capacity = 8,
+  };
+  struct store* s = store_fs_gds_create(&cfg);
+  if (!s) {
+    log_info(
+      "test_store_fs_gds: store_fs_gds_create returned NULL (no cuFile); "
+      "skipping");
+    return 0;
+  }
+
+  CUstream a = NULL;
+  EXPECT(cuStreamCreate(&a, CU_STREAM_NON_BLOCKING) == CUDA_SUCCESS);
+  store_fs_gds_set_stream(s, a);
+  store_destroy(s);
+  EXPECT(cuStreamDestroy(a) == CUDA_SUCCESS);
+  return 0;
+}
+
 int
 main(void)
 {
@@ -245,5 +276,6 @@ main(void)
   RUN(test_submit_fail_releases_pins);
   RUN(test_event_query_reflects_completion);
   RUN(test_set_stream_replace_and_destroy);
+  RUN(test_destroy_deregisters_active_stream);
   return 0;
 }
