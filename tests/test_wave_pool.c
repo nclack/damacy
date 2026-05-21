@@ -12,6 +12,7 @@
 #include "store/store.h"
 #include "wave/host_slab.h"
 #include "wave/wave_pool.h"
+#include "zarr/zarr_metadata.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -282,6 +283,42 @@ test_peel_commit_noop_ticket(void)
   return 0;
 }
 
+// Unprobed BLOSC_ZSTD reaching the sizer means the eligibility gate
+// failed to reject it; prepare_decode_caps treats that as DAMACY_INVAL.
+static int
+test_chunk_substreams_unprobed_blosc(void)
+{
+  struct sample_plan sp_unprobed = { .layout_probed = 0 };
+  struct sample_plan sp_probed = { .layout_probed = 1,
+                                   .layout = { .nblocks = 5 } };
+
+  uint32_t n = 0xDEADBEEF;
+  {
+    struct chunk_plan c = { .codec_id = (uint8_t)CODEC_BLOSC_ZSTD,
+                            .is_fill = 0 };
+    EXPECT(chunk_substreams_upper_bound(&c, &sp_unprobed, &n) == DAMACY_INVAL);
+    EXPECT(n == 0xDEADBEEF);
+  }
+  {
+    struct chunk_plan c = { .codec_id = (uint8_t)CODEC_BLOSC_ZSTD,
+                            .is_fill = 0 };
+    EXPECT(chunk_substreams_upper_bound(&c, &sp_probed, &n) == DAMACY_OK);
+    EXPECT(n == 5);
+  }
+  {
+    struct chunk_plan c = { .codec_id = (uint8_t)CODEC_BLOSC_ZSTD,
+                            .is_fill = 1 };
+    EXPECT(chunk_substreams_upper_bound(&c, &sp_unprobed, &n) == DAMACY_OK);
+    EXPECT(n == 0);
+  }
+  {
+    struct chunk_plan c = { .codec_id = (uint8_t)CODEC_ZSTD, .is_fill = 0 };
+    EXPECT(chunk_substreams_upper_bound(&c, &sp_unprobed, &n) == DAMACY_OK);
+    EXPECT(n == 1);
+  }
+  return 0;
+}
+
 int
 main(void)
 {
@@ -291,6 +328,7 @@ main(void)
   RUN(test_peel_reserve_defers_oversize_group);
   RUN(test_peel_reserve_errors_when_first_group_too_big);
   RUN(test_peel_commit_noop_ticket);
+  RUN(test_chunk_substreams_unprobed_blosc);
   printf("all wave_pool tests passed\n");
   return 0;
 }

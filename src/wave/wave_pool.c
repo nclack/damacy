@@ -351,7 +351,7 @@ CudaFail:
   return DAMACY_CUDA;
 }
 
-static inline enum damacy_status
+enum damacy_status
 chunk_substreams_upper_bound(const struct chunk_plan* c,
                              const struct sample_plan* sp,
                              uint32_t* out)

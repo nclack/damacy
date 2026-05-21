@@ -181,3 +181,12 @@ wave_pool_peel_commit(struct wave_pool* wp,
                       struct wave_pool_peel_ticket* t,
                       struct store_event ev,
                       int* changed);
+
+// DAMACY_INVAL on unprobed BLOSC_ZSTD documents the wave-eligibility
+// gate's contract; wave_chunks_eligible is the only legitimate caller.
+struct chunk_plan;
+struct sample_plan;
+enum damacy_status
+chunk_substreams_upper_bound(const struct chunk_plan* c,
+                             const struct sample_plan* sp,
+                             uint32_t* out);
