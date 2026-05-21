@@ -84,10 +84,17 @@ test_submit_fail_releases_pins(void)
   struct store_event ev2 = store_read_submit_dev(s, good, 1);
   EXPECT(ev2.seq != 0);
   EXPECT(cuStreamSynchronize(stream) == CUDA_SUCCESS);
+  store_event_discard(s, ev2);
 
   cuMemFree(dbuf);
   store_destroy(s);
   cuStreamDestroy(stream);
+  for (int i = 0; i < 3; ++i) {
+    char p[256];
+    snprintf(p, sizeof p, "%s/k%d", root, i);
+    unlink(p);
+  }
+  rmdir(root);
   return 0;
 }
 
@@ -177,11 +184,14 @@ test_event_query_reflects_completion(void)
   EXPECT(cuStreamSynchronize(stream) == CUDA_SUCCESS);
 
   EXPECT(store_event_query(s, ev) == 1);
+  store_event_discard(s, ev);
 
   cuMemFreeHost(gate_host);
   cuMemFree(dbuf);
   store_destroy(s);
   cuStreamDestroy(stream);
+  unlink(path);
+  rmdir(root);
   return 0;
 }
 
