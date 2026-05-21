@@ -184,7 +184,6 @@ test_event_query_reflects_completion(void)
   EXPECT(cuStreamSynchronize(stream) == CUDA_SUCCESS);
 
   EXPECT(store_event_query(s, ev) == 1);
-  store_event_discard(s, ev);
 
   cuMemFreeHost(gate_host);
   cuMemFree(dbuf);
