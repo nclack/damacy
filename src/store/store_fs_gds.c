@@ -538,12 +538,23 @@ store_fs_gds_set_stream(struct store* s, void* stream)
   if (!s)
     return;
   struct store_fs_gds* g = (struct store_fs_gds*)s;
+  if (g->gds_stream == stream)
+    return;
   if (g->gds_stream && g_libcufile.cuFileStreamDeregister)
     g_libcufile.cuFileStreamDeregister((CUstream)g->gds_stream);
-  g->gds_stream = stream;
-  if (stream && g_libcufile.cuFileStreamRegister) {
+  g->gds_stream = NULL;
+  if (!stream)
+    return;
+  if (g_libcufile.cuFileStreamRegister) {
     CUfileError_t e = g_libcufile.cuFileStreamRegister((CUstream)stream, 0);
-    if (e.err != CU_FILE_SUCCESS)
-      log_error("cuFileStreamRegister failed: err=%d", (int)e.err);
+    if (e.err != CU_FILE_SUCCESS) {
+      // Leaving gds_stream non-NULL would reproduce issue #118: the next
+      // cuFileReadAsync would run on a stream cuFile thinks is cold.
+      log_error("cuFileStreamRegister failed: err=%d; GDS submit_dev "
+                "disabled until set_stream succeeds",
+                (int)e.err);
+      return;
+    }
   }
+  g->gds_stream = stream;
 }
