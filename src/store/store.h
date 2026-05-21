@@ -56,12 +56,12 @@ extern "C"
     size_t len;
   };
 
-  // Completion handle returned by store_read_submit. Wait via
-  // store_event_wait; cheap value type.
+  // Non-NULL `impl` owns a backend ref; drive to completion via
+  // event_wait or event_query (until non-zero), else event_discard.
   struct store_event
   {
     uint64_t seq;
-    void* impl; // backend-private; NULL for host-staging stores
+    void* impl;
   };
 
   // Submit a batch of reads. Returns an event whose .seq advances after

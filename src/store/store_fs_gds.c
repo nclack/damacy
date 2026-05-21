@@ -363,6 +363,7 @@ SubmitFail:
       lru_entry_release(ctx->params[i].pin);
   }
   free(ctx->params);
+  // callback never enqueued; we own both refs (owner + callback-side)
   fs_gds_done_drop(ctx->done);
   fs_gds_done_drop(ctx->done);
   free(ctx);
