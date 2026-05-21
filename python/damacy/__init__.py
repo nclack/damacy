@@ -554,8 +554,16 @@ class Config:
             raise ValueError("host_buffer_waves must be >= 0")
         if max_chunks_per_wave < 0:
             raise ValueError("max_chunks_per_wave must be >= 0")
+        if max_chunks_per_wave > 0xFFFF:
+            raise ValueError(
+                f"max_chunks_per_wave must be <= 0xFFFF (got {max_chunks_per_wave})"
+            )
         if max_substreams_per_chunk < 0:
             raise ValueError("max_substreams_per_chunk must be >= 0")
+        if max_substreams_per_chunk > 0xFFFF:
+            raise ValueError(
+                f"max_substreams_per_chunk must be <= 0xFFFF (got {max_substreams_per_chunk})"
+            )
         if pop_timeout_s is not None and pop_timeout_s <= 0:
             raise ValueError(f"pop_timeout_s must be > 0 or None (got {pop_timeout_s})")
         ns = NumaStrategy.coerce(numa_strategy)
