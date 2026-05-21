@@ -61,6 +61,7 @@ extern "C"
   struct store_event
   {
     uint64_t seq;
+    void* impl; // backend-private; NULL for host-staging stores
   };
 
   // Submit a batch of reads. Returns an event whose .seq advances after

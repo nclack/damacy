@@ -11,6 +11,8 @@
 #include "util/strbuf.h"
 
 #include <cufile.h>
+#include <stdatomic.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -220,11 +222,32 @@ struct fs_gds_async_params
   struct lru_entry* pin;
 };
 
+// rc=2 protocol: submit-owner and host-func callback each own one ref;
+// last drop frees. `claimed` latches the owner-side drop into a single
+// CAS so repeated event_query calls don't double-free and an unqueried
+// event is still reclaimed by the callback alone.
+struct fs_gds_done
+{
+  _Atomic uint8_t flag;
+  _Atomic uint8_t claimed;
+  _Atomic int rc;
+};
+
+static void
+fs_gds_done_drop(struct fs_gds_done* d)
+{
+  if (!d)
+    return;
+  if (atomic_fetch_sub_explicit(&d->rc, 1, memory_order_acq_rel) == 1)
+    free(d);
+}
+
 struct fs_gds_async_ctx
 {
   struct store_fs_gds* g;
   size_t n;
   struct fs_gds_async_params* params;
+  struct fs_gds_done* done;
 };
 
 static void CUDA_CB
@@ -239,6 +262,10 @@ fs_gds_free_params_cb(void* userdata)
         lru_entry_release(ctx->params[i].pin);
     }
     free(ctx->params);
+  }
+  if (ctx->done) {
+    atomic_store_explicit(&ctx->done->flag, 1, memory_order_release);
+    fs_gds_done_drop(ctx->done);
   }
   free(ctx);
 }
@@ -274,6 +301,13 @@ gds_submit_dev(struct store* s, const struct store_read* reads, size_t n)
     free(ctx);
     return ev;
   }
+  ctx->done = (struct fs_gds_done*)calloc(1, sizeof(*ctx->done));
+  if (!ctx->done) {
+    free(ctx->params);
+    free(ctx);
+    return ev;
+  }
+  atomic_init(&ctx->done->rc, 2);
 
   size_t submitted = 0;
   for (size_t i = 0; i < n; ++i) {
@@ -316,6 +350,7 @@ gds_submit_dev(struct store* s, const struct store_read* reads, size_t n)
   }
 
   ev.seq = GDS_SENTINEL_SEQ;
+  ev.impl = ctx->done;
   return ev;
 
 SubmitFail:
@@ -328,22 +363,47 @@ SubmitFail:
       lru_entry_release(ctx->params[i].pin);
   }
   free(ctx->params);
+  fs_gds_done_drop(ctx->done);
+  fs_gds_done_drop(ctx->done);
   free(ctx);
   return ev;
 }
 
 static void
+fs_gds_try_claim(struct fs_gds_done* d)
+{
+  if (!d)
+    return;
+  uint8_t expected = 0;
+  if (atomic_compare_exchange_strong_explicit(
+        &d->claimed, &expected, 1, memory_order_acq_rel, memory_order_relaxed))
+    fs_gds_done_drop(d);
+}
+
+static void
 gds_event_wait(struct store* s, struct store_event ev)
 {
-  (void)s;
-  (void)ev;
+  struct store_fs_gds* g = (struct store_fs_gds*)s;
+  if (!g || ev.seq != GDS_SENTINEL_SEQ)
+    return;
+  if (g->gds_stream)
+    cuStreamSynchronize((CUstream)g->gds_stream);
+  fs_gds_try_claim((struct fs_gds_done*)ev.impl);
 }
 
 static int
 gds_event_query(struct store* s, struct store_event ev)
 {
   (void)s;
-  return ev.seq == GDS_SENTINEL_SEQ ? 1 : 0;
+  if (ev.seq != GDS_SENTINEL_SEQ)
+    return 0;
+  struct fs_gds_done* d = (struct fs_gds_done*)ev.impl;
+  if (!d)
+    return 1; // n==0 fast-path: nothing to wait on
+  if (!atomic_load_explicit(&d->flag, memory_order_acquire))
+    return 0;
+  fs_gds_try_claim(d);
+  return 1;
 }
 
 // Also reached from store_fs_gds_create's Fail label on partial
