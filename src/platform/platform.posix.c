@@ -232,6 +232,12 @@ platform_cpu_pause(void)
 #endif
 }
 
+void
+platform_yield(void)
+{
+  sched_yield();
+}
+
 int
 platform_default_thread_count(void)
 {

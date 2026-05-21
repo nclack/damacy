@@ -18,6 +18,7 @@ struct store_vtable
                                    size_t n);
   void (*event_wait)(struct store* s, struct store_event ev);
   int (*event_query)(struct store* s, struct store_event ev);
+  void (*event_discard)(struct store* s, struct store_event ev);
   int (*map)(struct store* s, const char* key, struct store_view* out);
   void (*unmap)(struct store* s, struct store_view* view);
 };

@@ -231,6 +231,14 @@ fs_event_query(struct store* s, struct store_event ev)
   return io_event_query(fs->q, (struct io_event){ .seq = ev.seq });
 }
 
+// Host store never attaches a backend ref; no-op.
+static void
+fs_event_discard(struct store* s, struct store_event ev)
+{
+  (void)s;
+  (void)ev;
+}
+
 static int
 fs_stat(struct store* s, const char* key, uint64_t* out)
 {
@@ -325,6 +333,7 @@ static const struct store_vtable fs_vtable_host = {
   .submit_dev = NULL,
   .event_wait = fs_event_wait,
   .event_query = fs_event_query,
+  .event_discard = fs_event_discard,
   .map = fs_map,
   .unmap = fs_unmap,
 };

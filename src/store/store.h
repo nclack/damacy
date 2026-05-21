@@ -56,11 +56,12 @@ extern "C"
     size_t len;
   };
 
-  // Completion handle returned by store_read_submit. Wait via
-  // store_event_wait; cheap value type.
+  // Non-NULL `impl` owns a backend ref; drive to completion via
+  // event_wait or event_query (until non-zero), else event_discard.
   struct store_event
   {
     uint64_t seq;
+    void* impl;
   };
 
   // Submit a batch of reads. Returns an event whose .seq advances after
@@ -84,11 +85,20 @@ extern "C"
   int store_supports_gds(struct store* s);
 
   // Block until all reads up to and including ev.seq have completed.
+  // Reclaims the backend ref in `ev`; do not call event_discard after.
+  // Caller must ensure the store's stream remains live and is progressing;
+  // a destroyed or permanently-stalled stream will deadlock the wait.
   void store_event_wait(struct store* s, struct store_event ev);
 
   // Non-blocking variant of store_event_wait. Returns non-zero if every
-  // read up to ev.seq has completed.
+  // read up to ev.seq has completed. A non-zero return reclaims the
+  // backend ref in `ev`; do not call event_discard after.
   int store_event_query(struct store* s, struct store_event ev);
+
+  // Release `ev` without waiting on completion. Required if neither
+  // event_wait nor event_query-to-completion is called on it. Safe on
+  // any event with NULL impl (zero-initialized events or n==0 submits).
+  void store_event_discard(struct store* s, struct store_event ev);
 
   // Submit + wait. Returns 0 on success.
   int store_read_many(struct store* s,

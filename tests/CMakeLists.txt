@@ -77,6 +77,7 @@ if(NOT DAMACY_FUZZ)
     add_damacy_test(test_decoder decoder CUDA::cuda_driver)
     if(DAMACY_ENABLE_GDS)
         add_damacy_test(test_store_fs_gds store lru hash log CUDA::cuda_driver)
+        set_tests_properties(test_store_fs_gds PROPERTIES LABELS DAMACY_GDS)
     endif()
 endif()
 
