@@ -36,7 +36,6 @@ struct wave_pool
 
   // max_substreams_per_wave = max_chunks_per_wave * max_substreams_per_chunk.
   uint32_t max_chunks_per_wave;
-  uint16_t max_substreams_per_chunk;
   uint32_t max_substreams_per_wave;
 
   // stream_decode: nvcomp decode + status_reduce. stream_post:

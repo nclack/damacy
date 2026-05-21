@@ -69,7 +69,6 @@ wave_pool_init(struct wave_pool* wp,
   wp->use_gds = (uint8_t)(enable_gds != 0);
   wp->bypass_decode = (uint8_t)(bypass_decode != 0);
   wp->max_chunks_per_wave = max_chunks_per_wave;
-  wp->max_substreams_per_chunk = max_substreams_per_chunk;
   wp->max_substreams_per_wave =
     (uint32_t)max_chunks_per_wave * (uint32_t)max_substreams_per_chunk;
 
