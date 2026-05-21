@@ -392,8 +392,14 @@ gds_event_wait(struct store* s, struct store_event ev)
   struct fs_gds_done* d = (struct fs_gds_done*)ev.impl;
   if (!d)
     return;
-  while (!atomic_load_explicit(&d->flag, memory_order_acquire))
+  // Bounded by cuFile read latency; yield to OS to avoid CPU burn under
+  // saturation.
+  for (unsigned i = 0; !atomic_load_explicit(&d->flag, memory_order_acquire);
+       ++i) {
     platform_cpu_pause();
+    if ((i & 127u) == 127u)
+      platform_yield();
+  }
   fs_gds_try_claim(d);
 }
 

@@ -53,6 +53,7 @@ extern "C"
   void platform_cond_broadcast(struct platform_cond* c);
 
   void platform_cpu_pause(void);
+  void platform_yield(void);
   int platform_default_thread_count(void);
 
   // Path is platform-native; no translation between "libfoo.so.N" / "foo.dll".
