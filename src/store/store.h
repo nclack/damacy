@@ -86,6 +86,8 @@ extern "C"
 
   // Block until all reads up to and including ev.seq have completed.
   // Reclaims the backend ref in `ev`; do not call event_discard after.
+  // Caller must ensure the store's stream remains live and is progressing;
+  // a destroyed or permanently-stalled stream will deadlock the wait.
   void store_event_wait(struct store* s, struct store_event ev);
 
   // Non-blocking variant of store_event_wait. Returns non-zero if every
@@ -95,7 +97,7 @@ extern "C"
 
   // Release `ev` without waiting on completion. Required if neither
   // event_wait nor event_query-to-completion is called on it. Safe on
-  // zero-initialized events.
+  // any event with NULL impl (zero-initialized events or n==0 submits).
   void store_event_discard(struct store* s, struct store_event ev);
 
   // Submit + wait. Returns 0 on success.
