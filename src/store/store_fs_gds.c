@@ -89,6 +89,8 @@ libcufile_once_init(void)
                "state on this libcufile");
     g_libcufile.cuFileStreamRegister = NULL;
     g_libcufile.cuFileStreamDeregister = NULL;
+    log_warn("cuFile: stream register/deregister unavailable in "
+             "libcufile.so.0; #118 compat-mode race may recur");
   }
   g_libcufile_ok = 1;
 }
@@ -457,12 +459,12 @@ gds_destroy(struct store* s)
   if (!g)
     return;
   // Drain in-flight host-funcs so a late pin-release can't land on a
-  // freed mutex.
-  if (g->gds_stream)
+  // freed mutex. cufile docs: deregister must precede cuStreamDestroy.
+  if (g->gds_stream) {
     cuStreamSynchronize((CUstream)g->gds_stream);
-  // cufile docs: deregister must precede cuStreamDestroy.
-  if (g->gds_stream && g_libcufile.cuFileStreamDeregister)
-    g_libcufile.cuFileStreamDeregister((CUstream)g->gds_stream);
+    if (g_libcufile.cuFileStreamDeregister)
+      g_libcufile.cuFileStreamDeregister((CUstream)g->gds_stream);
+  }
   lru_destroy(g->cache);
   platform_mutex_free(g->cache_lock);
   if (g->driver_opened && g_libcufile.cuFileDriverClose)
