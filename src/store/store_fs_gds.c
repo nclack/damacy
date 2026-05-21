@@ -80,6 +80,16 @@ libcufile_once_init(void)
     memset(&g_libcufile, 0, sizeof(g_libcufile));
     return;
   }
+  // Register-without-Deregister would silently leak per-stream state.
+  if (!g_libcufile.cuFileStreamRegister ||
+      !g_libcufile.cuFileStreamDeregister) {
+    if (g_libcufile.cuFileStreamRegister || g_libcufile.cuFileStreamDeregister)
+      log_warn("cuFile: only one of cuFileStreamRegister/Deregister "
+               "resolved; disabling both to avoid leaking per-stream "
+               "state on this libcufile");
+    g_libcufile.cuFileStreamRegister = NULL;
+    g_libcufile.cuFileStreamDeregister = NULL;
+  }
   g_libcufile_ok = 1;
 }
 
