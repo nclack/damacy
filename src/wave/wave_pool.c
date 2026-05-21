@@ -1034,6 +1034,9 @@ wave_pool_advance(struct wave_pool* wp, int* changed)
       continue;
     int ready = hs->is_fill_wave || store_event_query(wp->store, hs->io_event);
     if (ready) {
+      // store_event_query reclaimed the ref; clear so wave_pool_destroy
+      // doesn't redundantly discard a stale impl pointer.
+      hs->io_event = (struct store_event){ 0 };
       hs->io_ms = platform_toc(&hs->io_clock) * 1000.0f;
       hs->state = SLOT_READY;
       *changed = 1;
