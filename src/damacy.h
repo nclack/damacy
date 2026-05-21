@@ -117,16 +117,15 @@ extern "C"
     // DAMACY_DEFAULT_HOST_BUFFER_WAVES. Clamped to
     // [DAMACY_N_WAVES, DAMACY_MAX_HOST_BUFFER_WAVES].
     uint8_t host_buffer_waves;
+    // 0 → DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE. Clamped to 0xFFFFu.
+    uint32_t max_chunks_per_wave;
+    // 0 → DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK. Clamped to 0xFFFFu.
+    uint16_t max_substreams_per_chunk;
 
     uint32_t n_io_threads;
 
     uint32_t n_zarrs_meta_cache;
     uint32_t n_shards_meta_cache;
-
-    // 0 → DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE. Clamped to 0xFFFFu.
-    uint32_t max_chunks_per_wave;
-    // 0 → DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK.
-    uint16_t max_substreams_per_chunk;
 
     // AUTO resolves the GPU's host-NUMA node; DISABLED is a no-op;
     // PIN_TO forces `numa_node`.

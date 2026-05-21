@@ -492,15 +492,15 @@ class Config:
     batch_size: int
     dtype: Dtype
     lookahead_batches: int
-    n_io_threads: int
-    n_zarrs_meta_cache: int
-    n_shards_meta_cache: int
     max_chunk_uncompressed_bytes: int
     max_read_op_bytes: int
     max_gpu_memory_bytes: int
     host_buffer_waves: int
     max_chunks_per_wave: int
     max_substreams_per_chunk: int
+    n_io_threads: int
+    n_zarrs_meta_cache: int
+    n_shards_meta_cache: int
     sample_shape: tuple[int, ...]
     device: int | None
     pop_timeout_s: float | None
@@ -516,14 +516,14 @@ class Config:
         max_gpu_memory_bytes: int,
         dtype: Dtype | str | int = Dtype.F32,
         lookahead_batches: int = 2,
-        n_io_threads: int = 4,
-        n_zarrs_meta_cache: int = 64,
-        n_shards_meta_cache: int = 256,
         max_chunk_uncompressed_bytes: int = 0,
         max_read_op_bytes: int = 0,
         host_buffer_waves: int = 0,
         max_chunks_per_wave: int = 0,
         max_substreams_per_chunk: int = 0,
+        n_io_threads: int = 4,
+        n_zarrs_meta_cache: int = 64,
+        n_shards_meta_cache: int = 256,
         device: int | None = None,
         pop_timeout_s: float | None = 30.0,
         enable_gds: bool | None = None,
@@ -585,15 +585,15 @@ class Config:
         set_(self, "batch_size", batch_size)
         set_(self, "dtype", Dtype.coerce(dtype))
         set_(self, "lookahead_batches", lookahead_batches)
-        set_(self, "n_io_threads", n_io_threads)
-        set_(self, "n_zarrs_meta_cache", n_zarrs_meta_cache)
-        set_(self, "n_shards_meta_cache", n_shards_meta_cache)
         set_(self, "max_chunk_uncompressed_bytes", max_chunk_uncompressed_bytes)
         set_(self, "max_read_op_bytes", max_read_op_bytes)
         set_(self, "max_gpu_memory_bytes", max_gpu_memory_bytes)
         set_(self, "host_buffer_waves", host_buffer_waves)
         set_(self, "max_chunks_per_wave", max_chunks_per_wave)
         set_(self, "max_substreams_per_chunk", max_substreams_per_chunk)
+        set_(self, "n_io_threads", n_io_threads)
+        set_(self, "n_zarrs_meta_cache", n_zarrs_meta_cache)
+        set_(self, "n_shards_meta_cache", n_shards_meta_cache)
         set_(self, "sample_shape", shape_t)
         set_(self, "device", device)
         set_(self, "pop_timeout_s", pop_timeout_s)
@@ -999,16 +999,16 @@ class Pipeline:
             self._native = _native.Pipeline(
                 batch_size=config.batch_size,
                 lookahead_batches=config.lookahead_batches,
+                dtype=int(config.dtype),  # already coerced by Config.__init__
+                max_chunk_uncompressed_bytes=config.max_chunk_uncompressed_bytes,
+                max_read_op_bytes=config.max_read_op_bytes,
+                max_gpu_memory_bytes=config.max_gpu_memory_bytes,
+                host_buffer_waves=config.host_buffer_waves,
+                max_chunks_per_wave=config.max_chunks_per_wave,
+                max_substreams_per_chunk=config.max_substreams_per_chunk,
                 n_io_threads=config.n_io_threads,
                 n_zarrs_meta_cache=config.n_zarrs_meta_cache,
                 n_shards_meta_cache=config.n_shards_meta_cache,
-                dtype=int(config.dtype),  # already coerced by Config.__init__
-                max_chunk_uncompressed_bytes=config.max_chunk_uncompressed_bytes,
-                max_gpu_memory_bytes=config.max_gpu_memory_bytes,
-                host_buffer_waves=config.host_buffer_waves,
-                max_read_op_bytes=config.max_read_op_bytes,
-                max_chunks_per_wave=config.max_chunks_per_wave,
-                max_substreams_per_chunk=config.max_substreams_per_chunk,
                 sample_shape=tuple(config.sample_shape),
                 device=-1 if config.device is None else int(config.device),
                 enable_gds=_gds_to_native(config.enable_gds),

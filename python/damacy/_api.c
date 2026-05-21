@@ -698,18 +698,18 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   // keep all three in sync when adding a field.
   static char* kws[] = { "batch_size",
                          "lookahead_batches",
-                         "n_io_threads",
-                         "n_zarrs_meta_cache",
-                         "n_shards_meta_cache",
                          "dtype",
                          "max_chunk_uncompressed_bytes",
                          "max_gpu_memory_bytes",
+                         "n_io_threads",
+                         "n_zarrs_meta_cache",
+                         "n_shards_meta_cache",
                          "sample_shape",
-                         "device",
                          "host_buffer_waves",
-                         "max_read_op_bytes",
                          "max_chunks_per_wave",
                          "max_substreams_per_chunk",
+                         "max_read_op_bytes",
+                         "device",
                          "enable_gds",
                          "numa_strategy",
                          "numa_node",
@@ -717,40 +717,40 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                          NULL };
   unsigned int batch_size = 0;
   unsigned int lookahead = 2;
-  unsigned int n_io = 4;
-  unsigned int n_zarrs_meta = 64;
-  unsigned int n_shards_meta = 256;
   PyObject* dtype_obj = NULL;
   unsigned int max_chunk_uncompressed = 0;
   unsigned long long max_gpu_bytes = 0;
+  unsigned int n_io = 4;
+  unsigned int n_zarrs_meta = 64;
+  unsigned int n_shards_meta = 256;
   PyObject* sample_shape_obj = NULL;
-  int device = -1;
   unsigned int host_buffer_waves = 0;
-  unsigned long long max_read_op_bytes = 0;
   unsigned int max_chunks_per_wave = 0;
   unsigned int max_substreams_per_chunk = 0;
+  unsigned long long max_read_op_bytes = 0;
+  int device = -1;
   int enable_gds = DAMACY_GDS_AUTO;
   int numa_strategy = DAMACY_NUMA_AUTO;
   int numa_node = -1;
   int bypass_decode = 0;
   if (!PyArg_ParseTupleAndKeywords(args,
                                    kw,
-                                   "IIIIIOIKO|iIKIIiiip",
+                                   "IIOIKIIIO|IIIKiiiip",
                                    kws,
                                    &batch_size,
                                    &lookahead,
-                                   &n_io,
-                                   &n_zarrs_meta,
-                                   &n_shards_meta,
                                    &dtype_obj,
                                    &max_chunk_uncompressed,
                                    &max_gpu_bytes,
+                                   &n_io,
+                                   &n_zarrs_meta,
+                                   &n_shards_meta,
                                    &sample_shape_obj,
-                                   &device,
                                    &host_buffer_waves,
-                                   &max_read_op_bytes,
                                    &max_chunks_per_wave,
                                    &max_substreams_per_chunk,
+                                   &max_read_op_bytes,
+                                   &device,
                                    &enable_gds,
                                    &numa_strategy,
                                    &numa_node,
@@ -781,18 +781,18 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
     .dtype = dt,
     .device = device,
     .tuning = {
-      .n_io_threads = n_io,
-      .n_zarrs_meta_cache = n_zarrs_meta,
-      .n_shards_meta_cache = n_shards_meta,
+      .max_gpu_memory_bytes = (uint64_t)max_gpu_bytes,
       .max_chunk_uncompressed_bytes = max_chunk_uncompressed,
       .max_read_op_bytes = (uint64_t)max_read_op_bytes,
-      .max_gpu_memory_bytes = (uint64_t)max_gpu_bytes,
       .host_buffer_waves = (uint8_t)host_buffer_waves,
       .max_chunks_per_wave = (uint32_t)max_chunks_per_wave,
       .max_substreams_per_chunk = (uint16_t)max_substreams_per_chunk,
-      .enable_gds = (enum damacy_gds_mode)enable_gds,
+      .n_io_threads = n_io,
+      .n_zarrs_meta_cache = n_zarrs_meta,
+      .n_shards_meta_cache = n_shards_meta,
       .numa_strategy = (enum damacy_numa_strategy)numa_strategy,
       .numa_node = numa_node,
+      .enable_gds = (enum damacy_gds_mode)enable_gds,
     },
     .debug = { .bypass_decode = (uint8_t)(bypass_decode ? 1 : 0) },
   };
