@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779201301185,
+  "lastUpdate": 1779373688745,
   "repoUrl": "https://github.com/nclack/damacy",
   "entries": {
     "damacy timings": [
@@ -1947,6 +1947,88 @@ window.BENCHMARK_DATA = {
           {
             "name": "damacy/mixed/assemble.ms_avg",
             "value": 1.82911,
+            "unit": "ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Nathan Clack",
+            "username": "nclack",
+            "email": "nclack@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "67de5190f37f1b02098b2b5fafcea22352a1d264",
+          "message": "lru: atomic refcount, unlock release path (#111)\n\n## What\n\nMake the per-entry refcount atomic and drop the cache mutex from the\nrelease path. Acquire still takes the mutex — incrementing from zero has\nto be serialized against the eviction scan, which reads refcounts to\ndecide what's safe to evict.\n\n## Why\n\nThe refcount is a per-entry counter. It was under the cache mutex only\nbecause the field lived inside the entry struct, not because the value\nneeded that lock.\n\n## Results\n\nNot a lot of measured performance change on my laptop. The change is\nstill worth landing for cleaner refcount semantics and for the new\ncontention test that exercises the release path under concurrency, but\ndon't expect this workload to get faster.\n\n## Key file\n\n`src/util/lru.c` — refcount, acquire/release, eviction reads.\n\nCloses #108.",
+          "timestamp": "2026-05-20T17:14:02Z",
+          "url": "https://github.com/nclack/damacy/commit/67de5190f37f1b02098b2b5fafcea22352a1d264"
+        },
+        "date": 1779373687246,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "damacy/default/init",
+            "value": 70.3021,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/time_to_first_batch",
+            "value": 1002.4,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/wall",
+            "value": 8529.94,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/io.ms_avg",
+            "value": 3.08227,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/h2d.ms_avg",
+            "value": 3.86701,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/assemble.ms_avg",
+            "value": 1.62576,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/init",
+            "value": 70.6754,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/time_to_first_batch",
+            "value": 229.638,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/wall",
+            "value": 8689.95,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/io.ms_avg",
+            "value": 3.03879,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/h2d.ms_avg",
+            "value": 3.94194,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/assemble.ms_avg",
+            "value": 1.8139,
             "unit": "ms"
           }
         ]
