@@ -212,7 +212,7 @@ struct emit_ctx
   // populates ->layout / ->layout_probed on the first non-fill emit.
   struct sample_plan* sp;
   struct zarr_meta_cache* meta_cache;
-  uint16_t max_substreams_per_chunk;
+  uint32_t max_substreams_per_chunk;
   // per-shard
   const struct zarr_shard_entry* shard_entries;
   uint64_t n_shard_entries;

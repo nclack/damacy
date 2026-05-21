@@ -565,7 +565,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
 
   const uint32_t resolved_max_chunks_per_wave =
     resolve_max_chunks_per_wave(cfg);
-  const uint16_t resolved_max_substreams_per_chunk =
+  const uint32_t resolved_max_substreams_per_chunk =
     resolve_max_substreams_per_chunk(cfg);
   struct wave_pool_sizing sizing = { 0 };
   s = wave_pool_resolve_sizing(resolved_max_chunks_per_wave,

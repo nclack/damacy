@@ -145,7 +145,7 @@ extern "C"
     // wave_pool.max_chunks_per_wave).
     uint32_t max_chunks_per_wave;
     // Parser rejects blosc1 chunks with more sub-streams (DAMACY_DECODE).
-    uint16_t max_substreams_per_chunk;
+    uint32_t max_substreams_per_chunk;
   };
 
   struct planner;

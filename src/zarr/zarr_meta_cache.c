@@ -210,7 +210,7 @@ zarr_meta_cache_probe_layout(struct zarr_meta_cache* self,
                              uint64_t first_chunk_off,
                              uint32_t first_chunk_cbytes,
                              uint8_t codec_id,
-                             uint16_t max_substreams_per_chunk,
+                             uint32_t max_substreams_per_chunk,
                              struct chunk_layout* out)
 {
   if (!self || !uri || !shard_path || !out)

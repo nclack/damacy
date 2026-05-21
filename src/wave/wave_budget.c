@@ -229,7 +229,7 @@ predict_pool_total(uint32_t max_chunks_per_wave,
 
 enum damacy_status
 wave_pool_resolve_sizing(uint32_t max_chunks_per_wave,
-                         uint16_t max_substreams_per_chunk,
+                         uint32_t max_substreams_per_chunk,
                          uint64_t max_gpu_memory_bytes,
                          uint64_t max_chunk_uncompressed_bytes,
                          uint32_t batch_size,

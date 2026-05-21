@@ -786,7 +786,7 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
       .max_read_op_bytes = (uint64_t)max_read_op_bytes,
       .host_buffer_waves = (uint8_t)host_buffer_waves,
       .max_chunks_per_wave = (uint32_t)max_chunks_per_wave,
-      .max_substreams_per_chunk = (uint16_t)max_substreams_per_chunk,
+      .max_substreams_per_chunk = (uint32_t)max_substreams_per_chunk,
       .n_io_threads = n_io,
       .n_zarrs_meta_cache = n_zarrs_meta,
       .n_shards_meta_cache = n_shards_meta,
