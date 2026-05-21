@@ -133,8 +133,12 @@ wave_pool_destroy(struct wave_pool* wp, int cuda_skip)
   }
   for (int w = 0; w < DAMACY_N_WAVES; ++w)
     wave_destroy(&wp->waves[w], cuda_skip);
-  for (uint8_t s = 0; s < wp->n_slots; ++s)
-    slot_destroy(&wp->slots[s], cuda_skip);
+  for (uint8_t s = 0; s < wp->n_slots; ++s) {
+    struct host_slab_slot* hs = &wp->slots[s];
+    if (hs->state == SLOT_IO && wp->store)
+      store_event_discard(wp->store, hs->io_event);
+    slot_destroy(hs, cuda_skip);
+  }
   decoder_zstd_destroy(wp->zstd_decoder, cuda_skip);
   wp->zstd_decoder = NULL;
   if (!cuda_skip) {

@@ -91,6 +91,11 @@ extern "C"
   // read up to ev.seq has completed.
   int store_event_query(struct store* s, struct store_event ev);
 
+  // Release `ev` without waiting on completion. Required if neither
+  // event_wait nor event_query-to-completion is called on it. Safe on
+  // zero-initialized events.
+  void store_event_discard(struct store* s, struct store_event ev);
+
   // Submit + wait. Returns 0 on success.
   int store_read_many(struct store* s,
                       const struct store_read* reads,

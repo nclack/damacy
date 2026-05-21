@@ -411,6 +411,15 @@ gds_event_query(struct store* s, struct store_event ev)
   return 1;
 }
 
+static void
+gds_event_discard(struct store* s, struct store_event ev)
+{
+  (void)s;
+  if (ev.seq != GDS_SENTINEL_SEQ)
+    return;
+  fs_gds_try_claim((struct fs_gds_done*)ev.impl);
+}
+
 // Also reached from store_fs_gds_create's Fail label on partial
 // construction; every member is calloc-zeroed and every freed callee is
 // NULL-safe.
@@ -437,6 +446,7 @@ static const struct store_vtable gds_vtable = {
   .submit_dev = gds_submit_dev,
   .event_wait = gds_event_wait,
   .event_query = gds_event_query,
+  .event_discard = gds_event_discard,
 };
 
 struct store*
