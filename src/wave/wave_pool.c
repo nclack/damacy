@@ -133,8 +133,14 @@ wave_pool_destroy(struct wave_pool* wp, int cuda_skip)
   }
   for (int w = 0; w < DAMACY_N_WAVES; ++w)
     wave_destroy(&wp->waves[w], cuda_skip);
-  for (uint8_t s = 0; s < wp->n_slots; ++s)
-    slot_destroy(&wp->slots[s], cuda_skip);
+  for (uint8_t s = 0; s < wp->n_slots; ++s) {
+    struct host_slab_slot* hs = &wp->slots[s];
+    // is_fill_wave never attaches a backend ref; relies on impl=NULL
+    // guard inside store_event_discard.
+    if (hs->state == SLOT_IO && wp->store)
+      store_event_discard(wp->store, hs->io_event);
+    slot_destroy(hs, cuda_skip);
+  }
   decoder_zstd_destroy(wp->zstd_decoder, cuda_skip);
   wp->zstd_decoder = NULL;
   if (!cuda_skip) {
@@ -1030,6 +1036,9 @@ wave_pool_advance(struct wave_pool* wp, int* changed)
       continue;
     int ready = hs->is_fill_wave || store_event_query(wp->store, hs->io_event);
     if (ready) {
+      // store_event_query reclaimed the ref; clear so wave_pool_destroy
+      // doesn't redundantly discard a stale impl pointer.
+      hs->io_event = (struct store_event){ 0 };
       hs->io_ms = platform_toc(&hs->io_clock) * 1000.0f;
       hs->state = SLOT_READY;
       *changed = 1;

@@ -68,6 +68,17 @@ NotReady:
   return 0;
 }
 
+void
+store_event_discard(struct store* s, struct store_event ev)
+{
+  CHECK_SILENT(Out, s);
+  CHECK_SILENT(Out, s->vt);
+  if (s->vt->event_discard)
+    s->vt->event_discard(s, ev);
+Out:
+  return;
+}
+
 int
 store_read_many(struct store* s, const struct store_read* reads, size_t n)
 {
