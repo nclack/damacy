@@ -29,7 +29,13 @@ extern "C"
   // issue #118). Pass NULL to detach. Calling with the currently-adopted
   // stream is a no-op. Callers MUST call store_destroy(s) before
   // cuStreamDestroy(stream) so the cuFile deregister happens first;
-  // cuFile rejects cuStreamDestroy on a still-registered stream.
+  // cuFile docs require cuFileStreamDeregister before cuStreamDestroy on
+  // a registered stream.
+  //
+  // Not thread-safe with store_read_submit_dev on the same store. Caller
+  // must serialize stream transitions against any in-flight reads
+  // (typically: set the stream once at adoption, change only when no
+  // submits are in flight).
   void store_fs_gds_set_stream(struct store* s, void* stream);
 
   void store_fs_gds_stats_get(struct store* s, struct lru_stats* out);
