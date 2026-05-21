@@ -160,6 +160,8 @@ planner_create(const struct planner_config* cfg, struct planner** out)
   CHECK_SILENT(Error, cfg->meta_cache);
   CHECK_SILENT(Error, cfg->shard_cache);
   CHECK_SILENT(Error, cfg->page_alignment > 0);
+  CHECK_SILENT(Error, cfg->max_chunks_per_wave > 0);
+  CHECK_SILENT(Error, cfg->max_substreams_per_chunk > 0);
 
   status = DAMACY_OOM;
   self = (struct planner*)calloc(1, sizeof(*self));
