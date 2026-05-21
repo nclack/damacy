@@ -61,7 +61,8 @@ run_coalesce(struct planner_output* out, uint64_t cap, uint32_t n_in)
 {
   uint32_t* u32 = (uint32_t*)calloc((size_t)n_in * 3u, sizeof(uint32_t));
   struct read_op* ops = (struct read_op*)calloc(n_in, sizeof(struct read_op));
-  enum damacy_status s = coalesce_chunks(out, cap, u32, ops);
+  enum damacy_status s =
+    coalesce_chunks(out, cap, DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE, u32, ops);
   free(u32);
   free(ops);
   return s;
@@ -307,12 +308,12 @@ test_non_overlapping_output(void)
   return 0;
 }
 
-// Long contiguous touching stream past DAMACY_MAX_CHUNKS_PER_WAVE: no
-// surviving read_op may end up referenced by more than the cap.
+// Long contiguous touching stream past the default chunks-per-wave cap:
+// no surviving read_op may end up referenced by more than the cap.
 static int
 test_chunk_count_cap(void)
 {
-  const uint32_t cap = DAMACY_MAX_CHUNKS_PER_WAVE;
+  const uint32_t cap = DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE;
   const uint32_t n = cap + 5u;
   const uint32_t step = 4096u;
   struct read_op* reads = (struct read_op*)calloc(n, sizeof *reads);

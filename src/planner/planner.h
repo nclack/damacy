@@ -71,8 +71,9 @@ extern "C"
     // broadcast these bytes; bytes are interpreted under src_dtype.
     uint8_t fill_value[DAMACY_MAX_DTYPE_BYTES];
     // Per-array blosc1 chunk layout, populated lazily from the meta
-    // cache on first non-fill emit. layout_probed = 0 means downstream
-    // should fall back to MAX_BLOCKS_PER_CHUNK in cap calculations.
+    // cache on first non-fill emit. layout_probed = 0 means the
+    // wave-eligibility gate rejects the wave before prepare_decode_caps
+    // is called.
     struct chunk_layout layout;
     uint8_t layout_probed;
   };
@@ -140,6 +141,11 @@ extern "C"
     // request-count vs queue-depth tradeoff: bigger = fewer IOs;
     // smaller = more in-flight requests.
     uint64_t read_op_max_bytes;
+    // Coalesce caps each leader group at this many chunks (matches
+    // wave_pool.max_chunks_per_wave).
+    uint32_t max_chunks_per_wave;
+    // Parser rejects blosc1 chunks with more sub-streams (DAMACY_DECODE).
+    uint32_t max_substreams_per_chunk;
   };
 
   struct planner;

@@ -29,6 +29,8 @@
 enum damacy_status
 decoder_scratch_grow(struct decoder_zstd* decoder,
                      CUstream stream_decode,
+                     uint32_t max_chunks_per_wave,
+                     uint32_t max_substreams_per_wave,
                      uint64_t dev_per_wave,
                      uint64_t max_chunk_uncompressed_bytes,
                      struct gpu_budget* budget,
@@ -48,6 +50,8 @@ wave_pool_init(struct wave_pool* wp,
                struct damacy_stats* stats,
                enum damacy_dtype dtype,
                uint8_t host_buffer_waves,
+               uint32_t max_chunks_per_wave,
+               uint32_t max_substreams_per_chunk,
                uint64_t host_slab_per_wave,
                uint64_t dev_decompressed_per_wave,
                uint64_t max_chunk_uncompressed_bytes,
@@ -64,6 +68,9 @@ wave_pool_init(struct wave_pool* wp,
   wp->n_slots = host_buffer_waves;
   wp->use_gds = (uint8_t)(enable_gds != 0);
   wp->bypass_decode = (uint8_t)(bypass_decode != 0);
+  wp->max_chunks_per_wave = max_chunks_per_wave;
+  wp->max_substreams_per_wave = damacy_max_substreams_per_wave(
+    max_chunks_per_wave, max_substreams_per_chunk);
 
   // NON_BLOCKING so we don't serialize against the legacy default stream.
   CU(Fail, cuStreamCreate(&wp->stream_h2d, CU_STREAM_NON_BLOCKING));
@@ -88,13 +95,15 @@ wave_pool_init(struct wave_pool* wp,
   // Initial floor for the shared decoder; decoder_scratch_grow bumps
   // it lazily when a wave's substream count exceeds the current cap.
   // Per-wave fanout SOAs grow independently via fanout_grow.
-  size_t zsubs = 0, zstd_per = 0, total_uncompressed = 0;
-  decoder_initial_caps(dev_per_wave,
+  size_t substreams = 0, zstd_per = 0, total_uncompressed = 0;
+  decoder_initial_caps(max_chunks_per_wave,
+                       dev_per_wave,
                        max_chunk_uncompressed_bytes,
-                       &zsubs,
+                       &substreams,
                        &zstd_per,
                        &total_uncompressed);
-  wp->zstd_decoder = decoder_zstd_create(zsubs, zstd_per, total_uncompressed);
+  wp->zstd_decoder =
+    decoder_zstd_create(substreams, zstd_per, total_uncompressed);
   CHECK(Fail, wp->zstd_decoder);
 
   // GDS-only slots skip the pinned-host alloc; non-GDS slots skip the
@@ -102,10 +111,16 @@ wave_pool_init(struct wave_pool* wp,
   const uint64_t slot_host_cap = wp->use_gds ? 0ull : host_per_wave;
   const uint64_t slot_dev_cap = wp->use_gds ? host_per_wave : 0ull;
   for (uint8_t s = 0; s < host_buffer_waves; ++s)
-    if (slot_init(&wp->slots[s], slot_host_cap, slot_dev_cap) != 0)
+    if (slot_init(
+          &wp->slots[s], max_chunks_per_wave, slot_host_cap, slot_dev_cap) != 0)
       goto Fail;
   for (int w = 0; w < DAMACY_N_WAVES; ++w) {
-    if (wave_init(&wp->waves[w], host_per_wave, dev_per_wave, wp->use_gds) != 0)
+    if (wave_init(&wp->waves[w],
+                  max_chunks_per_wave,
+                  wp->max_substreams_per_wave,
+                  host_per_wave,
+                  dev_per_wave,
+                  wp->use_gds) != 0)
       goto Fail;
     wp->waves[w].bound_slot = -1;
   }
@@ -342,39 +357,35 @@ CudaFail:
   return DAMACY_CUDA;
 }
 
-// Per-chunk substream upper bound. Uses the probed blosc1 layout when
-// available; falls back to MAX_BLOCKS_PER_CHUNK for unprobed blosc-zstd,
-// 1 for plain zstd, and 0 for fill / raw-memcpy chunks (those don't
-// consume zstd substreams).
-static inline uint32_t
-chunk_zsubs_upper_bound(const struct chunk_plan* c,
-                        const struct sample_plan* sp)
+enum damacy_status
+chunk_substreams_upper_bound(const struct chunk_plan* c,
+                             const struct sample_plan* sp,
+                             uint32_t* out)
 {
   if (c->is_fill || c->codec_id == (uint8_t)CODEC_FILL ||
-      c->codec_id == (uint8_t)CODEC_NONE)
-    return 0;
-  if (c->codec_id == (uint8_t)CODEC_BLOSC_ZSTD) {
-    if (sp->layout_probed)
-      return sp->layout.nblocks;
-    return DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK;
+      c->codec_id == (uint8_t)CODEC_NONE) {
+    *out = 0;
+    return DAMACY_OK;
   }
-  // CODEC_ZSTD: one substream per chunk.
-  return 1;
+  if (c->codec_id == (uint8_t)CODEC_BLOSC_ZSTD) {
+    if (!sp->layout_probed)
+      return DAMACY_INVAL;
+    *out = sp->layout.nblocks;
+    return DAMACY_OK;
+  }
+  *out = 1;
+  return DAMACY_OK;
 }
 
-// Phase 2: grow per-wave fanout SOA + shared decoder scratch to cover
-// this wave's tight substream upper bound, computed from probed
-// chunk_layouts when available. need_zsubs <=
-// DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE by the damacy_limits static_assert
-// (peel caps n_chunks). Fanout grow is per-wave: the OTHER wave's SOA is
-// a separate allocation and untouched here, so this can run safely
-// while the other wave is in WAVE_H2D / WAVE_ASSEMBLE.
-// decoder_scratch_grow synchronizes stream_decode first.
+// Fanout grow is per-wave (the OTHER wave's SOA is a separate allocation
+// and untouched here), so this can run safely while the other wave is in
+// WAVE_H2D / WAVE_ASSEMBLE. decoder_scratch_grow synchronizes
+// stream_decode first.
 static enum damacy_status
 prepare_decode_caps(struct wave_pool* wp, struct damacy_wave* wave)
 {
   struct damacy_batch_slot* slot = &wp->pool->slots[wave->batch_pool_slot];
-  size_t need_zsubs = 0;
+  size_t need_substreams = 0;
   // bypass_decode flips every chunk to is_fill at build time, so the
   // wave needs zero zstd substream scratch.
   if (!wp->bypass_decode) {
@@ -383,22 +394,33 @@ prepare_decode_caps(struct wave_pool* wp, struct damacy_wave* wave)
         &slot->chunk_plans[wave->batch_chunk_offset + i];
       const struct sample_plan* sp =
         &slot->sample_plans[c->sample_idx_in_batch];
-      need_zsubs += chunk_zsubs_upper_bound(c, sp);
+      uint32_t n = 0;
+      enum damacy_status zs = chunk_substreams_upper_bound(c, sp, &n);
+      if (zs != DAMACY_OK) {
+        log_error("prepare_decode_caps: chunk %u failed substream upper "
+                  "bound (gate-vs-sizer contract violated)",
+                  i);
+        return zs;
+      }
+      need_substreams += n;
     }
   }
   enum damacy_status gs = fanout_grow(&wave->h_zstd_fan,
                                       &wave->zstd_fan,
                                       &wave->fanout_cap,
-                                      need_zsubs,
+                                      need_substreams,
+                                      wp->max_substreams_per_wave,
                                       wp->budget);
   if (gs != DAMACY_OK)
     return gs;
   return decoder_scratch_grow(wp->zstd_decoder,
                               wp->stream_decode,
+                              wp->max_chunks_per_wave,
+                              wp->max_substreams_per_wave,
                               wp->dev_per_wave,
                               wp->max_chunk_uncompressed_bytes,
                               wp->budget,
-                              need_zsubs);
+                              need_substreams);
 }
 
 // GPU parse: upload inputs (parse_chunks, assemble_chunks,
@@ -550,10 +572,6 @@ kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
     goto Error;
 
   needs_end_record = 1;
-  s = prepare_decode_caps(wp, wave);
-  if (s != DAMACY_OK)
-    goto Error;
-
   if (!wave_chunks_eligible(wp, wave)) {
     // Probe gap (e.g. all-fill preceding waves never seeded the layout
     // cache) or unsupported dont_split=0 — not garbage in compressed
@@ -563,6 +581,10 @@ kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
     s = DAMACY_INVAL;
     goto Error;
   }
+  s = prepare_decode_caps(wp, wave);
+  if (s != DAMACY_OK)
+    goto Error;
+
   build_gpu_parse_chunks(wp, wave);
   needs_end_record = 0; // gpu_parse records h2d_end itself
   s = gpu_parse(wp, wave);
@@ -848,7 +870,7 @@ wave_pool_peel_reserve(struct wave_pool* wp,
   uint32_t completed_groups = batch->n_groups_dispatched;
   const uint64_t dev_cap = wp->waves[0].dev_decompressed_cap;
 
-  // coalesce caps each group at DAMACY_MAX_CHUNKS_PER_WAVE chunks, so
+  // coalesce caps each group at wp->max_chunks_per_wave chunks, so
   // groups consume atomically — either the whole group fits this wave
   // or it's deferred to the next.
   {
@@ -866,7 +888,7 @@ wave_pool_peel_reserve(struct wave_pool* wp,
       uint64_t host_add = is_fill_group ? 0 : r->nbytes;
       if (host_cursor + host_add > hs->cap)
         break;
-      if (take + g.n_chunks > DAMACY_MAX_CHUNKS_PER_WAVE)
+      if (take + g.n_chunks > wp->max_chunks_per_wave)
         break;
       if (dev_cursor + g.total_decompressed > dev_cap)
         break;

@@ -55,11 +55,10 @@ fanout_upload(CUstream s,
 // Grow the fanout SOA pair to fit `need` substreams. *cap is the
 // current capacity (in substreams); updated on success. `need` is
 // rounded up to the next power of 2 and clamped at
-// DAMACY_MAX_BLOSC_ZSTD_SUBS_PER_WAVE. budget is checked + committed
-// for the device-resident bytes delta; on OOM the SOA is left
-// unchanged and DAMACY_OOM is returned. On CUDA failure the SOA is
-// zeroed (so wave_destroy stays safe) and the committed bytes are
-// rolled back.
+// max_substreams_per_wave. budget is checked + committed for the
+// device-resident bytes delta; on OOM the SOA is left unchanged and
+// DAMACY_OOM is returned. On CUDA failure the SOA is zeroed (so
+// wave_destroy stays safe) and the committed bytes are rolled back.
 //
 // Caller responsibility: ensure no stream is reading the to-be-freed
 // SOA when calling — fanout_grow does NOT synchronize. The wave-pool
@@ -71,4 +70,5 @@ fanout_grow(struct nvcomp_fanout_host* h,
             struct nvcomp_fanout* d,
             uint32_t* cap,
             size_t need,
+            uint32_t max_substreams_per_wave,
             struct gpu_budget* budget);
