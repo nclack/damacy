@@ -9,6 +9,8 @@
 #include "util/lru.h"
 
 #include <cuda.h>
+#include <sched.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -90,9 +92,106 @@ test_submit_fail_releases_pins(void)
   return 0;
 }
 
+static void CUDA_CB
+host_barrier_spin(void* user)
+{
+  _Atomic int* flag = (_Atomic int*)user;
+  while (!atomic_load_explicit(flag, memory_order_acquire))
+    sched_yield();
+}
+
+static int
+write_n(const char* path, size_t n)
+{
+  FILE* f = fopen(path, "wb");
+  if (!f)
+    return 1;
+  char* buf = (char*)calloc(1, n);
+  if (!buf) {
+    fclose(f);
+    return 1;
+  }
+  for (size_t i = 0; i < n; ++i)
+    buf[i] = (char)(i & 0xff);
+  size_t w = fwrite(buf, 1, n, f);
+  free(buf);
+  fclose(f);
+  return w == n ? 0 : 1;
+}
+
+// Park stream_h2d behind a host-barrier so cuFileReadAsync is queued
+// but not retired; store_event_query must report not-ready in that
+// window. Without the barrier the test is racy.
+static int
+test_event_query_reflects_completion(void)
+{
+  if (cuda_init_primary()) {
+    log_info("test_store_fs_gds: no CUDA device; skipping");
+    return 0;
+  }
+
+  enum
+  {
+    PAYLOAD = 16u * 1024u * 1024u,
+  };
+
+  char root[] = "/tmp/damacy_store_fs_gds_eq_XXXXXX";
+  EXPECT(mkdtemp(root));
+
+  char path[256];
+  snprintf(path, sizeof path, "%s/blob", root);
+  EXPECT(write_n(path, PAYLOAD) == 0);
+
+  struct store_fs_gds_config cfg = {
+    .root = root,
+    .fd_cache_capacity = 8,
+  };
+  struct store* s = store_fs_gds_create(&cfg);
+  if (!s) {
+    log_info(
+      "test_store_fs_gds: store_fs_gds_create returned NULL (no cuFile); "
+      "skipping");
+    return 0;
+  }
+
+  CUstream stream = NULL;
+  EXPECT(cuStreamCreate(&stream, CU_STREAM_NON_BLOCKING) == CUDA_SUCCESS);
+  store_fs_gds_set_stream(s, (void*)stream);
+
+  CUdeviceptr dbuf = 0;
+  EXPECT(cuMemAlloc(&dbuf, PAYLOAD) == CUDA_SUCCESS);
+
+  _Atomic int unblock = 0;
+  EXPECT(cuLaunchHostFunc(stream, host_barrier_spin, &unblock) == CUDA_SUCCESS);
+
+  struct store_read read = {
+    .key = "blob",
+    .dst = (void*)dbuf,
+    .offset = 0,
+    .len = PAYLOAD,
+  };
+  struct store_event ev = store_read_submit_dev(s, &read, 1);
+  EXPECT(ev.seq != 0);
+
+  EXPECT(store_event_query(s, ev) == 0);
+
+  atomic_store_explicit(&unblock, 1, memory_order_release);
+  EXPECT(cuStreamSynchronize(stream) == CUDA_SUCCESS);
+
+  EXPECT(store_event_query(s, ev) == 1);
+
+  cuMemFree(dbuf);
+  store_destroy(s);
+  cuStreamDestroy(stream);
+  return 0;
+}
+
 int
 main(void)
 {
+  // Must be set before cuFile init; lets the test run without nvidia-fs.
+  setenv("CUFILE_FORCE_COMPAT_MODE", "true", 1);
   RUN(test_submit_fail_releases_pins);
+  RUN(test_event_query_reflects_completion);
   return 0;
 }
