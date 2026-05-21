@@ -133,6 +133,48 @@ test_probe_direct(void)
   return 0;
 }
 
+// max_substreams_per_chunk gates nblocks. A header with nbytes/blocksize=2
+// against a cap of 1 must be rejected.
+static int
+test_probe_rejects_excess_substreams(void)
+{
+  char root[] = "/tmp/damacy_layout_subcap_XXXXXX";
+  EXPECT(mkdtemp(root));
+  char path[256];
+  snprintf(path, sizeof path, "%s/chunk", root);
+  EXPECT(write_blosc1_header(path,
+                             /*typesize*/ 2,
+                             /*nbytes*/ 1024,
+                             /*blocksize*/ 512,
+                             /*cbytes*/ 800,
+                             /*pad*/ 1024) == 0);
+
+  struct store_fs_config sc = { .root = root, .nthreads = 1 };
+  struct store* store = store_fs_create(&sc);
+  EXPECT(store);
+
+  struct chunk_layout out = { 0 };
+  EXPECT(zarr_chunk_layout_probe(store,
+                                 "chunk",
+                                 0,
+                                 800,
+                                 (uint8_t)CODEC_BLOSC_ZSTD,
+                                 /*max_substreams_per_chunk*/ 1,
+                                 &out) != 0);
+  EXPECT(zarr_chunk_layout_probe(store,
+                                 "chunk",
+                                 0,
+                                 800,
+                                 (uint8_t)CODEC_BLOSC_ZSTD,
+                                 /*max_substreams_per_chunk*/ 2,
+                                 &out) == 0);
+  EXPECT(out.nblocks == 2);
+
+  store_destroy(store);
+  fixture_rm_tree(root);
+  return 0;
+}
+
 // Malformed header: blocksize == 0 → probe fails.
 static int
 test_probe_rejects_bad_header(void)
@@ -382,6 +424,7 @@ int
 main(void)
 {
   RUN(test_probe_direct);
+  RUN(test_probe_rejects_excess_substreams);
   RUN(test_probe_rejects_bad_header);
   RUN(test_meta_cache_layout_roundtrip);
   RUN(test_planner_populates_layout_blosc_zstd);
