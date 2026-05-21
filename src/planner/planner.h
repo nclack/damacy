@@ -71,8 +71,9 @@ extern "C"
     // broadcast these bytes; bytes are interpreted under src_dtype.
     uint8_t fill_value[DAMACY_MAX_DTYPE_BYTES];
     // Per-array blosc1 chunk layout, populated lazily from the meta
-    // cache on first non-fill emit. layout_probed = 0 means downstream
-    // uses the observed max nblocks from the wave pool.
+    // cache on first non-fill emit. layout_probed = 0 means the
+    // wave-eligibility gate rejects the wave before prepare_decode_caps
+    // is called.
     struct chunk_layout layout;
     uint8_t layout_probed;
   };
