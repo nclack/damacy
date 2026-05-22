@@ -537,6 +537,35 @@ test_unknown_batch_gate_is_null(void)
 }
 
 static int
+test_pop_ready_for_batch_filters_by_batch_id(void)
+{
+  struct fixture fx = { 0 };
+  EXPECT(fixture_setup(&fx, "blosc-zstd") == 0);
+
+  struct damacy_sample s = { .uri = "foo", .aabb = { .rank = 2 } };
+  s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
+  s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
+
+  EXPECT(lookahead_push_with_batch(&fx.la, &s, 5) == 0);
+  EXPECT(lookahead_push_with_batch(&fx.la, &s, 7) == 0);
+  EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
+
+  struct prefetcher_ready r = { 0 };
+  EXPECT(prefetcher_pop_ready_for_batch(fx.p, 7, &r) == 1);
+  EXPECT(r.batch_id == 7);
+  prefetcher_ready_free(&r);
+
+  EXPECT(prefetcher_pop_ready_for_batch(fx.p, 7, &r) == 0);
+
+  EXPECT(prefetcher_pop_ready_for_batch(fx.p, 5, &r) == 1);
+  EXPECT(r.batch_id == 5);
+  prefetcher_ready_free(&r);
+
+  fixture_teardown(&fx);
+  return 0;
+}
+
+static int
 test_advance_watermark_broadcasts(void)
 {
   struct fixture fx = { 0 };
@@ -582,6 +611,7 @@ main(void)
   RUN(test_release_before_pop_defers);
   RUN(test_admit_fail_releases_batch_entry);
   RUN(test_unknown_batch_gate_is_null);
+  RUN(test_pop_ready_for_batch_filters_by_batch_id);
   RUN(test_advance_watermark_broadcasts);
   log_info("all tests passed");
   return 0;

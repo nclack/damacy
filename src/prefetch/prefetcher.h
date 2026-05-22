@@ -67,6 +67,10 @@ extern "C"
   // terminal-state slot is currently available.
   int prefetcher_pop_ready(struct prefetcher* p, struct prefetcher_ready* out);
 
+  int prefetcher_pop_ready_for_batch(struct prefetcher* p,
+                                     uint64_t batch_id,
+                                     struct prefetcher_ready* out);
+
   void prefetcher_ready_free(struct prefetcher_ready* r);
 
   // NULL if no in-flight samples; valid until released or destroyed.

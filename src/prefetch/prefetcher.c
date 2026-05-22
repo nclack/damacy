@@ -452,17 +452,16 @@ Bad:
   return DAMACY_INVAL;
 }
 
-int
-prefetcher_pop_ready(struct prefetcher* self, struct prefetcher_ready* out)
+static int
+pop_terminal_slot_locked(struct prefetcher* self,
+                         const uint64_t* match_batch_id,
+                         struct prefetcher_ready* out)
 {
-  CHECK(Bad, self);
-  CHECK(Bad, out);
-  *out = (struct prefetcher_ready){ 0 };
-  int found = 0;
-  platform_mutex_lock(self->lock);
   for (uint32_t i = 0; i < self->capacity; ++i) {
     struct prefetcher_slot* s = &self->slots[i];
     if (s->state != PREFETCHER_READY && s->state != PREFETCHER_ERROR)
+      continue;
+    if (match_batch_id && s->batch_id != *match_batch_id)
       continue;
     *out = (struct prefetcher_ready){
       .state = s->state,
@@ -477,9 +476,35 @@ prefetcher_pop_ready(struct prefetcher* self, struct prefetcher_ready* out)
     uint64_t batch_id = s->batch_id;
     *s = (struct prefetcher_slot){ .state = PREFETCHER_FREE };
     batch_unref_locked(self, batch_id);
-    found = 1;
-    break;
+    return 1;
   }
+  return 0;
+}
+
+int
+prefetcher_pop_ready(struct prefetcher* self, struct prefetcher_ready* out)
+{
+  CHECK(Bad, self);
+  CHECK(Bad, out);
+  *out = (struct prefetcher_ready){ 0 };
+  platform_mutex_lock(self->lock);
+  int found = pop_terminal_slot_locked(self, NULL, out);
+  platform_mutex_unlock(self->lock);
+  return found;
+Bad:
+  return 0;
+}
+
+int
+prefetcher_pop_ready_for_batch(struct prefetcher* self,
+                               uint64_t batch_id,
+                               struct prefetcher_ready* out)
+{
+  CHECK(Bad, self);
+  CHECK(Bad, out);
+  *out = (struct prefetcher_ready){ 0 };
+  platform_mutex_lock(self->lock);
+  int found = pop_terminal_slot_locked(self, &batch_id, out);
   platform_mutex_unlock(self->lock);
   return found;
 Bad:
