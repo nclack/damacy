@@ -201,7 +201,6 @@ advance_from_meta(struct prefetcher* p, struct prefetcher_slot* s)
   s->h_shards =
     (struct prefetch_handle*)calloc((size_t)n, sizeof(*s->h_shards));
   CHECK(Bad, s->h_shards);
-  s->n_shards = (uint32_t)n;
 
   struct shard_index_key probe = { .uri = s->uri, .rank = meta->rank };
   uint32_t i = 0;
@@ -211,6 +210,7 @@ advance_from_meta(struct prefetcher* p, struct prefetcher_slot* s)
     CHECK(Bad, prefetch_handle_valid(s->h_shards[i]));
     i++;
   }
+  s->n_shards = (uint32_t)n;
   s->state = PREFETCHER_PENDING_SHARD_INDEX;
   return;
 Bad:
