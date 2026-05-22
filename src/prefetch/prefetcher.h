@@ -72,6 +72,17 @@ extern "C"
                                      uint64_t batch_id,
                                      struct prefetcher_ready* out);
 
+  uint32_t prefetcher_ready_count_for_batch(struct prefetcher* p,
+                                            uint64_t batch_id);
+
+  int prefetcher_batch_full_ready(struct prefetcher* p,
+                                  uint64_t batch_id,
+                                  uint32_t n);
+
+  uint32_t prefetcher_in_flight(struct prefetcher* p);
+
+  int prefetcher_has_ready(struct prefetcher* p);
+
   void prefetcher_ready_free(struct prefetcher_ready* r);
 
   // NULL if no in-flight samples; valid until released or destroyed.

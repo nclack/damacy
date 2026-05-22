@@ -524,6 +524,66 @@ Bad:
   return 0;
 }
 
+uint32_t
+prefetcher_ready_count_for_batch(struct prefetcher* self, uint64_t batch_id)
+{
+  CHECK(Bad, self);
+  platform_mutex_lock(self->lock);
+  uint32_t n = 0;
+  for (uint32_t i = 0; i < self->capacity; ++i) {
+    const struct prefetcher_slot* s = &self->slots[i];
+    if ((s->state == PREFETCHER_READY || s->state == PREFETCHER_ERROR) &&
+        s->batch_id == batch_id)
+      n++;
+  }
+  platform_mutex_unlock(self->lock);
+  return n;
+Bad:
+  return 0;
+}
+
+int
+prefetcher_batch_full_ready(struct prefetcher* self,
+                            uint64_t batch_id,
+                            uint32_t n)
+{
+  return prefetcher_ready_count_for_batch(self, batch_id) >= n;
+}
+
+uint32_t
+prefetcher_in_flight(struct prefetcher* self)
+{
+  CHECK(Bad, self);
+  platform_mutex_lock(self->lock);
+  uint32_t n = 0;
+  for (uint32_t i = 0; i < self->capacity; ++i)
+    if (slot_active(&self->slots[i]))
+      n++;
+  platform_mutex_unlock(self->lock);
+  return n;
+Bad:
+  return 0;
+}
+
+int
+prefetcher_has_ready(struct prefetcher* self)
+{
+  CHECK(Bad, self);
+  platform_mutex_lock(self->lock);
+  int found = 0;
+  for (uint32_t i = 0; i < self->capacity; ++i) {
+    const struct prefetcher_slot* s = &self->slots[i];
+    if (s->state == PREFETCHER_READY || s->state == PREFETCHER_ERROR) {
+      found = 1;
+      break;
+    }
+  }
+  platform_mutex_unlock(self->lock);
+  return found;
+Bad:
+  return 0;
+}
+
 void
 prefetcher_ready_free(struct prefetcher_ready* r)
 {
