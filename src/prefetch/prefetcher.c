@@ -88,6 +88,19 @@ batch_get_or_create_locked(struct prefetcher* p,
   return NULL;
 }
 
+// Reuse is gated on gate.pending too: cache-side waiters reference this gate
+// independently of the slot refcount, and would alias it on next admission.
+static int
+batch_try_free_locked(struct prefetcher_batch_entry* e)
+{
+  if (e->refcount != 0)
+    return 0;
+  if (prefetch_gate_pending(&e->gate) != 0)
+    return 0;
+  e->in_use = 0;
+  return 1;
+}
+
 static void
 batch_unref_locked(struct prefetcher* p, uint64_t batch_id)
 {
@@ -96,8 +109,8 @@ batch_unref_locked(struct prefetcher* p, uint64_t batch_id)
     if (e->in_use && e->batch_id == batch_id) {
       if (e->refcount > 0)
         e->refcount--;
-      if (e->refcount == 0 && e->release_pending)
-        e->in_use = 0;
+      if (e->release_pending)
+        batch_try_free_locked(e);
       return;
     }
   }
@@ -111,10 +124,20 @@ batch_rollback_locked(struct prefetcher* p, uint64_t batch_id, int was_new)
     if (e->in_use && e->batch_id == batch_id) {
       if (e->refcount > 0)
         e->refcount--;
-      if (e->refcount == 0 && (was_new || e->release_pending))
-        e->in_use = 0;
+      if (was_new || e->release_pending)
+        batch_try_free_locked(e);
       return;
     }
+  }
+}
+
+static void
+batch_sweep_locked(struct prefetcher* p)
+{
+  for (uint32_t i = 0; i < p->batch_capacity; ++i) {
+    struct prefetcher_batch_entry* e = &p->batches[i];
+    if (e->in_use && e->release_pending && e->refcount == 0)
+      batch_try_free_locked(e);
   }
 }
 
@@ -298,6 +321,7 @@ worker_fn(void* arg)
   while (!atomic_load_explicit(&p->stop, memory_order_acquire)) {
     platform_mutex_lock(p->lock);
     advance_all(p);
+    batch_sweep_locked(p);
     struct prefetcher_slot* slot = find_free_slot_locked(p);
     int has_in_flight = 0;
     for (uint32_t i = 0; i < p->capacity; ++i)
@@ -502,10 +526,8 @@ prefetcher_release_batch(struct prefetcher* self, uint64_t batch_id)
   for (uint32_t i = 0; i < self->batch_capacity; ++i) {
     struct prefetcher_batch_entry* e = &self->batches[i];
     if (e->in_use && e->batch_id == batch_id) {
-      if (e->refcount == 0)
-        e->in_use = 0;
-      else
-        e->release_pending = 1;
+      e->release_pending = 1;
+      batch_try_free_locked(e);
       break;
     }
   }
