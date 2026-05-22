@@ -30,6 +30,8 @@ struct prefetcher_batch_entry
 {
   uint64_t batch_id;
   struct prefetch_gate gate;
+  uint32_t refcount;
+  int release_pending;
   int in_use;
 };
 
@@ -56,21 +58,41 @@ struct prefetcher
   uint64_t errored;
 };
 
+// Each call pairs with batch_unref_locked; release defers until refcount==0.
 static struct prefetch_gate*
 batch_get_or_create_locked(struct prefetcher* p, uint64_t batch_id)
 {
   for (uint32_t i = 0; i < p->batch_capacity; ++i)
-    if (p->batches[i].in_use && p->batches[i].batch_id == batch_id)
+    if (p->batches[i].in_use && p->batches[i].batch_id == batch_id) {
+      p->batches[i].refcount++;
       return &p->batches[i].gate;
+    }
   for (uint32_t i = 0; i < p->batch_capacity; ++i) {
     if (!p->batches[i].in_use) {
       p->batches[i].batch_id = batch_id;
       p->batches[i].in_use = 1;
+      p->batches[i].refcount = 1;
+      p->batches[i].release_pending = 0;
       prefetch_gate_init(&p->batches[i].gate);
       return &p->batches[i].gate;
     }
   }
   return NULL;
+}
+
+static void
+batch_unref_locked(struct prefetcher* p, uint64_t batch_id)
+{
+  for (uint32_t i = 0; i < p->batch_capacity; ++i) {
+    struct prefetcher_batch_entry* e = &p->batches[i];
+    if (e->in_use && e->batch_id == batch_id) {
+      if (e->refcount > 0)
+        e->refcount--;
+      if (e->refcount == 0 && e->release_pending)
+        e->in_use = 0;
+      return;
+    }
+  }
 }
 
 static struct prefetch_gate*
@@ -93,6 +115,9 @@ slot_active(const struct prefetcher_slot* s)
 static void
 fail_slot(struct prefetcher* p, struct prefetcher_slot* s)
 {
+  // Catches prefetcher-origin errors that bypass the cache (alloc fail,
+  // saturation).
+  prefetch_gate_set_error(s->gate);
   s->state = PREFETCHER_ERROR;
   p->errored++;
 }
@@ -117,7 +142,15 @@ advance_from_meta(struct prefetcher* p, struct prefetcher_slot* s)
   uint64_t n = 1;
   for (uint8_t d = 0; d < it.rank; ++d)
     n *= (it.shard_end[d] - it.shard_beg[d]);
-  CHECK(Bad, n > 0);
+
+  if (n == 0) {
+    s->n_shards = 0;
+    s->h_layout = prefetch_cache_request(
+      p->clc, hash_fnv1a_str(s->uri), s->uri, s->batch_id, s->gate);
+    CHECK(Bad, prefetch_handle_valid(s->h_layout));
+    s->state = PREFETCHER_PENDING_CHUNK_LAYOUT;
+    return;
+  }
 
   s->h_shards =
     (struct prefetch_handle*)calloc((size_t)n, sizeof(*s->h_shards));
@@ -227,6 +260,8 @@ admit_locked(struct prefetcher* p,
   p->submitted++;
   return;
 Bad:
+  if (gate)
+    batch_unref_locked(p, popped->batch_id);
   free(popped->uri);
   p->errored++;
 }
@@ -239,16 +274,31 @@ worker_fn(void* arg)
     platform_mutex_lock(p->lock);
     advance_all(p);
     struct prefetcher_slot* slot = find_free_slot_locked(p);
+    int has_in_flight = 0;
+    for (uint32_t i = 0; i < p->capacity; ++i)
+      if (slot_active(&p->slots[i])) {
+        has_in_flight = 1;
+        break;
+      }
     platform_mutex_unlock(p->lock);
 
     struct damacy_sample_slot popped = { 0 };
-    if (slot && lookahead_try_pop(p->la, &popped)) {
+    int popped_ok = 0;
+    // Block when there's nothing to poll; otherwise we'd sleep through state
+    // advances.
+    if (slot && !has_in_flight)
+      popped_ok = lookahead_pop_blocking(p->la, &popped);
+    else if (slot)
+      popped_ok = lookahead_try_pop(p->la, &popped);
+
+    if (popped_ok) {
       platform_mutex_lock(p->lock);
       admit_locked(p, slot, &popped);
       platform_mutex_unlock(p->lock);
       continue;
     }
-    platform_sleep_ns(1000000);
+    if (has_in_flight || !slot)
+      platform_sleep_ns(1000000);
   }
 }
 
@@ -384,7 +434,9 @@ prefetcher_pop_ready(struct prefetcher* self, struct prefetcher_ready* out)
       .n_shards = s->n_shards,
       .h_layout = s->h_layout,
     };
+    uint64_t batch_id = s->batch_id;
     *s = (struct prefetcher_slot){ .state = PREFETCHER_FREE };
+    batch_unref_locked(self, batch_id);
     found = 1;
     break;
   }
@@ -423,8 +475,12 @@ prefetcher_release_batch(struct prefetcher* self, uint64_t batch_id)
     return;
   platform_mutex_lock(self->lock);
   for (uint32_t i = 0; i < self->batch_capacity; ++i) {
-    if (self->batches[i].in_use && self->batches[i].batch_id == batch_id) {
-      self->batches[i].in_use = 0;
+    struct prefetcher_batch_entry* e = &self->batches[i];
+    if (e->in_use && e->batch_id == batch_id) {
+      if (e->refcount == 0)
+        e->in_use = 0;
+      else
+        e->release_pending = 1;
       break;
     }
   }

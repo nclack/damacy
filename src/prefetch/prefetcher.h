@@ -71,7 +71,8 @@ extern "C"
   const struct prefetch_gate* prefetcher_batch_gate(struct prefetcher* p,
                                                     uint64_t batch_id);
 
-  // Caller must ensure no slots still reference the batch's gate.
+  // Marks the batch releasable; the entry is reclaimed once the last
+  // referencing slot is popped (so the gate can't alias mid-flight).
   void prefetcher_release_batch(struct prefetcher* p, uint64_t batch_id);
 
   // Entries with max_batch_id < watermark become evictable.
