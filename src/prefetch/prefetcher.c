@@ -325,21 +325,20 @@ worker_fn(void* arg)
 
     struct damacy_sample_slot popped = { 0 };
     int popped_ok = 0;
-    // Block when there's nothing to poll; otherwise we'd sleep through state
-    // advances.
+    // Timed wait when in-flight work needs periodic state advance; pure block
+    // when admission is the only thing keeping us busy.
     if (slot && !has_in_flight)
       popped_ok = lookahead_pop_blocking(p->la, &popped);
     else if (slot)
-      popped_ok = lookahead_try_pop(p->la, &popped);
+      popped_ok = lookahead_pop_blocking_timeout(p->la, &popped, 1);
+    else
+      platform_sleep_ns(1000000);
 
     if (popped_ok) {
       platform_mutex_lock(p->lock);
       admit_locked(p, slot, &popped);
       platform_mutex_unlock(p->lock);
-      continue;
     }
-    if (has_in_flight || !slot)
-      platform_sleep_ns(1000000);
   }
 }
 

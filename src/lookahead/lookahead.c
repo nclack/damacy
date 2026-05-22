@@ -141,6 +141,27 @@ Bad:
 }
 
 int
+lookahead_pop_blocking_timeout(struct damacy_lookahead* la,
+                               struct damacy_sample_slot* out,
+                               int timeout_ms)
+{
+  CHECK(Bad, la);
+  CHECK(Bad, out);
+  platform_mutex_lock(la->lock);
+  if (la->size == 0 && !la->stop_signaled)
+    platform_cond_timedwait_ms(la->cond, la->lock, timeout_ms);
+  int popped = 0;
+  if (la->size > 0) {
+    pop_one_locked(la, out);
+    popped = 1;
+  }
+  platform_mutex_unlock(la->lock);
+  return popped;
+Bad:
+  return 0;
+}
+
+int
 lookahead_try_pop(struct damacy_lookahead* la, struct damacy_sample_slot* out)
 {
   CHECK(Bad, la);

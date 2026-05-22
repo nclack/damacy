@@ -217,6 +217,40 @@ test_signal_stop_unblocks_empty_pop(void)
   return 0;
 }
 
+static int
+test_pop_blocking_timeout_returns_on_timeout(void)
+{
+  struct damacy_lookahead la = { 0 };
+  EXPECT(lookahead_init(&la, 4) == 0);
+
+  struct damacy_sample_slot out = { 0 };
+  EXPECT(lookahead_pop_blocking_timeout(&la, &out, 5) == 0);
+
+  lookahead_destroy(&la);
+  return 0;
+}
+
+static int
+test_pop_blocking_timeout_pops_on_push(void)
+{
+  struct damacy_lookahead la = { 0 };
+  EXPECT(lookahead_init(&la, 4) == 0);
+
+  struct wake_ctx ctx = { .la = &la };
+  struct platform_thread* t = platform_thread_start(push_after_delay, &ctx);
+  EXPECT(t);
+
+  struct damacy_sample_slot out = { 0 };
+  EXPECT(lookahead_pop_blocking_timeout(&la, &out, 1000) == 1);
+  EXPECT(strcmp(out.uri, "late") == 0);
+  EXPECT(out.batch_id == 99);
+  sample_slot_clear(&out);
+
+  platform_thread_join(t);
+  lookahead_destroy(&la);
+  return 0;
+}
+
 int
 main(void)
 {
@@ -229,6 +263,8 @@ main(void)
   RUN(test_pop_blocking_returns_existing_after_stop);
   RUN(test_pop_blocking_wakes_on_push);
   RUN(test_signal_stop_unblocks_empty_pop);
+  RUN(test_pop_blocking_timeout_returns_on_timeout);
+  RUN(test_pop_blocking_timeout_pops_on_push);
   printf("all lookahead tests passed\n");
   return 0;
 }

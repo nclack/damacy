@@ -53,6 +53,11 @@ int
 lookahead_pop_blocking(struct damacy_lookahead* la,
                        struct damacy_sample_slot* out);
 
+int
+lookahead_pop_blocking_timeout(struct damacy_lookahead* la,
+                               struct damacy_sample_slot* out,
+                               int timeout_ms);
+
 // Non-blocking. Returns 1 on pop, 0 when empty.
 int
 lookahead_try_pop(struct damacy_lookahead* la, struct damacy_sample_slot* out);
