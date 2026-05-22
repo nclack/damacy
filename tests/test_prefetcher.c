@@ -488,6 +488,40 @@ test_release_before_pop_defers(void)
 }
 
 static int
+test_admit_fail_releases_batch_entry(void)
+{
+  struct fixture fx = { 0 };
+  EXPECT(fixture_setup(&fx, "blosc-zstd") == 0);
+
+  struct damacy_sample s = { .aabb = { .rank = 2 } };
+  s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
+  s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
+
+  for (int i = 0; i < 8; ++i) {
+    char uri[16];
+    snprintf(uri, sizeof uri, "missing%d", i);
+    s.uri = uri;
+    EXPECT(lookahead_push_with_batch(&fx.la, &s, 0) == 0);
+  }
+  EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
+
+  for (int i = 0; i < 8; ++i) {
+    struct prefetcher_ready r = { 0 };
+    EXPECT(prefetcher_pop_ready(fx.p, &r) == 1);
+    prefetcher_ready_free(&r);
+  }
+
+  s.uri = "missing_overflow";
+  EXPECT(lookahead_push_with_batch(&fx.la, &s, 99) == 0);
+  EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
+
+  EXPECT(prefetcher_batch_gate(fx.p, 99) == NULL);
+
+  fixture_teardown(&fx);
+  return 0;
+}
+
+static int
 test_unknown_batch_gate_is_null(void)
 {
   struct fixture fx = { 0 };
@@ -541,6 +575,7 @@ main(void)
   RUN(test_distinct_batches_get_separate_gates);
   RUN(test_release_batch_drops_gate);
   RUN(test_release_before_pop_defers);
+  RUN(test_admit_fail_releases_batch_entry);
   RUN(test_unknown_batch_gate_is_null);
   RUN(test_advance_watermark_broadcasts);
   log_info("all tests passed");

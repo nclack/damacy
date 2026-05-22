@@ -59,9 +59,15 @@ struct prefetcher
 };
 
 // Each call pairs with batch_unref_locked; release defers until refcount==0.
+// *out_was_new is set so admit can roll back a freshly-created entry whose
+// gate the user can't yet see — plain unref would leak it (release_pending=0).
 static struct prefetch_gate*
-batch_get_or_create_locked(struct prefetcher* p, uint64_t batch_id)
+batch_get_or_create_locked(struct prefetcher* p,
+                           uint64_t batch_id,
+                           int* out_was_new)
 {
+  if (out_was_new)
+    *out_was_new = 0;
   for (uint32_t i = 0; i < p->batch_capacity; ++i)
     if (p->batches[i].in_use && p->batches[i].batch_id == batch_id) {
       p->batches[i].refcount++;
@@ -74,6 +80,8 @@ batch_get_or_create_locked(struct prefetcher* p, uint64_t batch_id)
       p->batches[i].refcount = 1;
       p->batches[i].release_pending = 0;
       prefetch_gate_init(&p->batches[i].gate);
+      if (out_was_new)
+        *out_was_new = 1;
       return &p->batches[i].gate;
     }
   }
@@ -89,6 +97,21 @@ batch_unref_locked(struct prefetcher* p, uint64_t batch_id)
       if (e->refcount > 0)
         e->refcount--;
       if (e->refcount == 0 && e->release_pending)
+        e->in_use = 0;
+      return;
+    }
+  }
+}
+
+static void
+batch_rollback_locked(struct prefetcher* p, uint64_t batch_id, int was_new)
+{
+  for (uint32_t i = 0; i < p->batch_capacity; ++i) {
+    struct prefetcher_batch_entry* e = &p->batches[i];
+    if (e->in_use && e->batch_id == batch_id) {
+      if (e->refcount > 0)
+        e->refcount--;
+      if (e->refcount == 0 && (was_new || e->release_pending))
         e->in_use = 0;
       return;
     }
@@ -245,7 +268,9 @@ admit_locked(struct prefetcher* p,
              struct prefetcher_slot* slot,
              struct damacy_sample_slot* popped)
 {
-  struct prefetch_gate* gate = batch_get_or_create_locked(p, popped->batch_id);
+  int was_new = 0;
+  struct prefetch_gate* gate =
+    batch_get_or_create_locked(p, popped->batch_id, &was_new);
   struct prefetch_handle h = prefetch_cache_request(
     p->amc, hash_fnv1a_str(popped->uri), popped->uri, popped->batch_id, gate);
   CHECK(Bad, prefetch_handle_valid(h));
@@ -261,7 +286,7 @@ admit_locked(struct prefetcher* p,
   return;
 Bad:
   if (gate)
-    batch_unref_locked(p, popped->batch_id);
+    batch_rollback_locked(p, popped->batch_id, was_new);
   free(popped->uri);
   p->errored++;
 }
