@@ -82,6 +82,10 @@ add_src_lib(lookahead SOURCES lookahead/lookahead.h lookahead/lookahead.c
     LINKS log
 )
 
+add_src_lib(prefetch_cache SOURCES prefetch/prefetch_cache.h prefetch/prefetch_cache.c
+    LINKS lru log
+)
+
 # Runtime GPU-memory committer: tracks bytes committed against a
 # configured cap. Single source of truth for "have we exceeded?" and
 # "how many bytes are committed?" across wave_pool, batch_pool, and the

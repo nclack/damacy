@@ -1,0 +1,127 @@
+// See dev/metadata_prefetch.md.
+#pragma once
+
+#include "util/lru.h"
+
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+
+  struct prefetch_cache;
+
+  struct prefetch_handle
+  {
+    uint32_t slot;
+    uint32_t generation;
+  };
+
+  static const struct prefetch_handle PREFETCH_HANDLE_NONE = { 0, 0 };
+
+  // Layout: [error:1 | pending:63] — one atomic, one load.
+  struct prefetch_gate
+  {
+    _Atomic uint64_t state;
+  };
+
+  enum prefetch_state
+  {
+    PREFETCH_STATE_PENDING = 0,
+    PREFETCH_STATE_READY = 1,
+    PREFETCH_STATE_ERROR = 2,
+  };
+
+  struct prefetch_ops
+  {
+    int (*key_eq)(const struct prefetch_ops* self,
+                  const void* stored_key,
+                  const void* probe_key);
+    void* (*key_clone)(const struct prefetch_ops* self, const void* probe_key);
+    void (*key_destroy)(const struct prefetch_ops* self, void* stored_key);
+    void (*value_destroy)(const struct prefetch_ops* self,
+                          void* value); // NULL-safe
+  };
+
+  // Return 0 + value in *out_value, or non-zero + damacy_status in *out_err.
+  struct prefetch_fetcher
+  {
+    int (*fetch)(struct prefetch_fetcher* self,
+                 const void* key,
+                 void** out_value,
+                 int* out_err);
+  };
+
+  // Today wraps io_queue_post.
+  struct prefetch_executor
+  {
+    int (*post)(struct prefetch_executor* self,
+                void (*fn)(void*),
+                void* ctx,
+                void (*ctx_free)(void*));
+  };
+
+  struct prefetch_cache_config
+  {
+    uint32_t capacity;
+    uint32_t max_probe;
+    const struct prefetch_ops* ops;
+    struct prefetch_fetcher* fetcher;
+    struct prefetch_executor* executor;
+  };
+
+  struct prefetch_cache* prefetch_cache_create(
+    const struct prefetch_cache_config* cfg);
+
+  void prefetch_cache_destroy(struct prefetch_cache* c);
+
+  // PREFETCH_HANDLE_NONE on saturation (every entry has
+  // max_batch_id >= watermark) or invalid args. gate may be NULL.
+  struct prefetch_handle prefetch_cache_request(struct prefetch_cache* c,
+                                                uint64_t key_hash,
+                                                const void* key,
+                                                uint64_t batch_id,
+                                                struct prefetch_gate* gate);
+
+  // NULL on pending, error, or stale generation.
+  const void* prefetch_cache_try_get(const struct prefetch_cache* c,
+                                     struct prefetch_handle h);
+
+  // NULL unless READY. Doesn't bump LRU recency; caller ensures pinning.
+  const void* prefetch_cache_peek(const struct prefetch_cache* c,
+                                  uint64_t key_hash,
+                                  const void* key);
+
+  enum prefetch_state prefetch_cache_query(const struct prefetch_cache* c,
+                                           struct prefetch_handle h,
+                                           const void** out_value,
+                                           int* out_err);
+
+  // Monotonic; lower values ignored.
+  void prefetch_cache_advance_watermark(struct prefetch_cache* c,
+                                        uint64_t new_watermark);
+
+  int prefetch_handle_valid(struct prefetch_handle h);
+
+  void prefetch_gate_init(struct prefetch_gate* g);
+  int prefetch_gate_is_ready(const struct prefetch_gate* g);
+  int prefetch_gate_has_error(const struct prefetch_gate* g);
+  uint64_t prefetch_gate_pending(const struct prefetch_gate* g);
+
+  struct prefetch_cache_stats
+  {
+    struct lru_counters counters;
+    uint32_t size;
+    uint32_t capacity;
+    uint64_t watermark;
+    uint64_t pending;
+    uint64_t errored;
+  };
+
+  void prefetch_cache_stats_get(const struct prefetch_cache* c,
+                                struct prefetch_cache_stats* out);
+
+#ifdef __cplusplus
+}
+#endif

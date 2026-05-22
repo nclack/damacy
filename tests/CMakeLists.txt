@@ -52,6 +52,7 @@ add_damacy_test(test_path_intern path_intern hash log)
 add_damacy_test(test_group_chunks planner log)
 add_damacy_test(test_chunk_layout planner zarr_chunk_layout zarr_meta_cache zarr_shard_cache zarr store path_intern test_fixture)
 add_damacy_test(test_lookahead lookahead log)
+add_damacy_test(test_prefetch_cache prefetch_cache log)
 add_damacy_test(test_scheduler scheduler platform log)
 
 # End-to-end smoke test: requires CUDA + nvCOMP, so guarded against
