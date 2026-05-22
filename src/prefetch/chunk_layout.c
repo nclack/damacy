@@ -119,6 +119,7 @@ chunk_layout_fetch(struct prefetch_fetcher* self_,
                                    chunk_off,
                                    (uint32_t)chunk_nbytes,
                                    meta->inner_codec.id,
+                                   self->max_substreams_per_chunk,
                                    &probed);
   strbuf_free(&path);
   if (rc) {
@@ -140,17 +141,20 @@ void
 chunk_layout_fetcher_init(struct chunk_layout_fetcher* f,
                           struct store* store,
                           struct prefetch_cache* array_meta_cache,
-                          struct prefetch_cache* shard_index_cache)
+                          struct prefetch_cache* shard_index_cache,
+                          uint32_t max_substreams_per_chunk)
 {
   CHECK(End, f);
   CHECK(End, store);
   CHECK(End, array_meta_cache);
   CHECK(End, shard_index_cache);
+  CHECK(End, max_substreams_per_chunk > 0);
   *f = (struct chunk_layout_fetcher){
     .base = { .fetch = chunk_layout_fetch },
     .store = store,
     .array_meta_cache = array_meta_cache,
     .shard_index_cache = shard_index_cache,
+    .max_substreams_per_chunk = max_substreams_per_chunk,
   };
 End:
   return;

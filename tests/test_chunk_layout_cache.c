@@ -1,4 +1,5 @@
 #include "damacy.h"
+#include "damacy_limits.h"
 #include "fixture.h"
 #include "prefetch/array_meta.h"
 #include "prefetch/chunk_layout.h"
@@ -85,7 +86,11 @@ fixture_setup(struct fixture* fx, const char* codec)
   fx->sic = prefetch_cache_create(&sic_cfg);
   EXPECT(fx->sic);
 
-  chunk_layout_fetcher_init(&fx->clf, fx->store, fx->amc, fx->sic);
+  chunk_layout_fetcher_init(&fx->clf,
+                            fx->store,
+                            fx->amc,
+                            fx->sic,
+                            DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK);
   struct prefetch_cache_config clc_cfg = {
     .capacity = 4,
     .max_probe = 16,
