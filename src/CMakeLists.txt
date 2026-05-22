@@ -94,6 +94,10 @@ add_src_lib(shard_index SOURCES prefetch/shard_index.h prefetch/shard_index.c
     LINKS prefetch_cache zarr store strbuf hash log
 )
 
+add_src_lib(chunk_layout SOURCES prefetch/chunk_layout.h prefetch/chunk_layout.c
+    LINKS prefetch_cache shard_index zarr zarr_chunk_layout store strbuf hash log
+)
+
 # Runtime GPU-memory committer: tracks bytes committed against a
 # configured cap. Single source of truth for "have we exceeded?" and
 # "how many bytes are committed?" across wave_pool, batch_pool, and the
