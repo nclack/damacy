@@ -90,6 +90,10 @@ add_src_lib(array_meta SOURCES prefetch/array_meta.h prefetch/array_meta.c
     LINKS prefetch_cache zarr store strbuf log
 )
 
+add_src_lib(shard_index SOURCES prefetch/shard_index.h prefetch/shard_index.c
+    LINKS prefetch_cache zarr store strbuf hash log
+)
+
 # Runtime GPU-memory committer: tracks bytes committed against a
 # configured cap. Single source of truth for "have we exceeded?" and
 # "how many bytes are committed?" across wave_pool, batch_pool, and the

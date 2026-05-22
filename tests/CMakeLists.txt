@@ -54,6 +54,7 @@ add_damacy_test(test_chunk_layout planner zarr_chunk_layout zarr_meta_cache zarr
 add_damacy_test(test_lookahead lookahead log platform)
 add_damacy_test(test_prefetch_cache prefetch_cache log)
 add_damacy_test(test_array_meta array_meta prefetch_cache zarr store test_fixture)
+add_damacy_test(test_shard_index shard_index array_meta prefetch_cache zarr store hash test_fixture)
 add_damacy_test(test_sample_shard_iterator zarr log)
 add_damacy_test(test_scheduler scheduler platform log)
 
