@@ -58,77 +58,70 @@ struct prefetcher
   uint64_t errored;
 };
 
-// Each call pairs with batch_unref_locked; release defers until refcount==0.
-// *out_was_new is set so admit can roll back a freshly-created entry whose
-// gate the user can't yet see — plain unref would leak it (release_pending=0).
-static struct prefetch_gate*
+static struct prefetcher_batch_entry*
+batch_lookup_locked(struct prefetcher* p, uint64_t batch_id)
+{
+  for (uint32_t i = 0; i < p->batch_capacity; ++i)
+    if (p->batches[i].in_use && p->batches[i].batch_id == batch_id)
+      return &p->batches[i];
+  return NULL;
+}
+
+// Caller must pair with a refcount drop (batch_unref_locked or inline at admit
+// rollback). *out_was_new lets admit free a freshly-created entry directly on
+// failure — release_pending is 0, so plain unref would leak it.
+static struct prefetcher_batch_entry*
 batch_get_or_create_locked(struct prefetcher* p,
                            uint64_t batch_id,
                            int* out_was_new)
 {
-  if (out_was_new)
-    *out_was_new = 0;
-  for (uint32_t i = 0; i < p->batch_capacity; ++i)
-    if (p->batches[i].in_use && p->batches[i].batch_id == batch_id) {
-      p->batches[i].refcount++;
-      return &p->batches[i].gate;
-    }
+  *out_was_new = 0;
+  struct prefetcher_batch_entry* e = batch_lookup_locked(p, batch_id);
+  if (e) {
+    e->refcount++;
+    return e;
+  }
   for (uint32_t i = 0; i < p->batch_capacity; ++i) {
     if (!p->batches[i].in_use) {
-      p->batches[i].batch_id = batch_id;
-      p->batches[i].in_use = 1;
-      p->batches[i].refcount = 1;
-      p->batches[i].release_pending = 0;
-      prefetch_gate_init(&p->batches[i].gate);
-      if (out_was_new)
-        *out_was_new = 1;
-      return &p->batches[i].gate;
+      e = &p->batches[i];
+      e->batch_id = batch_id;
+      e->in_use = 1;
+      e->refcount = 1;
+      e->release_pending = 0;
+      prefetch_gate_init(&e->gate);
+      *out_was_new = 1;
+      return e;
     }
   }
   return NULL;
 }
 
-// Reuse is gated on gate.pending too: cache-side waiters reference this gate
-// independently of the slot refcount, and would alias it on next admission.
+// Reuse is gated on gate.pending: cache-side waiters reference the gate
+// independently of refcount and would alias it on the next admission.
 static int
 batch_try_free_locked(struct prefetcher_batch_entry* e)
 {
-  if (e->refcount != 0)
-    return 0;
-  if (prefetch_gate_pending(&e->gate) != 0)
+  if (e->refcount != 0 || prefetch_gate_pending(&e->gate) != 0)
     return 0;
   e->in_use = 0;
   return 1;
 }
 
 static void
-batch_unref_locked(struct prefetcher* p, uint64_t batch_id)
+batch_unref_entry_locked(struct prefetcher_batch_entry* e)
 {
-  for (uint32_t i = 0; i < p->batch_capacity; ++i) {
-    struct prefetcher_batch_entry* e = &p->batches[i];
-    if (e->in_use && e->batch_id == batch_id) {
-      if (e->refcount > 0)
-        e->refcount--;
-      if (e->release_pending)
-        batch_try_free_locked(e);
-      return;
-    }
-  }
+  if (e->refcount > 0)
+    e->refcount--;
+  if (e->release_pending)
+    batch_try_free_locked(e);
 }
 
 static void
-batch_rollback_locked(struct prefetcher* p, uint64_t batch_id, int was_new)
+batch_unref_locked(struct prefetcher* p, uint64_t batch_id)
 {
-  for (uint32_t i = 0; i < p->batch_capacity; ++i) {
-    struct prefetcher_batch_entry* e = &p->batches[i];
-    if (e->in_use && e->batch_id == batch_id) {
-      if (e->refcount > 0)
-        e->refcount--;
-      if (was_new || e->release_pending)
-        batch_try_free_locked(e);
-      return;
-    }
-  }
+  struct prefetcher_batch_entry* e = batch_lookup_locked(p, batch_id);
+  if (e)
+    batch_unref_entry_locked(e);
 }
 
 static void
@@ -139,15 +132,6 @@ batch_sweep_locked(struct prefetcher* p)
     if (e->in_use && e->release_pending && e->refcount == 0)
       batch_try_free_locked(e);
   }
-}
-
-static struct prefetch_gate*
-batch_find_locked(struct prefetcher* p, uint64_t batch_id)
-{
-  for (uint32_t i = 0; i < p->batch_capacity; ++i)
-    if (p->batches[i].in_use && p->batches[i].batch_id == batch_id)
-      return &p->batches[i].gate;
-  return NULL;
 }
 
 static int
@@ -277,13 +261,20 @@ advance_all(struct prefetcher* p)
   }
 }
 
-static struct prefetcher_slot*
-find_free_slot_locked(struct prefetcher* p)
+static void
+scan_slots_locked(struct prefetcher* p,
+                  struct prefetcher_slot** out_free,
+                  int* out_has_in_flight)
 {
-  for (uint32_t i = 0; i < p->capacity; ++i)
-    if (p->slots[i].state == PREFETCHER_FREE)
-      return &p->slots[i];
-  return NULL;
+  *out_free = NULL;
+  *out_has_in_flight = 0;
+  for (uint32_t i = 0; i < p->capacity; ++i) {
+    struct prefetcher_slot* s = &p->slots[i];
+    if (!*out_free && s->state == PREFETCHER_FREE)
+      *out_free = s;
+    else if (slot_active(s))
+      *out_has_in_flight = 1;
+  }
 }
 
 static void
@@ -292,8 +283,9 @@ admit_locked(struct prefetcher* p,
              struct damacy_sample_slot* popped)
 {
   int was_new = 0;
-  struct prefetch_gate* gate =
+  struct prefetcher_batch_entry* be =
     batch_get_or_create_locked(p, popped->batch_id, &was_new);
+  struct prefetch_gate* gate = be ? &be->gate : NULL;
   struct prefetch_handle h = prefetch_cache_request(
     p->amc, hash_fnv1a_str(popped->uri), popped->uri, popped->batch_id, gate);
   CHECK(Bad, prefetch_handle_valid(h));
@@ -308,8 +300,12 @@ admit_locked(struct prefetcher* p,
   p->submitted++;
   return;
 Bad:
-  if (gate)
-    batch_rollback_locked(p, popped->batch_id, was_new);
+  if (be) {
+    if (be->refcount > 0)
+      be->refcount--;
+    if (was_new || be->release_pending)
+      batch_try_free_locked(be);
+  }
   free(popped->uri);
   p->errored++;
 }
@@ -322,13 +318,9 @@ worker_fn(void* arg)
     platform_mutex_lock(p->lock);
     advance_all(p);
     batch_sweep_locked(p);
-    struct prefetcher_slot* slot = find_free_slot_locked(p);
-    int has_in_flight = 0;
-    for (uint32_t i = 0; i < p->capacity; ++i)
-      if (slot_active(&p->slots[i])) {
-        has_in_flight = 1;
-        break;
-      }
+    struct prefetcher_slot* slot;
+    int has_in_flight;
+    scan_slots_locked(p, &slot, &has_in_flight);
     platform_mutex_unlock(p->lock);
 
     struct damacy_sample_slot popped = { 0 };
@@ -510,7 +502,8 @@ prefetcher_batch_gate(struct prefetcher* self, uint64_t batch_id)
 {
   CHECK(Bad, self);
   platform_mutex_lock(self->lock);
-  const struct prefetch_gate* g = batch_find_locked(self, batch_id);
+  struct prefetcher_batch_entry* e = batch_lookup_locked(self, batch_id);
+  const struct prefetch_gate* g = e ? &e->gate : NULL;
   platform_mutex_unlock(self->lock);
   return g;
 Bad:
@@ -523,13 +516,10 @@ prefetcher_release_batch(struct prefetcher* self, uint64_t batch_id)
   if (!self)
     return;
   platform_mutex_lock(self->lock);
-  for (uint32_t i = 0; i < self->batch_capacity; ++i) {
-    struct prefetcher_batch_entry* e = &self->batches[i];
-    if (e->in_use && e->batch_id == batch_id) {
-      e->release_pending = 1;
-      batch_try_free_locked(e);
-      break;
-    }
+  struct prefetcher_batch_entry* e = batch_lookup_locked(self, batch_id);
+  if (e) {
+    e->release_pending = 1;
+    batch_try_free_locked(e);
   }
   platform_mutex_unlock(self->lock);
 }
