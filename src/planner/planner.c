@@ -7,6 +7,7 @@
 #include "util/path_intern.h"
 #include "util/prelude.h"
 #include "util/strbuf.h"
+#include "zarr/sample_shard_iterator.h"
 #include "zarr/zarr_meta_cache.h"
 #include "zarr/zarr_metadata.h"
 #include "zarr/zarr_shard_cache.h"
@@ -70,28 +71,27 @@ planner_ensure_scratch(struct planner* self, uint32_t need)
 
 // --- math helpers --------------------------------------------------------
 
-// Inner-chunk grid range for the chunks intersecting [aabb.lo, aabb.hi).
-// chunk_lo/chunk_hi are in inner-chunk-grid units (half-open).
+// chunk_beg/chunk_end are inner-chunk-grid units (half-open).
 static int
 chunk_range(const struct damacy_aabb* aabb,
             const struct zarr_metadata* meta,
-            uint64_t* chunk_lo,
-            uint64_t* chunk_hi)
+            uint64_t* chunk_beg,
+            uint64_t* chunk_end)
 {
   if (aabb->rank != meta->rank)
     return 1;
   for (uint8_t d = 0; d < meta->rank; ++d) {
-    int64_t lo = aabb->dims[d].beg;
-    int64_t hi = aabb->dims[d].end;
-    if (lo < 0 || hi <= lo)
+    int64_t beg = aabb->dims[d].beg;
+    int64_t end = aabb->dims[d].end;
+    if (beg < 0 || end <= beg)
       return 1;
-    if ((uint64_t)hi > meta->shape[d])
+    if ((uint64_t)end > meta->shape[d])
       return 1;
     uint64_t chunk_extent = meta->inner_chunk_shape[d];
     if (chunk_extent == 0)
       return 1;
-    chunk_lo[d] = (uint64_t)lo / chunk_extent;
-    chunk_hi[d] = ((uint64_t)hi - 1) / chunk_extent + 1;
+    chunk_beg[d] = (uint64_t)beg / chunk_extent;
+    chunk_end[d] = ((uint64_t)end - 1) / chunk_extent + 1;
   }
   return 0;
 }
@@ -200,7 +200,7 @@ struct emit_ctx
   const struct damacy_sample* sample;
   const struct zarr_metadata* meta;
   const uint64_t* inner_per_shard_dim; // [meta->rank]
-  const uint64_t* chunk_lo;            // [meta->rank], first chunk for sample
+  const uint64_t* chunk_beg;           // [meta->rank], first chunk for sample
   uint32_t sample_idx_in_batch;
   uint16_t batch_pool_slot;
   uint8_t codec_id;
@@ -247,7 +247,7 @@ emit_fill_chunk(const struct emit_ctx* ctx,
     .is_fill = 1,
   };
   for (uint8_t d = 0; d < meta->rank; ++d)
-    cp->chunk_d[d] = (uint32_t)(chunk_coord[d] - ctx->chunk_lo[d]);
+    cp->chunk_d[d] = (uint32_t)(chunk_coord[d] - ctx->chunk_beg[d]);
   out->n_chunk_plans++;
   return DAMACY_OK;
 }
@@ -341,7 +341,7 @@ emit_chunk(const struct emit_ctx* ctx,
     .codec_id = ctx->codec_id,
   };
   for (uint8_t d = 0; d < meta->rank; ++d)
-    cp->chunk_d[d] = (uint32_t)(chunk_coord[d] - ctx->chunk_lo[d]);
+    cp->chunk_d[d] = (uint32_t)(chunk_coord[d] - ctx->chunk_beg[d]);
 
   out->n_chunk_plans++;
   return DAMACY_OK;
@@ -429,9 +429,9 @@ planner_plan(struct planner* self,
       goto Cleanup;
     }
 
-    uint64_t chunk_lo[DAMACY_MAX_RANK];
-    uint64_t chunk_hi[DAMACY_MAX_RANK];
-    if (chunk_range(&sample->aabb, &meta, chunk_lo, chunk_hi)) {
+    uint64_t chunk_beg[DAMACY_MAX_RANK];
+    uint64_t chunk_end[DAMACY_MAX_RANK];
+    if (chunk_range(&sample->aabb, &meta, chunk_beg, chunk_end)) {
       status = DAMACY_INVAL;
       goto Cleanup;
     }
@@ -455,8 +455,8 @@ planner_plan(struct planner* self,
     uint32_t chunk_count = 1;
     for (uint8_t d = 0; d < meta.rank; ++d) {
       uint32_t S = (uint32_t)meta.inner_chunk_shape[d];
-      uint32_t N = (uint32_t)(chunk_hi[d] - chunk_lo[d]);
-      int64_t chunk_grid_origin = (int64_t)(chunk_lo[d] * (uint64_t)S);
+      uint32_t N = (uint32_t)(chunk_end[d] - chunk_beg[d]);
+      int64_t chunk_grid_origin = (int64_t)(chunk_beg[d] * (uint64_t)S);
       sp->dims[d] = (struct sample_dim){
         .chunk_shape = S,
         .chunk_grid_extent = N,
@@ -474,7 +474,7 @@ planner_plan(struct planner* self,
       .sample = sample,
       .meta = &meta,
       .inner_per_shard_dim = inner_per_shard_dim,
-      .chunk_lo = chunk_lo,
+      .chunk_beg = chunk_beg,
       .sample_idx_in_batch = sample_idx,
       .batch_pool_slot = batch_pool_slot,
       .codec_id = (uint8_t)meta.inner_codec.id,
@@ -484,94 +484,85 @@ planner_plan(struct planner* self,
       .meta_cache = self->cfg.meta_cache,
     };
 
-    // Iterate chunks in [chunk_lo, chunk_hi) row-major.
-    uint64_t chunk_coord[DAMACY_MAX_RANK];
-    for (uint8_t d = 0; d < meta.rank; ++d)
-      chunk_coord[d] = chunk_lo[d];
+    struct sample_shard_iterator shard_it;
+    if (sample_shard_iterator_init(&shard_it, &meta, &sample->aabb)) {
+      status = DAMACY_INVAL;
+      goto Cleanup;
+    }
 
-    // Track last-seen shard so we skip the cache+path work for chunks
-    // in the same shard.
-    uint64_t cached_shard_coord[DAMACY_MAX_RANK] = { 0 };
-    int have_cached_shard = 0;
+    uint64_t shard_coord[DAMACY_MAX_RANK];
+    while (sample_shard_iterator_next(&shard_it, shard_coord)) {
+      zarr_shard_cache_release(self->cfg.shard_cache, active_pin);
+      active_pin = (struct zarr_shard_pin){ 0 };
 
-    for (;;) {
-      // Compute shard coord and local-inner-coord for this chunk.
-      uint64_t shard_coord[DAMACY_MAX_RANK];
-      uint64_t local_inner[DAMACY_MAX_RANK];
-      for (uint8_t d = 0; d < meta.rank; ++d) {
-        shard_coord[d] = chunk_coord[d] / inner_per_shard_dim[d];
-        local_inner[d] = chunk_coord[d] % inner_per_shard_dim[d];
-      }
-
-      // Same shard as cached?
-      int same_shard = have_cached_shard;
-      for (uint8_t d = 0; d < meta.rank && same_shard; ++d)
-        if (shard_coord[d] != cached_shard_coord[d])
-          same_shard = 0;
-
-      if (!same_shard) {
-        // Crossing into a new shard: drop the prior pin (if any)
-        // before acquiring the next one. release is NULL-safe.
-        zarr_shard_cache_release(self->cfg.shard_cache, active_pin);
-        active_pin = (struct zarr_shard_pin){ 0 };
-
-        enum damacy_status shard_status =
-          zarr_shard_cache_get(self->cfg.shard_cache,
-                               sample->uri,
-                               &meta,
-                               shard_coord,
-                               &active_pin,
-                               &ctx.shard_entries,
-                               &ctx.n_shard_entries);
-        if (shard_status == DAMACY_NOTFOUND) {
-          // Shard file absent: emit fill chunks for the whole shard.
-          ctx.shard_missing = 1;
-          ctx.shard_entries = NULL;
-          ctx.n_shard_entries = 0;
-          ctx.interned_path = NULL;
-        } else if (shard_status != DAMACY_OK) {
-          status = shard_status;
-          goto Cleanup;
-        } else {
-          ctx.shard_missing = 0;
-          if (zarr_shard_path_build(
-                &self->path_sb, sample->uri, shard_coord, meta.rank)) {
-            status = DAMACY_OOM;
-            goto Cleanup;
-          }
-          // path_sb is reused across iterations; intern produces a
-          // stable pointer shared by every read_op into this shard.
-          ctx.interned_path =
-            path_intern_acquire(out->paths, strbuf_cstr(&self->path_sb));
-          if (!ctx.interned_path) {
-            status = DAMACY_OOM;
-            goto Cleanup;
-          }
-        }
-        for (uint8_t d = 0; d < meta.rank; ++d)
-          cached_shard_coord[d] = shard_coord[d];
-        have_cached_shard = 1;
-      }
-
-      enum damacy_status emit_status =
-        emit_chunk(&ctx, chunk_coord, local_inner, out);
-      if (emit_status != DAMACY_OK) {
-        status = emit_status;
+      enum damacy_status shard_status =
+        zarr_shard_cache_get(self->cfg.shard_cache,
+                             sample->uri,
+                             &meta,
+                             shard_coord,
+                             &active_pin,
+                             &ctx.shard_entries,
+                             &ctx.n_shard_entries);
+      if (shard_status == DAMACY_NOTFOUND) {
+        ctx.shard_missing = 1;
+        ctx.shard_entries = NULL;
+        ctx.n_shard_entries = 0;
+        ctx.interned_path = NULL;
+      } else if (shard_status != DAMACY_OK) {
+        status = shard_status;
         goto Cleanup;
+      } else {
+        ctx.shard_missing = 0;
+        if (zarr_shard_path_build(
+              &self->path_sb, sample->uri, shard_coord, meta.rank)) {
+          status = DAMACY_OOM;
+          goto Cleanup;
+        }
+        ctx.interned_path =
+          path_intern_acquire(out->paths, strbuf_cstr(&self->path_sb));
+        if (!ctx.interned_path) {
+          status = DAMACY_OOM;
+          goto Cleanup;
+        }
       }
 
-      // Advance row-major.
-      int finished = 1;
-      for (int d = (int)meta.rank - 1; d >= 0; --d) {
-        chunk_coord[d]++;
-        if (chunk_coord[d] < chunk_hi[d]) {
-          finished = 0;
-          break;
-        }
-        chunk_coord[d] = chunk_lo[d];
+      uint64_t chunk_beg_in_shard[DAMACY_MAX_RANK];
+      uint64_t chunk_end_in_shard[DAMACY_MAX_RANK];
+      for (uint8_t d = 0; d < meta.rank; ++d) {
+        uint64_t s_beg = shard_coord[d] * inner_per_shard_dim[d];
+        uint64_t s_end = s_beg + inner_per_shard_dim[d];
+        chunk_beg_in_shard[d] = s_beg > chunk_beg[d] ? s_beg : chunk_beg[d];
+        chunk_end_in_shard[d] = s_end < chunk_end[d] ? s_end : chunk_end[d];
       }
-      if (finished)
-        break;
+
+      uint64_t chunk_coord[DAMACY_MAX_RANK];
+      for (uint8_t d = 0; d < meta.rank; ++d)
+        chunk_coord[d] = chunk_beg_in_shard[d];
+
+      for (;;) {
+        uint64_t local_inner[DAMACY_MAX_RANK];
+        for (uint8_t d = 0; d < meta.rank; ++d)
+          local_inner[d] = chunk_coord[d] % inner_per_shard_dim[d];
+
+        enum damacy_status emit_status =
+          emit_chunk(&ctx, chunk_coord, local_inner, out);
+        if (emit_status != DAMACY_OK) {
+          status = emit_status;
+          goto Cleanup;
+        }
+
+        int finished = 1;
+        for (int d = (int)meta.rank - 1; d >= 0; --d) {
+          chunk_coord[d]++;
+          if (chunk_coord[d] < chunk_end_in_shard[d]) {
+            finished = 0;
+            break;
+          }
+          chunk_coord[d] = chunk_beg_in_shard[d];
+        }
+        if (finished)
+          break;
+      }
     }
   }
 
