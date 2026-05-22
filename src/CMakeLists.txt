@@ -79,7 +79,7 @@ add_src_lib(damacy_config SOURCES damacy_config.h damacy_config.c
 )
 
 add_src_lib(lookahead SOURCES lookahead/lookahead.h lookahead/lookahead.c
-    LINKS log
+    LINKS log platform
 )
 
 add_src_lib(prefetch_cache SOURCES prefetch/prefetch_cache.h prefetch/prefetch_cache.c

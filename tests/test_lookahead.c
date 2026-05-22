@@ -1,5 +1,6 @@
 #include "expect.h"
 #include "lookahead/lookahead.h"
+#include "platform/platform.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -117,6 +118,105 @@ test_wraparound(void)
   return 0;
 }
 
+static int
+test_push_with_batch_round_trip(void)
+{
+  struct damacy_lookahead la = { 0 };
+  EXPECT(lookahead_init(&la, 4) == 0);
+  struct damacy_sample s = mk_sample("k", 0, 1);
+  EXPECT(lookahead_push_with_batch(&la, &s, 42) == 0);
+
+  struct damacy_sample_slot out = { 0 };
+  EXPECT(lookahead_pop_blocking(&la, &out) == 1);
+  EXPECT(strcmp(out.uri, "k") == 0);
+  EXPECT(out.batch_id == 42);
+  sample_slot_clear(&out);
+
+  lookahead_destroy(&la);
+  return 0;
+}
+
+static int
+test_pop_blocking_returns_existing_after_stop(void)
+{
+  struct damacy_lookahead la = { 0 };
+  EXPECT(lookahead_init(&la, 4) == 0);
+  struct damacy_sample s = mk_sample("k", 0, 1);
+  EXPECT(lookahead_push_with_batch(&la, &s, 7) == 0);
+
+  lookahead_signal_stop(&la);
+
+  struct damacy_sample_slot out = { 0 };
+  EXPECT(lookahead_pop_blocking(&la, &out) == 1);
+  EXPECT(out.batch_id == 7);
+  sample_slot_clear(&out);
+
+  EXPECT(lookahead_pop_blocking(&la, &out) == 0);
+
+  lookahead_destroy(&la);
+  return 0;
+}
+
+struct wake_ctx
+{
+  struct damacy_lookahead* la;
+};
+
+static void
+push_after_delay(void* arg)
+{
+  struct wake_ctx* ctx = (struct wake_ctx*)arg;
+  platform_sleep_ns(10 * 1000 * 1000);
+  struct damacy_sample s = mk_sample("late", 0, 1);
+  lookahead_push_with_batch(ctx->la, &s, 99);
+}
+
+static int
+test_pop_blocking_wakes_on_push(void)
+{
+  struct damacy_lookahead la = { 0 };
+  EXPECT(lookahead_init(&la, 4) == 0);
+
+  struct wake_ctx ctx = { .la = &la };
+  struct platform_thread* t = platform_thread_start(push_after_delay, &ctx);
+  EXPECT(t);
+
+  struct damacy_sample_slot out = { 0 };
+  EXPECT(lookahead_pop_blocking(&la, &out) == 1);
+  EXPECT(strcmp(out.uri, "late") == 0);
+  EXPECT(out.batch_id == 99);
+  sample_slot_clear(&out);
+
+  platform_thread_join(t);
+  lookahead_destroy(&la);
+  return 0;
+}
+
+static void
+pop_in_thread(void* arg)
+{
+  struct damacy_lookahead* la = (struct damacy_lookahead*)arg;
+  struct damacy_sample_slot out = { 0 };
+  (void)lookahead_pop_blocking(la, &out);
+  sample_slot_clear(&out);
+}
+
+static int
+test_signal_stop_unblocks_empty_pop(void)
+{
+  struct damacy_lookahead la = { 0 };
+  EXPECT(lookahead_init(&la, 4) == 0);
+
+  struct platform_thread* t = platform_thread_start(pop_in_thread, &la);
+  EXPECT(t);
+  platform_sleep_ns(5 * 1000 * 1000);
+  lookahead_signal_stop(&la);
+  platform_thread_join(t);
+
+  lookahead_destroy(&la);
+  return 0;
+}
+
 int
 main(void)
 {
@@ -125,6 +225,10 @@ main(void)
   RUN(test_full_returns_1);
   RUN(test_destroy_frees);
   RUN(test_wraparound);
+  RUN(test_push_with_batch_round_trip);
+  RUN(test_pop_blocking_returns_existing_after_stop);
+  RUN(test_pop_blocking_wakes_on_push);
+  RUN(test_signal_stop_unblocks_empty_pop);
   printf("all lookahead tests passed\n");
   return 0;
 }
