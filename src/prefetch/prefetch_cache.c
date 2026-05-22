@@ -46,7 +46,11 @@ struct prefetch_cache
   uint64_t watermark;
   uint32_t generation_counter;
 
+  // Stable slot indices: eviction must not move a slot, or live handles to
+  // siblings misroute.
   struct prefetch_slot** active;
+  uint32_t* free_list;
+  uint32_t n_free;
   uint32_t n_active;
   uint32_t capacity;
 
@@ -127,8 +131,8 @@ gate_dec_pending(struct prefetch_gate* g)
   atomic_fetch_sub_explicit(&g->state, 1, memory_order_acq_rel);
 }
 
-static void
-gate_set_error(struct prefetch_gate* g)
+void
+prefetch_gate_set_error(struct prefetch_gate* g)
 {
   if (!g)
     return;
@@ -174,7 +178,7 @@ slot_release_waiters(struct prefetch_slot* s, int errored)
 {
   for (uint32_t i = 0; i < s->n_waiters; ++i) {
     if (errored)
-      gate_set_error(slot_waiter(s, i));
+      prefetch_gate_set_error(slot_waiter(s, i));
     gate_dec_pending(slot_waiter(s, i));
   }
   s->n_waiters = 0;
@@ -194,11 +198,9 @@ static void
 active_remove(struct prefetch_cache* c, struct prefetch_slot* s)
 {
   uint32_t i = s->active_idx;
+  c->active[i] = NULL;
+  c->free_list[c->n_free++] = i;
   c->n_active--;
-  if (i != c->n_active) {
-    c->active[i] = c->active[c->n_active];
-    c->active[i]->active_idx = i;
-  }
   s->active_idx = ACTIVE_IDX_UNLINKED;
 }
 
@@ -260,6 +262,11 @@ prefetch_cache_create(const struct prefetch_cache_config* cfg)
   self->active =
     (struct prefetch_slot**)calloc(cfg->capacity, sizeof(*self->active));
   CHECK(Error, self->active);
+  self->free_list = (uint32_t*)malloc(cfg->capacity * sizeof(*self->free_list));
+  CHECK(Error, self->free_list);
+  for (uint32_t i = 0; i < cfg->capacity; ++i)
+    self->free_list[i] = cfg->capacity - 1 - i;
+  self->n_free = cfg->capacity;
 
   struct lru_ops lru_ops = {
     .eq = lru_slot_eq,
@@ -284,7 +291,7 @@ prefetch_cache_destroy(struct prefetch_cache* self)
   // Caller must ensure no fetches are in flight. Release any pins
   // we still hold so lru_destroy can actually free.
   if (self->active) {
-    for (uint32_t i = 0; i < self->n_active; ++i) {
+    for (uint32_t i = 0; i < self->capacity; ++i) {
       struct prefetch_slot* s = self->active[i];
       if (s && s->lru_ent) {
         lru_entry_release(s->lru_ent);
@@ -294,6 +301,7 @@ prefetch_cache_destroy(struct prefetch_cache* self)
   }
   lru_destroy(self->idx);
   free(self->active);
+  free(self->free_list);
   platform_mutex_free(self->lock);
   free(self);
 }
@@ -335,7 +343,7 @@ prefetch_cache_request(struct prefetch_cache* self,
         return PREFETCH_HANDLE_NONE;
       }
     } else if (s->state == PREFETCH_STATE_ERROR) {
-      gate_set_error(gate);
+      prefetch_gate_set_error(gate);
     }
 
     struct prefetch_handle h = make_handle(s->active_idx, s->generation);
@@ -374,8 +382,10 @@ prefetch_cache_request(struct prefetch_cache* self,
   s->lru_ent = ent;
   lru_entry_acquire_locked(ent);
 
-  s->active_idx = self->n_active;
-  self->active[self->n_active++] = s;
+  uint32_t idx = self->free_list[--self->n_free];
+  s->active_idx = idx;
+  self->active[idx] = s;
+  self->n_active++;
   self->pending_count++;
 
   // First waiter uses inline storage; can't fail.
@@ -473,7 +483,7 @@ resolve_handle(const struct prefetch_cache* c, struct prefetch_handle h)
   if (h.slot == 0)
     return NULL;
   uint32_t idx = h.slot - 1;
-  if (idx >= c->n_active)
+  if (idx >= c->capacity)
     return NULL;
   struct prefetch_slot* s = c->active[idx];
   if (!s || s->generation != h.generation)
@@ -559,9 +569,9 @@ prefetch_cache_advance_watermark(struct prefetch_cache* self,
   }
   self->watermark = new_watermark;
   // Release pins; lru defers eviction until the slots are needed.
-  for (uint32_t i = 0; i < self->n_active; ++i) {
+  for (uint32_t i = 0; i < self->capacity; ++i) {
     struct prefetch_slot* s = self->active[i];
-    if (s->max_batch_id < new_watermark && s->lru_ent) {
+    if (s && s->max_batch_id < new_watermark && s->lru_ent) {
       lru_entry_release(s->lru_ent);
       s->lru_ent = NULL;
     }
