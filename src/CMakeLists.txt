@@ -161,6 +161,7 @@ endif()
 # Zarr v3 metadata + shard-index parsers (cache-layer building blocks).
 add_src_lib(zarr SOURCES zarr/zarr_metadata.h zarr/zarr_metadata.c
     zarr/zarr_shard_index.h zarr/zarr_shard_index.c
+    zarr/sample_shard_iterator.h zarr/sample_shard_iterator.c
     LINKS dtype json strbuf crc32c log
 )
 
