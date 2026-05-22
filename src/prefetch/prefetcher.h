@@ -54,6 +54,7 @@ extern "C"
   struct prefetcher_ready
   {
     enum prefetcher_sample_state state; // READY or ERROR
+    int err_code;                       // damacy_status when state == ERROR
     char* uri;
     struct damacy_aabb aabb;
     uint64_t batch_id;

@@ -16,6 +16,7 @@
 struct prefetcher_slot
 {
   enum prefetcher_sample_state state;
+  int err_code;
   char* uri;
   struct damacy_aabb aabb;
   uint64_t batch_id;
@@ -143,12 +144,11 @@ slot_active(const struct prefetcher_slot* s)
 }
 
 static void
-fail_slot(struct prefetcher* p, struct prefetcher_slot* s)
+fail_slot(struct prefetcher* p, struct prefetcher_slot* s, int err_code)
 {
-  // Catches prefetcher-origin errors that bypass the cache (alloc fail,
-  // saturation).
   prefetch_gate_set_error(s->gate);
   s->state = PREFETCHER_ERROR;
+  s->err_code = err_code ? err_code : DAMACY_INVAL;
   p->errored++;
 }
 
@@ -177,35 +177,44 @@ advance_from_meta(struct prefetcher* p, struct prefetcher_slot* s)
     s->n_shards = 0;
     s->h_layout = prefetch_cache_request(
       p->clc, hash_fnv1a_str(s->uri), s->uri, s->batch_id, s->gate);
-    CHECK(Bad, prefetch_handle_valid(s->h_layout));
+    if (!prefetch_handle_valid(s->h_layout)) {
+      err = DAMACY_OOM;
+      goto Bad;
+    }
     s->state = PREFETCHER_PENDING_CHUNK_LAYOUT;
     return;
   }
 
   s->h_shards =
     (struct prefetch_handle*)calloc((size_t)n, sizeof(*s->h_shards));
-  CHECK(Bad, s->h_shards);
+  if (!s->h_shards) {
+    err = DAMACY_OOM;
+    goto Bad;
+  }
 
   struct shard_index_key probe = { .uri = s->uri, .rank = meta->rank };
   uint32_t i = 0;
   while (sample_shard_iterator_next(&it, probe.shard_coord)) {
     s->h_shards[i] = prefetch_cache_request(
       p->sic, shard_index_key_hash(&probe), &probe, s->batch_id, s->gate);
-    CHECK(Bad, prefetch_handle_valid(s->h_shards[i]));
+    if (!prefetch_handle_valid(s->h_shards[i])) {
+      err = DAMACY_OOM;
+      goto Bad;
+    }
     i++;
   }
   s->n_shards = (uint32_t)n;
   s->state = PREFETCHER_PENDING_SHARD_INDEX;
   return;
 Bad:
-  fail_slot(p, s);
+  fail_slot(p, s, err);
 }
 
 static void
 advance_from_shard(struct prefetcher* p, struct prefetcher_slot* s)
 {
+  int err = 0;
   for (uint32_t i = 0; i < s->n_shards; ++i) {
-    int err = 0;
     enum prefetch_state st =
       prefetch_cache_query(p->sic, s->h_shards[i], NULL, &err);
     if (st == PREFETCH_STATE_PENDING)
@@ -216,11 +225,14 @@ advance_from_shard(struct prefetcher* p, struct prefetcher_slot* s)
 
   s->h_layout = prefetch_cache_request(
     p->clc, hash_fnv1a_str(s->uri), s->uri, s->batch_id, s->gate);
-  CHECK(Bad, prefetch_handle_valid(s->h_layout));
+  if (!prefetch_handle_valid(s->h_layout)) {
+    err = DAMACY_OOM;
+    goto Bad;
+  }
   s->state = PREFETCHER_PENDING_CHUNK_LAYOUT;
   return;
 Bad:
-  fail_slot(p, s);
+  fail_slot(p, s, err);
 }
 
 static void
@@ -237,7 +249,7 @@ advance_from_layout(struct prefetcher* p, struct prefetcher_slot* s)
   p->ready++;
   return;
 Bad:
-  fail_slot(p, s);
+  fail_slot(p, s, err);
 }
 
 static void
@@ -465,6 +477,7 @@ pop_terminal_slot_locked(struct prefetcher* self,
       continue;
     *out = (struct prefetcher_ready){
       .state = s->state,
+      .err_code = s->err_code,
       .uri = s->uri,
       .aabb = s->aabb,
       .batch_id = s->batch_id,

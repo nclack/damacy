@@ -327,6 +327,7 @@ test_pop_ready_surfaces_error_state(void)
   struct prefetcher_ready r = { 0 };
   EXPECT(prefetcher_pop_ready(fx.p, &r) == 1);
   EXPECT(r.state == PREFETCHER_ERROR);
+  EXPECT(r.err_code != 0);
   EXPECT(strcmp(r.uri, "missing") == 0);
   prefetcher_ready_free(&r);
 
