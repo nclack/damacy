@@ -40,6 +40,8 @@ extern "C"
   };
 
   struct prefetcher* prefetcher_create(const struct prefetcher_config* cfg);
+  // Caller must flush the cache executor before destroy; otherwise fetch
+  // workers may still touch slots the caches are about to free.
   void prefetcher_destroy(struct prefetcher* p);
 
   int prefetcher_start(struct prefetcher* p);
