@@ -59,8 +59,9 @@ mk_cfg(const char* root, uint32_t batch_size, int64_t sy, int64_t sx)
     .device = -1,
     .tuning = {
       .n_io_threads = 1,
-      .n_zarrs_meta_cache = 4,
-      .n_shards_meta_cache = 4,
+      .n_array_meta_cache = 4,
+      .n_shard_index_cache = 4,
+      .n_chunk_layout_cache = 4,
       .max_gpu_memory_bytes = 1ull << 30,
     },
   };
@@ -294,8 +295,9 @@ test_multi_wave_per_batch(void)
     .device = -1,
     .tuning = {
       .n_io_threads = 1,
-      .n_zarrs_meta_cache = 4,
-      .n_shards_meta_cache = 4,
+      .n_array_meta_cache = 4,
+      .n_shard_index_cache = 4,
+      .n_chunk_layout_cache = 4,
       .max_chunk_uncompressed_bytes = 4ull << 10,
       // Resolver minimum so the 16-chunk batch spills into ≥2 waves.
       .max_gpu_memory_bytes = 116ull << 20,
@@ -371,8 +373,9 @@ test_wave_grows_substream_cap(void)
     .device = -1,
     .tuning = {
       .n_io_threads = 1,
-      .n_zarrs_meta_cache = 4,
-      .n_shards_meta_cache = 4,
+      .n_array_meta_cache = 4,
+      .n_shard_index_cache = 4,
+      .n_chunk_layout_cache = 4,
       .max_chunk_uncompressed_bytes = 1ull << 20,
       .max_gpu_memory_bytes = 1ull << 30,
     },
@@ -447,8 +450,9 @@ test_grow_inside_tight_budget(void)
     .device = -1,
     .tuning = {
       .n_io_threads = 1,
-      .n_zarrs_meta_cache = 4,
-      .n_shards_meta_cache = 4,
+      .n_array_meta_cache = 4,
+      .n_shard_index_cache = 4,
+      .n_chunk_layout_cache = 4,
       .max_chunk_uncompressed_bytes = 4ull << 10,
       .max_gpu_memory_bytes = 120ull << 20,
     },
@@ -505,8 +509,9 @@ test_layout_probe_avoids_decoder_grow(void)
     .device = -1,
     .tuning = {
       .n_io_threads = 1,
-      .n_zarrs_meta_cache = 4,
-      .n_shards_meta_cache = 4,
+      .n_array_meta_cache = 4,
+      .n_shard_index_cache = 4,
+      .n_chunk_layout_cache = 4,
       .max_chunk_uncompressed_bytes = 4ull << 10,
       .max_gpu_memory_bytes = 120ull << 20,
     },

@@ -126,8 +126,9 @@ def _base_config(dtype: str | int | damacy.Dtype = "f32") -> Config:
         dtype=dtype,
         lookahead_batches=2,
         n_io_threads=1,
-        n_zarrs_meta_cache=4,
-        n_shards_meta_cache=4,
+        n_array_meta_cache=4,
+        n_shard_index_cache=4,
+        n_chunk_layout_cache=4,
         sample_shape=(8, 16),
         max_gpu_memory_bytes=1 << 30,
     )
@@ -168,7 +169,7 @@ def test_dtype_coerce():
 
 
 def test_invalid_config_raises_invalid_argument():
-    cfg = dataclasses.replace(_base_config(), n_zarrs_meta_cache=0)
+    cfg = dataclasses.replace(_base_config(), n_array_meta_cache=0)
     with pytest.raises(InvalidArgument) as excinfo:
         Pipeline(cfg)
     # The base class is still _native.DamacyError so legacy `except
@@ -460,8 +461,9 @@ def test_native_pipeline_rejects_out_of_range_enums(tiny_zarr):
             batch_size=1,
             lookahead_batches=2,
             n_io_threads=1,
-            n_zarrs_meta_cache=4,
-            n_shards_meta_cache=4,
+            n_array_meta_cache=4,
+            n_shard_index_cache=4,
+            n_chunk_layout_cache=4,
             dtype=_native.DTYPE_F32,
             max_chunk_uncompressed_bytes=0,
             max_gpu_memory_bytes=1 << 30,
@@ -868,7 +870,7 @@ def test_use_after_close_raises(tiny_zarr):
 
 def test_per_status_exceptions_share_base():
     # Cheap construction-time INVAL.
-    cfg = dataclasses.replace(_base_config(), n_zarrs_meta_cache=0)
+    cfg = dataclasses.replace(_base_config(), n_array_meta_cache=0)
     with pytest.raises(DamacyError) as excinfo:
         Pipeline(cfg)
     assert isinstance(excinfo.value, InvalidArgument)

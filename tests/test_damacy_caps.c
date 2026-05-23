@@ -63,8 +63,9 @@ mk_cfg(const char* root, uint32_t batch_size, int64_t sy, int64_t sx)
     .device = -1,
     .tuning = {
       .n_io_threads = 1,
-      .n_zarrs_meta_cache = 4,
-      .n_shards_meta_cache = 4,
+      .n_array_meta_cache = 4,
+      .n_shard_index_cache = 4,
+      .n_chunk_layout_cache = 4,
       .max_gpu_memory_bytes = 1ull << 30,
     },
   };
@@ -246,8 +247,9 @@ test_pool_reserve_fits_default_budget(void)
     .device = -1,
     .tuning = {
       .n_io_threads = 1,
-      .n_zarrs_meta_cache = 4,
-      .n_shards_meta_cache = 4,
+      .n_array_meta_cache = 4,
+      .n_shard_index_cache = 4,
+      .n_chunk_layout_cache = 4,
       .max_gpu_memory_bytes = 1ull << 30,
     },
   };
@@ -298,8 +300,9 @@ test_pool_exceeds_budget_rejected_at_create(void)
     .device = -1,
     .tuning = {
       .n_io_threads = 1,
-      .n_zarrs_meta_cache = 4,
-      .n_shards_meta_cache = 4,
+      .n_array_meta_cache = 4,
+      .n_shard_index_cache = 4,
+      .n_chunk_layout_cache = 4,
       .max_gpu_memory_bytes = 32ull << 20,
     },
   };

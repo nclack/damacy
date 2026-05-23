@@ -24,8 +24,9 @@ mk_cfg(uint32_t chunk_cap)
     .device = -1,
     .tuning = {
       .n_io_threads = 1,
-      .n_zarrs_meta_cache = 4,
-      .n_shards_meta_cache = 4,
+      .n_array_meta_cache = 4,
+      .n_shard_index_cache = 4,
+      .n_chunk_layout_cache = 4,
       .max_chunk_uncompressed_bytes = chunk_cap,
       .max_gpu_memory_bytes = 0,
     },
