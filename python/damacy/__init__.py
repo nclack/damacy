@@ -450,8 +450,9 @@ class Config:
         dtype: Destination dtype for assembled batches.
         lookahead_batches: User-side push-queue depth (>= 2).
         n_io_threads: IO worker threads (>= 1).
-        n_zarrs_meta_cache: LRU cap for zarr-metadata entries.
-        n_shards_meta_cache: LRU cap for shard-index entries.
+        n_array_meta_cache: LRU cap for zarr-metadata entries.
+        n_shard_index_cache: LRU cap for shard-index entries.
+        n_chunk_layout_cache: LRU cap for per-array blosc1 chunk-layout entries.
         max_chunk_uncompressed_bytes: Largest uncompressed chunk size
             the pipeline accepts; 0 selects the C default (512 KB).
         max_read_op_bytes: Cap on the size of a single coalesced
@@ -499,8 +500,9 @@ class Config:
     max_chunks_per_wave: int
     max_substreams_per_chunk: int
     n_io_threads: int
-    n_zarrs_meta_cache: int
-    n_shards_meta_cache: int
+    n_array_meta_cache: int
+    n_shard_index_cache: int
+    n_chunk_layout_cache: int
     sample_shape: tuple[int, ...]
     device: int | None
     pop_timeout_s: float | None
@@ -522,8 +524,9 @@ class Config:
         max_chunks_per_wave: int = 0,
         max_substreams_per_chunk: int = 0,
         n_io_threads: int = 4,
-        n_zarrs_meta_cache: int = 64,
-        n_shards_meta_cache: int = 256,
+        n_array_meta_cache: int = 64,
+        n_shard_index_cache: int = 256,
+        n_chunk_layout_cache: int = 64,
         device: int | None = None,
         pop_timeout_s: float | None = 30.0,
         enable_gds: bool | None = None,
@@ -592,8 +595,9 @@ class Config:
         set_(self, "max_chunks_per_wave", max_chunks_per_wave)
         set_(self, "max_substreams_per_chunk", max_substreams_per_chunk)
         set_(self, "n_io_threads", n_io_threads)
-        set_(self, "n_zarrs_meta_cache", n_zarrs_meta_cache)
-        set_(self, "n_shards_meta_cache", n_shards_meta_cache)
+        set_(self, "n_array_meta_cache", n_array_meta_cache)
+        set_(self, "n_shard_index_cache", n_shard_index_cache)
+        set_(self, "n_chunk_layout_cache", n_chunk_layout_cache)
         set_(self, "sample_shape", shape_t)
         set_(self, "device", device)
         set_(self, "pop_timeout_s", pop_timeout_s)
@@ -1007,8 +1011,9 @@ class Pipeline:
                 max_chunks_per_wave=config.max_chunks_per_wave,
                 max_substreams_per_chunk=config.max_substreams_per_chunk,
                 n_io_threads=config.n_io_threads,
-                n_zarrs_meta_cache=config.n_zarrs_meta_cache,
-                n_shards_meta_cache=config.n_shards_meta_cache,
+                n_array_meta_cache=config.n_array_meta_cache,
+                n_shard_index_cache=config.n_shard_index_cache,
+                n_chunk_layout_cache=config.n_chunk_layout_cache,
                 sample_shape=tuple(config.sample_shape),
                 device=-1 if config.device is None else int(config.device),
                 enable_gds=_gds_to_native(config.enable_gds),

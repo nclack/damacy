@@ -702,8 +702,9 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                          "max_chunk_uncompressed_bytes",
                          "max_gpu_memory_bytes",
                          "n_io_threads",
-                         "n_zarrs_meta_cache",
-                         "n_shards_meta_cache",
+                         "n_array_meta_cache",
+                         "n_shard_index_cache",
+                         "n_chunk_layout_cache",
                          "sample_shape",
                          "host_buffer_waves",
                          "max_chunks_per_wave",
@@ -721,8 +722,9 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   unsigned int max_chunk_uncompressed = 0;
   unsigned long long max_gpu_bytes = 0;
   unsigned int n_io = 4;
-  unsigned int n_zarrs_meta = 64;
-  unsigned int n_shards_meta = 256;
+  unsigned int n_array_meta = 64;
+  unsigned int n_shard_index = 256;
+  unsigned int n_chunk_layout = 64;
   PyObject* sample_shape_obj = NULL;
   unsigned int host_buffer_waves = 0;
   unsigned int max_chunks_per_wave = 0;
@@ -735,7 +737,7 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   int bypass_decode = 0;
   if (!PyArg_ParseTupleAndKeywords(args,
                                    kw,
-                                   "IIOIKIIIO|IIIKiiiip",
+                                   "IIOIKIIIIO|IIIKiiiip",
                                    kws,
                                    &batch_size,
                                    &lookahead,
@@ -743,8 +745,9 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                                    &max_chunk_uncompressed,
                                    &max_gpu_bytes,
                                    &n_io,
-                                   &n_zarrs_meta,
-                                   &n_shards_meta,
+                                   &n_array_meta,
+                                   &n_shard_index,
+                                   &n_chunk_layout,
                                    &sample_shape_obj,
                                    &host_buffer_waves,
                                    &max_chunks_per_wave,
@@ -788,8 +791,9 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
       .max_chunks_per_wave = (uint32_t)max_chunks_per_wave,
       .max_substreams_per_chunk = (uint32_t)max_substreams_per_chunk,
       .n_io_threads = n_io,
-      .n_zarrs_meta_cache = n_zarrs_meta,
-      .n_shards_meta_cache = n_shards_meta,
+      .n_array_meta_cache = n_array_meta,
+      .n_shard_index_cache = n_shard_index,
+      .n_chunk_layout_cache = n_chunk_layout,
       .numa_strategy = (enum damacy_numa_strategy)numa_strategy,
       .numa_node = numa_node,
       .enable_gds = (enum damacy_gds_mode)enable_gds,

@@ -295,7 +295,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   array_meta_fetcher_init(&self->array_meta_fetcher, self->store_host);
   {
     struct prefetch_cache_config amc_cfg = {
-      .capacity = cfg->tuning.n_zarrs_meta_cache,
+      .capacity = cfg->tuning.n_array_meta_cache,
       .max_probe = 16,
       .ops = &array_meta_ops,
       .fetcher = &self->array_meta_fetcher.base,
@@ -308,7 +308,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     &self->shard_index_fetcher, self->store_host, self->array_meta_cache);
   {
     struct prefetch_cache_config sic_cfg = {
-      .capacity = cfg->tuning.n_shards_meta_cache,
+      .capacity = cfg->tuning.n_shard_index_cache,
       .max_probe = 16,
       .ops = &shard_index_ops,
       .fetcher = &self->shard_index_fetcher.base,
@@ -324,7 +324,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
                             resolved_max_substreams_per_chunk);
   {
     struct prefetch_cache_config clc_cfg = {
-      .capacity = cfg->tuning.n_zarrs_meta_cache,
+      .capacity = cfg->tuning.n_chunk_layout_cache,
       .max_probe = 16,
       .ops = &chunk_layout_ops,
       .fetcher = &self->chunk_layout_fetcher.base,

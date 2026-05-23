@@ -125,8 +125,9 @@ extern "C"
 
     uint32_t n_io_threads;
 
-    uint32_t n_zarrs_meta_cache;
-    uint32_t n_shards_meta_cache;
+    uint32_t n_array_meta_cache;
+    uint32_t n_shard_index_cache;
+    uint32_t n_chunk_layout_cache;
 
     // AUTO resolves the GPU's host-NUMA node; DISABLED is a no-op;
     // PIN_TO forces `numa_node`.
