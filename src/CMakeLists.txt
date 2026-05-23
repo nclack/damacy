@@ -235,7 +235,9 @@ add_cuda_lib(assemble SOURCES assemble/assemble.h assemble/assemble.cu
 # (cuMem*, cuStream*, cuEvent*); the runtime API is only pulled in
 # transitively via decoder/assemble (nvcomp's headers + the kernel
 # launch in assemble.cu).
-add_cuda_lib(damacy SOURCES damacy.h damacy.c damacy_status.c
+add_cuda_lib(damacy
+    SOURCES damacy.h damacy_internal.h damacy.c damacy_lifecycle.c
+            damacy_status.c
     LINKS platform planner zarr_meta_cache zarr_shard_cache zarr store
           decoder assemble dtype log lookahead gpu_budget
           batch_pool wave_pool wave_budget damacy_stats damacy_config

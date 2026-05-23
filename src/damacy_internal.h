@@ -76,3 +76,12 @@ struct ctx_guard
 {
   int active;
 };
+
+enum damacy_status
+ctx_guard_enter(struct damacy* d, struct ctx_guard* g);
+
+void
+ctx_guard_exit(struct ctx_guard* g);
+
+int
+damacy_scheduler_step(void* arg);
