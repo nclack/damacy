@@ -665,10 +665,12 @@ class Stats:
     bind_wait: Metric
     pop_wait: Metric
     flush_wait: Metric
-    zarr_meta_hits: int
-    zarr_meta_misses: int
-    shard_idx_hits: int
-    shard_idx_misses: int
+    array_meta_hits: int
+    array_meta_misses: int
+    shard_index_hits: int
+    shard_index_misses: int
+    chunk_layout_hits: int
+    chunk_layout_misses: int
     batches_emitted: int
     batches_truncated: int
     waves_emitted: int
@@ -693,10 +695,12 @@ class Stats:
             bind_wait=m(st["bind_wait"]),
             pop_wait=m(st["pop_wait"]),
             flush_wait=m(st["flush_wait"]),
-            zarr_meta_hits=st["zarr_meta_hits"],
-            zarr_meta_misses=st["zarr_meta_misses"],
-            shard_idx_hits=st["shard_idx_hits"],
-            shard_idx_misses=st["shard_idx_misses"],
+            array_meta_hits=st["array_meta_hits"],
+            array_meta_misses=st["array_meta_misses"],
+            shard_index_hits=st["shard_index_hits"],
+            shard_index_misses=st["shard_index_misses"],
+            chunk_layout_hits=st["chunk_layout_hits"],
+            chunk_layout_misses=st["chunk_layout_misses"],
             batches_emitted=st["batches_emitted"],
             batches_truncated=st["batches_truncated"],
             waves_emitted=st["waves_emitted"],

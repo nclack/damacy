@@ -1034,10 +1034,12 @@ Pipeline_stats(PipelineObj* self, PyObject* Py_UNUSED(ignored))
     const char* name;
     unsigned long long val;
   } counters[] = {
-    { "zarr_meta_hits", st.zarr_meta_hits },
-    { "zarr_meta_misses", st.zarr_meta_misses },
-    { "shard_idx_hits", st.shard_idx_hits },
-    { "shard_idx_misses", st.shard_idx_misses },
+    { "array_meta_hits", st.array_meta.hits },
+    { "array_meta_misses", st.array_meta.misses },
+    { "shard_index_hits", st.shard_index.hits },
+    { "shard_index_misses", st.shard_index.misses },
+    { "chunk_layout_hits", st.chunk_layout.hits },
+    { "chunk_layout_misses", st.chunk_layout.misses },
     { "batches_emitted", st.batches_emitted },
     { "batches_truncated", st.batches_truncated },
     { "waves_emitted", st.waves_emitted },
