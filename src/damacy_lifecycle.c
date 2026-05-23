@@ -12,6 +12,16 @@
 
 #include <stdlib.h>
 
+static int
+damacy_io_exec_post(struct prefetch_executor* e,
+                    void (*fn)(void*),
+                    void* ctx,
+                    void (*ctx_free)(void*))
+{
+  struct damacy* d = container_of(e, struct damacy, io_exec);
+  return io_queue_post(d->prefetch_io_q, fn, ctx, ctx_free);
+}
+
 // --- ctx guard ------------------------------------------------------------
 
 enum damacy_status
@@ -52,6 +62,21 @@ destroy_inner(struct damacy* self, int cuda_skip)
   // Stop the worker first so its accesses retire before we free.
   scheduler_destroy(self->sched);
   self->sched = NULL;
+
+  // Prefetcher joins its worker (and the cache-executor io_queue's
+  // workers via prefetcher_stop → lookahead signal). Must precede the
+  // prefetch caches and io_queue teardown so no in-flight fetch
+  // touches freed state.
+  prefetcher_destroy(self->pf);
+  self->pf = NULL;
+  prefetch_cache_destroy(self->clc);
+  self->clc = NULL;
+  prefetch_cache_destroy(self->sic);
+  self->sic = NULL;
+  prefetch_cache_destroy(self->amc);
+  self->amc = NULL;
+  io_queue_destroy(self->prefetch_io_q);
+  self->prefetch_io_q = NULL;
 
   wave_pool_destroy(&self->wave_pool, cuda_skip);
 
@@ -276,6 +301,50 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     zarr_shard_cache_create(self->store_host, cfg->tuning.n_shards_meta_cache);
   CHECK(Fail, self->shard_cache);
 
+  self->prefetch_io_q = io_queue_create(2, &self->numa);
+  CHECK(Fail, self->prefetch_io_q);
+  self->io_exec.post = damacy_io_exec_post;
+  array_meta_fetcher_init(&self->amf, self->store_host);
+  {
+    struct prefetch_cache_config amc_cfg = {
+      .capacity = cfg->tuning.n_zarrs_meta_cache,
+      .max_probe = 16,
+      .ops = &array_meta_ops,
+      .fetcher = &self->amf.base,
+      .executor = &self->io_exec,
+    };
+    self->amc = prefetch_cache_create(&amc_cfg);
+    CHECK(Fail, self->amc);
+  }
+  shard_index_fetcher_init(&self->sif, self->store_host, self->amc);
+  {
+    struct prefetch_cache_config sic_cfg = {
+      .capacity = cfg->tuning.n_shards_meta_cache,
+      .max_probe = 16,
+      .ops = &shard_index_ops,
+      .fetcher = &self->sif.base,
+      .executor = &self->io_exec,
+    };
+    self->sic = prefetch_cache_create(&sic_cfg);
+    CHECK(Fail, self->sic);
+  }
+  chunk_layout_fetcher_init(&self->clf,
+                            self->store_host,
+                            self->amc,
+                            self->sic,
+                            resolved_max_substreams_per_chunk);
+  {
+    struct prefetch_cache_config clc_cfg = {
+      .capacity = cfg->tuning.n_zarrs_meta_cache,
+      .max_probe = 16,
+      .ops = &chunk_layout_ops,
+      .fetcher = &self->clf.base,
+      .executor = &self->io_exec,
+    };
+    self->clc = prefetch_cache_create(&clc_cfg);
+    CHECK(Fail, self->clc);
+  }
+
   for (int b = 0; b < 2; ++b)
     CHECK(Fail,
           batch_slot_init(&self->batch_pool.slots[b], cfg->batch_size) == 0);
@@ -321,6 +390,19 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   CHECK(Fail,
         lookahead_init(&self->lookahead,
                        cfg->lookahead_batches * cfg->batch_size) == 0);
+
+  {
+    struct prefetcher_config pf_cfg = {
+      .lookahead = &self->lookahead,
+      .array_meta_cache = self->amc,
+      .shard_index_cache = self->sic,
+      .chunk_layout_cache = self->clc,
+      .capacity = cfg->lookahead_batches * cfg->batch_size,
+      .batch_capacity = cfg->lookahead_batches + 2,
+    };
+    self->pf = prefetcher_create(&pf_cfg);
+    CHECK(Fail, self->pf);
+  }
 
   self->batch_samples = (struct damacy_sample_slot*)calloc(
     cfg->batch_size, sizeof(struct damacy_sample_slot));

@@ -242,5 +242,7 @@ add_cuda_lib(damacy
     LINKS platform planner zarr_meta_cache zarr_shard_cache zarr store
           decoder assemble dtype log lookahead gpu_budget
           batch_pool wave_pool wave_budget damacy_stats damacy_config
-          damacy_nvtx strbuf scheduler CUDA::cuda_driver
+          damacy_nvtx strbuf scheduler io_queue
+          prefetch_cache prefetcher array_meta shard_index chunk_layout
+          CUDA::cuda_driver
 )

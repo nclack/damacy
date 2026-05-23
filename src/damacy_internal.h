@@ -3,9 +3,15 @@
 #include "batch_pool/batch_pool.h"
 #include "damacy.h"
 #include "gpu_budget/gpu_budget.h"
+#include "io_queue/io_queue.h"
 #include "lookahead/lookahead.h"
 #include "numa/numa.h"
 #include "planner/planner.h"
+#include "prefetch/array_meta.h"
+#include "prefetch/chunk_layout.h"
+#include "prefetch/prefetch_cache.h"
+#include "prefetch/prefetcher.h"
+#include "prefetch/shard_index.h"
 #include "scheduler/scheduler.h"
 #include "store/store.h"
 #include "wave/wave_pool.h"
@@ -48,6 +54,18 @@ struct damacy
   struct zarr_meta_cache* meta_cache;
   struct zarr_shard_cache* shard_cache;
   struct planner* planner;
+
+  // Dedicated io_queue isolates metadata reads from the store's bulk
+  // chunk I/O so they can't head-of-line block decode.
+  struct io_queue* prefetch_io_q;
+  struct prefetch_executor io_exec;
+  struct array_meta_fetcher amf;
+  struct shard_index_fetcher sif;
+  struct chunk_layout_fetcher clf;
+  struct prefetch_cache* amc;
+  struct prefetch_cache* sic;
+  struct prefetch_cache* clc;
+  struct prefetcher* pf;
 
   struct damacy_lookahead lookahead;
   struct damacy_batch_pool batch_pool;
