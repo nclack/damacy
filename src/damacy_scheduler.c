@@ -19,7 +19,7 @@ kick_peel_into_free_slots(struct damacy* self, int* changed)
       if (free_slot < 0)
         break;
       if (!prefetcher_batch_full_ready(
-            self->pf, self->next_batch_id, self->cfg.batch_size))
+            self->prefetcher, self->next_batch_id, self->cfg.batch_size))
         break;
       enum damacy_status s =
         plan_reserve(self, (uint16_t)free_slot, self->cfg.batch_size);

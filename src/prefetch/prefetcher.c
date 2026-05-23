@@ -41,10 +41,10 @@ struct prefetcher_batch_entry
 
 struct prefetcher
 {
-  struct damacy_lookahead* la;
-  struct prefetch_cache* amc;
-  struct prefetch_cache* sic;
-  struct prefetch_cache* clc;
+  struct damacy_lookahead* lookahead;
+  struct prefetch_cache* array_meta_cache;
+  struct prefetch_cache* shard_index_cache;
+  struct prefetch_cache* chunk_layout_cache;
 
   struct prefetcher_slot* slots;
   uint32_t capacity;
@@ -160,7 +160,7 @@ advance_from_meta(struct prefetcher* p, struct prefetcher_slot* s)
   int err = 0;
   const void* value = NULL;
   enum prefetch_state st =
-    prefetch_cache_query(p->amc, s->h_meta, &value, &err);
+    prefetch_cache_query(p->array_meta_cache, s->h_meta, &value, &err);
   if (st == PREFETCH_STATE_PENDING)
     return;
   if (st == PREFETCH_STATE_ERROR)
@@ -178,7 +178,7 @@ advance_from_meta(struct prefetcher* p, struct prefetcher_slot* s)
   if (n == 0) {
     s->n_shards = 0;
     s->h_layout = prefetch_cache_request(
-      p->clc, hash_fnv1a_str(s->uri), s->uri, s->batch_id, s->gate);
+      p->chunk_layout_cache, hash_fnv1a_str(s->uri), s->uri, s->batch_id, s->gate);
     if (!prefetch_handle_valid(s->h_layout)) {
       err = DAMACY_OOM;
       goto Bad;
@@ -198,7 +198,7 @@ advance_from_meta(struct prefetcher* p, struct prefetcher_slot* s)
   uint32_t i = 0;
   while (sample_shard_iterator_next(&it, probe.shard_coord)) {
     s->h_shards[i] = prefetch_cache_request(
-      p->sic, shard_index_key_hash(&probe), &probe, s->batch_id, s->gate);
+      p->shard_index_cache, shard_index_key_hash(&probe), &probe, s->batch_id, s->gate);
     if (!prefetch_handle_valid(s->h_shards[i])) {
       // The K successful requests already registered the gate as a waiter
       // (for PENDING/new slots). Their cache workers will dec_pending when
@@ -223,7 +223,7 @@ advance_from_shard(struct prefetcher* p, struct prefetcher_slot* s)
   int err = 0;
   for (uint32_t i = 0; i < s->n_shards; ++i) {
     enum prefetch_state st =
-      prefetch_cache_query(p->sic, s->h_shards[i], NULL, &err);
+      prefetch_cache_query(p->shard_index_cache, s->h_shards[i], NULL, &err);
     if (st == PREFETCH_STATE_PENDING)
       return;
     if (st == PREFETCH_STATE_ERROR)
@@ -231,7 +231,7 @@ advance_from_shard(struct prefetcher* p, struct prefetcher_slot* s)
   }
 
   s->h_layout = prefetch_cache_request(
-    p->clc, hash_fnv1a_str(s->uri), s->uri, s->batch_id, s->gate);
+    p->chunk_layout_cache, hash_fnv1a_str(s->uri), s->uri, s->batch_id, s->gate);
   if (!prefetch_handle_valid(s->h_layout)) {
     err = DAMACY_OOM;
     goto Bad;
@@ -247,7 +247,7 @@ advance_from_layout(struct prefetcher* p, struct prefetcher_slot* s)
 {
   int err = 0;
   enum prefetch_state st =
-    prefetch_cache_query(p->clc, s->h_layout, NULL, &err);
+    prefetch_cache_query(p->chunk_layout_cache, s->h_layout, NULL, &err);
   if (st == PREFETCH_STATE_PENDING)
     return;
   if (st == PREFETCH_STATE_ERROR)
@@ -334,8 +334,11 @@ admit_locked(struct prefetcher* p,
     return;
   }
   struct prefetch_gate* gate = &be->gate;
-  struct prefetch_handle h = prefetch_cache_request(
-    p->amc, hash_fnv1a_str(popped->uri), popped->uri, popped->batch_id, gate);
+  struct prefetch_handle h = prefetch_cache_request(p->array_meta_cache,
+                                                    hash_fnv1a_str(popped->uri),
+                                                    popped->uri,
+                                                    popped->batch_id,
+                                                    gate);
   if (!prefetch_handle_valid(h)) {
     // ERROR slot retains the batch ref; pop releases it like a normal slot.
     emit_error_slot_locked(p, slot, popped, gate, DAMACY_OOM);
@@ -375,9 +378,9 @@ worker_fn(void* arg)
     // Timed wait when in-flight work needs periodic state advance; pure block
     // when admission is the only thing keeping us busy.
     if (slot && !has_in_flight)
-      popped_ok = lookahead_pop_blocking(p->la, &popped);
+      popped_ok = lookahead_pop_blocking(p->lookahead, &popped);
     else if (slot)
-      popped_ok = lookahead_pop_blocking_timeout(p->la, &popped, 1);
+      popped_ok = lookahead_pop_blocking_timeout(p->lookahead, &popped, 1);
     else
       // TODO(perf): replace polling with a condvar signaled from
       // pop_terminal_slot_locked when a slot frees up.
@@ -409,10 +412,10 @@ prefetcher_create(const struct prefetcher_config* cfg)
   self = (struct prefetcher*)malloc(sizeof(*self));
   CHECK(Error, self);
   *self = (struct prefetcher){
-    .la = cfg->lookahead,
-    .amc = cfg->array_meta_cache,
-    .sic = cfg->shard_index_cache,
-    .clc = cfg->chunk_layout_cache,
+    .lookahead = cfg->lookahead,
+    .array_meta_cache = cfg->array_meta_cache,
+    .shard_index_cache = cfg->shard_index_cache,
+    .chunk_layout_cache = cfg->chunk_layout_cache,
     .capacity = cfg->capacity,
     .batch_capacity = cfg->batch_capacity,
   };
@@ -473,7 +476,7 @@ prefetcher_stop(struct prefetcher* self)
   if (!was_started)
     return;
   atomic_store_explicit(&self->stop, 1, memory_order_release);
-  lookahead_signal_stop(self->la);
+  lookahead_signal_stop(self->lookahead);
   if (self->worker) {
     platform_thread_join(self->worker);
     self->worker = NULL;
@@ -485,7 +488,7 @@ prefetcher_drain(struct prefetcher* self)
 {
   CHECK(Bad, self);
   for (;;) {
-    if (lookahead_size(self->la) == 0 &&
+    if (lookahead_size(self->lookahead) == 0 &&
         atomic_load_explicit(&self->in_transit, memory_order_acquire) == 0) {
       int active = 0;
       platform_mutex_lock(self->lock);
@@ -676,9 +679,9 @@ prefetcher_advance_watermark(struct prefetcher* self, uint64_t watermark)
 {
   if (!self)
     return;
-  prefetch_cache_advance_watermark(self->amc, watermark);
-  prefetch_cache_advance_watermark(self->sic, watermark);
-  prefetch_cache_advance_watermark(self->clc, watermark);
+  prefetch_cache_advance_watermark(self->array_meta_cache, watermark);
+  prefetch_cache_advance_watermark(self->shard_index_cache, watermark);
+  prefetch_cache_advance_watermark(self->chunk_layout_cache, watermark);
 }
 
 void

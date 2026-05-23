@@ -79,14 +79,14 @@ struct damacy {
   struct zarr_shard_cache* shard_cache;
 
   /* NEW prefetch caches + fetchers (3 of each) */
-  struct array_meta_fetcher amf;
-  struct shard_index_fetcher sif;
-  struct chunk_layout_fetcher clf;
-  struct prefetch_cache* amc;
-  struct prefetch_cache* sic;
-  struct prefetch_cache* clc;
+  struct array_meta_fetcher array_meta_fetcher;
+  struct shard_index_fetcher shard_index_fetcher;
+  struct chunk_layout_fetcher chunk_layout_fetcher;
+  struct prefetch_cache* array_meta_cache;
+  struct prefetch_cache* shard_index_cache;
+  struct prefetch_cache* chunk_layout_cache;
   struct prefetch_executor io_exec;  // shim wrapping io_queue_post
-  struct prefetcher* pf;
+  struct prefetcher* prefetcher;
 
   /* unchanged tail */
   struct planner* planner;
@@ -179,42 +179,42 @@ self->shard_cache = zarr_shard_cache_create(self->store_host, cfg->tuning.n_shar
 
 /* new prefetch caches + fetchers */
 self->io_exec.post = damacy_io_exec_post;
-array_meta_fetcher_init(&self->amf, self->store_host);
-shard_index_fetcher_init(&self->sif, self->store_host, /* amc set below */ NULL);
-chunk_layout_fetcher_init(&self->clf, self->store_host, NULL, NULL,
+array_meta_fetcher_init(&self->array_meta_fetcher, self->store_host);
+shard_index_fetcher_init(&self->shard_index_fetcher, self->store_host, /* array_meta_cache set below */ NULL);
+chunk_layout_fetcher_init(&self->chunk_layout_fetcher, self->store_host, NULL, NULL,
                           resolved_max_substreams_per_chunk);
 
-self->amc = prefetch_cache_create(&(struct prefetch_cache_config){
+self->array_meta_cache = prefetch_cache_create(&(struct prefetch_cache_config){
   .capacity = cfg->tuning.n_zarrs_meta_cache,
   .max_probe = 16,
   .ops = &array_meta_ops,
-  .fetcher = &self->amf.base,
+  .fetcher = &self->array_meta_fetcher.base,
   .executor = &self->io_exec,
 });
-/* re-init sif/clf with the real cache pointers — fetcher_init zeroes the
+/* re-init shard_index_fetcher/chunk_layout_fetcher with the real cache pointers — fetcher_init zeroes the
    struct so we have to either: (a) split fetcher_init into _init + _wire_caches,
    or (b) construct caches first then call fetcher_init. (b) requires the
    chunk_layout_fetcher's array_meta_cache/shard_index_cache fields to be
    patched post-creation. Pick (b) — small static struct reset is cheap. */
-shard_index_fetcher_init(&self->sif, self->store_host, self->amc);
-self->sic = prefetch_cache_create(...);  /* shard_index_ops, &self->sif.base, ... */
-chunk_layout_fetcher_init(&self->clf, self->store_host, self->amc, self->sic,
+shard_index_fetcher_init(&self->shard_index_fetcher, self->store_host, self->array_meta_cache);
+self->shard_index_cache = prefetch_cache_create(...);  /* shard_index_ops, &self->shard_index_fetcher.base, ... */
+chunk_layout_fetcher_init(&self->chunk_layout_fetcher, self->store_host, self->array_meta_cache, self->shard_index_cache,
                           resolved_max_substreams_per_chunk);
-self->clc = prefetch_cache_create(...);  /* chunk_layout_ops, &self->clf.base, ... */
+self->chunk_layout_cache = prefetch_cache_create(...);  /* chunk_layout_ops, &self->chunk_layout_fetcher.base, ... */
 ```
 
 After scheduler_create (current line 709), add `prefetcher_create` +
 `prefetcher_start`:
 ```c
-self->pf = prefetcher_create(&(struct prefetcher_config){
+self->prefetcher = prefetcher_create(&(struct prefetcher_config){
   .lookahead = &self->lookahead,
-  .array_meta_cache = self->amc,
-  .shard_index_cache = self->sic,
-  .chunk_layout_cache = self->clc,
+  .array_meta_cache = self->array_meta_cache,
+  .shard_index_cache = self->shard_index_cache,
+  .chunk_layout_cache = self->chunk_layout_cache,
   .capacity = cfg->lookahead_batches * cfg->batch_size,
   .batch_capacity = cfg->lookahead_batches + 2,  // DAMACY_N_BATCH_SLOTS
 });
-prefetcher_start(self->pf);  /* must come before scheduler kicks */
+prefetcher_start(self->prefetcher);  /* must come before scheduler kicks */
 ```
 
 Order: prefetcher_create *before* scheduler_create so the worker can
@@ -227,17 +227,17 @@ prefetcher → caches) is cleanest if create mirrors it reversed.
 Insert after `scheduler_destroy` (current line 427) and before
 `wave_pool_destroy` (line 430):
 ```c
-prefetcher_destroy(self->pf);  /* signals lookahead stop, joins worker */
-self->pf = NULL;
+prefetcher_destroy(self->prefetcher);  /* signals lookahead stop, joins worker */
+self->prefetcher = NULL;
 ```
 
 Insert after `zarr_meta_cache_destroy` chain (current 441–444) — or
 better, replace with prefetch cache teardown in reverse dependency
 order:
 ```c
-prefetch_cache_destroy(self->clc); self->clc = NULL;
-prefetch_cache_destroy(self->sic); self->sic = NULL;
-prefetch_cache_destroy(self->amc); self->amc = NULL;
+prefetch_cache_destroy(self->chunk_layout_cache); self->chunk_layout_cache = NULL;
+prefetch_cache_destroy(self->shard_index_cache); self->shard_index_cache = NULL;
+prefetch_cache_destroy(self->array_meta_cache); self->array_meta_cache = NULL;
 zarr_shard_cache_destroy(self->shard_cache); self->shard_cache = NULL;  // PR-1 only
 zarr_meta_cache_destroy(self->meta_cache); self->meta_cache = NULL;     // PR-1 only
 ```
@@ -300,7 +300,7 @@ static enum damacy_status plan_reserve(struct damacy* self, uint16_t slot_idx,
 
   uint64_t head_batch_id = self->next_batch_id;  /* see note below */
   for (uint32_t i = 0; i < n_samples; ++i) {
-    if (!prefetcher_pop_ready_for_batch(self->pf, head_batch_id, &self->staging[i])) {
+    if (!prefetcher_pop_ready_for_batch(self->prefetcher, head_batch_id, &self->staging[i])) {
       /* shouldn't happen — scheduler's gate function already verified
          availability. If it does, return AGAIN and rewind. */
       for (uint32_t j = 0; j < i; ++j)
@@ -341,9 +341,9 @@ static enum damacy_status plan_reserve(struct damacy* self, uint16_t slot_idx,
 **Important:** `head_batch_id`. The scheduler picks "the next batch to
 plan"; that's `self->next_batch_id` (incremented in plan_commit when
 state becomes BATCH_FILLING). Two scheduler scenarios:
-- pf has batch_size ready slots for batch_id N → pop them, plan.
-- pf has slots for some N, M > N, but < batch_size for N → wait (no plan).
-- pf has full batch_size for N + partial for M → plan N only.
+- prefetcher has batch_size ready slots for batch_id N → pop them, plan.
+- prefetcher has slots for some N, M > N, but < batch_size for N → wait (no plan).
+- prefetcher has full batch_size for N + partial for M → plan N only.
 
 The "is N's batch ready" predicate becomes a new helper (see scheduler.c).
 
@@ -365,7 +365,7 @@ transfer; then `prefetcher_ready_free` doesn't double-free. Simpler than
 double-allocating.
 
 Additional in plan_commit on success: after `self->next_batch_id++`,
-call `prefetcher_advance_watermark(self->pf, self->next_batch_id)`. (The
+call `prefetcher_advance_watermark(self->prefetcher, self->next_batch_id)`. (The
 watermark is exclusive — entries with `max_batch_id < watermark` evict.
 So advancing to next_batch_id means batch IDs 0..next-1 are unpinned.
 For PR-1 with planner still using legacy caches, this is purely a
@@ -380,7 +380,7 @@ if (self->lookahead.size < self->cfg.batch_size) break;
 ```
 to
 ```c
-if (!prefetcher_batch_full_ready(self->pf, self->next_batch_id,
+if (!prefetcher_batch_full_ready(self->prefetcher, self->next_batch_id,
                                   self->cfg.batch_size)) break;
 ```
 
@@ -409,8 +409,8 @@ if (!any_wave_in_flight(&self->wave_pool) &&
     !any_slot_in_flight(&self->wave_pool) &&
     !any_batch_in_flight(&self->batch_pool) &&
     lookahead_size(&self->lookahead) == 0 &&
-    prefetcher_in_flight(self->pf) == 0 &&
-    !prefetcher_has_ready(self->pf)) {
+    prefetcher_in_flight(self->prefetcher) == 0 &&
+    !prefetcher_has_ready(self->prefetcher)) {
   r = DAMACY_AGAIN;
   goto Done;
 }
@@ -429,13 +429,13 @@ existing failed_status check:
    in-flight sample:
    ```c
    while (lookahead_size(&self->lookahead) > 0 ||
-          prefetcher_in_flight(self->pf) > 0) {
+          prefetcher_in_flight(self->prefetcher) > 0) {
      if (self->failed_status != DAMACY_OK) { r = self->failed_status; goto Done; }
      SCHEDULER_WAIT_DIAG(self->sched, 5000);
    }
    ```
-2. If `prefetcher_has_ready(self->pf)`, the tail samples are ready.
-   Pre-count how many: `n_tail = prefetcher_ready_count_for_batch(self->pf, head_id)`.
+2. If `prefetcher_has_ready(self->prefetcher)`, the tail samples are ready.
+   Pre-count how many: `n_tail = prefetcher_ready_count_for_batch(self->prefetcher, head_id)`.
    New API — see below.
 3. If `n_tail > 0 && n_tail < batch_size`, plan the truncated tail:
    `plan_reserve(self, slot, n_tail)`. (plan_reserve already handles the
@@ -449,19 +449,19 @@ Make `_full_ready` call this internally.
 `damacy_stats_get` (current 1056–1086): replace zarr_meta_cache /
 zarr_shard_cache stats reads with three `prefetch_cache_stats` reads.
 Per plan §8 of damacy_rewrite_plan, keep the *names* (zarr_meta_hits /
-shard_idx_hits) populated from `amc` and `sic` for ABI compat in PR-1;
+shard_idx_hits) populated from `array_meta_cache` and `shard_index_cache` for ABI compat in PR-1;
 PR-2 renames + adds chunk_layout fields.
 
 ```c
-if (m->amc) {
+if (m->array_meta_cache) {
   struct prefetch_cache_stats cs;
-  prefetch_cache_stats_get(m->amc, &cs);
+  prefetch_cache_stats_get(m->array_meta_cache, &cs);
   out->zarr_meta_hits = cs.counters.hits;     /* map prefetch_cache stats names */
   out->zarr_meta_misses = cs.counters.misses;
 }
-if (m->sic) {
+if (m->shard_index_cache) {
   struct prefetch_cache_stats cs;
-  prefetch_cache_stats_get(m->sic, &cs);
+  prefetch_cache_stats_get(m->shard_index_cache, &cs);
   out->shard_idx_hits = cs.counters.hits;
   out->shard_idx_misses = cs.counters.misses;
 }
@@ -550,7 +550,7 @@ xfail leaks state.)
 8. `damacy: rewire pop/flush idle predicates` — include prefetcher
    state in `damacy_pop`'s AGAIN gate and `damacy_flush`'s wait loops.
 9. `damacy: update stats to read prefetch caches` — `damacy_stats_get`
-   reads amc/sic counts instead of legacy caches.
+   reads array_meta_cache/shard_index_cache counts instead of legacy caches.
 
 Each commit builds + tests independently. The PR is reviewable
 commit-by-commit.
@@ -575,7 +575,7 @@ commit-by-commit.
    `failed_status` re-check after the wait. damacy_pop surfaces it as
    the new error path; document in PR description.
 4. **Watermark advance + legacy caches.** Advancing the prefetcher
-   watermark unpins entries in amc/sic/clc; the planner uses
+   watermark unpins entries in array_meta_cache/shard_index_cache/chunk_layout_cache; the planner uses
    `meta_cache`/`shard_cache` (legacy) which have independent LRU
    semantics. No interaction. PR-2 unifies.
 5. **`store_fs_io_queue` accessor.** Lives in `src/store/store_fs.h`;

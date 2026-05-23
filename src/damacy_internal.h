@@ -63,13 +63,13 @@ struct damacy
   // chunk I/O so they can't head-of-line block decode.
   struct io_queue* prefetch_io_q;
   struct prefetch_executor io_exec;
-  struct array_meta_fetcher amf;
-  struct shard_index_fetcher sif;
-  struct chunk_layout_fetcher clf;
-  struct prefetch_cache* amc;
-  struct prefetch_cache* sic;
-  struct prefetch_cache* clc;
-  struct prefetcher* pf;
+  struct array_meta_fetcher array_meta_fetcher;
+  struct shard_index_fetcher shard_index_fetcher;
+  struct chunk_layout_fetcher chunk_layout_fetcher;
+  struct prefetch_cache* array_meta_cache;
+  struct prefetch_cache* shard_index_cache;
+  struct prefetch_cache* chunk_layout_cache;
+  struct prefetcher* prefetcher;
   // plan_reserve pops here and steals uri (NULLs the staging slot) into
   // batch_stage; plan_commit frees the remaining handles.
   struct prefetcher_ready* staging;

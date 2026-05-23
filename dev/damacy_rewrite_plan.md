@@ -71,28 +71,30 @@ CMakeLists.txt:209, :239) and add `prefetch` + `prefetcher`.
 ### Replace:
 - damacy.c:638-643 — `zarr_meta_cache_create` + `zarr_shard_cache_create` blocks.
   Replace with three `prefetch_cache_create` calls:
-  - `self->amc = prefetch_cache_create(&{ .capacity=cfg->tuning.n_array_meta_cache, .ops=&array_meta_ops, .fetcher=&self->amf.base, .executor=&self->io_exec });`
-  - `self->sic` with `shard_index_ops` + `shard_index_fetcher_init(&self->sif, self->store_host, self->amc)`
-  - `self->clc` with `chunk_layout_ops` + `chunk_layout_fetcher_init(&self->clf, self->store_host, self->amc, self->sic)`
+  - `self->array_meta_cache = prefetch_cache_create(&{ .capacity=cfg->tuning.n_array_meta_cache, .ops=&array_meta_ops, .fetcher=&self->array_meta_fetcher.base, .executor=&self->io_exec });`
+  - `self->shard_index_cache` with `shard_index_ops` + `shard_index_fetcher_init(&self->shard_index_fetcher, self->store_host, self->array_meta_cache)`
+  - `self->chunk_layout_cache` with `chunk_layout_ops` + `chunk_layout_fetcher_init(&self->chunk_layout_fetcher, self->store_host, self->array_meta_cache, self->shard_index_cache)`
   - Where do the fetchers live? Embed by value in `struct damacy`:
-    `struct array_meta_fetcher amf; struct shard_index_fetcher sif; struct chunk_layout_fetcher clf;`
+    `struct array_meta_fetcher array_meta_fetcher; struct shard_index_fetcher shard_index_fetcher; struct chunk_layout_fetcher chunk_layout_fetcher;`
     and one `struct prefetch_executor io_exec` shim wrapping `io_queue_post`
     on `self->store_host`'s queue (or expose it from store_fs; see Open Question §11).
 - damacy.c:645-652 — `planner_config` no longer takes `meta_cache`/`shard_cache`.
   New shape (see §3): `planner_config { .page_alignment, .max_chunk_uncompressed_bytes, .read_op_max_bytes };`
   Plus planner_plan signature change.
 - Add
-  `self->pf = prefetcher_create(&{ .lookahead=&self->lookahead, .array_meta_cache=self->amc, .shard_index_cache=self->sic, .chunk_layout_cache=self->clc, .capacity = cfg->lookahead_batches * cfg->batch_size, .batch_capacity = cfg->lookahead_batches + DAMACY_N_BATCH_SLOTS });`
-  and `prefetcher_start(self->pf)` *before* the scheduler starts, so the
+  `self->prefetcher = prefetcher_create(&{ .lookahead=&self->lookahead, .array_meta_cache=self->array_meta_cache, .shard_index_cache=self->shard_index_cache, .chunk_layout_cache=self->chunk_layout_cache, .capacity = cfg->lookahead_batches * cfg->batch_size, .batch_capacity = cfg->lookahead_batches + DAMACY_N_BATCH_SLOTS });`
+  and `prefetcher_start(self->prefetcher)` *before* the scheduler starts, so the
   prefetcher is already draining the lookahead when the scheduler ticks.
 
 ### destroy_inner ordering:
 - Step the prefetcher off first (or rely on `prefetcher_destroy` calling
   `prefetcher_stop` internally — see prefetcher.c:293-308). Order:
-  `scheduler_destroy` → `prefetcher_destroy(self->pf)` (this signals
+  `scheduler_destroy` → `prefetcher_destroy(self->prefetcher)` (this signals
   lookahead stop) → existing wave_pool_destroy and below →
-  `prefetch_cache_destroy` for clc, sic, amc (reverse dependency order:
-  clc depends on sic and amc; sic depends on amc).
+  `prefetch_cache_destroy` for chunk_layout_cache, shard_index_cache,
+  array_meta_cache (reverse dependency order: chunk_layout_cache depends on
+  shard_index_cache and array_meta_cache; shard_index_cache depends on
+  array_meta_cache).
 
 ### `damacy_config_describe`:
 No change needed — it doesn't touch caches.
@@ -154,7 +156,7 @@ prefetcher slots.
   - Requires at least `batch_size` prefetcher_ready slots for the head
     batch_id. Use a pre-collection buffer `self->staging[batch_size]` of
     `struct prefetcher_ready`.
-  - `prefetcher_pop_ready(self->pf, &staging[i])` until `n == batch_size`.
+  - `prefetcher_pop_ready(self->prefetcher, &staging[i])` until `n == batch_size`.
     If any `staging[i].state == PREFETCHER_ERROR`, latch
     `self->failed_status = error_from_ready(&staging[i])` (need a small
     mapping helper — the prefetcher_ready doesn't currently carry the
@@ -208,16 +210,16 @@ then an internal prefetcher detail.
    branch (damacy.c:343-358) replaces `self->lookahead.size < self->cfg.batch_size`
    gate with "do we have batch_size ready prefetcher slots?". Use a
    non-blocking check that scans the prefetcher's internal slot table —
-   exposed via a new helper `prefetcher_ready_count(self->pf)` (add to
+   exposed via a new helper `prefetcher_ready_count(self->prefetcher)` (add to
    prefetcher.h) OR pre-pop into `self->staging[]` greedily during the
    gate check.
 4. **Watermark advance:** after a successful `plan_commit` for batch_id B,
-   call `prefetcher_advance_watermark(self->pf, B + 1)`. This is the
+   call `prefetcher_advance_watermark(self->prefetcher, B + 1)`. This is the
    project's chosen safer "advance on plan success" path (per the
    metadata_prefetch.md "Watermark advance point" open knob §). The
    dev/metadata_prefetch.md plan §8 says scheduler does this.
 5. **Batch gate release:** after watermark advance, also call
-   `prefetcher_release_batch(self->pf, B)` to free the per-batch gate
+   `prefetcher_release_batch(self->prefetcher, B)` to free the per-batch gate
    entry — but only if the planner gate-poll path is wired (skip if we
    elide the gate check).
 
@@ -239,8 +241,8 @@ New:
 ```
 !any_wave_in_flight && !any_slot_in_flight && !any_batch_in_flight
   && lookahead_size(&self->lookahead) == 0
-  && prefetcher_in_flight_count(self->pf) == 0  // new helper
-  && prefetcher_ready_count(self->pf) < self->cfg.batch_size
+  && prefetcher_in_flight_count(self->prefetcher) == 0  // new helper
+  && prefetcher_ready_count(self->prefetcher) < self->cfg.batch_size
 ```
 `prefetcher_in_flight_count` can read `prefetcher_stats.in_flight`
 (already in prefetcher_stats_get, prefetcher.h:40). Add a non-locking
@@ -352,7 +354,8 @@ Drop the three deleted test targets; drop link deps on `zarr_meta_cache`
   to reflect the new reality.
 - Line 1025-1027: `st.zarr_meta_hits`, `st.shard_idx_hits` — these stats
   fields go away or get renamed. Suggest a new `damacy_stats` shape with
-  three `prefetch_cache_stats` blocks (amc, sic, clc), each with its own
+  three `prefetch_cache_stats` blocks (array_meta_cache, shard_index_cache,
+  chunk_layout_cache), each with its own
   hits/misses/size/capacity. The Python dict keys become e.g.
   `array_meta_hits`, `shard_index_hits`, `chunk_layout_hits`.
 
@@ -483,7 +486,7 @@ both reviewable.
    pop, the prefetcher may still be parking samples on the second or
    third stage. flush has to wait for the prefetcher to finish resolving
    the *current* lookahead before it can plan the tail. Use
-   `prefetcher_drain(self->pf)` (prefetcher.h:49) — already provided
+   `prefetcher_drain(self->prefetcher)` (prefetcher.h:49) — already provided
    exactly for this case. **Verify** that prefetcher_drain returns once
    *every queued sample* is in READY or ERROR.
 
@@ -495,7 +498,8 @@ both reviewable.
 
 8. **Stats struct compat.** `damacy_stats` (damacy.h:312-351) has
    `zarr_meta_hits`, `shard_idx_hits` as uint64. If we keep these field
-   names but populate them from the new caches (amc + sic respectively),
+   names but populate them from the new caches (array_meta_cache +
+   shard_index_cache respectively),
    there's no ABI break. Easier than renaming. Drop
    `n_zarrs_meta_cache`/`n_shards_meta_cache` config fields though —
    those have to rename because the *count* of caches changed (now 3,

@@ -36,12 +36,12 @@ struct fixture
 {
   char* root;
   struct store* store;
-  struct array_meta_fetcher amf;
-  struct prefetch_cache* amc;
-  struct shard_index_fetcher sif;
-  struct prefetch_cache* sic;
-  struct chunk_layout_fetcher clf;
-  struct prefetch_cache* clc;
+  struct array_meta_fetcher array_meta_fetcher;
+  struct prefetch_cache* array_meta_cache;
+  struct shard_index_fetcher shard_index_fetcher;
+  struct prefetch_cache* shard_index_cache;
+  struct chunk_layout_fetcher chunk_layout_fetcher;
+  struct prefetch_cache* chunk_layout_cache;
 };
 
 static int
@@ -64,54 +64,54 @@ fixture_setup(struct fixture* fx, const char* codec)
   fx->store = store_fs_create(&sc);
   EXPECT(fx->store);
 
-  array_meta_fetcher_init(&fx->amf, fx->store);
+  array_meta_fetcher_init(&fx->array_meta_fetcher, fx->store);
   struct prefetch_cache_config amc_cfg = {
     .capacity = 4,
     .max_probe = 16,
     .ops = &array_meta_ops,
-    .fetcher = &fx->amf.base,
+    .fetcher = &fx->array_meta_fetcher.base,
     .executor = &SYNC_EXECUTOR,
   };
-  fx->amc = prefetch_cache_create(&amc_cfg);
-  EXPECT(fx->amc);
+  fx->array_meta_cache = prefetch_cache_create(&amc_cfg);
+  EXPECT(fx->array_meta_cache);
 
-  shard_index_fetcher_init(&fx->sif, fx->store, fx->amc);
+  shard_index_fetcher_init(&fx->shard_index_fetcher, fx->store, fx->array_meta_cache);
   struct prefetch_cache_config sic_cfg = {
     .capacity = 4,
     .max_probe = 16,
     .ops = &shard_index_ops,
-    .fetcher = &fx->sif.base,
+    .fetcher = &fx->shard_index_fetcher.base,
     .executor = &SYNC_EXECUTOR,
   };
-  fx->sic = prefetch_cache_create(&sic_cfg);
-  EXPECT(fx->sic);
+  fx->shard_index_cache = prefetch_cache_create(&sic_cfg);
+  EXPECT(fx->shard_index_cache);
 
-  chunk_layout_fetcher_init(&fx->clf,
+  chunk_layout_fetcher_init(&fx->chunk_layout_fetcher,
                             fx->store,
-                            fx->amc,
-                            fx->sic,
+                            fx->array_meta_cache,
+                            fx->shard_index_cache,
                             DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK);
   struct prefetch_cache_config clc_cfg = {
     .capacity = 4,
     .max_probe = 16,
     .ops = &chunk_layout_ops,
-    .fetcher = &fx->clf.base,
+    .fetcher = &fx->chunk_layout_fetcher.base,
     .executor = &SYNC_EXECUTOR,
   };
-  fx->clc = prefetch_cache_create(&clc_cfg);
-  EXPECT(fx->clc);
+  fx->chunk_layout_cache = prefetch_cache_create(&clc_cfg);
+  EXPECT(fx->chunk_layout_cache);
   return 0;
 }
 
 static void
 fixture_teardown(struct fixture* fx)
 {
-  if (fx->clc)
-    prefetch_cache_destroy(fx->clc);
-  if (fx->sic)
-    prefetch_cache_destroy(fx->sic);
-  if (fx->amc)
-    prefetch_cache_destroy(fx->amc);
+  if (fx->chunk_layout_cache)
+    prefetch_cache_destroy(fx->chunk_layout_cache);
+  if (fx->shard_index_cache)
+    prefetch_cache_destroy(fx->shard_index_cache);
+  if (fx->array_meta_cache)
+    prefetch_cache_destroy(fx->array_meta_cache);
   if (fx->store)
     store_destroy(fx->store);
   if (fx->root) {
@@ -126,7 +126,7 @@ warm_upstream(struct fixture* fx, const char* uri)
   struct prefetch_gate gate;
   prefetch_gate_init(&gate);
   struct prefetch_handle h_meta =
-    prefetch_cache_request(fx->amc, hash_fnv1a_str(uri), uri, 0, &gate);
+    prefetch_cache_request(fx->array_meta_cache, hash_fnv1a_str(uri), uri, 0, &gate);
   EXPECT(prefetch_handle_valid(h_meta));
   EXPECT(prefetch_gate_is_ready(&gate));
   EXPECT(!prefetch_gate_has_error(&gate));
@@ -136,7 +136,7 @@ warm_upstream(struct fixture* fx, const char* uri)
   probe.shard_coord[1] = 0;
   prefetch_gate_init(&gate);
   struct prefetch_handle h_si = prefetch_cache_request(
-    fx->sic, shard_index_key_hash(&probe), &probe, 0, &gate);
+    fx->shard_index_cache, shard_index_key_hash(&probe), &probe, 0, &gate);
   EXPECT(prefetch_handle_valid(h_si));
   EXPECT(prefetch_gate_is_ready(&gate));
   EXPECT(!prefetch_gate_has_error(&gate));
@@ -153,13 +153,13 @@ test_probes_blosc_zstd_layout(void)
   struct prefetch_gate gate;
   prefetch_gate_init(&gate);
   struct prefetch_handle h =
-    prefetch_cache_request(fx.clc, hash_fnv1a_str("foo"), "foo", 0, &gate);
+    prefetch_cache_request(fx.chunk_layout_cache, hash_fnv1a_str("foo"), "foo", 0, &gate);
   EXPECT(prefetch_handle_valid(h));
   EXPECT(prefetch_gate_is_ready(&gate));
   EXPECT(!prefetch_gate_has_error(&gate));
 
   const struct chunk_layout* layout =
-    (const struct chunk_layout*)prefetch_cache_try_get(fx.clc, h);
+    (const struct chunk_layout*)prefetch_cache_try_get(fx.chunk_layout_cache, h);
   EXPECT(layout);
   EXPECT(layout->codec_id == CODEC_BLOSC_ZSTD);
   EXPECT(layout->typesize == 2);
@@ -181,13 +181,13 @@ test_non_blosc_codec_yields_no_layout(void)
   struct prefetch_gate gate;
   prefetch_gate_init(&gate);
   struct prefetch_handle h =
-    prefetch_cache_request(fx.clc, hash_fnv1a_str("foo"), "foo", 0, &gate);
+    prefetch_cache_request(fx.chunk_layout_cache, hash_fnv1a_str("foo"), "foo", 0, &gate);
   EXPECT(prefetch_handle_valid(h));
   EXPECT(prefetch_gate_is_ready(&gate));
   EXPECT(!prefetch_gate_has_error(&gate));
 
   // Non-blosc samples carry no blosc1-specific layout; decoder uses caps.
-  EXPECT(prefetch_cache_try_get(fx.clc, h) == NULL);
+  EXPECT(prefetch_cache_try_get(fx.chunk_layout_cache, h) == NULL);
 
   fixture_teardown(&fx);
   return 0;
@@ -203,14 +203,14 @@ test_dedup_returns_same_layout(void)
   struct prefetch_gate gate;
   prefetch_gate_init(&gate);
   struct prefetch_handle h1 =
-    prefetch_cache_request(fx.clc, hash_fnv1a_str("foo"), "foo", 0, &gate);
+    prefetch_cache_request(fx.chunk_layout_cache, hash_fnv1a_str("foo"), "foo", 0, &gate);
   struct prefetch_handle h2 =
-    prefetch_cache_request(fx.clc, hash_fnv1a_str("foo"), "foo", 0, &gate);
+    prefetch_cache_request(fx.chunk_layout_cache, hash_fnv1a_str("foo"), "foo", 0, &gate);
   EXPECT(h1.slot == h2.slot);
   EXPECT(h1.generation == h2.generation);
 
-  const void* v1 = prefetch_cache_try_get(fx.clc, h1);
-  const void* v2 = prefetch_cache_try_get(fx.clc, h2);
+  const void* v1 = prefetch_cache_try_get(fx.chunk_layout_cache, h1);
+  const void* v2 = prefetch_cache_try_get(fx.chunk_layout_cache, h2);
   EXPECT(v1 && v1 == v2);
 
   fixture_teardown(&fx);

@@ -58,7 +58,7 @@ plan_reserve(struct damacy* self, uint16_t slot_idx, uint32_t n_samples)
   const uint64_t head_batch_id = self->next_batch_id;
   for (uint32_t i = 0; i < n_samples; ++i) {
     if (!prefetcher_pop_ready_for_batch(
-          self->pf, head_batch_id, &self->staging[i])) {
+          self->prefetcher, head_batch_id, &self->staging[i])) {
       // Caller (scheduler / flush) must have verified availability.
       // Rewind and let the caller observe AGAIN.
       for (uint32_t j = 0; j < i; ++j)
@@ -171,7 +171,7 @@ plan_commit(struct damacy* self,
   slot->n_groups_dispatched = 0;
   slot->chunks_remaining = (int32_t)slot->n_chunks;
   slot->batch_id = self->next_batch_id++;
-  prefetcher_advance_watermark(self->pf, self->next_batch_id);
+  prefetcher_advance_watermark(self->prefetcher, self->next_batch_id);
   slot->state = BATCH_FILLING;
   self->stats.chunks_planned += slot->n_chunks;
   self->stats.chunks_to_load += slot->n_chunks_to_load;

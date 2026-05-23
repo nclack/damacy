@@ -67,14 +67,14 @@ destroy_inner(struct damacy* self, int cuda_skip)
   // workers via prefetcher_stop → lookahead signal). Must precede the
   // prefetch caches and io_queue teardown so no in-flight fetch
   // touches freed state.
-  prefetcher_destroy(self->pf);
-  self->pf = NULL;
-  prefetch_cache_destroy(self->clc);
-  self->clc = NULL;
-  prefetch_cache_destroy(self->sic);
-  self->sic = NULL;
-  prefetch_cache_destroy(self->amc);
-  self->amc = NULL;
+  prefetcher_destroy(self->prefetcher);
+  self->prefetcher = NULL;
+  prefetch_cache_destroy(self->chunk_layout_cache);
+  self->chunk_layout_cache = NULL;
+  prefetch_cache_destroy(self->shard_index_cache);
+  self->shard_index_cache = NULL;
+  prefetch_cache_destroy(self->array_meta_cache);
+  self->array_meta_cache = NULL;
   io_queue_destroy(self->prefetch_io_q);
   self->prefetch_io_q = NULL;
 
@@ -306,45 +306,45 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   self->prefetch_io_q = io_queue_create(2, &self->numa);
   CHECK(Fail, self->prefetch_io_q);
   self->io_exec.post = damacy_io_exec_post;
-  array_meta_fetcher_init(&self->amf, self->store_host);
+  array_meta_fetcher_init(&self->array_meta_fetcher, self->store_host);
   {
     struct prefetch_cache_config amc_cfg = {
       .capacity = cfg->tuning.n_zarrs_meta_cache,
       .max_probe = 16,
       .ops = &array_meta_ops,
-      .fetcher = &self->amf.base,
+      .fetcher = &self->array_meta_fetcher.base,
       .executor = &self->io_exec,
     };
-    self->amc = prefetch_cache_create(&amc_cfg);
-    CHECK(Fail, self->amc);
+    self->array_meta_cache = prefetch_cache_create(&amc_cfg);
+    CHECK(Fail, self->array_meta_cache);
   }
-  shard_index_fetcher_init(&self->sif, self->store_host, self->amc);
+  shard_index_fetcher_init(&self->shard_index_fetcher, self->store_host, self->array_meta_cache);
   {
     struct prefetch_cache_config sic_cfg = {
       .capacity = cfg->tuning.n_shards_meta_cache,
       .max_probe = 16,
       .ops = &shard_index_ops,
-      .fetcher = &self->sif.base,
+      .fetcher = &self->shard_index_fetcher.base,
       .executor = &self->io_exec,
     };
-    self->sic = prefetch_cache_create(&sic_cfg);
-    CHECK(Fail, self->sic);
+    self->shard_index_cache = prefetch_cache_create(&sic_cfg);
+    CHECK(Fail, self->shard_index_cache);
   }
-  chunk_layout_fetcher_init(&self->clf,
+  chunk_layout_fetcher_init(&self->chunk_layout_fetcher,
                             self->store_host,
-                            self->amc,
-                            self->sic,
+                            self->array_meta_cache,
+                            self->shard_index_cache,
                             resolved_max_substreams_per_chunk);
   {
     struct prefetch_cache_config clc_cfg = {
       .capacity = cfg->tuning.n_zarrs_meta_cache,
       .max_probe = 16,
       .ops = &chunk_layout_ops,
-      .fetcher = &self->clf.base,
+      .fetcher = &self->chunk_layout_fetcher.base,
       .executor = &self->io_exec,
     };
-    self->clc = prefetch_cache_create(&clc_cfg);
-    CHECK(Fail, self->clc);
+    self->chunk_layout_cache = prefetch_cache_create(&clc_cfg);
+    CHECK(Fail, self->chunk_layout_cache);
   }
 
   for (int b = 0; b < 2; ++b)
@@ -356,8 +356,8 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   // wave_pool_init so first-touch of pinned-host slabs + per-wave
   // scratch lands on the right node. Restored immediately after.
   {
-    struct platform_cpu_mask saved_aff;
-    numa_scope_enter(&self->numa, &saved_aff);
+    struct platform_cpu_mask saved_affinity;
+    numa_scope_enter(&self->numa, &saved_affinity);
     int wp_rc = wave_pool_init(&self->wave_pool,
                                &self->batch_pool,
                                want_gds ? self->store_gds : self->store_host,
@@ -372,7 +372,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
                                (int)want_gds,
                                cfg->debug.bypass_decode,
                                self->budget);
-    numa_scope_exit(&saved_aff);
+    numa_scope_exit(&saved_affinity);
     CHECK(Fail, wp_rc == 0);
   }
   if (want_gds)
@@ -396,14 +396,14 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   {
     struct prefetcher_config pf_cfg = {
       .lookahead = &self->lookahead,
-      .array_meta_cache = self->amc,
-      .shard_index_cache = self->sic,
-      .chunk_layout_cache = self->clc,
+      .array_meta_cache = self->array_meta_cache,
+      .shard_index_cache = self->shard_index_cache,
+      .chunk_layout_cache = self->chunk_layout_cache,
       .capacity = cfg->lookahead_batches * cfg->batch_size,
       .batch_capacity = cfg->lookahead_batches + 2,
     };
-    self->pf = prefetcher_create(&pf_cfg);
-    CHECK(Fail, self->pf);
+    self->prefetcher = prefetcher_create(&pf_cfg);
+    CHECK(Fail, self->prefetcher);
   }
 
   self->batch_samples = (struct damacy_sample_slot*)calloc(
@@ -420,7 +420,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
 
   // Start the prefetcher worker before the scheduler so the scheduler's
   // first tick can see ready batches.
-  CHECK(Fail, prefetcher_start(self->pf) == 0);
+  CHECK(Fail, prefetcher_start(self->prefetcher) == 0);
 
   // Spawn the worker last — everything it touches must already exist.
   self->sched = scheduler_create(

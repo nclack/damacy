@@ -41,8 +41,8 @@ damacy_pop(struct damacy* self, struct damacy_batch** out)
         !any_slot_in_flight(&self->wave_pool) &&
         !any_batch_in_flight(&self->batch_pool) &&
         lookahead_size(&self->lookahead) == 0 &&
-        prefetcher_in_flight(self->pf) == 0 &&
-        !prefetcher_has_ready(self->pf)) {
+        prefetcher_in_flight(self->prefetcher) == 0 &&
+        !prefetcher_has_ready(self->prefetcher)) {
       r = DAMACY_AGAIN;
       goto Done;
     }
@@ -279,15 +279,15 @@ damacy_stats_get(const struct damacy* self, struct damacy_stats* out)
   out->gpu_bytes_committed = gpu_budget_committed(m->budget);
   scheduler_unlock(m->sched);
   // PR-1 keeps the public stat names; PR-2 will rename + add chunk_layout.
-  if (m->amc) {
+  if (m->array_meta_cache) {
     struct prefetch_cache_stats cs;
-    prefetch_cache_stats_get(m->amc, &cs);
+    prefetch_cache_stats_get(m->array_meta_cache, &cs);
     out->zarr_meta_hits = cs.counters.hits;
     out->zarr_meta_misses = cs.counters.misses;
   }
-  if (m->sic) {
+  if (m->shard_index_cache) {
     struct prefetch_cache_stats cs;
-    prefetch_cache_stats_get(m->sic, &cs);
+    prefetch_cache_stats_get(m->shard_index_cache, &cs);
     out->shard_idx_hits = cs.counters.hits;
     out->shard_idx_misses = cs.counters.misses;
   }
