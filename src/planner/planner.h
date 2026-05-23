@@ -22,7 +22,7 @@ extern "C"
 {
 #endif
 
-  struct zarr_meta_cache;
+  struct prefetch_cache;
   struct zarr_shard_cache;
   struct path_intern;
 
@@ -138,7 +138,8 @@ extern "C"
 
   struct planner_config
   {
-    struct zarr_meta_cache* meta_cache;
+    struct prefetch_cache* array_meta_cache;
+    struct prefetch_cache* chunk_layout_cache;
     struct zarr_shard_cache* shard_cache;
     // Page alignment used for read_op.file_offset / nbytes. Typically
     // platform_page_alignment(), captured once at create.
