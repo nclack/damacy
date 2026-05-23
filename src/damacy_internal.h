@@ -85,3 +85,16 @@ ctx_guard_exit(struct ctx_guard* g);
 
 int
 damacy_scheduler_step(void* arg);
+
+enum damacy_status
+plan_reserve(struct damacy* self, uint16_t slot_idx, uint32_t n_samples);
+
+enum damacy_status
+plan_run(struct damacy* self, uint16_t slot_idx, float* out_elapsed_ms);
+
+enum damacy_status
+plan_commit(struct damacy* self,
+            uint16_t slot_idx,
+            enum damacy_status run_status,
+            float elapsed_ms,
+            int* changed);
