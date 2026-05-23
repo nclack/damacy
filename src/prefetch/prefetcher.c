@@ -289,18 +289,48 @@ scan_slots_locked(struct prefetcher* p,
   }
 }
 
+// URI ownership transfers into the slot (and on to prefetcher_ready).
+static void
+emit_error_slot_locked(struct prefetcher* p,
+                       struct prefetcher_slot* slot,
+                       struct damacy_sample_slot* popped,
+                       struct prefetch_gate* gate,
+                       int err_code)
+{
+  prefetch_gate_set_error(gate);
+  *slot = (struct prefetcher_slot){
+    .state = PREFETCHER_ERROR,
+    .err_code = err_code,
+    .uri = popped->uri,
+    .aabb = popped->aabb,
+    .batch_id = popped->batch_id,
+    .gate = gate,
+  };
+  p->errored++;
+}
+
 static void
 admit_locked(struct prefetcher* p,
              struct prefetcher_slot* slot,
              struct damacy_sample_slot* popped)
 {
+  CHECK_SILENT(Drop, slot);
+
   int was_new = 0;
   struct prefetcher_batch_entry* be =
     batch_get_or_create_locked(p, popped->batch_id, &was_new);
-  struct prefetch_gate* gate = be ? &be->gate : NULL;
+  if (!be) {
+    emit_error_slot_locked(p, slot, popped, NULL, DAMACY_OOM);
+    return;
+  }
+  struct prefetch_gate* gate = &be->gate;
   struct prefetch_handle h = prefetch_cache_request(
     p->amc, hash_fnv1a_str(popped->uri), popped->uri, popped->batch_id, gate);
-  CHECK(Bad, prefetch_handle_valid(h));
+  if (!prefetch_handle_valid(h)) {
+    // ERROR slot retains the batch ref; pop releases it like a normal slot.
+    emit_error_slot_locked(p, slot, popped, gate, DAMACY_OOM);
+    return;
+  }
   *slot = (struct prefetcher_slot){
     .state = PREFETCHER_PENDING_ARRAY_META,
     .uri = popped->uri,
@@ -311,13 +341,7 @@ admit_locked(struct prefetcher* p,
   };
   p->submitted++;
   return;
-Bad:
-  if (be) {
-    if (be->refcount > 0)
-      be->refcount--;
-    if (was_new || be->release_pending)
-      batch_try_free_locked(be);
-  }
+Drop:
   free(popped->uri);
   p->errored++;
 }
