@@ -34,6 +34,10 @@ struct damacy
   struct damacy_config cfg;
   enum damacy_status failed_status;
   uint64_t next_batch_id;
+  // Push-side cursor: indexes into the stream of samples ever pushed.
+  // Divided by batch_size to label each lookahead push with its batch_id
+  // so the prefetcher can group samples for prefetcher_batch_full_ready.
+  uint64_t pushed_samples;
   uint64_t page_alignment;
   int cuda_device;
   int retained_primary_device; // -1 = caller's ctx; else release at destroy
@@ -66,6 +70,9 @@ struct damacy
   struct prefetch_cache* sic;
   struct prefetch_cache* clc;
   struct prefetcher* pf;
+  // plan_reserve pops here and steals uri (NULLs the staging slot) into
+  // batch_stage; plan_commit frees the remaining handles.
+  struct prefetcher_ready* staging;
 
   struct damacy_lookahead lookahead;
   struct damacy_batch_pool batch_pool;

@@ -172,7 +172,7 @@ test_probes_blosc_zstd_layout(void)
 }
 
 static int
-test_non_blosc_codec_errors(void)
+test_non_blosc_codec_yields_no_layout(void)
 {
   struct fixture fx = { 0 };
   EXPECT(fixture_setup(&fx, "zstd") == 0);
@@ -183,11 +183,11 @@ test_non_blosc_codec_errors(void)
   struct prefetch_handle h =
     prefetch_cache_request(fx.clc, hash_fnv1a_str("foo"), "foo", 0, &gate);
   EXPECT(prefetch_handle_valid(h));
-  EXPECT(prefetch_gate_has_error(&gate));
+  EXPECT(prefetch_gate_is_ready(&gate));
+  EXPECT(!prefetch_gate_has_error(&gate));
 
-  int err = 0;
-  EXPECT(prefetch_cache_query(fx.clc, h, NULL, &err) == PREFETCH_STATE_ERROR);
-  EXPECT(err == DAMACY_DECODE);
+  // Non-blosc samples carry no blosc1-specific layout; decoder uses caps.
+  EXPECT(prefetch_cache_try_get(fx.clc, h) == NULL);
 
   fixture_teardown(&fx);
   return 0;
@@ -221,7 +221,7 @@ int
 main(void)
 {
   RUN(test_probes_blosc_zstd_layout);
-  RUN(test_non_blosc_codec_errors);
+  RUN(test_non_blosc_codec_yields_no_layout);
   RUN(test_dedup_returns_same_layout);
   log_info("all tests passed");
   return 0;

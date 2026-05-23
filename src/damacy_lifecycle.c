@@ -80,6 +80,8 @@ destroy_inner(struct damacy* self, int cuda_skip)
 
   wave_pool_destroy(&self->wave_pool, cuda_skip);
 
+  free(self->staging);
+  self->staging = NULL;
   free(self->batch_stage);
   self->batch_stage = NULL;
   free(self->batch_samples);
@@ -410,8 +412,15 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   self->batch_stage = (struct damacy_sample*)calloc(
     cfg->batch_size, sizeof(struct damacy_sample));
   CHECK(Fail, self->batch_stage);
+  self->staging = (struct prefetcher_ready*)calloc(
+    cfg->batch_size, sizeof(struct prefetcher_ready));
+  CHECK(Fail, self->staging);
 
   self->handle.d = self;
+
+  // Start the prefetcher worker before the scheduler so the scheduler's
+  // first tick can see ready batches.
+  CHECK(Fail, prefetcher_start(self->pf) == 0);
 
   // Spawn the worker last — everything it touches must already exist.
   self->sched = scheduler_create(

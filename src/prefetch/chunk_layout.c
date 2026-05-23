@@ -74,9 +74,11 @@ chunk_layout_fetch(struct prefetch_fetcher* self_,
     return 1;
   }
   if (meta->inner_codec.id != CODEC_BLOSC_ZSTD) {
-    // Probe is blosc1-specific; non-blosc arrays fall back to worst-case caps.
-    *out_err = DAMACY_DECODE;
-    return 1;
+    // Probe is blosc1-specific; non-blosc arrays carry no chunk layout
+    // and the decoder uses worst-case caps. Surface as success with no
+    // value so the sample's prefetch stage reaches READY.
+    *out_value = NULL;
+    return 0;
   }
 
   // TODO(perf): origin-shard probe; far-from-origin workloads silently

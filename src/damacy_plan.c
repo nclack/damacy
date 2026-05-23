@@ -55,18 +55,43 @@ plan_reserve(struct damacy* self, uint16_t slot_idx, uint32_t n_samples)
   if (slot->state != BATCH_FREE)
     return DAMACY_INVAL;
 
-  lookahead_drain(&self->lookahead, self->batch_samples, n_samples);
+  const uint64_t head_batch_id = self->next_batch_id;
+  for (uint32_t i = 0; i < n_samples; ++i) {
+    if (!prefetcher_pop_ready_for_batch(
+          self->pf, head_batch_id, &self->staging[i])) {
+      // Caller (scheduler / flush) must have verified availability.
+      // Rewind and let the caller observe AGAIN.
+      for (uint32_t j = 0; j < i; ++j)
+        prefetcher_ready_free(&self->staging[j]);
+      return DAMACY_AGAIN;
+    }
+    if (self->staging[i].state == PREFETCHER_ERROR &&
+        self->staging[i].err_code != DAMACY_NOTFOUND) {
+      // PR-1 still routes (uri, aabb) through the legacy planner, which
+      // independently substitutes fill for NOTFOUND chunks. Surface other
+      // prefetch errors here; the planner will handle missing data.
+      enum damacy_status es =
+        self->staging[i].err_code ? (enum damacy_status)self->staging[i].err_code
+                                  : DAMACY_INVAL;
+      for (uint32_t j = 0; j <= i; ++j)
+        prefetcher_ready_free(&self->staging[j]);
+      self->failed_status = es;
+      return es;
+    }
+  }
 
   enum damacy_status status = batch_pool_allocate(self);
   if (status != DAMACY_OK) {
     for (uint32_t i = 0; i < n_samples; ++i)
-      sample_slot_clear(&self->batch_samples[i]);
+      prefetcher_ready_free(&self->staging[i]);
     self->failed_status = status;
     return status;
   }
   for (uint32_t i = 0; i < n_samples; ++i) {
-    self->batch_stage[i].uri = self->batch_samples[i].uri;
-    self->batch_stage[i].aabb = self->batch_samples[i].aabb;
+    // Steal uri into batch_stage; plan_commit frees the rest of staging[i].
+    self->batch_stage[i].uri = self->staging[i].uri;
+    self->batch_stage[i].aabb = self->staging[i].aabb;
+    self->staging[i].uri = NULL;
   }
   slot->n_samples = n_samples;
   slot->state = BATCH_PLANNING;
@@ -132,7 +157,7 @@ plan_commit(struct damacy* self,
   metric_record(&self->stats.plan, elapsed_ms, 0, 0);
   struct damacy_batch_slot* slot = &self->batch_pool.slots[slot_idx];
   for (uint32_t i = 0; i < slot->n_samples; ++i)
-    sample_slot_clear(&self->batch_samples[i]);
+    prefetcher_ready_free(&self->staging[i]);
   if (run_status != DAMACY_OK) {
     slot->state = BATCH_FREE;
     slot->n_samples = 0;
@@ -146,6 +171,7 @@ plan_commit(struct damacy* self,
   slot->n_groups_dispatched = 0;
   slot->chunks_remaining = (int32_t)slot->n_chunks;
   slot->batch_id = self->next_batch_id++;
+  prefetcher_advance_watermark(self->pf, self->next_batch_id);
   slot->state = BATCH_FILLING;
   self->stats.chunks_planned += slot->n_chunks;
   self->stats.chunks_to_load += slot->n_chunks_to_load;

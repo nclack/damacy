@@ -40,7 +40,9 @@ damacy_pop(struct damacy* self, struct damacy_batch** out)
     if (!any_wave_in_flight(&self->wave_pool) &&
         !any_slot_in_flight(&self->wave_pool) &&
         !any_batch_in_flight(&self->batch_pool) &&
-        self->lookahead.size < self->cfg.batch_size) {
+        lookahead_size(&self->lookahead) == 0 &&
+        prefetcher_in_flight(self->pf) == 0 &&
+        !prefetcher_has_ready(self->pf)) {
       r = DAMACY_AGAIN;
       goto Done;
     }

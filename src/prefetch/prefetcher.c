@@ -20,6 +20,9 @@ struct prefetcher_slot
   char* uri;
   struct damacy_aabb aabb;
   uint64_t batch_id;
+  // Monotonic admission sequence. pop returns the smallest admit_seq
+  // among terminal slots so plan_reserve sees samples in push order.
+  uint64_t admit_seq;
   struct prefetch_gate* gate;
   struct prefetch_handle h_meta;
   struct prefetch_handle* h_shards;
@@ -60,6 +63,7 @@ struct prefetcher
   uint64_t submitted;
   uint64_t ready;
   uint64_t errored;
+  uint64_t next_admit_seq;
 };
 
 static struct prefetcher_batch_entry*
@@ -342,6 +346,7 @@ admit_locked(struct prefetcher* p,
     .uri = popped->uri,
     .aabb = popped->aabb,
     .batch_id = popped->batch_id,
+    .admit_seq = p->next_admit_seq++,
     .gate = gate,
     .h_meta = h,
   };
@@ -505,29 +510,38 @@ pop_terminal_slot_locked(struct prefetcher* self,
                          const uint64_t* match_batch_id,
                          struct prefetcher_ready* out)
 {
+  uint32_t best = UINT32_MAX;
+  uint64_t best_seq = 0;
   for (uint32_t i = 0; i < self->capacity; ++i) {
     struct prefetcher_slot* s = &self->slots[i];
     if (s->state != PREFETCHER_READY && s->state != PREFETCHER_ERROR)
       continue;
     if (match_batch_id && s->batch_id != *match_batch_id)
       continue;
-    *out = (struct prefetcher_ready){
-      .state = s->state,
-      .err_code = s->err_code,
-      .uri = s->uri,
-      .aabb = s->aabb,
-      .batch_id = s->batch_id,
-      .h_meta = s->h_meta,
-      .h_shards = s->h_shards,
-      .n_shards = s->n_shards,
-      .h_layout = s->h_layout,
-    };
-    uint64_t batch_id = s->batch_id;
-    *s = (struct prefetcher_slot){ .state = PREFETCHER_FREE };
-    batch_unref_locked(self, batch_id);
-    return 1;
+    if (best == UINT32_MAX || s->admit_seq < best_seq) {
+      best = i;
+      best_seq = s->admit_seq;
+    }
   }
-  return 0;
+  if (best == UINT32_MAX)
+    return 0;
+
+  struct prefetcher_slot* s = &self->slots[best];
+  *out = (struct prefetcher_ready){
+    .state = s->state,
+    .err_code = s->err_code,
+    .uri = s->uri,
+    .aabb = s->aabb,
+    .batch_id = s->batch_id,
+    .h_meta = s->h_meta,
+    .h_shards = s->h_shards,
+    .n_shards = s->n_shards,
+    .h_layout = s->h_layout,
+  };
+  uint64_t batch_id = s->batch_id;
+  *s = (struct prefetcher_slot){ .state = PREFETCHER_FREE };
+  batch_unref_locked(self, batch_id);
+  return 1;
 }
 
 int

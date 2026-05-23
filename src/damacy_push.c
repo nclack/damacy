@@ -28,7 +28,8 @@ push_one(struct damacy* self, const struct damacy_sample* sample)
   if (!sample_aabb_extents_match_cfg(&self->cfg, &sample->aabb))
     return DAMACY_INVAL;
 
-  if (lookahead_push(&self->lookahead, sample))
+  uint64_t batch_id = self->pushed_samples / self->cfg.batch_size;
+  if (lookahead_push_with_batch(&self->lookahead, sample, batch_id))
     return DAMACY_OOM;
   return DAMACY_OK;
 }
@@ -64,6 +65,7 @@ damacy_push(struct damacy* self, struct damacy_sample_slice samples)
       r.status = ps;
       goto Done;
     }
+    self->pushed_samples++;
   }
   r.unconsumed.beg = samples.end;
 Done:
