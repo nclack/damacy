@@ -84,7 +84,7 @@ struct damacy
   // driven directly by the orchestrator (no per-call ctx building).
   struct wave_pool wave_pool;
 
-  struct damacy_sample* batch_stage;
+  struct planner_sample* batch_stage;
 
   struct damacy_batch handle;
   struct damacy_stats stats;

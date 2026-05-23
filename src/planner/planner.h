@@ -8,8 +8,9 @@
 // scheduler; the planner zeroes them.
 #pragma once
 
-#include "damacy.h"                 // damacy_status, damacy_sample, damacy_aabb
-#include "damacy_limits.h"          // DAMACY_MAX_RANK
+#include "damacy.h"        // damacy_status, damacy_sample, damacy_aabb
+#include "damacy_limits.h" // DAMACY_MAX_RANK
+#include "prefetch/prefetch_handle.h"
 #include "zarr/zarr_chunk_layout.h" // struct chunk_layout
 #include "zarr/zarr_metadata.h"     // DAMACY_MAX_DTYPE_BYTES
 
@@ -125,6 +126,16 @@ extern "C"
   int read_op_group_iterator_next(struct read_op_group_iterator* it,
                                   struct read_op_group* out);
 
+  struct planner_sample
+  {
+    const char* uri;
+    struct damacy_aabb aabb;
+    struct prefetch_handle h_meta;
+    struct prefetch_handle* h_shards;
+    uint32_t n_shards;
+    struct prefetch_handle h_layout;
+  };
+
   struct planner_config
   {
     struct zarr_meta_cache* meta_cache;
@@ -199,7 +210,7 @@ extern "C"
   // a pointer across all emitted read_ops, and the storage lives until
   // planner_destroy.
   enum damacy_status planner_plan(struct planner* p,
-                                  const struct damacy_sample* samples,
+                                  const struct planner_sample* samples,
                                   uint32_t n_samples,
                                   uint16_t batch_pool_slot,
                                   const int64_t* dst_strides, // [rank+1]

@@ -198,10 +198,10 @@ fixture_destroy(struct fixture* f)
   fixture_rm_tree(f->root);
 }
 
-static struct damacy_sample
+static struct planner_sample
 mk_sample(const char* uri, int64_t y0, int64_t y1, int64_t x0, int64_t x1)
 {
-  struct damacy_sample s = { .uri = uri, .aabb = { .rank = 2 } };
+  struct planner_sample s = { .uri = uri, .aabb = { .rank = 2 } };
   s.aabb.dims[0] = (struct damacy_interval){ .beg = y0, .end = y1 };
   s.aabb.dims[1] = (struct damacy_interval){ .beg = x0, .end = x1 };
   return s;
@@ -247,7 +247,7 @@ test_single_chunk_aligned(void)
     return 1;
 
   // AABB = inner chunk (1, 0): y in [2,4), x in [0,4).
-  struct damacy_sample s = mk_sample("foo", 2, 4, 0, 4);
+  struct planner_sample s = mk_sample("foo", 2, 4, 0, 4);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 2, 4, dst_strides);
 
@@ -321,7 +321,7 @@ test_multi_chunk_partial(void)
 
   // AABB = y in [1,4), x in [2,7). Touches all 4 chunks (2x2 grid).
   // Chunk grid origin: (0,0). aabb_lo=(1,2). aabb_lo_relative=(1,2).
-  struct damacy_sample s = mk_sample("foo", 1, 4, 2, 7);
+  struct planner_sample s = mk_sample("foo", 1, 4, 2, 7);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 3, 5, dst_strides);
 
@@ -386,7 +386,7 @@ test_two_samples_indices(void)
   if (fixture_init(&f, offsets, nbytes))
     return 1;
 
-  struct damacy_sample s[2] = {
+  struct planner_sample s[2] = {
     mk_sample("foo", 0, 2, 0, 4), // chunk (0,0)
     mk_sample("foo", 2, 4, 4, 8), // chunk (1,1)
   };
@@ -436,7 +436,7 @@ test_empty_chunk_becomes_fill(void)
   if (fixture_init(&f, offsets, nbytes))
     return 1;
 
-  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8); // all 4 chunks
+  struct planner_sample s = mk_sample("foo", 0, 4, 0, 8); // all 4 chunks
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
 
@@ -487,7 +487,7 @@ test_fill_value_int16_neg1(void)
   if (fixture_init_with_json(&f, INT16_FILL_NEG1_ZARR_JSON, offsets, nbytes))
     return 1;
 
-  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  struct planner_sample s = mk_sample("foo", 0, 4, 0, 8);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
 
@@ -530,7 +530,7 @@ test_fill_value_f32_nan(void)
   if (fixture_init_with_json(&f, F32_FILL_NAN_ZARR_JSON, offsets, nbytes))
     return 1;
 
-  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  struct planner_sample s = mk_sample("foo", 0, 4, 0, 8);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
   struct read_op reads[8] = { 0 };
@@ -593,7 +593,7 @@ test_missing_shard_becomes_fill(void)
   struct planner* planner = NULL;
   EXPECT(planner_create(&pcfg, &planner) == DAMACY_OK);
 
-  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  struct planner_sample s = mk_sample("foo", 0, 4, 0, 8);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
   struct read_op reads[8] = { 0 };
@@ -639,7 +639,7 @@ test_page_alignment(void)
   if (fixture_init(&f, offsets, nbytes))
     return 1;
 
-  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  struct planner_sample s = mk_sample("foo", 0, 4, 0, 8);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
   struct read_op reads[8] = { 0 };
@@ -694,7 +694,7 @@ run_blosc_codec_id_case(const char* cname, uint8_t expected_codec_id)
   if (fixture_init_with_json(&f, json, offsets, nbytes))
     return 1;
 
-  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  struct planner_sample s = mk_sample("foo", 0, 4, 0, 8);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
 
@@ -735,7 +735,7 @@ run_blosc_lz4_rejected_case(const char* cname)
   if (fixture_init_with_json(&f, json, offsets, nbytes))
     return 1;
 
-  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  struct planner_sample s = mk_sample("foo", 0, 4, 0, 8);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
 
@@ -787,7 +787,7 @@ test_codec_id_none(void)
   if (fixture_init_with_json(&f, NONE_ZARR_JSON, offsets, nbytes))
     return 1;
 
-  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  struct planner_sample s = mk_sample("foo", 0, 4, 0, 8);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
 
@@ -829,7 +829,7 @@ test_codec_id_blosc_unknown_cname(void)
   if (fixture_init_with_json(&f, json, offsets, nbytes))
     return 1;
 
-  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  struct planner_sample s = mk_sample("foo", 0, 4, 0, 8);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
 
@@ -945,7 +945,7 @@ test_unsharded_single_chunk(void)
     return 1;
 
   // Sample covers exactly chunk (1, 0): y in [2,4), x in [0,4).
-  struct damacy_sample s = mk_sample("foo", 2, 4, 0, 4);
+  struct planner_sample s = mk_sample("foo", 2, 4, 0, 4);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 2, 4, dst_strides);
 
@@ -993,7 +993,7 @@ test_unsharded_multi_chunk(void)
   if (fixture_init_unsharded(&f, chunk_bytes))
     return 1;
 
-  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  struct planner_sample s = mk_sample("foo", 0, 4, 0, 8);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
 
@@ -1080,7 +1080,7 @@ test_sharded_index_start(void)
   };
   EXPECT(planner_create(&pcfg, &f.planner) == DAMACY_OK);
 
-  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  struct planner_sample s = mk_sample("foo", 0, 4, 0, 8);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
   struct read_op reads[8] = { 0 };
@@ -1123,7 +1123,7 @@ test_coalesce_adjacent_pages(void)
   if (fixture_init(&f, offsets, nbytes))
     return 1;
 
-  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  struct planner_sample s = mk_sample("foo", 0, 4, 0, 8);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
 
@@ -1169,7 +1169,7 @@ test_coalesce_gap_blocks_fusion(void)
   if (fixture_init(&f, offsets, nbytes))
     return 1;
 
-  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  struct planner_sample s = mk_sample("foo", 0, 4, 0, 8);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
 
@@ -1216,7 +1216,7 @@ test_coalesce_fill_does_not_block_fusion(void)
   if (fixture_init(&f, offsets, nbytes))
     return 1;
 
-  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  struct planner_sample s = mk_sample("foo", 0, 4, 0, 8);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
 
@@ -1277,7 +1277,7 @@ test_coalesce_non_monotonic_shard(void)
   if (fixture_init(&f, offsets, nbytes))
     return 1;
 
-  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  struct planner_sample s = mk_sample("foo", 0, 4, 0, 8);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
 
@@ -1322,7 +1322,7 @@ test_coalesce_cross_sample(void)
   if (fixture_init(&f, offsets, nbytes))
     return 1;
 
-  struct damacy_sample s[2] = {
+  struct planner_sample s[2] = {
     mk_sample("foo", 0, 2, 0, 8), // chunks (0,0) and (0,1)
     mk_sample("foo", 2, 4, 0, 8), // chunks (1,0) and (1,1)
   };

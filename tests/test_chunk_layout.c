@@ -309,7 +309,7 @@ test_planner_populates_layout_blosc_zstd(void)
   struct planner* planner = NULL;
   EXPECT(planner_create(&pcfg, &planner) == DAMACY_OK);
 
-  struct damacy_sample s = { .uri = "foo", .aabb = { .rank = 2 } };
+  struct planner_sample s = { .uri = "foo", .aabb = { .rank = 2 } };
   s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
   s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
   int64_t dst_strides[3] = { 16 * 32, 32, 1 };
@@ -385,7 +385,7 @@ test_planner_skips_layout_for_zstd(void)
   struct planner* planner = NULL;
   EXPECT(planner_create(&pcfg, &planner) == DAMACY_OK);
 
-  struct damacy_sample s = { .uri = "foo", .aabb = { .rank = 2 } };
+  struct planner_sample s = { .uri = "foo", .aabb = { .rank = 2 } };
   s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
   s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
   int64_t dst_strides[3] = { 16 * 32, 32, 1 };

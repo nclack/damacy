@@ -199,7 +199,7 @@ planner_destroy(struct planner* self)
 struct emit_ctx
 {
   // per-sample
-  const struct damacy_sample* sample;
+  const struct planner_sample* sample;
   const struct zarr_metadata* meta;
   const uint64_t* inner_per_shard_dim; // [meta->rank]
   const uint64_t* chunk_beg;           // [meta->rank], first chunk for sample
@@ -353,7 +353,7 @@ emit_chunk(const struct emit_ctx* ctx,
 
 enum damacy_status
 planner_plan(struct planner* self,
-             const struct damacy_sample* samples,
+             const struct planner_sample* samples,
              uint32_t n_samples,
              uint16_t batch_pool_slot,
              const int64_t* dst_strides,
@@ -383,7 +383,7 @@ planner_plan(struct planner* self,
   out->n_sample_plans = 0;
 
   for (uint32_t sample_idx = 0; sample_idx < n_samples; ++sample_idx) {
-    const struct damacy_sample* sample = &samples[sample_idx];
+    const struct planner_sample* sample = &samples[sample_idx];
     if (!sample->uri) {
       status = DAMACY_INVAL;
       goto Cleanup;
