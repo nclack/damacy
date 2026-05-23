@@ -228,12 +228,17 @@ advance_from_shard(struct prefetcher* p, struct prefetcher_slot* s)
 {
   int err = 0;
   for (uint32_t i = 0; i < s->n_shards; ++i) {
-    enum prefetch_state st =
-      prefetch_cache_query(p->shard_index_cache, s->h_shards[i], NULL, &err);
+    int per_shard_err = 0;
+    enum prefetch_state st = prefetch_cache_query(
+      p->shard_index_cache, s->h_shards[i], NULL, &per_shard_err);
     if (st == PREFETCH_STATE_PENDING)
       return;
-    if (st == PREFETCH_STATE_ERROR)
+    if (st == PREFETCH_STATE_ERROR && per_shard_err != DAMACY_NOTFOUND) {
+      // Missing shards (NOTFOUND) are normal — the planner emits fill.
+      // Other errors fail the whole sample.
+      err = per_shard_err;
       goto Bad;
+    }
   }
 
   s->h_layout = prefetch_cache_request(p->chunk_layout_cache,
