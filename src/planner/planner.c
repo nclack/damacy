@@ -5,12 +5,12 @@
 #include "planner/coalesce.h"
 #include "planner/group_chunks.h"
 #include "prefetch/prefetch_cache.h"
+#include "prefetch/shard_index.h"
 #include "util/path_intern.h"
 #include "util/prelude.h"
 #include "util/strbuf.h"
 #include "zarr/sample_shard_iterator.h"
 #include "zarr/zarr_metadata.h"
-#include "zarr/zarr_shard_cache.h"
 #include "zarr/zarr_shard_index.h"
 
 #include <stdlib.h>
@@ -159,7 +159,7 @@ planner_create(const struct planner_config* cfg, struct planner** out)
   CHECK_SILENT(Error, cfg);
   CHECK_SILENT(Error, cfg->array_meta_cache);
   CHECK_SILENT(Error, cfg->chunk_layout_cache);
-  CHECK_SILENT(Error, cfg->shard_cache);
+  CHECK_SILENT(Error, cfg->shard_index_cache);
   CHECK_SILENT(Error, cfg->page_alignment > 0);
   CHECK_SILENT(Error, cfg->max_chunks_per_wave > 0);
   CHECK_SILENT(Error, cfg->max_substreams_per_chunk > 0);
@@ -350,14 +350,8 @@ planner_plan(struct planner* self,
              uint8_t dst_full_rank,
              struct planner_output* out)
 {
-  // Pin held across shard-coord runs. Released on shard change and on
-  // every exit path (Cleanup). Zero-init = unpinned, safe to release.
-  struct zarr_shard_pin active_pin = { 0 };
   enum damacy_status status = DAMACY_OK;
 
-  // Precondition checks before any pin could be held — these don't go
-  // through Cleanup because `self` may be NULL (Cleanup dereferences
-  // self->cfg.shard_cache).
   CHECK_SILENT(Invalid, self);
   CHECK_SILENT(Invalid, samples);
   CHECK_SILENT(Invalid, out);
@@ -493,28 +487,32 @@ planner_plan(struct planner* self,
     }
 
     uint64_t shard_coord[DAMACY_MAX_RANK];
+    uint32_t shard_idx_in_sample = 0;
     while (sample_shard_iterator_next(&shard_it, shard_coord)) {
-      zarr_shard_cache_release(self->cfg.shard_cache, active_pin);
-      active_pin = (struct zarr_shard_pin){ 0 };
-
-      enum damacy_status shard_status =
-        zarr_shard_cache_get(self->cfg.shard_cache,
-                             sample->uri,
-                             meta,
-                             shard_coord,
-                             &active_pin,
-                             &ctx.shard_entries,
-                             &ctx.n_shard_entries);
-      if (shard_status == DAMACY_NOTFOUND) {
-        ctx.shard_missing = 1;
-        ctx.shard_entries = NULL;
-        ctx.n_shard_entries = 0;
-        ctx.interned_path = NULL;
-      } else if (shard_status != DAMACY_OK) {
-        status = shard_status;
+      if (shard_idx_in_sample >= sample->n_shards) {
+        status = DAMACY_INVAL;
         goto Cleanup;
+      }
+      struct prefetch_handle h = sample->h_shards[shard_idx_in_sample++];
+      const struct shard_index_value* sv =
+        (const struct shard_index_value*)prefetch_cache_try_get(
+          self->cfg.shard_index_cache, h);
+      if (!sv) {
+        int err = 0;
+        prefetch_cache_query(self->cfg.shard_index_cache, h, NULL, &err);
+        if (err == DAMACY_NOTFOUND) {
+          ctx.shard_missing = 1;
+          ctx.shard_entries = NULL;
+          ctx.n_shard_entries = 0;
+          ctx.interned_path = NULL;
+        } else {
+          status = err ? (enum damacy_status)err : DAMACY_DECODE;
+          goto Cleanup;
+        }
       } else {
         ctx.shard_missing = 0;
+        ctx.shard_entries = sv->entries;
+        ctx.n_shard_entries = sv->n_entries;
         if (zarr_shard_path_build(
               &self->path_sb, sample->uri, shard_coord, meta->rank)) {
           status = DAMACY_OOM;
@@ -568,9 +566,6 @@ planner_plan(struct planner* self,
     }
   }
 
-  zarr_shard_cache_release(self->cfg.shard_cache, active_pin);
-  active_pin = (struct zarr_shard_pin){ 0 };
-
   {
     status = planner_ensure_scratch(self, out->n_read_ops);
     if (status != DAMACY_OK)
@@ -595,7 +590,6 @@ planner_plan(struct planner* self,
   return DAMACY_OK;
 
 Cleanup:
-  zarr_shard_cache_release(self->cfg.shard_cache, active_pin);
   return status;
 
 Invalid:

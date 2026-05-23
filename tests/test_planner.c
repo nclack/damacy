@@ -14,8 +14,8 @@
 #include "store/store.h"
 #include "util/hash.h"
 #include "util/path_intern.h"
+#include "zarr/sample_shard_iterator.h"
 #include "zarr/zarr_metadata.h"
-#include "zarr/zarr_shard_cache.h"
 #include "zarr/zarr_shard_index.h"
 
 #include <stdio.h>
@@ -160,11 +160,12 @@ struct fixture
   struct prefetch_cache* shard_index_cache;
   struct chunk_layout_fetcher clf;
   struct prefetch_cache* chunk_layout_cache;
-  struct zarr_shard_cache* shards;
   struct planner* planner;
   struct path_intern paths;
   struct prefetch_handle h_meta;
   struct prefetch_handle h_layout;
+  struct prefetch_handle* shard_arrays[8];
+  uint32_t n_shard_arrays;
 };
 
 static int
@@ -210,11 +211,6 @@ fixture_wire_caches(struct fixture* f)
   });
   EXPECT(f->chunk_layout_cache);
 
-  f->shards = zarr_shard_cache_create(f->store, 4);
-  EXPECT(f->shards);
-
-  // Warm "foo" so mk_sample's handles are usable. h_layout intentionally
-  // resolves to NULL value (no shard_index cache) — planner uses caps.
   f->h_meta = prefetch_cache_request(
     f->array_meta_cache, hash_fnv1a_str("foo"), "foo", 0, NULL);
   EXPECT(prefetch_handle_valid(f->h_meta));
@@ -225,7 +221,7 @@ fixture_wire_caches(struct fixture* f)
   struct planner_config pcfg = {
     .array_meta_cache = f->array_meta_cache,
     .chunk_layout_cache = f->chunk_layout_cache,
-    .shard_cache = f->shards,
+    .shard_index_cache = f->shard_index_cache,
     .max_chunks_per_wave = DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE,
     .max_substreams_per_chunk = DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK,
     .page_alignment = PAGE,
@@ -269,21 +265,18 @@ static void
 fixture_destroy(struct fixture* f)
 {
   planner_destroy(f->planner);
-  zarr_shard_cache_destroy(f->shards);
   prefetch_cache_destroy(f->chunk_layout_cache);
   prefetch_cache_destroy(f->shard_index_cache);
   prefetch_cache_destroy(f->array_meta_cache);
   store_destroy(f->store);
   path_intern_free(&f->paths);
+  for (uint32_t i = 0; i < f->n_shard_arrays; ++i)
+    free(f->shard_arrays[i]);
   fixture_rm_tree(f->root);
 }
 
 static struct planner_sample
-mk_sample(const struct fixture* f,
-          int64_t y0,
-          int64_t y1,
-          int64_t x0,
-          int64_t x1)
+mk_sample(struct fixture* f, int64_t y0, int64_t y1, int64_t x0, int64_t x1)
 {
   struct planner_sample s = {
     .uri = "foo",
@@ -293,6 +286,33 @@ mk_sample(const struct fixture* f,
   };
   s.aabb.dims[0] = (struct damacy_interval){ .beg = y0, .end = y1 };
   s.aabb.dims[1] = (struct damacy_interval){ .beg = x0, .end = x1 };
+
+  const struct zarr_metadata* meta =
+    (const struct zarr_metadata*)prefetch_cache_try_get(f->array_meta_cache,
+                                                        f->h_meta);
+  if (!meta)
+    return s;
+  struct sample_shard_iterator it;
+  if (sample_shard_iterator_init(&it, meta, &s.aabb) != 0)
+    return s;
+  uint64_t n = 1;
+  for (uint8_t d = 0; d < it.rank; ++d)
+    n *= (it.shard_end[d] - it.shard_beg[d]);
+  if (n == 0)
+    return s;
+  struct prefetch_handle* arr =
+    (struct prefetch_handle*)calloc((size_t)n, sizeof(struct prefetch_handle));
+  if (!arr)
+    return s;
+  struct shard_index_key probe = { .uri = "foo", .rank = meta->rank };
+  uint32_t i = 0;
+  while (sample_shard_iterator_next(&it, probe.shard_coord))
+    arr[i++] = prefetch_cache_request(
+      f->shard_index_cache, shard_index_key_hash(&probe), &probe, 0, NULL);
+  s.h_shards = arr;
+  s.n_shards = (uint32_t)n;
+  if (f->n_shard_arrays < sizeof f->shard_arrays / sizeof f->shard_arrays[0])
+    f->shard_arrays[f->n_shard_arrays++] = arr;
   return s;
 }
 
