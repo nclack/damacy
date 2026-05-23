@@ -188,12 +188,6 @@ add_src_lib(zarr_chunk_layout SOURCES zarr/zarr_chunk_layout.h zarr/zarr_chunk_l
     LINKS zarr store log
 )
 
-# damacy.h is header-included for the damacy_status enum; no link needed
-# (no symbols referenced).
-add_src_lib(zarr_meta_cache SOURCES zarr/zarr_meta_cache.h zarr/zarr_meta_cache.c
-    LINKS zarr zarr_chunk_layout lru store strbuf hash log
-)
-
 add_src_lib(zarr_shard_cache SOURCES zarr/zarr_shard_cache.h zarr/zarr_shard_cache.c
     LINKS zarr lru store strbuf hash log
 )
@@ -206,7 +200,7 @@ add_src_lib(planner
             planner/coalesce.h planner/coalesce.c
             planner/group_chunks.h planner/group_chunks.c
             planner/read_op_sort.h planner/read_op_sort.c
-    LINKS zarr_meta_cache zarr_shard_cache zarr dtype platform strbuf
+    LINKS prefetch_cache zarr_shard_cache zarr dtype platform strbuf
           path_intern log
 )
 
@@ -239,7 +233,7 @@ add_cuda_lib(damacy
     SOURCES damacy.h damacy_internal.h
             damacy_lifecycle.c damacy_push.c damacy_plan.c damacy_pop.c
             damacy_scheduler.c damacy_status.c
-    LINKS platform planner zarr_meta_cache zarr_shard_cache zarr store
+    LINKS platform planner zarr_shard_cache zarr store
           decoder assemble dtype log lookahead gpu_budget
           batch_pool wave_pool wave_budget damacy_stats damacy_config
           damacy_nvtx strbuf scheduler io_queue

@@ -15,7 +15,6 @@
 #include "scheduler/scheduler.h"
 #include "store/store.h"
 #include "wave/wave_pool.h"
-#include "zarr/zarr_meta_cache.h"
 #include "zarr/zarr_shard_cache.h"
 
 #include <cuda.h>
@@ -59,7 +58,6 @@ struct damacy
 
   struct store* store_host;
   struct store* store_gds;
-  struct zarr_meta_cache* meta_cache;
   struct zarr_shard_cache* shard_cache;
   struct planner* planner;
 

@@ -90,8 +90,6 @@ destroy_inner(struct damacy* self, int cuda_skip)
   self->planner = NULL;
   zarr_shard_cache_destroy(self->shard_cache);
   self->shard_cache = NULL;
-  zarr_meta_cache_destroy(self->meta_cache);
-  self->meta_cache = NULL;
   store_destroy(self->store_gds);
   self->store_gds = NULL;
   store_destroy(self->store_host);
@@ -293,9 +291,6 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     }
   }
 
-  self->meta_cache =
-    zarr_meta_cache_create(self->store_host, cfg->tuning.n_zarrs_meta_cache);
-  CHECK(Fail, self->meta_cache);
   self->shard_cache =
     zarr_shard_cache_create(self->store_host, cfg->tuning.n_shards_meta_cache);
   CHECK(Fail, self->shard_cache);
@@ -377,7 +372,8 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     log_info("damacy: compressed reads via cuFile / GDS (skip bulk H2D)");
 
   struct planner_config pcfg = {
-    .meta_cache = self->meta_cache,
+    .array_meta_cache = self->array_meta_cache,
+    .chunk_layout_cache = self->chunk_layout_cache,
     .shard_cache = self->shard_cache,
     .page_alignment = self->page_alignment,
     .max_chunk_uncompressed_bytes = runtime_chunk_cap,
