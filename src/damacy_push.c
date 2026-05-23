@@ -1,10 +1,7 @@
 #include "damacy.h"
 
-#include "damacy_config.h"
 #include "damacy_internal.h"
-#include "zarr/zarr_metadata.h"
 
-// 1 if `aabb` extents (assumed same rank as cfg) match cfg->sample_shape.
 static int
 sample_aabb_extents_match_cfg(const struct damacy_config* cfg,
                               const struct damacy_aabb* aabb)
@@ -17,23 +14,14 @@ sample_aabb_extents_match_cfg(const struct damacy_config* cfg,
   return 1;
 }
 
+// Cfg-only validations; URI / dtype / per-array rank checks now surface
+// at decode time via the prefetcher pipeline.
 static enum damacy_status
 push_one(struct damacy* self, const struct damacy_sample* sample)
 {
   if (!sample->uri)
     return DAMACY_INVAL;
   if (sample->aabb.rank == 0 || sample->aabb.rank > DAMACY_MAX_RANK)
-    return DAMACY_RANK;
-
-  struct zarr_metadata meta;
-  enum damacy_status ms =
-    zarr_meta_cache_get(self->meta_cache, sample->uri, &meta);
-  if (ms != DAMACY_OK)
-    return ms;
-
-  if (!cast_path_supported(self->cfg.dtype, meta.dtype))
-    return DAMACY_DTYPE;
-  if (sample->aabb.rank != meta.rank)
     return DAMACY_RANK;
   if (sample->aabb.rank != self->cfg.sample_rank)
     return DAMACY_RANK;
@@ -57,8 +45,8 @@ damacy_push(struct damacy* self, struct damacy_sample_slice samples)
     r.status = DAMACY_INVAL;
     return r;
   }
-  // No ctx_guard: push touches no CUDA. The lock guards lookahead +
-  // meta/shape checks against the worker's plan_into_slot drain.
+  // No ctx_guard: push touches no CUDA. The lock pairs lookahead_push
+  // with the worker's plan_reserve drain.
   scheduler_lock(self->sched);
   if (self->failed_status != DAMACY_OK) {
     r.status = DAMACY_SHUTDOWN;
