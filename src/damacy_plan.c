@@ -65,11 +65,7 @@ plan_reserve(struct damacy* self, uint16_t slot_idx, uint32_t n_samples)
         prefetcher_ready_free(&self->staging[j]);
       return DAMACY_AGAIN;
     }
-    if (self->staging[i].state == PREFETCHER_ERROR &&
-        self->staging[i].err_code != DAMACY_NOTFOUND) {
-      // PR-1 still routes (uri, aabb) through the legacy planner, which
-      // independently substitutes fill for NOTFOUND chunks. Surface other
-      // prefetch errors here; the planner will handle missing data.
+    if (self->staging[i].state == PREFETCHER_ERROR) {
       enum damacy_status es = self->staging[i].err_code
                                 ? (enum damacy_status)self->staging[i].err_code
                                 : DAMACY_INVAL;

@@ -1,7 +1,7 @@
 // Shared test fixture helpers for the fs-backed integration tests
-// (test_zarr_meta_cache, test_zarr_shard_cache, test_planner,
-// test_damacy). Provides the EXPECT / RUN macros indirectly via
-// expect.h; declares fs-side scaffolding implemented in fixture.c.
+// (test_array_meta, test_shard_index, test_planner, test_damacy).
+// Provides the EXPECT / RUN macros indirectly via expect.h; declares
+// fs-side scaffolding implemented in fixture.c.
 #pragma once
 
 #include "expect.h"

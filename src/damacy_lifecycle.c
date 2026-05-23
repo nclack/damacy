@@ -88,8 +88,6 @@ destroy_inner(struct damacy* self, int cuda_skip)
 
   planner_destroy(self->planner);
   self->planner = NULL;
-  zarr_shard_cache_destroy(self->shard_cache);
-  self->shard_cache = NULL;
   store_destroy(self->store_gds);
   self->store_gds = NULL;
   store_destroy(self->store_host);
@@ -291,10 +289,6 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     }
   }
 
-  self->shard_cache =
-    zarr_shard_cache_create(self->store_host, cfg->tuning.n_shards_meta_cache);
-  CHECK(Fail, self->shard_cache);
-
   self->prefetch_io_q = io_queue_create(2, &self->numa);
   CHECK(Fail, self->prefetch_io_q);
   self->io_exec.post = damacy_io_exec_post;
@@ -374,7 +368,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   struct planner_config pcfg = {
     .array_meta_cache = self->array_meta_cache,
     .chunk_layout_cache = self->chunk_layout_cache,
-    .shard_cache = self->shard_cache,
+    .shard_index_cache = self->shard_index_cache,
     .page_alignment = self->page_alignment,
     .max_chunk_uncompressed_bytes = runtime_chunk_cap,
     .read_op_max_bytes = resolve_max_read_op_bytes(cfg),
