@@ -278,18 +278,18 @@ damacy_stats_get(const struct damacy* self, struct damacy_stats* out)
   *out = m->stats;
   out->gpu_bytes_committed = gpu_budget_committed(m->budget);
   scheduler_unlock(m->sched);
-  // Cache stats have their own internal mutex; safe outside scheduler_lock.
-  if (m->meta_cache) {
-    struct zarr_meta_cache_stats ms;
-    zarr_meta_cache_stats_get(m->meta_cache, &ms);
-    out->zarr_meta_hits = ms.counters.hits;
-    out->zarr_meta_misses = ms.counters.misses;
+  // PR-1 keeps the public stat names; PR-2 will rename + add chunk_layout.
+  if (m->amc) {
+    struct prefetch_cache_stats cs;
+    prefetch_cache_stats_get(m->amc, &cs);
+    out->zarr_meta_hits = cs.counters.hits;
+    out->zarr_meta_misses = cs.counters.misses;
   }
-  if (m->shard_cache) {
-    struct zarr_shard_cache_stats ss;
-    zarr_shard_cache_stats_get(m->shard_cache, &ss);
-    out->shard_idx_hits = ss.counters.hits;
-    out->shard_idx_misses = ss.counters.misses;
+  if (m->sic) {
+    struct prefetch_cache_stats cs;
+    prefetch_cache_stats_get(m->sic, &cs);
+    out->shard_idx_hits = cs.counters.hits;
+    out->shard_idx_misses = cs.counters.misses;
   }
 }
 
