@@ -137,10 +137,12 @@ class Counters(BaseModel):
     reads_issued: int = 0
     distinct_zarrs: int
     distinct_shards: int
-    zarr_meta_hits: int
-    zarr_meta_misses: int
-    shard_idx_hits: int
-    shard_idx_misses: int
+    array_meta_hits: int
+    array_meta_misses: int
+    shard_index_hits: int
+    shard_index_misses: int
+    chunk_layout_hits: int
+    chunk_layout_misses: int
     gpu_bytes_committed: int = 0
 
 

@@ -154,8 +154,15 @@ def _counters_table(r: Results) -> Table:
         ),
         ("distinct_zarrs", f"{c.distinct_zarrs}"),
         ("distinct_shards", f"{c.distinct_shards}"),
-        ("zarr_meta hits/misses", f"{c.zarr_meta_hits:,} / {c.zarr_meta_misses:,}"),
-        ("shard_idx hits/misses", f"{c.shard_idx_hits:,} / {c.shard_idx_misses:,}"),
+        ("array_meta hits/misses", f"{c.array_meta_hits:,} / {c.array_meta_misses:,}"),
+        (
+            "shard_index hits/misses",
+            f"{c.shard_index_hits:,} / {c.shard_index_misses:,}",
+        ),
+        (
+            "chunk_layout hits/misses",
+            f"{c.chunk_layout_hits:,} / {c.chunk_layout_misses:,}",
+        ),
         ("gpu_bytes_committed", f"{c.gpu_bytes_committed / 1e6:,.1f} MB"),
     ]
     for k, v in rows:

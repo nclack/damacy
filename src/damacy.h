@@ -338,8 +338,11 @@ extern "C"
     struct damacy_metric pop_wait; // user thread blocked on the scheduler cv
     struct damacy_metric flush_wait;
 
-    uint64_t zarr_meta_hits, zarr_meta_misses;
-    uint64_t shard_idx_hits, shard_idx_misses;
+    struct
+    {
+      uint64_t hits;
+      uint64_t misses;
+    } array_meta, shard_index, chunk_layout;
     uint64_t batches_emitted;
     uint64_t batches_truncated;
     uint64_t waves_emitted;
