@@ -92,10 +92,11 @@ chunk_layout_fetch(struct prefetch_fetcher* self_,
   const struct shard_index_value* sv =
     (const struct shard_index_value*)prefetch_cache_peek(
       self->shard_index_cache, shard_index_key_hash(&probe), &probe);
+  // Missing or empty shard ⇒ no chunk to probe; the decoder uses caps.
+  // Same outcome as the non-blosc path above.
   if (!sv) {
-    log_error("chunk_layout_fetch: shard_index not ready for uri=%s", uri);
-    *out_err = DAMACY_INVAL;
-    return 1;
+    *out_value = NULL;
+    return 0;
   }
 
   uint64_t chunk_off = 0;
@@ -110,8 +111,8 @@ chunk_layout_fetch(struct prefetch_fetcher* self_,
     }
   }
   if (!found) {
-    *out_err = DAMACY_NOTFOUND;
-    return 1;
+    *out_value = NULL;
+    return 0;
   }
 
   struct strbuf path = { 0 };
