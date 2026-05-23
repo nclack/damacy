@@ -405,8 +405,8 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     CHECK(Fail, self->prefetcher);
   }
 
-  self->batch_stage = (struct damacy_sample*)calloc(
-    cfg->batch_size, sizeof(struct damacy_sample));
+  self->batch_stage = (struct planner_sample*)calloc(
+    cfg->batch_size, sizeof(struct planner_sample));
   CHECK(Fail, self->batch_stage);
   self->staging = (struct prefetcher_ready*)calloc(
     cfg->batch_size, sizeof(struct prefetcher_ready));
