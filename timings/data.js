@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779549727257,
+  "lastUpdate": 1779644131151,
   "repoUrl": "https://github.com/nclack/damacy",
   "entries": {
     "damacy timings": [
@@ -2193,6 +2193,88 @@ window.BENCHMARK_DATA = {
           {
             "name": "damacy/mixed/assemble.ms_avg",
             "value": 1.8894,
+            "unit": "ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Nathan Clack",
+            "username": "nclack",
+            "email": "nclack@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "5672f7e6bbe2a34a7f45529db72e8951c076fb90",
+          "message": "Runtime tuning: chunks/wave + substreams/chunk (#112)\n\n## Approach\n\nClose #101 by removing the dead static fallback and replacing the\nad-hoc structural constants it derived from with explicit\n`damacy_tuning` knobs.\n\n`chunk_substreams_upper_bound` (formerly `chunk_zsubs_upper_bound`)\nin `src/wave/wave_pool.c` sizes the per-wave fanout SOA and the\nshared nvcomp zstd decoder scratch. Its `!sp->layout_probed` fallback\nreturned a hardcoded `DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK = 32` — the\nadversarial worst case. But `wave_chunks_eligible` (per-chunk gate,\nruns before `prepare_decode_caps` in `kick_h2d`) rejects any wave\ncontaining an unprobed BLOSC_ZSTD chunk with `DAMACY_INVAL`, so the\nfallback is structurally unreachable. The \"perf\" framing of the\noriginal issue was moot.\n\nThis PR:\n\n- **Turns the implicit gate-vs-sizer contract into an explicit\n  check.** `chunk_substreams_upper_bound` now returns\n  `enum damacy_status`; on unprobed BLOSC it returns `DAMACY_INVAL`\n  with a `log_error(\"gate-vs-sizer contract violated\")` at the\n  caller. A future gate regression now fails loudly instead of\n  silently undersizing the fanout SOA.\n- **Replaces the two compile-time constants**\n(`DAMACY_MAX_CHUNKS_PER_WAVE`,\n`DAMACY_BLOSC_MAX_BLOCKS_PER_CHUNK`) with\n`damacy_tuning.max_chunks_per_wave`\n  and `damacy_tuning.max_substreams_per_chunk`. The parser, planner,\n  coalesce, wave_pool, fanout, wave_budget, and meta_cache all thread\n  the effective values through their existing param chains. New\n  `DAMACY_DEFAULT_*` siblings preserve current behavior; `0` in either\n  field resolves to the default. `WAVE_ZSUBS_STRUCTURAL_MAX` becomes\n  a runtime field `wave_pool.max_substreams_per_wave` derived once at\n  init.\n- **Drops the dead substream rename target.** `zsubs` was a\n  contraction that read as zstd-specific; renames to `substreams`\n  everywhere (the noun that matches both BLOSC1 spec language and the\n  nvcomp batched-decode input it actually counts).\n- **Strips machinery wired only to the unreachable branch:** the\n  `_Atomic(uint16_t) observed_max_nblocks_per_chunk` slot, its\n  `atomic_u16_observe_max` CAS-loop helper (`src/util/atomic_max.h`),\n  the meta-cache observer setter, the bump sites in\n  `zarr_meta_cache_layout_set` / `_probe_layout`, and the wiring in\n  `damacy_create`. `zarr/zarr_meta_cache.h` returns to `extern \"C\"`\n  shape (matches main) — the C-only `static_assert` is no longer\n  needed.\n\n## API\n\nTwo new optional fields on `damacy_tuning` (Python `Config`):\n\n- `max_chunks_per_wave: int = 0` — `0` → 512 (current behavior).\n  Clamped to `0xFFFFu` (the 16-bit chunk_idx packing in\n  `d_block_chunk_map`).\n- `max_substreams_per_chunk: int = 0` — `0` → 32 (current behavior).\n  Parser rejects blosc1 layouts above this with `DAMACY_DECODE`.\n\n## Key file\n\n`src/wave/wave_pool.c:355` — `chunk_substreams_upper_bound` (the\ncontract check) and `prepare_decode_caps` (caller).\n\nCloses #101.",
+          "timestamp": "2026-05-21T18:39:34Z",
+          "url": "https://github.com/nclack/damacy/commit/5672f7e6bbe2a34a7f45529db72e8951c076fb90"
+        },
+        "date": 1779644130368,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "damacy/default/init",
+            "value": 77.7766,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/time_to_first_batch",
+            "value": 1009.54,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/wall",
+            "value": 8501.49,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/io.ms_avg",
+            "value": 3.10811,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/h2d.ms_avg",
+            "value": 3.86281,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/assemble.ms_avg",
+            "value": 1.62736,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/init",
+            "value": 79.489,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/time_to_first_batch",
+            "value": 221.485,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/wall",
+            "value": 8679.95,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/io.ms_avg",
+            "value": 3.00842,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/h2d.ms_avg",
+            "value": 3.9285,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/assemble.ms_avg",
+            "value": 1.82366,
             "unit": "ms"
           }
         ]
