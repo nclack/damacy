@@ -13,7 +13,7 @@ extern "C"
     uint32_t generation;
   };
 
-  static const struct prefetch_handle PREFETCH_HANDLE_NONE = { 0, 0 };
+#define PREFETCH_HANDLE_NONE ((struct prefetch_handle){ 0, 0 })
 
 #ifdef __cplusplus
 }
