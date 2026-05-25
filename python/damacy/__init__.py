@@ -1112,11 +1112,13 @@ class Pipeline:
         generator, infinite generator, …); large or unbounded sources
         are pulled lazily as :meth:`pop` frees space.
 
-        Fatal errors from the C-side validator (``NotFound``,
-        ``DtypeMismatch``, ``RankMismatch``, …) raise the matching
-        :class:`DamacyError` subclass; the offending iterator is
-        discarded but samples accepted by earlier ``push`` calls are
-        unaffected.
+        Local validation (shape/rank against ``Config.sample_shape``)
+        raises the matching :class:`DamacyError` subclass here and
+        discards the offending iterator. Errors that depend on store
+        contents — :class:`NotFound`, :class:`DtypeMismatch`,
+        per-array :class:`RankMismatch`, decode failures — surface at
+        :meth:`pop` instead, since the pipeline fetches metadata
+        asynchronously after push returns.
         """
         self._check_open()
         self._pending.append(iter(samples))

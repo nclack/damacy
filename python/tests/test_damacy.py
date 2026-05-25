@@ -224,21 +224,21 @@ def test_push_pop_release_via_context_managers(tiny_zarr):
             assert "Batch" in repr(batch)
 
 
-@pytest.mark.skip(reason="PR-3 will update expected error placement (push → pop)")
-def test_unknown_uri_raises_notfound(tiny_zarr):
+def test_unknown_uri_surfaces_at_pop_as_notfound(tiny_zarr):
     _ = tiny_zarr
     with Pipeline(_base_config()) as d:
+        d.push([Sample(uri="not_a_zarr", aabb=[(0, 8), (0, 16)])])
         with pytest.raises(NotFound) as excinfo:
-            d.push([Sample(uri="not_a_zarr", aabb=[(0, 8), (0, 16)])])
+            d.pop()
         assert excinfo.value.status is Status.NOTFOUND
 
 
-@pytest.mark.skip(reason="PR-3 will update expected error placement (push → pop)")
-def test_unsupported_src_dtype_raises_dtype_mismatch(tiny_zarr_no_cast):
+def test_unsupported_src_dtype_surfaces_at_pop_as_dtype_mismatch(tiny_zarr_no_cast):
     uri = tiny_zarr_no_cast
     with Pipeline(_base_config(dtype="f32")) as d:
+        d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
         with pytest.raises(DtypeMismatch) as excinfo:
-            d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
+            d.pop()
         assert excinfo.value.status is Status.DTYPE
 
 
@@ -345,21 +345,18 @@ def test_push_chains_multiple_calls(tiny_zarr):
         assert _drain_ids(d, 5) == [0, 1, 2, 3, 4]
 
 
-@pytest.mark.skip(reason="PR-3 will update expected error placement (push → pop)")
-def test_push_error_drops_offending_iterator(tiny_zarr):
-    """A NotFound surfaces the error and discards the failing iterator's
-    tail. Samples accepted by earlier ``push`` calls (already in the
-    native lookahead) still resolve through ``pop``."""
+def test_pop_error_makes_pipeline_terminal(tiny_zarr):
+    """Once an async error (here, NotFound) surfaces at pop, the pipeline
+    failed_status is sticky — subsequent pops re-raise the same status."""
     uri = tiny_zarr
     good = Sample(uri=uri, aabb=[(0, 8), (0, 16)])
     bad = Sample(uri="not_a_zarr", aabb=[(0, 8), (0, 16)])
     with Pipeline(_base_config()) as d:
-        d.push([good])  # drains synchronously into native
+        d.push([bad, good])
         with pytest.raises(NotFound):
-            d.push([bad, good])  # raises on bad; the trailing good is dropped
-        # The first push's sample is in the lookahead and still pops.
-        with d.pop() as b:
-            assert b.info.batch_id == 0
+            d.pop()
+        with pytest.raises(NotFound):
+            d.pop()
 
 
 # ---- Config dataclass --------------------------------------------------
