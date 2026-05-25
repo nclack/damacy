@@ -140,6 +140,8 @@ extern "C"
     struct prefetch_cache* array_meta_cache;
     struct prefetch_cache* chunk_layout_cache;
     struct prefetch_cache* shard_index_cache;
+    // Source dtype lacking a cast path to this fails with DAMACY_DTYPE.
+    enum damacy_dtype dst_dtype;
     // Page alignment used for read_op.file_offset / nbytes. Typically
     // platform_page_alignment(), captured once at create.
     uint64_t page_alignment;

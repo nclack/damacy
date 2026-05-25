@@ -1,5 +1,6 @@
 #include "planner/planner.h"
 
+#include "damacy_config.h"
 #include "dtype/dtype.h"
 #include "log/log.h"
 #include "planner/coalesce.h"
@@ -398,6 +399,10 @@ planner_plan(struct planner* self,
     }
     if ((uint8_t)(meta->rank + 1) != dst_full_rank) {
       status = DAMACY_RANK;
+      goto Cleanup;
+    }
+    if (!cast_path_supported(self->cfg.dst_dtype, meta->dtype)) {
+      status = DAMACY_DTYPE;
       goto Cleanup;
     }
     if (meta->inner_codec.id == CODEC_BLOSC_LZ4) {
