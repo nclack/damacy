@@ -30,6 +30,27 @@ that cap to fit the dataset, and raise `max_gpu_memory_bytes`
 along with it if needed. See
 [GPU memory budget](budget.md#when-the-budget-refuses).
 
+## `NotFound` or `DtypeMismatch` from `pop()` (not `push()`)
+
+`push()` only validates what's locally checkable — sample shape and
+rank against `Config.sample_shape`. Errors that depend on store
+contents — missing URIs, unsupported source dtypes, per-array rank
+mismatch — surface from `pop()`, since damacy fetches the zarr
+metadata asynchronously after `push()` returns.
+
+```python
+with Pipeline(cfg) as d:
+    d.push([Sample(uri="missing", aabb=[(0, 8), (0, 16)])])  # returns fine
+    try:
+        d.pop()                                              # raises NotFound
+    except NotFound:
+        ...
+```
+
+Once any pop-side error fires, the pipeline is terminal — subsequent
+`pop()` calls re-raise the same status. Build a fresh `Pipeline` to
+recover.
+
 ## `PoolStarved` from `pop()`
 
 The pool was empty for longer than `Config.pop_timeout_s`
