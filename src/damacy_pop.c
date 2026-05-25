@@ -183,7 +183,9 @@ damacy_flush(struct damacy* self)
   }
 
   // Worker only plans at full batch_size; flush emits the truncated tail.
-  if (self->lookahead.size > 0 && self->lookahead.size < self->cfg.batch_size) {
+  // TODO: misses tails already pulled by prefetcher into PENDING.
+  uint32_t la_size = lookahead_size(&self->lookahead);
+  if (la_size > 0 && la_size < self->cfg.batch_size) {
     // Wait until a slot is FREE *and* no other plan is in progress.
     // plan_run releases the lock so a worker plan could be mid-flight;
     // both predicates are re-evaluated together under the lock on every
@@ -199,8 +201,7 @@ damacy_flush(struct damacy* self)
       goto Done;
     }
     int free_slot = find_free_batch_slot(&self->batch_pool);
-    uint32_t n = self->lookahead.size;
-    r = plan_reserve(self, (uint16_t)free_slot, n);
+    r = plan_reserve(self, (uint16_t)free_slot, la_size);
     if (r != DAMACY_OK)
       goto Done;
     scheduler_unlock(self->sched);

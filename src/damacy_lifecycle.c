@@ -84,8 +84,6 @@ destroy_inner(struct damacy* self, int cuda_skip)
   self->staging = NULL;
   free(self->batch_stage);
   self->batch_stage = NULL;
-  free(self->batch_samples);
-  self->batch_samples = NULL;
   lookahead_destroy(&self->lookahead);
   batch_pool_destroy(&self->batch_pool, cuda_skip);
 
@@ -318,7 +316,8 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     self->array_meta_cache = prefetch_cache_create(&amc_cfg);
     CHECK(Fail, self->array_meta_cache);
   }
-  shard_index_fetcher_init(&self->shard_index_fetcher, self->store_host, self->array_meta_cache);
+  shard_index_fetcher_init(
+    &self->shard_index_fetcher, self->store_host, self->array_meta_cache);
   {
     struct prefetch_cache_config sic_cfg = {
       .capacity = cfg->tuning.n_shards_meta_cache,
@@ -406,9 +405,6 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     CHECK(Fail, self->prefetcher);
   }
 
-  self->batch_samples = (struct damacy_sample_slot*)calloc(
-    cfg->batch_size, sizeof(struct damacy_sample_slot));
-  CHECK(Fail, self->batch_samples);
   self->batch_stage = (struct damacy_sample*)calloc(
     cfg->batch_size, sizeof(struct damacy_sample));
   CHECK(Fail, self->batch_stage);

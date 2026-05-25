@@ -29,6 +29,10 @@ struct damacy_batch
   uint64_t batch_id;
 };
 
+// Lock order (outer → inner): scheduler_lock → prefetcher->lock → cache->lock
+// → lookahead->lock. Code holding scheduler_lock may acquire any of the
+// inner locks; the reverse causes deadlock. The prefetcher worker never
+// takes scheduler_lock.
 struct damacy
 {
   struct damacy_config cfg;
@@ -80,7 +84,6 @@ struct damacy
   // driven directly by the orchestrator (no per-call ctx building).
   struct wave_pool wave_pool;
 
-  struct damacy_sample_slot* batch_samples;
   struct damacy_sample* batch_stage;
 
   struct damacy_batch handle;
