@@ -63,6 +63,8 @@ chunk_layout_fetch(struct prefetch_fetcher* self_,
     container_of(self_, struct chunk_layout_fetcher, base);
   const char* uri = (const char*)key;
 
+  // Borrowed under prefetcher stage ordering; upstream entry remains pinned
+  // until this slot transitions out of PENDING.
   const struct zarr_metadata* meta =
     (const struct zarr_metadata*)prefetch_cache_peek(
       self->array_meta_cache, hash_fnv1a_str(uri), uri);
@@ -83,6 +85,8 @@ chunk_layout_fetch(struct prefetch_fetcher* self_,
   for (uint8_t d = 0; d < meta->rank; ++d)
     probe.shard_coord[d] = 0;
 
+  // Borrowed under prefetcher stage ordering; upstream entry remains pinned
+  // until this slot transitions out of PENDING.
   const struct shard_index_value* sv =
     (const struct shard_index_value*)prefetch_cache_peek(
       self->shard_index_cache, shard_index_key_hash(&probe), &probe);

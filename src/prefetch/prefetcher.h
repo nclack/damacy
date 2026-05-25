@@ -53,6 +53,9 @@ extern "C"
   enum damacy_status prefetcher_drain(struct prefetcher* p);
 
   // uri + h_shards become caller-owned; release via prefetcher_ready_free.
+  // Always safe to call prefetcher_release_batch after popping any ERROR slot
+  // — it is a no-op if no batch entry was allocated (the batch-capacity-
+  // saturation path).
   struct prefetcher_ready
   {
     enum prefetcher_sample_state state; // READY or ERROR
@@ -88,6 +91,9 @@ extern "C"
   void prefetcher_ready_free(struct prefetcher_ready* r);
 
   // NULL if no in-flight samples; valid until released or destroyed.
+  // Returns NULL when the batch is unknown OR was rejected at batch-capacity
+  // saturation; in the saturation case a PREFETCHER_ERROR slot with
+  // DAMACY_OOM appears via pop_ready.
   const struct prefetch_gate* prefetcher_batch_gate(struct prefetcher* p,
                                                     uint64_t batch_id);
 

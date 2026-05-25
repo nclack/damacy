@@ -102,8 +102,8 @@ shard_index_fetch(struct prefetch_fetcher* self_,
     container_of(self_, struct shard_index_fetcher, base);
   const struct shard_index_key* k = (const struct shard_index_key*)key;
 
-  // Peek is safe: the prefetcher orders stage-2 after stage-1, so the
-  // array-meta entry is still pinned.
+  // Borrowed under prefetcher stage ordering; upstream entry remains pinned
+  // until this slot transitions out of PENDING.
   const struct zarr_metadata* meta =
     (const struct zarr_metadata*)prefetch_cache_peek(
       self->array_meta_cache, hash_fnv1a_str(k->uri), k->uri);

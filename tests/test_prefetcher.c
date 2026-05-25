@@ -647,26 +647,24 @@ test_batch_capacity_saturation_surfaces_error(void)
     EXPECT(lookahead_push_with_batch(&fx.la, &s, i) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
 
+  for (int i = 0; i < 8; ++i) {
+    struct prefetcher_ready r = { 0 };
+    EXPECT(prefetcher_pop_ready(fx.p, &r) == 1);
+    EXPECT(r.state == PREFETCHER_READY);
+    prefetcher_ready_free(&r);
+  }
+
   EXPECT(lookahead_push_with_batch(&fx.la, &s, 99) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
 
-  uint32_t found_ready = 0;
-  uint32_t found_overflow_error = 0;
-  for (uint32_t i = 0; i < 9; ++i) {
-    struct prefetcher_ready r = { 0 };
-    EXPECT(prefetcher_pop_ready(fx.p, &r) == 1);
-    if (r.batch_id == 99) {
-      EXPECT(r.state == PREFETCHER_ERROR);
-      EXPECT(r.err_code == DAMACY_OOM);
-      found_overflow_error++;
-    } else {
-      EXPECT(r.state == PREFETCHER_READY);
-      found_ready++;
-    }
-    prefetcher_ready_free(&r);
-  }
-  EXPECT(found_ready == 8);
-  EXPECT(found_overflow_error == 1);
+  struct prefetcher_ready r = { 0 };
+  EXPECT(prefetcher_pop_ready(fx.p, &r) == 1);
+  EXPECT(r.state == PREFETCHER_ERROR);
+  EXPECT(r.batch_id == 99);
+  EXPECT(r.err_code == DAMACY_OOM);
+  prefetcher_ready_free(&r);
+
+  prefetcher_release_batch(fx.p, 99);
   EXPECT(prefetcher_batch_gate(fx.p, 99) == NULL);
 
   fixture_teardown(&fx);

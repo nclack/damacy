@@ -56,8 +56,9 @@ extern "C"
   // post() returns 0: callee owns ctx (fn or ctx_free will free it).
   // post() returns non-zero: ownership stays with caller; the executor must
   // not have invoked ctx_free, or the caller's recovery path double-frees.
-  // post() runs under the prefetcher's lock; must be non-blocking and must
-  // not call back into the prefetcher or cache.
+  // post() is called without the cache lock held. When invoked from the
+  // prefetcher worker, the prefetcher's lock is held. post() must be
+  // non-blocking and must not call back into the cache or prefetcher.
   struct prefetch_executor
   {
     int (*post)(struct prefetch_executor* self,
@@ -88,7 +89,9 @@ extern "C"
                                                 uint64_t batch_id,
                                                 struct prefetch_gate* gate);
 
-  // NULL on pending, error, or stale generation.
+  // NULL on pending, error, stale generation, OR when the ready value happens
+  // to be NULL (callers using NULL as a 'no-value' sentinel). Use
+  // prefetch_cache_query for the unambiguous state.
   const void* prefetch_cache_try_get(const struct prefetch_cache* c,
                                      struct prefetch_handle h);
 

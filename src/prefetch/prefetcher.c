@@ -54,6 +54,9 @@ struct prefetcher
   _Atomic int stop;
   _Atomic int started;
 
+  // Closes the drain TOCTOU between lookahead_pop and admit_locked.
+  _Atomic uint32_t in_transit;
+
   uint64_t submitted;
   uint64_t ready;
   uint64_t errored;
@@ -309,7 +312,7 @@ admit_locked(struct prefetcher* p,
              struct prefetcher_slot* slot,
              struct damacy_sample_slot* popped)
 {
-  CHECK_SILENT(Drop, slot);
+  CHECK(Drop, slot);
 
   struct prefetcher_batch_entry* be =
     batch_get_or_create_locked(p, popped->batch_id);
@@ -367,8 +370,11 @@ worker_fn(void* arg)
       platform_sleep_ns(1000000);
 
     if (popped_ok) {
+      atomic_fetch_add_explicit(&p->in_transit, 1, memory_order_acq_rel);
       platform_mutex_lock(p->lock);
+      // scan_slots_locked only signals popped_ok when a FREE slot exists.
       admit_locked(p, slot, &popped);
+      atomic_fetch_sub_explicit(&p->in_transit, 1, memory_order_acq_rel);
       platform_mutex_unlock(p->lock);
     }
   }
@@ -465,7 +471,8 @@ prefetcher_drain(struct prefetcher* self)
 {
   CHECK(Bad, self);
   for (;;) {
-    if (lookahead_size(self->la) == 0) {
+    if (lookahead_size(self->la) == 0 &&
+        atomic_load_explicit(&self->in_transit, memory_order_acquire) == 0) {
       int active = 0;
       platform_mutex_lock(self->lock);
       for (uint32_t i = 0; i < self->capacity; ++i) {
