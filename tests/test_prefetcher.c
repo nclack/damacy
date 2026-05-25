@@ -77,7 +77,8 @@ fixture_setup_layout(struct fixture* fx,
   fx->array_meta_cache = prefetch_cache_create(&amc_cfg);
   EXPECT(fx->array_meta_cache);
 
-  shard_index_fetcher_init(&fx->shard_index_fetcher, fx->store, fx->array_meta_cache);
+  shard_index_fetcher_init(
+    &fx->shard_index_fetcher, fx->store, fx->array_meta_cache);
   struct prefetch_cache_config sic_cfg = {
     .capacity = 8,
     .max_probe = 16,
@@ -644,7 +645,7 @@ test_batch_capacity_saturation_surfaces_error(void)
   s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
 
   for (uint64_t i = 0; i < 8; ++i)
-    EXPECT(lookahead_push_with_batch(&fx.la, &s, i) == 0);
+    EXPECT(lookahead_push_with_batch(&fx.lookahead, &s, i) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
 
   for (int i = 0; i < 8; ++i) {
@@ -654,7 +655,7 @@ test_batch_capacity_saturation_surfaces_error(void)
     prefetcher_ready_free(&r);
   }
 
-  EXPECT(lookahead_push_with_batch(&fx.la, &s, 99) == 0);
+  EXPECT(lookahead_push_with_batch(&fx.lookahead, &s, 99) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
 
   struct prefetcher_ready r = { 0 };

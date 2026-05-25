@@ -399,7 +399,8 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
       .shard_index_cache = self->shard_index_cache,
       .chunk_layout_cache = self->chunk_layout_cache,
       .capacity = cfg->lookahead_batches * cfg->batch_size,
-      .batch_capacity = cfg->lookahead_batches + 2,
+      // +4 covers the admit→release_batch transit window per batch_id.
+      .batch_capacity = cfg->lookahead_batches + 4,
     };
     self->prefetcher = prefetcher_create(&pf_cfg);
     CHECK(Fail, self->prefetcher);
