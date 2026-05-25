@@ -1118,7 +1118,9 @@ class Pipeline:
         contents — :class:`NotFound`, :class:`DtypeMismatch`,
         per-array :class:`RankMismatch`, decode failures — surface at
         :meth:`pop` instead, since the pipeline fetches metadata
-        asynchronously after push returns.
+        asynchronously after push returns. Once any such error fires,
+        the pipeline is terminal — rebuild a fresh :class:`Pipeline`
+        to recover.
         """
         self._check_open()
         self._pending.append(iter(samples))

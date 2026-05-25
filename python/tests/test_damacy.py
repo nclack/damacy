@@ -359,6 +359,17 @@ def test_pop_error_makes_pipeline_terminal(tiny_zarr):
             d.pop()
 
 
+def test_pop_dtype_error_makes_pipeline_terminal(tiny_zarr_no_cast):
+    """The DAMACY_DTYPE path surfaced at pop is also sticky."""
+    uri = tiny_zarr_no_cast
+    with Pipeline(_base_config(dtype="f32")) as d:
+        d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
+        with pytest.raises(DtypeMismatch):
+            d.pop()
+        with pytest.raises(DtypeMismatch):
+            d.pop()
+
+
 # ---- Config dataclass --------------------------------------------------
 
 
