@@ -63,20 +63,19 @@ destroy_inner(struct damacy* self, int cuda_skip)
   scheduler_destroy(self->sched);
   self->sched = NULL;
 
-  // Prefetcher joins its worker (and the cache-executor io_queue's
-  // workers via prefetcher_stop → lookahead signal). Must precede the
-  // prefetch caches and io_queue teardown so no in-flight fetch
-  // touches freed state.
+  // Order: stop producers (prefetcher) → drain consumers (io_queue) →
+  // free resources (caches). prefetch_fetch_worker locks cache mutexes
+  // on completion, so caches must outlive io_queue's pending tasks.
   prefetcher_destroy(self->prefetcher);
   self->prefetcher = NULL;
+  io_queue_destroy(self->prefetch_io_q);
+  self->prefetch_io_q = NULL;
   prefetch_cache_destroy(self->chunk_layout_cache);
   self->chunk_layout_cache = NULL;
   prefetch_cache_destroy(self->shard_index_cache);
   self->shard_index_cache = NULL;
   prefetch_cache_destroy(self->array_meta_cache);
   self->array_meta_cache = NULL;
-  io_queue_destroy(self->prefetch_io_q);
-  self->prefetch_io_q = NULL;
 
   wave_pool_destroy(&self->wave_pool, cuda_skip);
 
