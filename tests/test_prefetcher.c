@@ -525,6 +525,7 @@ test_admit_fail_releases_batch_entry(void)
   EXPECT(prefetcher_pop_ready(fx.p, &r) == 1);
   EXPECT(r.state == PREFETCHER_ERROR);
   EXPECT(r.batch_id == 99);
+  EXPECT(r.err_code == DAMACY_OOM);
   prefetcher_ready_free(&r);
 
   prefetcher_release_batch(fx.p, 99);

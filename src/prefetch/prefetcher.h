@@ -47,7 +47,9 @@ extern "C"
   int prefetcher_start(struct prefetcher* p);
   void prefetcher_stop(struct prefetcher* p); // idempotent
 
-  // Blocks until the lookahead is empty and no slots are pending.
+  // Blocks until the lookahead is empty and no slots are pending. Un-popped
+  // READY/ERROR slots still occupy capacity, so draining without popping
+  // can wedge the next push if capacity fills.
   enum damacy_status prefetcher_drain(struct prefetcher* p);
 
   // uri + h_shards become caller-owned; release via prefetcher_ready_free.

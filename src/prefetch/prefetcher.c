@@ -68,15 +68,11 @@ batch_lookup_locked(struct prefetcher* p, uint64_t batch_id)
   return NULL;
 }
 
-// Caller must pair with a refcount drop (batch_unref_locked or inline at admit
-// rollback). *out_was_new lets admit free a freshly-created entry directly on
-// failure — release_pending is 0, so plain unref would leak it.
+// Caller must pair with a refcount drop (batch_unref_locked); a failed admit
+// converts the slot to ERROR which still holds the ref until pop.
 static struct prefetcher_batch_entry*
-batch_get_or_create_locked(struct prefetcher* p,
-                           uint64_t batch_id,
-                           int* out_was_new)
+batch_get_or_create_locked(struct prefetcher* p, uint64_t batch_id)
 {
-  *out_was_new = 0;
   struct prefetcher_batch_entry* e = batch_lookup_locked(p, batch_id);
   if (e) {
     e->refcount++;
@@ -90,7 +86,6 @@ batch_get_or_create_locked(struct prefetcher* p,
       e->refcount = 1;
       e->release_pending = 0;
       prefetch_gate_init(&e->gate);
-      *out_was_new = 1;
       return e;
     }
   }
@@ -316,9 +311,8 @@ admit_locked(struct prefetcher* p,
 {
   CHECK_SILENT(Drop, slot);
 
-  int was_new = 0;
   struct prefetcher_batch_entry* be =
-    batch_get_or_create_locked(p, popped->batch_id, &was_new);
+    batch_get_or_create_locked(p, popped->batch_id);
   if (!be) {
     emit_error_slot_locked(p, slot, popped, NULL, DAMACY_OOM);
     return;
