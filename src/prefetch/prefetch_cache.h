@@ -56,6 +56,8 @@ extern "C"
   // post() returns 0: callee owns ctx (fn or ctx_free will free it).
   // post() returns non-zero: ownership stays with caller; the executor must
   // not have invoked ctx_free, or the caller's recovery path double-frees.
+  // post() runs under the prefetcher's lock; must be non-blocking and must
+  // not call back into the prefetcher or cache.
   struct prefetch_executor
   {
     int (*post)(struct prefetch_executor* self,

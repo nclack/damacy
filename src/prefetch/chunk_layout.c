@@ -77,6 +77,8 @@ chunk_layout_fetch(struct prefetch_fetcher* self_,
     return 1;
   }
 
+  // TODO(perf): origin-shard probe; far-from-origin workloads silently
+  // fall through to worst-case decoder caps. Needs cache API extension.
   struct shard_index_key probe = { .uri = uri, .rank = meta->rank };
   for (uint8_t d = 0; d < meta->rank; ++d)
     probe.shard_coord[d] = 0;

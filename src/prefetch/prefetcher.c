@@ -156,14 +156,14 @@ static void
 advance_from_meta(struct prefetcher* p, struct prefetcher_slot* s)
 {
   int err = 0;
-  enum prefetch_state st = prefetch_cache_query(p->amc, s->h_meta, NULL, &err);
+  const void* value = NULL;
+  enum prefetch_state st =
+    prefetch_cache_query(p->amc, s->h_meta, &value, &err);
   if (st == PREFETCH_STATE_PENDING)
     return;
   if (st == PREFETCH_STATE_ERROR)
     goto Bad;
-
-  const struct zarr_metadata* meta =
-    (const struct zarr_metadata*)prefetch_cache_try_get(p->amc, s->h_meta);
+  const struct zarr_metadata* meta = (const struct zarr_metadata*)value;
   CHECK(Bad, meta);
 
   struct sample_shard_iterator it;
@@ -344,6 +344,8 @@ worker_fn(void* arg)
     else if (slot)
       popped_ok = lookahead_pop_blocking_timeout(p->la, &popped, 1);
     else
+      // TODO(perf): replace polling with a condvar signaled from
+      // pop_terminal_slot_locked when a slot frees up.
       platform_sleep_ns(1000000);
 
     if (popped_ok) {

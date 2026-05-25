@@ -217,8 +217,12 @@ lru_slot_destroy(void* value, void* user)
     else if (s->state == PREFETCH_STATE_ERROR)
       c->errored_count--;
   }
-  if (s->n_waiters)
+  if (s->n_waiters) {
+    // Waiters' gates have pending counts incremented; drop them as ERROR
+    // before free, otherwise any prefetch_gate_is_ready waiter deadlocks.
     log_error("evicting slot with %u live waiters", s->n_waiters);
+    slot_release_waiters(s, 1);
+  }
   free(s->waiters_heap);
   if (s->key)
     c->ops->key_destroy(c->ops, s->key);
@@ -569,9 +573,13 @@ prefetch_cache_advance_watermark(struct prefetch_cache* self,
   }
   self->watermark = new_watermark;
   // Release pins; lru defers eviction until the slots are needed.
+  // PENDING slots keep their pin: prefetch_fetch_worker still holds a
+  // raw pointer to the slot and dereferences it on completion. Releasing
+  // here would let eviction free the slot mid-fetch.
   for (uint32_t i = 0; i < self->capacity; ++i) {
     struct prefetch_slot* s = self->active[i];
-    if (s && s->max_batch_id < new_watermark && s->lru_ent) {
+    if (s && s->state != PREFETCH_STATE_PENDING &&
+        s->max_batch_id < new_watermark && s->lru_ent) {
       lru_entry_release(s->lru_ent);
       s->lru_ent = NULL;
     }
