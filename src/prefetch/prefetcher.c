@@ -196,9 +196,10 @@ advance_from_meta(struct prefetcher* p, struct prefetcher_slot* s)
     s->h_shards[i] = prefetch_cache_request(
       p->sic, shard_index_key_hash(&probe), &probe, s->batch_id, s->gate);
     if (!prefetch_handle_valid(s->h_shards[i])) {
-      // Unwind the i successful gate increments; sync executors won't drain.
-      for (uint32_t j = 0; j < i; ++j)
-        prefetch_gate_dec_pending(s->gate);
+      // The K successful requests already registered the gate as a waiter
+      // (for PENDING/new slots). Their cache workers will dec_pending when
+      // they resolve. batch_try_free_locked gates the entry on
+      // gate_pending == 0, so recycling waits naturally.
       s->n_shards = i;
       err = DAMACY_OOM;
       goto Bad;

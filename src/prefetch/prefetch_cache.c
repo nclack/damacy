@@ -123,7 +123,7 @@ gate_inc_pending(struct prefetch_gate* g)
   atomic_fetch_add_explicit(&g->state, 1, memory_order_acq_rel);
 }
 
-void
+static void
 prefetch_gate_dec_pending(struct prefetch_gate* g)
 {
   if (!g)
