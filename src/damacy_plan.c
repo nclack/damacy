@@ -65,6 +65,8 @@ plan_reserve(struct damacy* self, uint16_t slot_idx, uint32_t n_samples)
         prefetcher_ready_free(&self->staging[j]);
       return DAMACY_AGAIN;
     }
+    // advance_from_shard absorbs NOTFOUND at the prefetcher level; a
+    // slot-level ERROR here is always a real error.
     if (self->staging[i].state == PREFETCHER_ERROR) {
       enum damacy_status es = self->staging[i].err_code
                                 ? (enum damacy_status)self->staging[i].err_code
