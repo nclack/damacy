@@ -33,6 +33,7 @@ Variants reuse a base via :func:`dataclasses.replace`::
 
 from __future__ import annotations
 
+import contextlib
 import itertools
 import logging
 import os
@@ -1182,7 +1183,11 @@ class Pipeline:
         such error fires, the pipeline is terminal; subsequent calls
         re-raise the same status."""
         self._check_open()
-        self._drain_pending()
+        # Swallow ShutdownError from drain so the sticky error from the
+        # native pipeline (NotFound/DtypeMismatch/…) surfaces from pop,
+        # not the secondary SHUTDOWN raised by re-pushing into a terminal.
+        with contextlib.suppress(ShutdownError):
+            self._drain_pending()
         timeout = self._config.pop_timeout_s
         if timeout is None:
             try:
