@@ -531,7 +531,14 @@ planner_plan(struct planner* self,
           self->cfg.shard_index_cache, h);
       if (!sv) {
         int err = 0;
-        prefetch_cache_query(self->cfg.shard_index_cache, h, NULL, &err);
+        enum prefetch_state st =
+          prefetch_cache_query(self->cfg.shard_index_cache, h, NULL, &err);
+        if (st == PREFETCH_STATE_PENDING) {
+          // Batch gate should have made this unreachable.
+          log_error("planner: shard still PENDING (uri=%s)", sample->uri);
+          status = DAMACY_INVAL;
+          goto Cleanup;
+        }
         if (err == DAMACY_NOTFOUND) {
           ctx.shard_missing = 1;
           ctx.shard_entries = NULL;
