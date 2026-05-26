@@ -164,7 +164,7 @@ struct fixture
   struct path_intern paths;
   struct prefetch_handle h_meta;
   struct prefetch_handle h_layout;
-  struct prefetch_handle* shard_arrays[8];
+  struct prefetch_handle* shard_arrays[32];
   uint32_t n_shard_arrays;
 };
 
@@ -295,28 +295,16 @@ mk_sample(struct fixture* f,
   const struct zarr_metadata* meta =
     (const struct zarr_metadata*)prefetch_cache_try_get(f->array_meta_cache,
                                                         f->h_meta);
-  if (!meta) {
-    *out = s;
-    return 0;
-  }
+  EXPECT(meta);
   struct sample_shard_iterator it;
-  if (sample_shard_iterator_init(&it, meta, &s.aabb) != 0) {
-    *out = s;
-    return 0;
-  }
+  EXPECT(sample_shard_iterator_init(&it, meta, &s.aabb) == 0);
   uint64_t n = 1;
   for (uint8_t d = 0; d < it.rank; ++d)
     n *= (it.shard_end[d] - it.shard_beg[d]);
-  if (n == 0) {
-    *out = s;
-    return 0;
-  }
+  EXPECT(n > 0);
   struct prefetch_handle* arr =
     (struct prefetch_handle*)calloc((size_t)n, sizeof(struct prefetch_handle));
-  if (!arr) {
-    *out = s;
-    return 0;
-  }
+  EXPECT(arr);
   struct shard_index_key probe = { .uri = "foo", .rank = meta->rank };
   uint32_t i = 0;
   while (sample_shard_iterator_next(&it, probe.shard_coord))
@@ -924,8 +912,6 @@ test_codec_id_none(void)
   return 0;
 }
 
-// Unknown blosc cname must propagate as a non-OK status; the resolver
-// only accepts {lz4, lz4hc, zstd}.
 static int
 test_codec_id_blosc_unknown_cname(void)
 {
@@ -939,26 +925,7 @@ test_codec_id_blosc_unknown_cname(void)
   if (fixture_init_with_json(&f, json, offsets, nbytes))
     return 1;
 
-  struct planner_sample s;
-  EXPECT(mk_sample(&f, 0, 4, 0, 8, &s) == 0);
-  int64_t dst_strides[3];
-  mk_dst_strides_2d(1, 4, 8, dst_strides);
-
-  struct read_op reads[8] = { 0 };
-  struct chunk_plan chunks[8] = { 0 };
-  struct sample_plan samples[4] = { 0 };
-  struct planner_output out = {
-    .read_ops = reads,
-    .read_ops_cap = 8,
-    .chunk_plans = chunks,
-    .chunk_plans_cap = 8,
-    .sample_plans = samples,
-    .sample_plans_cap = 4,
-    .read_op_groups = (struct read_op_group[8]){ { 0 } },
-    .read_op_groups_cap = 8,
-    .paths = &f.paths,
-  };
-  EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) != DAMACY_OK);
+  EXPECT(!prefetch_cache_try_get(f.array_meta_cache, f.h_meta));
 
   fixture_destroy(&f);
   return 0;
