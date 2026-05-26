@@ -408,7 +408,7 @@ planner_plan(struct planner* self,
     if (meta->inner_codec.id == CODEC_BLOSC_LZ4) {
       log_error("planner: blosc1-lz4 inner codec is not supported (uri=%s)",
                 sample->uri);
-      status = DAMACY_INVAL;
+      status = DAMACY_DECODE;
       goto Cleanup;
     }
 

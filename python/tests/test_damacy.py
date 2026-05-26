@@ -224,8 +224,7 @@ def test_push_pop_release_via_context_managers(tiny_zarr):
             assert "Batch" in repr(batch)
 
 
-def test_unknown_uri_surfaces_at_pop_as_notfound(tiny_zarr):
-    _ = tiny_zarr
+def test_unknown_uri_surfaces_at_pop_as_notfound():
     with Pipeline(_base_config()) as d:
         d.push([Sample(uri="not_a_zarr", aabb=[(0, 8), (0, 16)])])
         with pytest.raises(NotFound) as excinfo:
@@ -345,14 +344,12 @@ def test_push_chains_multiple_calls(tiny_zarr):
         assert _drain_ids(d, 5) == [0, 1, 2, 3, 4]
 
 
-def test_pop_error_makes_pipeline_terminal(tiny_zarr):
+def test_pop_error_makes_pipeline_terminal():
     """Once an async error (here, NotFound) surfaces at pop, the pipeline
     failed_status is sticky — subsequent pops re-raise the same status."""
-    uri = tiny_zarr
-    good = Sample(uri=uri, aabb=[(0, 8), (0, 16)])
     bad = Sample(uri="not_a_zarr", aabb=[(0, 8), (0, 16)])
     with Pipeline(_base_config()) as d:
-        d.push([bad, good])
+        d.push([bad])
         with pytest.raises(NotFound):
             d.pop()
         with pytest.raises(NotFound):

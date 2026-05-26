@@ -1174,7 +1174,13 @@ class Pipeline:
         Raises :class:`PoolStarved` if no batch arrives within
         ``Config.pop_timeout_s`` seconds (default 30). Usually that
         means tensors from previous batches are still being held —
-        drop them, or ``.clone()`` if you need to keep them."""
+        drop them, or ``.clone()`` if you need to keep them.
+
+        Store-derived errors — :class:`NotFound`,
+        :class:`DtypeMismatch`, per-array :class:`RankMismatch`,
+        decode failures — surface here rather than at push. Once any
+        such error fires, the pipeline is terminal; subsequent calls
+        re-raise the same status."""
         self._check_open()
         self._drain_pending()
         timeout = self._config.pop_timeout_s

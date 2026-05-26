@@ -829,7 +829,7 @@ run_blosc_codec_id_case(const char* cname, uint8_t expected_codec_id)
   return 0;
 }
 
-// Planner rejects blosc1-lz4 with DAMACY_INVAL (codec is no longer supported).
+// Planner rejects blosc1-lz4 with DAMACY_DECODE (codec is no longer supported).
 static int
 run_blosc_lz4_rejected_case(const char* cname)
 {
@@ -863,7 +863,7 @@ run_blosc_lz4_rejected_case(const char* cname)
     .paths = &f.paths,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) ==
-         DAMACY_INVAL);
+         DAMACY_DECODE);
 
   fixture_destroy(&f);
   return 0;
