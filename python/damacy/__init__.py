@@ -1121,7 +1121,8 @@ class Pipeline:
         :meth:`pop` instead, since the pipeline fetches metadata
         asynchronously after push returns. Once any such error fires,
         the pipeline is terminal — rebuild a fresh :class:`Pipeline`
-        to recover.
+        to recover. Calling :meth:`push` on a terminal pipeline raises
+        :class:`ShutdownError`.
         """
         self._check_open()
         self._pending.append(iter(samples))

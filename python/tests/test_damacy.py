@@ -367,6 +367,27 @@ def test_pop_dtype_error_makes_pipeline_terminal(tiny_zarr_no_cast):
             d.pop()
 
 
+def test_pop_surfaces_sticky_error_over_drain(tiny_zarr):
+    """pop()'s internal drain re-pushes pending items into native. Once
+    the pipeline is terminal the re-push raises SHUTDOWN; the suppress
+    around drain must let the sticky error surface from native.pop,
+    not the secondary ShutdownError from drain."""
+    uri = tiny_zarr
+    good = Sample(uri=uri, aabb=[(0, 8), (0, 16)])
+    bad = Sample(uri="not_a_zarr", aabb=[(0, 8), (0, 16)])
+    with Pipeline(_base_config()) as d:
+        # Push bad first + a generator of goods. Cap=2; the generator
+        # holds extra goods that will sit in _pending across the pop
+        # whose drain hits SHUTDOWN after bad fails.
+        d.push([bad])
+        d.push(iter([good, good, good]))
+        with pytest.raises(NotFound):
+            d.pop()
+        # Sticky: second pop also surfaces NotFound, not ShutdownError.
+        with pytest.raises(NotFound):
+            d.pop()
+
+
 # ---- Config dataclass --------------------------------------------------
 
 
