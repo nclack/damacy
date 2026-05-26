@@ -1,6 +1,7 @@
 #include "damacy.h"
 
 #include "damacy_internal.h"
+#include "log/log.h"
 #include "nvtx/nvtx.h"
 
 #include <cuda.h>
@@ -23,6 +24,11 @@ kick_peel_into_free_slots(struct damacy* self, int* changed)
         break;
       enum damacy_status s =
         plan_reserve(self, (uint16_t)free_slot, self->cfg.batch_size);
+      if (s == DAMACY_AGAIN) {
+        log_error(
+          "kick_peel: plan_reserve AGAIN despite prefetcher_batch_full_ready");
+        return DAMACY_INVAL;
+      }
       if (s != DAMACY_OK)
         return s;
       scheduler_unlock(self->sched);
