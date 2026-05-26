@@ -671,6 +671,46 @@ test_batch_capacity_saturation_surfaces_error(void)
   return 0;
 }
 
+static int
+test_batch_table_recycles_after_release(void)
+{
+  struct fixture fx = { 0 };
+  EXPECT(fixture_setup(&fx, "blosc-zstd") == 0);
+
+  struct damacy_sample s = { .uri = "foo", .aabb = { .rank = 2 } };
+  s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
+  s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
+
+  for (uint64_t i = 0; i < 8; ++i)
+    EXPECT(lookahead_push_with_batch(&fx.la, &s, i) == 0);
+  EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
+
+  for (uint64_t i = 0; i < 8; ++i) {
+    struct prefetcher_ready r = { 0 };
+    EXPECT(prefetcher_pop_ready(fx.p, &r) == 1);
+    EXPECT(r.state == PREFETCHER_READY);
+    prefetcher_ready_free(&r);
+    prefetcher_release_batch(fx.p, i);
+    EXPECT(prefetcher_batch_gate(fx.p, i) == NULL);
+  }
+
+  for (uint64_t i = 100; i < 108; ++i)
+    EXPECT(lookahead_push_with_batch(&fx.la, &s, i) == 0);
+  EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
+
+  for (uint64_t i = 100; i < 108; ++i) {
+    struct prefetcher_ready r = { 0 };
+    EXPECT(prefetcher_pop_ready(fx.p, &r) == 1);
+    EXPECT(r.state == PREFETCHER_READY);
+    EXPECT(r.err_code == 0);
+    prefetcher_ready_free(&r);
+    prefetcher_release_batch(fx.p, i);
+  }
+
+  fixture_teardown(&fx);
+  return 0;
+}
+
 int
 main(void)
 {
@@ -694,6 +734,7 @@ main(void)
   RUN(test_batch_readiness_helpers);
   RUN(test_advance_watermark_broadcasts);
   RUN(test_batch_capacity_saturation_surfaces_error);
+  RUN(test_batch_table_recycles_after_release);
   log_info("all tests passed");
   return 0;
 }

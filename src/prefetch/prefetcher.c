@@ -196,6 +196,10 @@ advance_from_meta(struct prefetcher* p, struct prefetcher_slot* s)
     s->h_shards[i] = prefetch_cache_request(
       p->sic, shard_index_key_hash(&probe), &probe, s->batch_id, s->gate);
     if (!prefetch_handle_valid(s->h_shards[i])) {
+      // Unwind the i successful gate increments; sync executors won't drain.
+      for (uint32_t j = 0; j < i; ++j)
+        prefetch_gate_dec_pending(s->gate);
+      s->n_shards = i;
       err = DAMACY_OOM;
       goto Bad;
     }
@@ -250,6 +254,8 @@ Bad:
   fail_slot(p, s, err);
 }
 
+// Lock order: p->lock outermost. advance_all may take cache locks inside;
+// fetch workers (running on the io_queue) must not touch p->lock.
 static void
 advance_all(struct prefetcher* p)
 {
@@ -317,6 +323,8 @@ admit_locked(struct prefetcher* p,
   struct prefetcher_batch_entry* be =
     batch_get_or_create_locked(p, popped->batch_id);
   if (!be) {
+    // gate=NULL: no batch entry allocated; see prefetcher_batch_gate doc
+    // for the saturation-error contract.
     emit_error_slot_locked(p, slot, popped, NULL, DAMACY_OOM);
     return;
   }

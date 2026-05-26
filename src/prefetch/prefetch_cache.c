@@ -123,8 +123,8 @@ gate_inc_pending(struct prefetch_gate* g)
   atomic_fetch_add_explicit(&g->state, 1, memory_order_acq_rel);
 }
 
-static void
-gate_dec_pending(struct prefetch_gate* g)
+void
+prefetch_gate_dec_pending(struct prefetch_gate* g)
 {
   if (!g)
     return;
@@ -179,7 +179,7 @@ slot_release_waiters(struct prefetch_slot* s, int errored)
   for (uint32_t i = 0; i < s->n_waiters; ++i) {
     if (errored)
       prefetch_gate_set_error(slot_waiter(s, i));
-    gate_dec_pending(slot_waiter(s, i));
+    prefetch_gate_dec_pending(slot_waiter(s, i));
   }
   s->n_waiters = 0;
 }
@@ -342,7 +342,7 @@ prefetch_cache_request(struct prefetch_cache* self,
     if (s->state == PREFETCH_STATE_PENDING) {
       gate_inc_pending(gate);
       if (slot_register_waiter(s, gate)) {
-        gate_dec_pending(gate);
+        prefetch_gate_dec_pending(gate);
         platform_mutex_unlock(self->lock);
         return PREFETCH_HANDLE_NONE;
       }

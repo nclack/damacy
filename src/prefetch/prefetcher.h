@@ -64,6 +64,8 @@ extern "C"
     struct damacy_aabb aabb;
     uint64_t batch_id;
     struct prefetch_handle h_meta;
+    // On ERROR mid-shard-allocation, h_shards may be non-NULL with n_shards
+    // == 0; iterate by n_shards, never by (h_shards != NULL).
     struct prefetch_handle* h_shards;
     uint32_t n_shards;
     struct prefetch_handle h_layout;

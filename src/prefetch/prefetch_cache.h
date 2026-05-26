@@ -119,6 +119,9 @@ extern "C"
   int prefetch_gate_has_error(const struct prefetch_gate* g);
   uint64_t prefetch_gate_pending(const struct prefetch_gate* g);
   void prefetch_gate_set_error(struct prefetch_gate* g);
+  // Lets the prefetcher unwind partial increments on mid-loop OOM; without
+  // this, executors that don't drain leak pending forever.
+  void prefetch_gate_dec_pending(struct prefetch_gate* g);
 
   struct prefetch_cache_stats
   {
