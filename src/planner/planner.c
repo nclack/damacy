@@ -544,6 +544,12 @@ planner_plan(struct planner* self,
           status = DAMACY_INVAL;
           goto Cleanup;
         }
+        if (st == PREFETCH_STATE_READY) {
+          log_error("planner: shard READY with NULL value (uri=%s)",
+                    sample->uri);
+          status = DAMACY_INVAL;
+          goto Cleanup;
+        }
         if (err == DAMACY_NOTFOUND) {
           ctx.shard_missing = 1;
           ctx.shard_entries = NULL;

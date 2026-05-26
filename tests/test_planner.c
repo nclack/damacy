@@ -222,6 +222,7 @@ fixture_wire_caches(struct fixture* f)
     .array_meta_cache = f->array_meta_cache,
     .chunk_layout_cache = f->chunk_layout_cache,
     .shard_index_cache = f->shard_index_cache,
+    .dst_dtype = DAMACY_F32,
     .max_chunks_per_wave = DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE,
     .max_substreams_per_chunk = DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK,
     .page_alignment = PAGE,

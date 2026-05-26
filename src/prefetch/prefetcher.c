@@ -638,6 +638,8 @@ Bad:
   return 0;
 }
 
+// ERROR slots count as "ready" so pop doesn't latch AGAIN before the
+// scheduler drains the failure into damacy::failed_status.
 int
 prefetcher_has_ready(struct prefetcher* self)
 {
