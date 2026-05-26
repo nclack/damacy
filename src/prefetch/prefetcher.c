@@ -316,12 +316,15 @@ emit_error_slot_locked(struct prefetcher* p,
                        int err_code)
 {
   prefetch_gate_set_error(gate);
+  // Assign admit_seq so pop_terminal_slot_locked returns this ERROR slot
+  // in push order; without this it lands at admit_seq=0 and pops first.
   *slot = (struct prefetcher_slot){
     .state = PREFETCHER_ERROR,
     .err_code = err_code,
     .uri = popped->uri,
     .aabb = popped->aabb,
     .batch_id = popped->batch_id,
+    .admit_seq = p->next_admit_seq++,
     .gate = gate,
   };
   p->errored++;
