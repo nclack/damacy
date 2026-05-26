@@ -201,6 +201,7 @@ plan_commit(struct damacy* self,
     }
     slot->state = BATCH_READY;
   }
-  slot->deferred_release_pending = 0;
+  // Non-degenerate path doesn't clear the flag: assemble on FIFO stream_post
+  // already inherits the cuStreamWaitEvent, so host-side consumption is moot.
   return DAMACY_OK;
 }
