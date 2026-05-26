@@ -608,6 +608,15 @@ planner_plan(struct planner* self,
           break;
       }
     }
+    if (shard_idx_in_sample != sample->n_shards) {
+      log_error(
+        "planner: shard count mismatch (uri=%s iterated=%u expected=%u)",
+        sample->uri,
+        shard_idx_in_sample,
+        sample->n_shards);
+      status = DAMACY_INVAL;
+      goto Cleanup;
+    }
   }
 
   {

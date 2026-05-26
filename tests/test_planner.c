@@ -925,7 +925,65 @@ test_codec_id_blosc_unknown_cname(void)
   if (fixture_init_with_json(&f, json, offsets, nbytes))
     return 1;
 
-  EXPECT(!prefetch_cache_try_get(f.array_meta_cache, f.h_meta));
+  int err = 0;
+  enum prefetch_state st =
+    prefetch_cache_query(f.array_meta_cache, f.h_meta, NULL, &err);
+  EXPECT(st == PREFETCH_STATE_ERROR);
+
+  fixture_destroy(&f);
+  return 0;
+}
+
+static int
+test_unsupported_source_dtype(void)
+{
+  static const char* U64_ZARR_JSON =
+    "{"
+    "\"zarr_format\":3,"
+    "\"node_type\":\"array\","
+    "\"shape\":[4,8],"
+    "\"data_type\":\"uint64\","
+    "\"chunk_grid\":{\"name\":\"regular\",\"configuration\":{"
+    "\"chunk_shape\":[4,8]}},"
+    "\"chunk_key_encoding\":{\"name\":\"default\",\"configuration\":{"
+    "\"separator\":\"/\"}},"
+    "\"fill_value\":0,"
+    "\"codecs\":[{\"name\":\"sharding_indexed\",\"configuration\":{"
+    "\"chunk_shape\":[2,4],"
+    "\"codecs\":[{\"name\":\"bytes\",\"configuration\":{\"endian\":\"little\"}}"
+    "],"
+    "\"index_codecs\":[{\"name\":\"bytes\",\"configuration\":{"
+    "\"endian\":\"little\"}},{\"name\":\"crc32c\"}],"
+    "\"index_location\":\"end\"}}]"
+    "}";
+
+  const uint64_t offsets[4] = { 0, 128, 256, 384 };
+  const uint64_t nbytes[4] = { 64, 64, 64, 64 };
+  struct fixture f = { 0 };
+  if (fixture_init_with_json(&f, U64_ZARR_JSON, offsets, nbytes))
+    return 1;
+
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 0, 4, 0, 8, &s) == 0);
+  int64_t dst_strides[3];
+  mk_dst_strides_2d(1, 4, 8, dst_strides);
+
+  struct read_op reads[8] = { 0 };
+  struct chunk_plan chunks[8] = { 0 };
+  struct sample_plan samples[4] = { 0 };
+  struct planner_output out = {
+    .read_ops = reads,
+    .read_ops_cap = 8,
+    .chunk_plans = chunks,
+    .chunk_plans_cap = 8,
+    .sample_plans = samples,
+    .sample_plans_cap = 4,
+    .read_op_groups = (struct read_op_group[8]){ { 0 } },
+    .read_op_groups_cap = 8,
+    .paths = &f.paths,
+  };
+  EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) ==
+         DAMACY_DTYPE);
 
   fixture_destroy(&f);
   return 0;
@@ -1429,6 +1487,7 @@ main(void)
   RUN(test_codec_id_blosc_zstd);
   RUN(test_codec_id_none);
   RUN(test_codec_id_blosc_unknown_cname);
+  RUN(test_unsupported_source_dtype);
   RUN(test_unsharded_single_chunk);
   RUN(test_unsharded_multi_chunk);
   RUN(test_sharded_index_start);
