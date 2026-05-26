@@ -33,6 +33,7 @@ Variants reuse a base via :func:`dataclasses.replace`::
 
 from __future__ import annotations
 
+import contextlib
 import itertools
 import logging
 import os
@@ -1112,11 +1113,16 @@ class Pipeline:
         generator, infinite generator, …); large or unbounded sources
         are pulled lazily as :meth:`pop` frees space.
 
-        Fatal errors from the C-side validator (``NotFound``,
-        ``DtypeMismatch``, ``RankMismatch``, …) raise the matching
-        :class:`DamacyError` subclass; the offending iterator is
-        discarded but samples accepted by earlier ``push`` calls are
-        unaffected.
+        Local validation (shape/rank against ``Config.sample_shape``)
+        raises the matching :class:`DamacyError` subclass here and
+        discards the offending iterator. Errors that depend on store
+        contents — :class:`NotFound`, :class:`DtypeMismatch`,
+        per-array :class:`RankMismatch`, decode failures — surface at
+        :meth:`pop` instead, since the pipeline fetches metadata
+        asynchronously after push returns. Once any such error fires,
+        the pipeline is terminal — rebuild a fresh :class:`Pipeline`
+        to recover. Calling :meth:`push` on a terminal pipeline raises
+        :class:`ShutdownError`.
         """
         self._check_open()
         self._pending.append(iter(samples))
@@ -1170,9 +1176,19 @@ class Pipeline:
         Raises :class:`PoolStarved` if no batch arrives within
         ``Config.pop_timeout_s`` seconds (default 30). Usually that
         means tensors from previous batches are still being held —
-        drop them, or ``.clone()`` if you need to keep them."""
+        drop them, or ``.clone()`` if you need to keep them.
+
+        Store-derived errors — :class:`NotFound`,
+        :class:`DtypeMismatch`, per-array :class:`RankMismatch`,
+        decode failures — surface here rather than at push. Once any
+        such error fires, the pipeline is terminal; subsequent calls
+        re-raise the same status."""
         self._check_open()
-        self._drain_pending()
+        # Swallow ShutdownError from drain so the sticky error from the
+        # native pipeline (NotFound/DtypeMismatch/…) surfaces from pop,
+        # not the secondary SHUTDOWN raised by re-pushing into a terminal.
+        with contextlib.suppress(ShutdownError):
+            self._drain_pending()
         timeout = self._config.pop_timeout_s
         if timeout is None:
             try:

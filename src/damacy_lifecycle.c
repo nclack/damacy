@@ -369,6 +369,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     .array_meta_cache = self->array_meta_cache,
     .chunk_layout_cache = self->chunk_layout_cache,
     .shard_index_cache = self->shard_index_cache,
+    .dst_dtype = cfg->dtype,
     .page_alignment = self->page_alignment,
     .max_chunk_uncompressed_bytes = runtime_chunk_cap,
     .read_op_max_bytes = resolve_max_read_op_bytes(cfg),

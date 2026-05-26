@@ -197,7 +197,7 @@ add_src_lib(planner
             planner/group_chunks.h planner/group_chunks.c
             planner/read_op_sort.h planner/read_op_sort.c
     LINKS prefetch_cache shard_index zarr dtype platform strbuf
-          path_intern log
+          path_intern log damacy_config
 )
 
 # GPU pieces — add_cuda_lib is a no-op under DAMACY_FUZZ.

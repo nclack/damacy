@@ -1,5 +1,6 @@
 #include "planner/planner.h"
 
+#include "damacy_config.h"
 #include "dtype/dtype.h"
 #include "log/log.h"
 #include "planner/coalesce.h"
@@ -400,10 +401,14 @@ planner_plan(struct planner* self,
       status = DAMACY_RANK;
       goto Cleanup;
     }
+    if (!cast_path_supported(self->cfg.dst_dtype, meta->dtype)) {
+      status = DAMACY_DTYPE;
+      goto Cleanup;
+    }
     if (meta->inner_codec.id == CODEC_BLOSC_LZ4) {
       log_error("planner: blosc1-lz4 inner codec is not supported (uri=%s)",
                 sample->uri);
-      status = DAMACY_INVAL;
+      status = DAMACY_DECODE;
       goto Cleanup;
     }
 

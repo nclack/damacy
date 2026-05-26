@@ -224,21 +224,20 @@ def test_push_pop_release_via_context_managers(tiny_zarr):
             assert "Batch" in repr(batch)
 
 
-@pytest.mark.skip(reason="PR-3 will update expected error placement (push → pop)")
-def test_unknown_uri_raises_notfound(tiny_zarr):
-    _ = tiny_zarr
+def test_unknown_uri_surfaces_at_pop_as_notfound():
     with Pipeline(_base_config()) as d:
+        d.push([Sample(uri="not_a_zarr", aabb=[(0, 8), (0, 16)])])
         with pytest.raises(NotFound) as excinfo:
-            d.push([Sample(uri="not_a_zarr", aabb=[(0, 8), (0, 16)])])
+            d.pop()
         assert excinfo.value.status is Status.NOTFOUND
 
 
-@pytest.mark.skip(reason="PR-3 will update expected error placement (push → pop)")
-def test_unsupported_src_dtype_raises_dtype_mismatch(tiny_zarr_no_cast):
+def test_unsupported_src_dtype_surfaces_at_pop_as_dtype_mismatch(tiny_zarr_no_cast):
     uri = tiny_zarr_no_cast
     with Pipeline(_base_config(dtype="f32")) as d:
+        d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
         with pytest.raises(DtypeMismatch) as excinfo:
-            d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
+            d.pop()
         assert excinfo.value.status is Status.DTYPE
 
 
@@ -345,21 +344,48 @@ def test_push_chains_multiple_calls(tiny_zarr):
         assert _drain_ids(d, 5) == [0, 1, 2, 3, 4]
 
 
-@pytest.mark.skip(reason="PR-3 will update expected error placement (push → pop)")
-def test_push_error_drops_offending_iterator(tiny_zarr):
-    """A NotFound surfaces the error and discards the failing iterator's
-    tail. Samples accepted by earlier ``push`` calls (already in the
-    native lookahead) still resolve through ``pop``."""
+def test_pop_error_makes_pipeline_terminal():
+    """Once an async error (here, NotFound) surfaces at pop, the pipeline
+    failed_status is sticky — subsequent pops re-raise the same status."""
+    bad = Sample(uri="not_a_zarr", aabb=[(0, 8), (0, 16)])
+    with Pipeline(_base_config()) as d:
+        d.push([bad])
+        with pytest.raises(NotFound):
+            d.pop()
+        with pytest.raises(NotFound):
+            d.pop()
+
+
+def test_pop_dtype_error_makes_pipeline_terminal(tiny_zarr_no_cast):
+    """The DAMACY_DTYPE path surfaced at pop is also sticky."""
+    uri = tiny_zarr_no_cast
+    with Pipeline(_base_config(dtype="f32")) as d:
+        d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
+        with pytest.raises(DtypeMismatch):
+            d.pop()
+        with pytest.raises(DtypeMismatch):
+            d.pop()
+
+
+def test_pop_surfaces_sticky_error_over_drain(tiny_zarr):
+    """pop()'s internal drain re-pushes pending items into native. Once
+    the pipeline is terminal the re-push raises SHUTDOWN; the suppress
+    around drain must let the sticky error surface from native.pop,
+    not the secondary ShutdownError from drain."""
     uri = tiny_zarr
     good = Sample(uri=uri, aabb=[(0, 8), (0, 16)])
     bad = Sample(uri="not_a_zarr", aabb=[(0, 8), (0, 16)])
     with Pipeline(_base_config()) as d:
-        d.push([good])  # drains synchronously into native
+        # Push bad first + a generator of goods. Cap=2; the generator
+        # holds extra goods that will sit in _pending across the pop
+        # whose drain hits SHUTDOWN after bad fails.
+        d.push([bad])
+        d.push(iter([good, good, good]))
         with pytest.raises(NotFound):
-            d.push([bad, good])  # raises on bad; the trailing good is dropped
-        # The first push's sample is in the lookahead and still pops.
-        with d.pop() as b:
-            assert b.info.batch_id == 0
+            d.pop()
+        # Sticky: second pop also surfaces NotFound, not ShutdownError.
+        with pytest.raises(NotFound):
+            d.pop()
 
 
 # ---- Config dataclass --------------------------------------------------
