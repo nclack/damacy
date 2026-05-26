@@ -683,7 +683,7 @@ test_batch_table_recycles_after_release(void)
   s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
 
   for (uint64_t i = 0; i < 8; ++i)
-    EXPECT(lookahead_push_with_batch(&fx.la, &s, i) == 0);
+    EXPECT(lookahead_push_with_batch(&fx.lookahead, &s, i) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
 
   for (uint64_t i = 0; i < 8; ++i) {
@@ -696,7 +696,7 @@ test_batch_table_recycles_after_release(void)
   }
 
   for (uint64_t i = 100; i < 108; ++i)
-    EXPECT(lookahead_push_with_batch(&fx.la, &s, i) == 0);
+    EXPECT(lookahead_push_with_batch(&fx.lookahead, &s, i) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
 
   for (uint64_t i = 100; i < 108; ++i) {
