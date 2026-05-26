@@ -84,11 +84,16 @@ damacy_release(struct damacy* self, struct damacy_batch* b)
     scheduler_unlock(self->sched);
     return;
   }
+  uint64_t batch_id = self->batch_pool.slots[s].batch_id;
   self->batch_pool.slots[s].state = BATCH_FREE;
   self->batch_pool.slots[s].n_chunks = 0;
   self->batch_pool.slots[s].n_chunks_dispatched = 0;
   self->batch_pool.slots[s].n_groups_dispatched = 0;
   self->batch_pool.slots[s].deferred_release_pending = 0;
+  // Drops the prefetcher's batch-entry ref so the slot can recycle.
+  // Without this the prefetcher's batch table saturates after
+  // batch_capacity distinct batch_ids.
+  prefetcher_release_batch(self->prefetcher, batch_id);
   scheduler_unlock(self->sched);
 }
 
@@ -135,6 +140,7 @@ damacy_release_event(struct damacy* self, struct damacy_batch* b, void* event)
   // either slot — picks up this wait. The flag is read by plan_into_slot
   // to host-sync stream_post before its sync cuMemsetD8 (which targets the
   // legacy null stream and would otherwise race).
+  uint64_t batch_id = slot->batch_id;
   if (cuStreamWaitEvent(self->wave_pool.stream_post, (CUevent)event, 0) !=
       CUDA_SUCCESS) {
     // Deferred wait couldn't be installed; fall back to immediate release
@@ -144,6 +150,7 @@ damacy_release_event(struct damacy* self, struct damacy_batch* b, void* event)
     slot->n_chunks_dispatched = 0;
     slot->n_groups_dispatched = 0;
     slot->deferred_release_pending = 0;
+    prefetcher_release_batch(self->prefetcher, batch_id);
     r = DAMACY_CUDA;
     goto Done;
   }
@@ -153,6 +160,7 @@ damacy_release_event(struct damacy* self, struct damacy_batch* b, void* event)
   slot->n_chunks = 0;
   slot->n_chunks_dispatched = 0;
   slot->n_groups_dispatched = 0;
+  prefetcher_release_batch(self->prefetcher, batch_id);
   r = DAMACY_OK;
 
 Done:
@@ -183,15 +191,21 @@ damacy_flush(struct damacy* self)
   }
 
   // Worker only plans at full batch_size; flush emits the truncated tail.
-  // TODO: misses tails already pulled by prefetcher into PENDING.
-  uint32_t la_size = lookahead_size(&self->lookahead);
-  if (la_size > 0 && la_size < self->cfg.batch_size) {
-    // Wait until a slot is FREE *and* no other plan is in progress.
-    // plan_run releases the lock so a worker plan could be mid-flight;
-    // both predicates are re-evaluated together under the lock on every
-    // wake (cv_wait yields only inside the loop body), so we exit when
-    // both hold simultaneously and the subsequent find_free_batch_slot
-    // read is current.
+  // Drain the prefetcher first so the tail count is stable: in-flight
+  // samples may still be admitted, fetched, and reach READY. Reading
+  // lookahead size or ready_count_for_batch before settle would miss
+  // them.
+  while ((lookahead_size(&self->lookahead) > 0 ||
+          prefetcher_in_flight(self->prefetcher) > 0) &&
+         self->failed_status == DAMACY_OK)
+    SCHEDULER_WAIT_DIAG(self->sched, 5000);
+  if (self->failed_status != DAMACY_OK) {
+    r = self->failed_status;
+    goto Done;
+  }
+  uint32_t tail =
+    prefetcher_ready_count_for_batch(self->prefetcher, self->next_batch_id);
+  if (tail > 0 && tail < self->cfg.batch_size) {
     while ((find_free_batch_slot(&self->batch_pool) < 0 ||
             any_batch_planning(&self->batch_pool)) &&
            self->failed_status == DAMACY_OK)
@@ -201,7 +215,7 @@ damacy_flush(struct damacy* self)
       goto Done;
     }
     int free_slot = find_free_batch_slot(&self->batch_pool);
-    r = plan_reserve(self, (uint16_t)free_slot, la_size);
+    r = plan_reserve(self, (uint16_t)free_slot, tail);
     if (r != DAMACY_OK)
       goto Done;
     scheduler_unlock(self->sched);

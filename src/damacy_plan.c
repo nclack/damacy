@@ -70,9 +70,9 @@ plan_reserve(struct damacy* self, uint16_t slot_idx, uint32_t n_samples)
       // PR-1 still routes (uri, aabb) through the legacy planner, which
       // independently substitutes fill for NOTFOUND chunks. Surface other
       // prefetch errors here; the planner will handle missing data.
-      enum damacy_status es =
-        self->staging[i].err_code ? (enum damacy_status)self->staging[i].err_code
-                                  : DAMACY_INVAL;
+      enum damacy_status es = self->staging[i].err_code
+                                ? (enum damacy_status)self->staging[i].err_code
+                                : DAMACY_INVAL;
       for (uint32_t j = 0; j <= i; ++j)
         prefetcher_ready_free(&self->staging[j]);
       self->failed_status = es;
@@ -156,8 +156,13 @@ plan_commit(struct damacy* self,
 {
   metric_record(&self->stats.plan, elapsed_ms, 0, 0);
   struct damacy_batch_slot* slot = &self->batch_pool.slots[slot_idx];
-  for (uint32_t i = 0; i < slot->n_samples; ++i)
+  for (uint32_t i = 0; i < slot->n_samples; ++i) {
     prefetcher_ready_free(&self->staging[i]);
+    // plan_reserve stole uri from staging[i] into batch_stage[i]; planner
+    // is done reading it by now, so free here to close the leak.
+    free((char*)self->batch_stage[i].uri);
+    self->batch_stage[i].uri = NULL;
+  }
   if (run_status != DAMACY_OK) {
     slot->state = BATCH_FREE;
     slot->n_samples = 0;

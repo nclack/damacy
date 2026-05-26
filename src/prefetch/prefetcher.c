@@ -177,8 +177,11 @@ advance_from_meta(struct prefetcher* p, struct prefetcher_slot* s)
 
   if (n == 0) {
     s->n_shards = 0;
-    s->h_layout = prefetch_cache_request(
-      p->chunk_layout_cache, hash_fnv1a_str(s->uri), s->uri, s->batch_id, s->gate);
+    s->h_layout = prefetch_cache_request(p->chunk_layout_cache,
+                                         hash_fnv1a_str(s->uri),
+                                         s->uri,
+                                         s->batch_id,
+                                         s->gate);
     if (!prefetch_handle_valid(s->h_layout)) {
       err = DAMACY_OOM;
       goto Bad;
@@ -197,8 +200,11 @@ advance_from_meta(struct prefetcher* p, struct prefetcher_slot* s)
   struct shard_index_key probe = { .uri = s->uri, .rank = meta->rank };
   uint32_t i = 0;
   while (sample_shard_iterator_next(&it, probe.shard_coord)) {
-    s->h_shards[i] = prefetch_cache_request(
-      p->shard_index_cache, shard_index_key_hash(&probe), &probe, s->batch_id, s->gate);
+    s->h_shards[i] = prefetch_cache_request(p->shard_index_cache,
+                                            shard_index_key_hash(&probe),
+                                            &probe,
+                                            s->batch_id,
+                                            s->gate);
     if (!prefetch_handle_valid(s->h_shards[i])) {
       // The K successful requests already registered the gate as a waiter
       // (for PENDING/new slots). Their cache workers will dec_pending when
@@ -230,8 +236,11 @@ advance_from_shard(struct prefetcher* p, struct prefetcher_slot* s)
       goto Bad;
   }
 
-  s->h_layout = prefetch_cache_request(
-    p->chunk_layout_cache, hash_fnv1a_str(s->uri), s->uri, s->batch_id, s->gate);
+  s->h_layout = prefetch_cache_request(p->chunk_layout_cache,
+                                       hash_fnv1a_str(s->uri),
+                                       s->uri,
+                                       s->batch_id,
+                                       s->gate);
   if (!prefetch_handle_valid(s->h_layout)) {
     err = DAMACY_OOM;
     goto Bad;
@@ -607,8 +616,11 @@ uint32_t
 prefetcher_in_flight(struct prefetcher* self)
 {
   CHECK(Bad, self);
+  // Include in_transit (popped from lookahead, not yet admitted) so a
+  // 0 return reliably means "no further state transitions will happen
+  // from already-queued work".
+  uint32_t n = atomic_load_explicit(&self->in_transit, memory_order_acquire);
   platform_mutex_lock(self->lock);
-  uint32_t n = 0;
   for (uint32_t i = 0; i < self->capacity; ++i)
     if (slot_active(&self->slots[i]))
       n++;
