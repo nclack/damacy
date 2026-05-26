@@ -275,8 +275,13 @@ fixture_destroy(struct fixture* f)
   fixture_rm_tree(f->root);
 }
 
-static struct planner_sample
-mk_sample(struct fixture* f, int64_t y0, int64_t y1, int64_t x0, int64_t x1)
+static int
+mk_sample(struct fixture* f,
+          int64_t y0,
+          int64_t y1,
+          int64_t x0,
+          int64_t x1,
+          struct planner_sample* out)
 {
   struct planner_sample s = {
     .uri = "foo",
@@ -290,20 +295,28 @@ mk_sample(struct fixture* f, int64_t y0, int64_t y1, int64_t x0, int64_t x1)
   const struct zarr_metadata* meta =
     (const struct zarr_metadata*)prefetch_cache_try_get(f->array_meta_cache,
                                                         f->h_meta);
-  if (!meta)
-    return s;
+  if (!meta) {
+    *out = s;
+    return 0;
+  }
   struct sample_shard_iterator it;
-  if (sample_shard_iterator_init(&it, meta, &s.aabb) != 0)
-    return s;
+  if (sample_shard_iterator_init(&it, meta, &s.aabb) != 0) {
+    *out = s;
+    return 0;
+  }
   uint64_t n = 1;
   for (uint8_t d = 0; d < it.rank; ++d)
     n *= (it.shard_end[d] - it.shard_beg[d]);
-  if (n == 0)
-    return s;
+  if (n == 0) {
+    *out = s;
+    return 0;
+  }
   struct prefetch_handle* arr =
     (struct prefetch_handle*)calloc((size_t)n, sizeof(struct prefetch_handle));
-  if (!arr)
-    return s;
+  if (!arr) {
+    *out = s;
+    return 0;
+  }
   struct shard_index_key probe = { .uri = "foo", .rank = meta->rank };
   uint32_t i = 0;
   while (sample_shard_iterator_next(&it, probe.shard_coord))
@@ -311,9 +324,11 @@ mk_sample(struct fixture* f, int64_t y0, int64_t y1, int64_t x0, int64_t x1)
       f->shard_index_cache, shard_index_key_hash(&probe), &probe, 0, NULL);
   s.h_shards = arr;
   s.n_shards = (uint32_t)n;
-  if (f->n_shard_arrays < sizeof f->shard_arrays / sizeof f->shard_arrays[0])
-    f->shard_arrays[f->n_shard_arrays++] = arr;
-  return s;
+  EXPECT(f->n_shard_arrays <
+         sizeof f->shard_arrays / sizeof f->shard_arrays[0]);
+  f->shard_arrays[f->n_shard_arrays++] = arr;
+  *out = s;
+  return 0;
 }
 
 // Find the chunk_plan whose 2D grid coordinate matches (y, x), or NULL.
@@ -356,7 +371,8 @@ test_single_chunk_aligned(void)
     return 1;
 
   // AABB = inner chunk (1, 0): y in [2,4), x in [0,4).
-  struct planner_sample s = mk_sample(&f, 2, 4, 0, 4);
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 2, 4, 0, 4, &s) == 0);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 2, 4, dst_strides);
 
@@ -430,7 +446,8 @@ test_multi_chunk_partial(void)
 
   // AABB = y in [1,4), x in [2,7). Touches all 4 chunks (2x2 grid).
   // Chunk grid origin: (0,0). aabb_lo=(1,2). aabb_lo_relative=(1,2).
-  struct planner_sample s = mk_sample(&f, 1, 4, 2, 7);
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 1, 4, 2, 7, &s) == 0);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 3, 5, dst_strides);
 
@@ -495,10 +512,9 @@ test_two_samples_indices(void)
   if (fixture_init(&f, offsets, nbytes))
     return 1;
 
-  struct planner_sample s[2] = {
-    mk_sample(&f, 0, 2, 0, 4), // chunk (0,0)
-    mk_sample(&f, 2, 4, 4, 8), // chunk (1,1)
-  };
+  struct planner_sample s[2];
+  EXPECT(mk_sample(&f, 0, 2, 0, 4, &s[0]) == 0); // chunk (0,0)
+  EXPECT(mk_sample(&f, 2, 4, 4, 8, &s[1]) == 0); // chunk (1,1)
   int64_t dst_strides[3];
   mk_dst_strides_2d(2, 2, 4, dst_strides); // strides=[8,4,1]
 
@@ -545,7 +561,8 @@ test_empty_chunk_becomes_fill(void)
   if (fixture_init(&f, offsets, nbytes))
     return 1;
 
-  struct planner_sample s = mk_sample(&f, 0, 4, 0, 8); // all 4 chunks
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 0, 4, 0, 8, &s) == 0); // all 4 chunks
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
 
@@ -596,7 +613,8 @@ test_fill_value_int16_neg1(void)
   if (fixture_init_with_json(&f, INT16_FILL_NEG1_ZARR_JSON, offsets, nbytes))
     return 1;
 
-  struct planner_sample s = mk_sample(&f, 0, 4, 0, 8);
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 0, 4, 0, 8, &s) == 0);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
 
@@ -639,7 +657,8 @@ test_fill_value_f32_nan(void)
   if (fixture_init_with_json(&f, F32_FILL_NAN_ZARR_JSON, offsets, nbytes))
     return 1;
 
-  struct planner_sample s = mk_sample(&f, 0, 4, 0, 8);
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 0, 4, 0, 8, &s) == 0);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
   struct read_op reads[8] = { 0 };
@@ -683,7 +702,8 @@ test_missing_shard_becomes_fill(void)
   // Intentionally do NOT create foo/c/0/0.
   EXPECT(fixture_wire_caches(&f) == 0);
 
-  struct planner_sample s = mk_sample(&f, 0, 4, 0, 8);
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 0, 4, 0, 8, &s) == 0);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
   struct read_op reads[8] = { 0 };
@@ -725,7 +745,8 @@ test_page_alignment(void)
   if (fixture_init(&f, offsets, nbytes))
     return 1;
 
-  struct planner_sample s = mk_sample(&f, 0, 4, 0, 8);
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 0, 4, 0, 8, &s) == 0);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
   struct read_op reads[8] = { 0 };
@@ -780,7 +801,8 @@ run_blosc_codec_id_case(const char* cname, uint8_t expected_codec_id)
   if (fixture_init_with_json(&f, json, offsets, nbytes))
     return 1;
 
-  struct planner_sample s = mk_sample(&f, 0, 4, 0, 8);
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 0, 4, 0, 8, &s) == 0);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
 
@@ -821,7 +843,8 @@ run_blosc_lz4_rejected_case(const char* cname)
   if (fixture_init_with_json(&f, json, offsets, nbytes))
     return 1;
 
-  struct planner_sample s = mk_sample(&f, 0, 4, 0, 8);
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 0, 4, 0, 8, &s) == 0);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
 
@@ -873,7 +896,8 @@ test_codec_id_none(void)
   if (fixture_init_with_json(&f, NONE_ZARR_JSON, offsets, nbytes))
     return 1;
 
-  struct planner_sample s = mk_sample(&f, 0, 4, 0, 8);
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 0, 4, 0, 8, &s) == 0);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
 
@@ -915,7 +939,8 @@ test_codec_id_blosc_unknown_cname(void)
   if (fixture_init_with_json(&f, json, offsets, nbytes))
     return 1;
 
-  struct planner_sample s = mk_sample(&f, 0, 4, 0, 8);
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 0, 4, 0, 8, &s) == 0);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
 
@@ -1015,7 +1040,8 @@ test_unsharded_single_chunk(void)
     return 1;
 
   // Sample covers exactly chunk (1, 0): y in [2,4), x in [0,4).
-  struct planner_sample s = mk_sample(&f, 2, 4, 0, 4);
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 2, 4, 0, 4, &s) == 0);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 2, 4, dst_strides);
 
@@ -1063,7 +1089,8 @@ test_unsharded_multi_chunk(void)
   if (fixture_init_unsharded(&f, chunk_bytes))
     return 1;
 
-  struct planner_sample s = mk_sample(&f, 0, 4, 0, 8);
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 0, 4, 0, 8, &s) == 0);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
 
@@ -1135,7 +1162,8 @@ test_sharded_index_start(void)
 
   EXPECT(fixture_wire_caches(&f) == 0);
 
-  struct planner_sample s = mk_sample(&f, 0, 4, 0, 8);
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 0, 4, 0, 8, &s) == 0);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
   struct read_op reads[8] = { 0 };
@@ -1178,7 +1206,8 @@ test_coalesce_adjacent_pages(void)
   if (fixture_init(&f, offsets, nbytes))
     return 1;
 
-  struct planner_sample s = mk_sample(&f, 0, 4, 0, 8);
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 0, 4, 0, 8, &s) == 0);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
 
@@ -1224,7 +1253,8 @@ test_coalesce_gap_blocks_fusion(void)
   if (fixture_init(&f, offsets, nbytes))
     return 1;
 
-  struct planner_sample s = mk_sample(&f, 0, 4, 0, 8);
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 0, 4, 0, 8, &s) == 0);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
 
@@ -1271,7 +1301,8 @@ test_coalesce_fill_does_not_block_fusion(void)
   if (fixture_init(&f, offsets, nbytes))
     return 1;
 
-  struct planner_sample s = mk_sample(&f, 0, 4, 0, 8);
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 0, 4, 0, 8, &s) == 0);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
 
@@ -1332,7 +1363,8 @@ test_coalesce_non_monotonic_shard(void)
   if (fixture_init(&f, offsets, nbytes))
     return 1;
 
-  struct planner_sample s = mk_sample(&f, 0, 4, 0, 8);
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 0, 4, 0, 8, &s) == 0);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
 
@@ -1377,10 +1409,9 @@ test_coalesce_cross_sample(void)
   if (fixture_init(&f, offsets, nbytes))
     return 1;
 
-  struct planner_sample s[2] = {
-    mk_sample(&f, 0, 2, 0, 8), // chunks (0,0) and (0,1)
-    mk_sample(&f, 2, 4, 0, 8), // chunks (1,0) and (1,1)
-  };
+  struct planner_sample s[2];
+  EXPECT(mk_sample(&f, 0, 2, 0, 8, &s[0]) == 0); // chunks (0,0) and (0,1)
+  EXPECT(mk_sample(&f, 2, 4, 0, 8, &s[1]) == 0); // chunks (1,0) and (1,1)
   int64_t dst_strides[3];
   mk_dst_strides_2d(2, 2, 8, dst_strides);
 

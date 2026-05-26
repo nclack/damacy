@@ -735,6 +735,7 @@ test_missing_shard_reaches_ready(void)
   EXPECT(prefetcher_pop_ready(fx.p, &r) == 1);
   EXPECT(r.state == PREFETCHER_READY);
   EXPECT(r.n_shards == 1);
+  EXPECT(prefetch_handle_valid(r.h_layout));
   int err = 0;
   enum prefetch_state st =
     prefetch_cache_query(fx.shard_index_cache, r.h_shards[0], NULL, &err);

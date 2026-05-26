@@ -373,14 +373,23 @@ planner_plan(struct planner* self,
       goto Cleanup;
     }
 
-    const struct zarr_metadata* meta =
-      (const struct zarr_metadata*)prefetch_cache_try_get(
-        self->cfg.array_meta_cache, sample->h_meta);
+    const void* meta_value = NULL;
+    int meta_err = 0;
+    enum prefetch_state meta_state = prefetch_cache_query(
+      self->cfg.array_meta_cache, sample->h_meta, &meta_value, &meta_err);
+    if (meta_state == PREFETCH_STATE_PENDING) {
+      // Batch gate should make this unreachable.
+      log_error("planner: meta still PENDING (uri=%s)", sample->uri);
+      status = DAMACY_INVAL;
+      goto Cleanup;
+    }
+    if (meta_state == PREFETCH_STATE_ERROR) {
+      status = meta_err ? (enum damacy_status)meta_err : DAMACY_INVAL;
+      goto Cleanup;
+    }
+    const struct zarr_metadata* meta = (const struct zarr_metadata*)meta_value;
     if (!meta) {
-      int err = 0;
-      prefetch_cache_query(
-        self->cfg.array_meta_cache, sample->h_meta, NULL, &err);
-      status = err ? (enum damacy_status)err : DAMACY_INVAL;
+      status = DAMACY_INVAL;
       goto Cleanup;
     }
     if (sample->aabb.rank != meta->rank) {
@@ -461,9 +470,27 @@ planner_plan(struct planner* self,
     sp->chunk_count = chunk_count;
     out->n_sample_plans++;
 
+    const void* layout_value = NULL;
+    int layout_err = 0;
+    enum prefetch_state layout_state =
+      prefetch_cache_query(self->cfg.chunk_layout_cache,
+                           sample->h_layout,
+                           &layout_value,
+                           &layout_err);
+    if (layout_state == PREFETCH_STATE_PENDING) {
+      // Batch gate should make this unreachable.
+      log_error("planner: chunk_layout still PENDING (uri=%s)", sample->uri);
+      status = DAMACY_INVAL;
+      goto Cleanup;
+    }
+    if (layout_state == PREFETCH_STATE_ERROR) {
+      status = layout_err ? (enum damacy_status)layout_err : DAMACY_DECODE;
+      goto Cleanup;
+    }
+    // NULL value on READY is legitimate for non-blosc codecs;
+    // emit_chunk falls back to worst-case caps.
     const struct chunk_layout* layout =
-      (const struct chunk_layout*)prefetch_cache_try_get(
-        self->cfg.chunk_layout_cache, sample->h_layout);
+      (const struct chunk_layout*)layout_value;
 
     struct emit_ctx ctx = {
       .sample = sample,
@@ -490,6 +517,11 @@ planner_plan(struct planner* self,
     uint32_t shard_idx_in_sample = 0;
     while (sample_shard_iterator_next(&shard_it, shard_coord)) {
       if (shard_idx_in_sample >= sample->n_shards) {
+        log_error(
+          "planner: shard count mismatch (uri=%s iterated=%u expected=%u)",
+          sample->uri,
+          shard_idx_in_sample + 1u,
+          sample->n_shards);
         status = DAMACY_INVAL;
         goto Cleanup;
       }
