@@ -105,10 +105,18 @@ extern "C"
                       const struct store_read* reads,
                       size_t n);
 
-  // Recover the size in bytes of the resource named by `key`. Returns 0 on
-  // success and writes *out. Used by the shard-index cache to find a
-  // shard footer.
-  int store_stat(struct store* s, const char* key, uint64_t* out);
+  // NOT_FOUND is reserved for absent resources; other failures are ERROR
+  // so callers don't alias them to "absent."
+  enum store_stat_result
+  {
+    STORE_STAT_OK = 0,
+    STORE_STAT_NOT_FOUND,
+    STORE_STAT_ERROR,
+  };
+
+  enum store_stat_result store_stat(struct store* s,
+                                    const char* key,
+                                    uint64_t* out);
 
   // Read-only view of a whole resource. `data`/`len` are public; the
   // remaining fields are backend-private — treat them as opaque.

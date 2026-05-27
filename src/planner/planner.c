@@ -405,13 +405,6 @@ planner_plan(struct planner* self,
       status = DAMACY_DTYPE;
       goto Cleanup;
     }
-    if (meta->inner_codec.id == CODEC_BLOSC_LZ4) {
-      log_error("planner: blosc1-lz4 inner codec is not supported (uri=%s)",
-                sample->uri);
-      status = DAMACY_DECODE;
-      goto Cleanup;
-    }
-
     uint64_t inner_per_shard_dim[DAMACY_MAX_RANK];
     if (zarr_metadata_inner_per_shard(meta, inner_per_shard_dim, NULL)) {
       status = DAMACY_DECODE;

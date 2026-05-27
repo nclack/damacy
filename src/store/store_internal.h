@@ -9,7 +9,9 @@
 struct store_vtable
 {
   void (*destroy)(struct store* s);
-  int (*stat)(struct store* s, const char* key, uint64_t* out);
+  enum store_stat_result (*stat)(struct store* s,
+                                 const char* key,
+                                 uint64_t* out);
   struct store_event (*submit)(struct store* s,
                                const struct store_read* reads,
                                size_t n);

@@ -94,7 +94,7 @@ Fail:
   return 1;
 }
 
-int
+enum store_stat_result
 store_stat(struct store* s, const char* key, uint64_t* out)
 {
   CHECK_SILENT(Fail, s);
@@ -104,7 +104,7 @@ store_stat(struct store* s, const char* key, uint64_t* out)
   CHECK_SILENT(Fail, out);
   return s->vt->stat(s, key, out);
 Fail:
-  return 1;
+  return STORE_STAT_ERROR;
 }
 
 int
