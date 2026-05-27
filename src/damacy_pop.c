@@ -216,6 +216,11 @@ damacy_flush(struct damacy* self)
     }
     int free_slot = find_free_batch_slot(&self->batch_pool);
     r = plan_reserve(self, (uint16_t)free_slot, tail);
+    if (r == DAMACY_AGAIN) {
+      log_error("flush: plan_reserve AGAIN after drain");
+      r = DAMACY_INVAL;
+      goto Done;
+    }
     if (r != DAMACY_OK)
       goto Done;
     scheduler_unlock(self->sched);
