@@ -642,6 +642,26 @@ pop_terminal_slot_locked(struct prefetcher* self,
   return 1;
 }
 
+static uint32_t
+ready_count_for_batch_locked(struct prefetcher* self,
+                             uint64_t batch_id,
+                             uint64_t* out_first_seq)
+{
+  uint32_t n = 0;
+  uint64_t first_seq = 0;
+  for (uint32_t i = 0; i < self->capacity; ++i) {
+    const struct prefetcher_slot* s = &self->slots[i];
+    if (!slot_terminal(s) || s->batch_id != batch_id)
+      continue;
+    if (n == 0 || s->admit_seq < first_seq)
+      first_seq = s->admit_seq;
+    n++;
+  }
+  if (out_first_seq)
+    *out_first_seq = first_seq;
+  return n;
+}
+
 int
 prefetcher_pop_ready(struct prefetcher* self, struct prefetcher_ready* out)
 {
@@ -657,17 +677,44 @@ Bad:
 }
 
 int
-prefetcher_pop_ready_for_batch(struct prefetcher* self,
-                               uint64_t batch_id,
-                               struct prefetcher_ready* out)
+prefetcher_take_wave(struct prefetcher* self,
+                     uint64_t batch_id,
+                     uint32_t n,
+                     struct prefetcher_wave_ticket* ticket,
+                     struct prefetcher_ready* out)
 {
   CHECK(Bad, self);
+  CHECK(Bad, ticket);
   CHECK(Bad, out);
-  *out = (struct prefetcher_ready){ 0 };
+  CHECK(Bad, n > 0);
+  for (uint32_t i = 0; i < n; ++i)
+    out[i] = (struct prefetcher_ready){ 0 };
+
   platform_mutex_lock(self->lock);
-  int found = pop_terminal_slot_locked(self, &batch_id, out);
+  uint64_t first_seq = 0;
+  if (ready_count_for_batch_locked(self, batch_id, &first_seq) < n) {
+    platform_mutex_unlock(self->lock);
+    *ticket = (struct prefetcher_wave_ticket){ 0 };
+    return 0;
+  }
+  *ticket = (struct prefetcher_wave_ticket){
+    .batch_id = batch_id,
+    .n_samples = n,
+    .first_admit_seq = first_seq,
+  };
+  for (uint32_t i = 0; i < n; ++i) {
+    // The readiness check and pops run under one lock, so this cannot
+    // miss unless the prefetcher invariants are already broken.
+    if (!pop_terminal_slot_locked(self, &batch_id, &out[i])) {
+      platform_mutex_unlock(self->lock);
+      for (uint32_t j = 0; j < i; ++j)
+        prefetcher_ready_free(&out[j]);
+      *ticket = (struct prefetcher_wave_ticket){ 0 };
+      return 0;
+    }
+  }
   platform_mutex_unlock(self->lock);
-  return found;
+  return 1;
 Bad:
   return 0;
 }
@@ -677,24 +724,11 @@ prefetcher_ready_count_for_batch(struct prefetcher* self, uint64_t batch_id)
 {
   CHECK(Bad, self);
   platform_mutex_lock(self->lock);
-  uint32_t n = 0;
-  for (uint32_t i = 0; i < self->capacity; ++i) {
-    const struct prefetcher_slot* s = &self->slots[i];
-    if (slot_terminal(s) && s->batch_id == batch_id)
-      n++;
-  }
+  uint32_t n = ready_count_for_batch_locked(self, batch_id, NULL);
   platform_mutex_unlock(self->lock);
   return n;
 Bad:
   return 0;
-}
-
-int
-prefetcher_batch_full_ready(struct prefetcher* self,
-                            uint64_t batch_id,
-                            uint32_t n)
-{
-  return prefetcher_ready_count_for_batch(self, batch_id) >= n;
 }
 
 uint32_t

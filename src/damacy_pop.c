@@ -215,7 +215,11 @@ damacy_flush(struct damacy* self)
       goto Done;
     }
     int free_slot = find_free_batch_slot(&self->batch_pool);
-    r = plan_reserve(self, (uint16_t)free_slot, tail);
+    struct prefetcher_wave_ticket ticket = {
+      .batch_id = self->next_batch_id,
+      .n_samples = tail,
+    };
+    r = plan_reserve(self, (uint16_t)free_slot, ticket);
     if (r == DAMACY_AGAIN) {
       log_error("flush: plan_reserve AGAIN after drain");
       r = DAMACY_INVAL;

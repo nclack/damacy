@@ -47,31 +47,41 @@ batch_pool_allocate(struct damacy* self)
 // pop (any_batch_in_flight) and flush (any_batch_planning) wait.
 
 enum damacy_status
-plan_reserve(struct damacy* self, uint16_t slot_idx, uint32_t n_samples)
+plan_reserve(struct damacy* self,
+             uint16_t slot_idx,
+             struct prefetcher_wave_ticket ticket)
 {
-  if (n_samples == 0)
+  if (ticket.n_samples == 0)
     return DAMACY_OK;
+  if (ticket.batch_id != self->next_batch_id)
+    return DAMACY_INVAL;
   struct damacy_batch_slot* slot = &self->batch_pool.slots[slot_idx];
   if (slot->state != BATCH_FREE)
     return DAMACY_INVAL;
 
-  const uint64_t head_batch_id = self->next_batch_id;
-  for (uint32_t i = 0; i < n_samples; ++i) {
-    if (!prefetcher_pop_ready_for_batch(
-          self->prefetcher, head_batch_id, &self->staging[i])) {
-      // Caller (scheduler / flush) must have verified availability.
-      // Rewind and let the caller observe AGAIN.
-      for (uint32_t j = 0; j < i; ++j)
-        prefetcher_ready_free(&self->staging[j]);
-      return DAMACY_AGAIN;
-    }
+  struct prefetcher_wave_ticket consumed = { 0 };
+  if (!prefetcher_take_wave(self->prefetcher,
+                            ticket.batch_id,
+                            ticket.n_samples,
+                            &consumed,
+                            self->staging)) {
+    return DAMACY_AGAIN;
+  }
+  if (consumed.n_samples != ticket.n_samples ||
+      consumed.batch_id != ticket.batch_id) {
+    for (uint32_t i = 0; i < consumed.n_samples; ++i)
+      prefetcher_ready_free(&self->staging[i]);
+    return DAMACY_INVAL;
+  }
+
+  for (uint32_t i = 0; i < ticket.n_samples; ++i) {
     // advance_from_shard absorbs NOTFOUND at the prefetcher level; a
     // slot-level ERROR here is always a real error.
     if (self->staging[i].result == PREFETCHER_RESULT_ERROR) {
       enum damacy_status es = self->staging[i].err_code
                                 ? (enum damacy_status)self->staging[i].err_code
                                 : DAMACY_INVAL;
-      for (uint32_t j = 0; j <= i; ++j)
+      for (uint32_t j = 0; j < ticket.n_samples; ++j)
         prefetcher_ready_free(&self->staging[j]);
       self->failed_status = es;
       return es;
@@ -80,12 +90,12 @@ plan_reserve(struct damacy* self, uint16_t slot_idx, uint32_t n_samples)
 
   enum damacy_status status = batch_pool_allocate(self);
   if (status != DAMACY_OK) {
-    for (uint32_t i = 0; i < n_samples; ++i)
+    for (uint32_t i = 0; i < ticket.n_samples; ++i)
       prefetcher_ready_free(&self->staging[i]);
     self->failed_status = status;
     return status;
   }
-  for (uint32_t i = 0; i < n_samples; ++i) {
+  for (uint32_t i = 0; i < ticket.n_samples; ++i) {
     // Steal uri + h_shards into batch_stage; plan_commit frees the rest
     // of staging[i] (the bare handles are POD and safe to copy).
     self->batch_stage[i].uri = self->staging[i].uri;
@@ -98,7 +108,7 @@ plan_reserve(struct damacy* self, uint16_t slot_idx, uint32_t n_samples)
     self->staging[i].h_shards = NULL;
     self->staging[i].n_shards = 0;
   }
-  slot->n_samples = n_samples;
+  slot->n_samples = ticket.n_samples;
   slot->state = BATCH_PLANNING;
   return DAMACY_OK;
 }

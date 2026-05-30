@@ -1,7 +1,6 @@
 #include "damacy.h"
 
 #include "damacy_internal.h"
-#include "log/log.h"
 #include "nvtx/nvtx.h"
 
 #include <cuda.h>
@@ -19,16 +18,13 @@ kick_peel_into_free_slots(struct damacy* self, int* changed)
       int free_slot = find_free_batch_slot(&self->batch_pool);
       if (free_slot < 0)
         break;
-      if (!prefetcher_batch_full_ready(
-            self->prefetcher, self->next_batch_id, self->cfg.samples_per_batch))
+      struct prefetcher_wave_ticket ticket = {
+        .batch_id = self->next_batch_id,
+        .n_samples = self->cfg.samples_per_batch,
+      };
+      enum damacy_status s = plan_reserve(self, (uint16_t)free_slot, ticket);
+      if (s == DAMACY_AGAIN)
         break;
-      enum damacy_status s =
-        plan_reserve(self, (uint16_t)free_slot, self->cfg.samples_per_batch);
-      if (s == DAMACY_AGAIN) {
-        log_error(
-          "kick_peel: plan_reserve AGAIN despite prefetcher_batch_full_ready");
-        return DAMACY_INVAL;
-      }
       if (s != DAMACY_OK)
         return s;
       scheduler_unlock(self->sched);

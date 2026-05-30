@@ -67,20 +67,27 @@ extern "C"
     struct prefetch_handle h_layout;
   };
 
+  struct prefetcher_wave_ticket
+  {
+    uint64_t batch_id;
+    uint32_t n_samples;
+    uint64_t first_admit_seq;
+  };
+
   // Returns 1 if a terminal-state slot was popped into *out; 0 if no
   // terminal-state slot is currently available.
   int prefetcher_pop_ready(struct prefetcher* p, struct prefetcher_ready* out);
 
-  int prefetcher_pop_ready_for_batch(struct prefetcher* p,
-                                     uint64_t batch_id,
-                                     struct prefetcher_ready* out);
+  // Atomically pops n terminal samples for batch_id into out[0..n). On
+  // success, ticket describes the consumed input wave.
+  int prefetcher_take_wave(struct prefetcher* p,
+                           uint64_t batch_id,
+                           uint32_t n,
+                           struct prefetcher_wave_ticket* ticket,
+                           struct prefetcher_ready* out);
 
   uint32_t prefetcher_ready_count_for_batch(struct prefetcher* p,
                                             uint64_t batch_id);
-
-  int prefetcher_batch_full_ready(struct prefetcher* p,
-                                  uint64_t batch_id,
-                                  uint32_t n);
 
   uint32_t prefetcher_in_flight(struct prefetcher* p);
 
