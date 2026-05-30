@@ -4,8 +4,8 @@
 #include "damacy.h"
 #include "damacy_limits.h"
 #include "render_job/render_job.h"
-#include "wave/compressed_input.h"
-#include "wave/host_slab.h"
+#include "wave/input_slot.h"
+#include "wave/input_transfer.h"
 #include "wave/wave.h"
 
 #include <cuda.h>
@@ -17,14 +17,14 @@ struct decoder_zstd;
 struct gpu_budget;
 struct render_job_pool;
 struct store;
-struct compressed_input_path;
+struct input_transfer_ops;
 
 struct wave_pool
 {
   struct damacy_wave waves[DAMACY_N_WAVES];
 
   // Input staging slots. n_slots >= DAMACY_N_WAVES.
-  struct host_slab_slot slots[DAMACY_MAX_HOST_BUFFER_WAVES];
+  struct input_slot slots[DAMACY_MAX_HOST_BUFFER_WAVES];
   uint8_t n_slots;
 
   uint32_t max_chunks_per_wave;
@@ -54,7 +54,7 @@ struct wave_pool
   struct damacy_stats* stats;
   enum damacy_dtype dtype;
 
-  const struct compressed_input_path* input_path;
+  const struct input_transfer_ops* input;
 
   // Bench bypass; see damacy_config.bypass_decode.
   uint8_t bypass_decode;
@@ -74,12 +74,9 @@ wave_pool_init(struct wave_pool* wp,
                uint64_t input_staging_per_wave,
                uint64_t dev_decompressed_per_wave,
                uint64_t max_chunk_uncompressed_bytes,
-               enum compressed_input_mode input_mode,
+               const struct input_transfer_ops* input,
                int bypass_decode,
                struct gpu_budget* budget);
-
-const struct compressed_input_path*
-wave_pool_compressed_input_path(enum compressed_input_mode mode);
 
 // Destroy owned resources. cuda_skip=1 skips CUDA-owned frees.
 void

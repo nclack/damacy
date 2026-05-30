@@ -253,7 +253,7 @@ wave_dispatcher_reserve(struct render_job* job,
 
   out->n_chunks = take;
   out->n_reads = n_reads;
-  out->host_used_bytes = host_cursor;
+  out->input_used_bytes = host_cursor;
   out->io_bytes = host_cursor;
   out->is_fill_wave = (uint8_t)(n_reads == 0);
   job->n_chunks_dispatched += take;

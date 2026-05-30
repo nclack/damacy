@@ -292,7 +292,7 @@ extern "C"
     // Sums to the wave-boundary gap visible in nsys.
     struct damacy_metric decode_gap;
     struct damacy_metric assemble;
-    // Time a host_slab_slot sat in SLOT_READY waiting for a WAVE_FREE
+    // Time an input_slot sat in SLOT_READY waiting for a WAVE_FREE
     // wave to bind to. Non-zero average → more host_buffer_waves slots
     // would let IO finish further ahead of decode without stalling.
     struct damacy_metric bind_wait;

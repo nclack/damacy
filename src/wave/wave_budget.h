@@ -3,7 +3,7 @@
 #pragma once
 
 #include "damacy.h"
-#include "wave/compressed_input.h"
+#include "wave/input_transfer.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -25,7 +25,7 @@ struct gpu_budget_breakdown
 
 enum damacy_status
 gpu_budget_predict(const struct damacy_config* cfg,
-                   const struct compressed_input_resources* input,
+                   const struct input_transfer_resources* input,
                    uint64_t dev_decompressed_per_wave,
                    struct gpu_budget_breakdown* out);
 
@@ -62,7 +62,7 @@ struct wave_pool_sizing
 enum damacy_status
 wave_pool_resolve_sizing(uint32_t max_chunks_per_wave,
                          uint32_t max_substreams_per_chunk,
-                         uint8_t input_staging_device_instances,
+                         uint8_t input_device_staging_buffers,
                          uint64_t max_gpu_memory_bytes,
                          uint64_t max_chunk_uncompressed_bytes,
                          uint32_t samples_per_batch,

@@ -8,7 +8,7 @@
 #include "expect.h"
 #include "gpu_budget/gpu_budget.h"
 #include "render_job/render_job.h"
-#include "wave/host_slab.h"
+#include "wave/input_slot.h"
 #include "wave/wave_pool.h"
 #include "zarr/zarr_metadata.h"
 
@@ -163,7 +163,7 @@ test_failed_h2d_submit_drains_before_unbind(void)
                         4096,
                         4096,
                         4096,
-                        0,
+                        input_transfer_h2d(),
                         0,
                         budget) == 0);
 
@@ -239,7 +239,7 @@ test_failed_bulk_h2d_submit_drains_before_unbind(void)
                         4096,
                         4096,
                         4096,
-                        0,
+                        input_transfer_h2d(),
                         0,
                         budget) == 0);
 
@@ -296,7 +296,7 @@ test_gds_slot_stays_bound_until_h2d_end(void)
 
   struct wave_pool wp;
   memset(&wp, 0, sizeof(wp));
-  wp.input_path = wave_pool_compressed_input_path(COMPRESSED_INPUT_GDS);
+  wp.input = input_transfer_gds();
   wp.n_slots = 1;
   wp.waves[0].state = WAVE_H2D;
   wp.waves[0].bound_slot = 0;

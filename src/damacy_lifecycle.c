@@ -217,14 +217,14 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     resolve_max_substreams_per_chunk(cfg);
   const uint8_t resolved_host_buffer_waves = resolve_host_buffer_waves(cfg);
   const uint8_t want_gds = resolve_enable_gds(cfg);
-  const enum compressed_input_mode input_mode =
-    want_gds ? COMPRESSED_INPUT_GDS : COMPRESSED_INPUT_H2D;
-  const uint8_t input_device_instances =
-    compressed_input_device_instances(input_mode, resolved_host_buffer_waves);
+  const struct input_transfer_ops* input =
+    want_gds ? input_transfer_gds() : input_transfer_h2d();
+  const struct input_transfer_resources min_input =
+    input_transfer_resources(input, resolved_host_buffer_waves, 0);
   struct wave_pool_sizing sizing = { 0 };
   s = wave_pool_resolve_sizing(resolved_max_chunks_per_wave,
                                resolved_max_substreams_per_chunk,
-                               input_device_instances,
+                               min_input.device_staging_buffers,
                                resolver_budget,
                                runtime_chunk_cap,
                                cfg->samples_per_batch,
@@ -232,11 +232,12 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   if (s != DAMACY_OK)
     goto Fail;
   {
-    const struct compressed_input_resources input = compressed_input_resources(
-      input_mode, resolved_host_buffer_waves, sizing.input_staging_per_wave);
+    const struct input_transfer_resources input_resources =
+      input_transfer_resources(
+        input, resolved_host_buffer_waves, sizing.input_staging_per_wave);
     struct gpu_budget_breakdown predicted = { 0 };
     s = gpu_budget_predict(
-      cfg, &input, sizing.dev_decompressed_per_wave, &predicted);
+      cfg, &input_resources, sizing.dev_decompressed_per_wave, &predicted);
     if (s != DAMACY_OK)
       goto Fail;
     gpu_budget_commit(self->budget, predicted.total);
@@ -380,7 +381,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
                                sizing.input_staging_per_wave,
                                sizing.dev_decompressed_per_wave,
                                runtime_chunk_cap,
-                               input_mode,
+                               input,
                                cfg->debug.bypass_decode,
                                self->budget);
     numa_scope_exit(&saved_affinity);
@@ -534,15 +535,15 @@ damacy_config_describe(const struct damacy_config* cfg)
 
   const uint8_t resolved_host_buffer_waves = resolve_host_buffer_waves(cfg);
   const uint8_t want_gds = resolve_enable_gds(cfg);
-  const enum compressed_input_mode input_mode =
-    want_gds ? COMPRESSED_INPUT_GDS : COMPRESSED_INPUT_H2D;
-  const uint8_t input_device_instances =
-    compressed_input_device_instances(input_mode, resolved_host_buffer_waves);
+  const struct input_transfer_ops* input =
+    want_gds ? input_transfer_gds() : input_transfer_h2d();
+  const struct input_transfer_resources min_input =
+    input_transfer_resources(input, resolved_host_buffer_waves, 0);
   struct wave_pool_sizing sizing = { 0 };
   enum damacy_status rs =
     wave_pool_resolve_sizing(resolve_max_chunks_per_wave(cfg),
                              resolve_max_substreams_per_chunk(cfg),
-                             input_device_instances,
+                             min_input.device_staging_buffers,
                              resolver_budget,
                              runtime_chunk_cap,
                              cfg->samples_per_batch,
@@ -552,11 +553,12 @@ damacy_config_describe(const struct damacy_config* cfg)
              damacy_status_str(rs));
     return;
   }
-  const struct compressed_input_resources input = compressed_input_resources(
-    input_mode, resolved_host_buffer_waves, sizing.input_staging_per_wave);
+  const struct input_transfer_resources input_resources =
+    input_transfer_resources(
+      input, resolved_host_buffer_waves, sizing.input_staging_per_wave);
   struct gpu_budget_breakdown predicted = { 0 };
   if (gpu_budget_predict(
-        cfg, &input, sizing.dev_decompressed_per_wave, &predicted) !=
+        cfg, &input_resources, sizing.dev_decompressed_per_wave, &predicted) !=
       DAMACY_OK) {
     log_info("damacy_config_describe: gpu_budget_predict failed");
     return;

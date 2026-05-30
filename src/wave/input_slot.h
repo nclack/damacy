@@ -20,7 +20,7 @@ enum slot_state
   SLOT_BUSY,
 };
 
-struct host_slab_slot
+struct input_slot
 {
   enum slot_state state;
   // Exactly one of buf/dev_buf is allocated for input staging.
@@ -48,31 +48,31 @@ struct host_slab_slot
 
 // Allocate one input staging slot.
 int
-slot_init(struct host_slab_slot* slot,
+slot_init(struct input_slot* slot,
           uint32_t max_chunks_per_wave,
           uint64_t host_cap,
           uint64_t dev_cap);
 
 void
-slot_destroy(struct host_slab_slot* slot, int cuda_skip);
+slot_destroy(struct input_slot* slot, int cuda_skip);
 
 // SLOT_BUSY → SLOT_FREE.
 void
-slot_release(struct host_slab_slot* slot);
+slot_release(struct input_slot* slot);
 
 // Linear scans across `slots[0..n)`. find_* returns the index of the
 // first matching slot, or -1 if none. any_* returns 1/0.
 //
-// host_slab_any_in_flight returns 1 for any non-FREE state, including
+// input_slot_any_in_flight returns 1 for any non-FREE state, including
 // the transient SLOT_PEELING window (peel reserve → peel commit). This
 // is intentional: damacy_pop relies on it to know a peel may produce
 // future ready batches even when no wave has actually launched yet.
 // Any new non-FREE state added later must keep this property.
 int
-host_slab_find_free(const struct host_slab_slot* slots, uint8_t n);
+input_slot_find_free(const struct input_slot* slots, uint8_t n);
 int
-host_slab_find_ready(const struct host_slab_slot* slots, uint8_t n);
+input_slot_find_ready(const struct input_slot* slots, uint8_t n);
 int
-host_slab_any_in_flight(const struct host_slab_slot* slots, uint8_t n);
+input_slot_any_in_flight(const struct input_slot* slots, uint8_t n);
 int
-host_slab_any_free(const struct host_slab_slot* slots, uint8_t n);
+input_slot_any_free(const struct input_slot* slots, uint8_t n);

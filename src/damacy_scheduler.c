@@ -5,7 +5,7 @@
 
 #include <cuda.h>
 
-// Drains sealed render jobs into free host_slab_slots, planning a fresh
+// Drains sealed render jobs into free input_slots, planning a fresh
 // batch when no render job has chunks left to peel. Stops when there
 // are no free slots, no render jobs with work, and no room to plan more.
 static enum damacy_status

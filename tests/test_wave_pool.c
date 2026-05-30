@@ -1,6 +1,6 @@
 // Unit tests for the host-side parts of src/wave/wave_pool.c.
 // wave_pool_init needs CUDA (creates streams); peel_reserve and
-// peel_commit don't — they touch stats, render_job cursors, host_slab
+// peel_commit don't — they touch stats, render_job cursors, input_slot
 // state, and chunk_plans / read_op_groups, all stack-constructible.
 
 #include "batch_pool/batch_pool.h"
@@ -11,7 +11,7 @@
 #include "planner/planner.h"
 #include "render_job/render_job.h"
 #include "store/store.h"
-#include "wave/host_slab.h"
+#include "wave/input_slot.h"
 #include "wave/wave_pool.h"
 #include "zarr/zarr_metadata.h"
 
@@ -34,7 +34,7 @@ setup_post_reserve(struct wave_pool* wp,
                    struct damacy_batch_pool* batch_pool,
                    struct render_job_pool* jobs,
                    struct damacy_stats* stats,
-                   struct host_slab_slot* slot,
+                   struct input_slot* slot,
                    uint32_t n_chunks)
 {
   memset(wp, 0, sizeof(*wp));
@@ -66,7 +66,7 @@ test_peel_commit_rollback_once(void)
   struct damacy_batch_pool batch_pool;
   struct render_job_pool jobs;
   struct damacy_stats stats;
-  struct host_slab_slot slot;
+  struct input_slot slot;
   const uint32_t n_chunks = 3;
   setup_post_reserve(&wp, &batch_pool, &jobs, &stats, &slot, n_chunks);
 
@@ -108,7 +108,7 @@ test_peel_commit_success_then_recommit(void)
   struct damacy_batch_pool batch_pool;
   struct render_job_pool jobs;
   struct damacy_stats stats;
-  struct host_slab_slot slot;
+  struct input_slot slot;
   const uint32_t n_chunks = 4;
   setup_post_reserve(&wp, &batch_pool, &jobs, &stats, &slot, n_chunks);
 
@@ -152,7 +152,7 @@ test_peel_commit_rolls_back_groups(void)
   struct damacy_batch_pool batch_pool;
   struct render_job_pool jobs;
   struct damacy_stats stats;
-  struct host_slab_slot slot;
+  struct input_slot slot;
   const uint32_t n_chunks = 5;
   setup_post_reserve(&wp, &batch_pool, &jobs, &stats, &slot, n_chunks);
 
@@ -200,7 +200,7 @@ init_reserve_fixture(struct reserve_fixture* f,
   f->wp.render_jobs = &f->jobs;
   f->wp.stats = &f->stats;
   f->wp.n_slots = 1;
-  f->wp.input_path = wave_pool_compressed_input_path(COMPRESSED_INPUT_H2D);
+  f->wp.input = input_transfer_h2d();
   f->wp.max_chunks_per_wave = DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE;
   f->wp.waves[0].dev_decompressed_cap = dev_cap;
   f->wp.slots[0].state = SLOT_FREE;

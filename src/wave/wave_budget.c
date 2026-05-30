@@ -102,7 +102,7 @@ wave_pool_shared_predict_bytes(uint32_t max_chunks_per_wave,
 
 enum damacy_status
 gpu_budget_predict(const struct damacy_config* cfg,
-                   const struct compressed_input_resources* input,
+                   const struct input_transfer_resources* input,
                    uint64_t dev_decompressed_per_wave,
                    struct gpu_budget_breakdown* out)
 {
@@ -125,7 +125,7 @@ gpu_budget_predict(const struct damacy_config* cfg,
   if (s != DAMACY_OK)
     return s;
 
-  out->dev_compressed = input->gpu_budget_bytes;
+  out->dev_compressed = input->device_staging_bytes;
   out->dev_decompressed = 2ull * per_wave.dev_decompressed;
   out->blosc1_meta = 2ull * per_wave.blosc1_meta;
   out->fanout_soa = 2ull * per_wave.fanout_soa;
@@ -161,7 +161,7 @@ decoder_initial_caps(uint32_t max_chunks_per_wave,
 static enum damacy_status
 predict_pool_total(uint32_t max_chunks_per_wave,
                    uint32_t max_substreams_per_wave,
-                   uint8_t input_staging_device_instances,
+                   uint8_t input_device_staging_buffers,
                    uint64_t input_staging_per_wave,
                    uint64_t dev_per_wave,
                    uint64_t max_chunk_uncompressed_bytes,
@@ -193,7 +193,7 @@ predict_pool_total(uint32_t max_chunks_per_wave,
     per_wave.fanout_soa - fanout_slice_init + fanout_slice_max;
 
   uint64_t total =
-    (uint64_t)input_staging_device_instances * input_staging_per_wave +
+    (uint64_t)input_device_staging_buffers * input_staging_per_wave +
     2ull *
       (per_wave.dev_decompressed + per_wave.blosc1_meta + fanout_soa_worst) +
     nvcomp_temp_max +
@@ -205,7 +205,7 @@ predict_pool_total(uint32_t max_chunks_per_wave,
 enum damacy_status
 wave_pool_resolve_sizing(uint32_t max_chunks_per_wave,
                          uint32_t max_substreams_per_chunk,
-                         uint8_t input_staging_device_instances,
+                         uint8_t input_device_staging_buffers,
                          uint64_t max_gpu_memory_bytes,
                          uint64_t max_chunk_uncompressed_bytes,
                          uint32_t samples_per_batch,
@@ -217,7 +217,7 @@ wave_pool_resolve_sizing(uint32_t max_chunks_per_wave,
   uint64_t total_min = 0;
   enum damacy_status s = predict_pool_total(max_chunks_per_wave,
                                             max_substreams_per_wave,
-                                            input_staging_device_instances,
+                                            input_device_staging_buffers,
                                             min_per_wave,
                                             min_per_wave,
                                             max_chunk_uncompressed_bytes,
@@ -236,7 +236,7 @@ wave_pool_resolve_sizing(uint32_t max_chunks_per_wave,
 
   const uint64_t headroom = max_gpu_memory_bytes - total_min;
   const uint64_t scale =
-    (uint64_t)input_staging_device_instances + DAMACY_N_WAVES;
+    (uint64_t)input_device_staging_buffers + DAMACY_N_WAVES;
   const uint64_t delta_per_wave_cap = scale > 0 ? headroom / scale : 0;
   const uint64_t step = 1ull << 20; // 1 MB granularity
   uint64_t per_wave = min_per_wave + (delta_per_wave_cap / step) * step;
@@ -250,7 +250,7 @@ wave_pool_resolve_sizing(uint32_t max_chunks_per_wave,
   uint64_t predicted = 0;
   s = predict_pool_total(max_chunks_per_wave,
                          max_substreams_per_wave,
-                         input_staging_device_instances,
+                         input_device_staging_buffers,
                          per_wave,
                          per_wave,
                          max_chunk_uncompressed_bytes,
@@ -264,7 +264,7 @@ wave_pool_resolve_sizing(uint32_t max_chunks_per_wave,
       per_wave = min_per_wave;
     s = predict_pool_total(max_chunks_per_wave,
                            max_substreams_per_wave,
-                           input_staging_device_instances,
+                           input_device_staging_buffers,
                            per_wave,
                            per_wave,
                            max_chunk_uncompressed_bytes,

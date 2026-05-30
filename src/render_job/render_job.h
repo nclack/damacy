@@ -59,7 +59,7 @@ struct wave_desc
   uint32_t n_chunks;
   uint32_t n_reads;
   uint32_t prev_n_groups_dispatched;
-  uint64_t host_used_bytes;
+  uint64_t input_used_bytes;
   uint64_t io_bytes;
   uint8_t is_fill_wave;
 };

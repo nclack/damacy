@@ -124,11 +124,13 @@ add_cuda_lib(render_job SOURCES render_job/render_job.h render_job/render_job.c
     LINKS planner path_intern store log CUDA::cuda_driver
 )
 
-# Pinned-host slab slot pool: one slot per wave's worth of compressed
-# bytes plus the store_read records that drove its IO. Pure alloc /
-# release / find primitives.
-add_cuda_lib(host_slab SOURCES wave/host_slab.h wave/host_slab.c
+# Input staging slot pool.
+add_cuda_lib(input_slot SOURCES wave/input_slot.h wave/input_slot.c
     LINKS store CUDA::cuda_driver
+)
+
+add_cuda_lib(input_transfer SOURCES wave/input_transfer.h wave/input_transfer.c
+    LINKS input_slot store damacy_nvtx CUDA::cuda_driver
 )
 
 # Pinned-host + device SOA fanout used by the zstd decoder batch path.
@@ -143,9 +145,9 @@ add_cuda_lib(fanout SOURCES wave/fanout.h wave/fanout.c
 # all functions pure aside from the decoder grow's
 # cuStreamSynchronize.
 add_cuda_lib(wave_budget
-    SOURCES wave/compressed_input.h wave/compressed_input.c
-            wave/wave_budget.h wave/wave_budget.c
-    LINKS decoder fanout planner assemble gpu_budget damacy_config log
+    SOURCES wave/input_transfer.h wave/wave_budget.h wave/wave_budget.c
+    LINKS input_transfer decoder fanout planner assemble gpu_budget
+          damacy_config log
           CUDA::cuda_driver
 )
 
@@ -158,15 +160,15 @@ add_cuda_lib(wave SOURCES wave/wave.h wave/wave.c
 )
 
 # wave_pool: the conductor the scheduler drives. Owns both waves + the
-# host_slab pool + 3 streams + the shared zstd decoder + decode anchor
+# input_slot pool + 3 streams + the shared zstd decoder + decode anchor
 # ring, and is the home of the per-stage submitters (kick_h2d /
 # kick_decode / kick_assemble), wave_pool_peel, and the wave_pool_advance
 # state machine.
 add_cuda_lib(wave_pool
-    SOURCES wave/compressed_input.h wave/wave_pool.h wave/wave_pool.c
-    LINKS wave host_slab fanout wave_budget gpu_budget batch_pool decoder
-          assemble planner render_job store damacy_stats damacy_config
-          damacy_nvtx log CUDA::cuda_driver
+    SOURCES wave/input_transfer.h wave/wave_pool.h wave/wave_pool.c
+    LINKS wave input_slot input_transfer fanout wave_budget gpu_budget
+          batch_pool decoder assemble planner render_job store damacy_stats
+          damacy_config damacy_nvtx log CUDA::cuda_driver
 )
 
 # Read-side store. store_fs.c is the host impl; store_fs_gds.c is an

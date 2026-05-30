@@ -1,4 +1,4 @@
-#include "host_slab.h"
+#include "input_slot.h"
 
 #include "damacy_limits.h"
 
@@ -7,7 +7,7 @@
 #include <string.h>
 
 int
-slot_init(struct host_slab_slot* slot,
+slot_init(struct input_slot* slot,
           uint32_t max_chunks_per_wave,
           uint64_t host_cap,
           uint64_t dev_cap)
@@ -45,7 +45,7 @@ Error:
 }
 
 void
-slot_destroy(struct host_slab_slot* slot, int cuda_skip)
+slot_destroy(struct input_slot* slot, int cuda_skip)
 {
   if (!slot)
     return;
@@ -63,7 +63,7 @@ slot_destroy(struct host_slab_slot* slot, int cuda_skip)
 }
 
 void
-slot_release(struct host_slab_slot* slot)
+slot_release(struct input_slot* slot)
 {
   slot->state = SLOT_FREE;
   slot->used_bytes = 0;
@@ -77,7 +77,7 @@ slot_release(struct host_slab_slot* slot)
 }
 
 int
-host_slab_find_free(const struct host_slab_slot* slots, uint8_t n)
+input_slot_find_free(const struct input_slot* slots, uint8_t n)
 {
   for (uint8_t s = 0; s < n; ++s)
     if (slots[s].state == SLOT_FREE)
@@ -86,7 +86,7 @@ host_slab_find_free(const struct host_slab_slot* slots, uint8_t n)
 }
 
 int
-host_slab_find_ready(const struct host_slab_slot* slots, uint8_t n)
+input_slot_find_ready(const struct input_slot* slots, uint8_t n)
 {
   for (uint8_t s = 0; s < n; ++s)
     if (slots[s].state == SLOT_READY)
@@ -95,7 +95,7 @@ host_slab_find_ready(const struct host_slab_slot* slots, uint8_t n)
 }
 
 int
-host_slab_any_in_flight(const struct host_slab_slot* slots, uint8_t n)
+input_slot_any_in_flight(const struct input_slot* slots, uint8_t n)
 {
   for (uint8_t s = 0; s < n; ++s)
     if (slots[s].state != SLOT_FREE)
@@ -104,7 +104,7 @@ host_slab_any_in_flight(const struct host_slab_slot* slots, uint8_t n)
 }
 
 int
-host_slab_any_free(const struct host_slab_slot* slots, uint8_t n)
+input_slot_any_free(const struct input_slot* slots, uint8_t n)
 {
   for (uint8_t s = 0; s < n; ++s)
     if (slots[s].state == SLOT_FREE)

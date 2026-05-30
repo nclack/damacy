@@ -74,7 +74,7 @@ test_reserve_commits_cursor_and_desc(void)
   EXPECT(desc.batch_chunk_offset == 0);
   EXPECT(desc.n_chunks == 2);
   EXPECT(desc.n_reads == 2);
-  EXPECT(desc.host_used_bytes == 128);
+  EXPECT(desc.input_used_bytes == 128);
   EXPECT(f.job.n_chunks_dispatched == 2);
   EXPECT(f.job.n_groups_dispatched == 2);
   EXPECT(f.store_reads[0].dst == f.host_buf);
