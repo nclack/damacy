@@ -14,6 +14,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define max(a, b) ((a) > (b) ? (a) : (b))
+
 struct prefetcher;
 struct prefetcher_slot;
 
@@ -674,13 +676,10 @@ prefetcher_take_ready_wave(struct prefetcher* self,
   CHECK(Bad, ticket);
   CHECK(Bad, out);
   CHECK(Bad, max_samples > 0);
-  for (uint32_t i = 0; i < max_samples; ++i)
-    out[i] = (struct prefetcher_ready){ 0 };
+  memset(out, 0, max_samples * sizeof(*out));
 
   platform_mutex_lock(self->lock);
-  uint32_t n = ready_prefix_count_locked(self);
-  if (n > max_samples)
-    n = max_samples;
+  uint32_t n = max(max_samples, ready_prefix_count_locked(self));
   if (n == 0) {
     platform_mutex_unlock(self->lock);
     *ticket = (struct prefetcher_wave_ticket){ 0 };
