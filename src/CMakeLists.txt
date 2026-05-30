@@ -143,7 +143,8 @@ add_cuda_lib(fanout SOURCES wave/fanout.h wave/fanout.c
 # all functions pure aside from the decoder grow's
 # cuStreamSynchronize.
 add_cuda_lib(wave_budget
-    SOURCES wave/compressed_input.h wave/wave_budget.h wave/wave_budget.c
+    SOURCES wave/compressed_input.h wave/compressed_input.c
+            wave/wave_budget.h wave/wave_budget.c
     LINKS decoder fanout planner assemble gpu_budget damacy_config log
           CUDA::cuda_driver
 )
