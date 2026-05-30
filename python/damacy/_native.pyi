@@ -48,6 +48,15 @@ GDS_AUTO: Final[int]
 GDS_ON: Final[int]
 GDS_OFF: Final[int]
 
+# ---- damacy default constants ------------------------------------------
+
+DEFAULT_CHUNK_UNCOMPRESSED_BYTES: Final[int]
+DEFAULT_READ_OP_MAX_BYTES: Final[int]
+DEFAULT_HOST_BUFFER_WAVES: Final[int]
+DEFAULT_MAX_CHUNKS_PER_WAVE: Final[int]
+DEFAULT_MAX_SUBSTREAMS_PER_CHUNK: Final[int]
+DEFAULT_PREFETCH_IO_THREADS: Final[int]
+
 # ---- exceptions ---------------------------------------------------------
 
 class DamacyError(RuntimeError):
@@ -137,10 +146,10 @@ class Pipeline:
         n_shard_index_cache: int,
         n_chunk_layout_cache: int,
         sample_shape: tuple[int, ...],
-        host_buffer_waves: int = 0,
-        max_chunks_per_wave: int = 0,
-        max_substreams_per_chunk: int = 0,
-        max_read_op_bytes: int = 0,
+        host_buffer_waves: int = DEFAULT_HOST_BUFFER_WAVES,
+        max_chunks_per_wave: int = DEFAULT_MAX_CHUNKS_PER_WAVE,
+        max_substreams_per_chunk: int = DEFAULT_MAX_SUBSTREAMS_PER_CHUNK,
+        max_read_op_bytes: int = DEFAULT_READ_OP_MAX_BYTES,
         device: int = -1,
         enable_gds: int = GDS_AUTO,
         numa_strategy: int = NUMA_AUTO,

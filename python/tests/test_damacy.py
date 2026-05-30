@@ -398,7 +398,7 @@ def test_config_validates_eagerly():
         Config(samples_per_batch=0, sample_shape=ss, max_gpu_memory_bytes=gpu)
     with pytest.raises(ValueError, match="lookahead_samples"):
         Config(
-            samples_per_batch=1,
+            samples_per_batch=2,
             sample_shape=ss,
             lookahead_samples=1,
             max_gpu_memory_bytes=gpu,
@@ -504,7 +504,7 @@ def test_native_pipeline_rejects_out_of_range_enums(tiny_zarr):
             n_shard_index_cache=4,
             n_chunk_layout_cache=4,
             dtype=_native.DTYPE_F32,
-            max_chunk_uncompressed_bytes=0,
+            max_chunk_uncompressed_bytes=_native.DEFAULT_CHUNK_UNCOMPRESSED_BYTES,
             max_gpu_memory_bytes=1 << 30,
             sample_shape=(8, 16),
             **override,

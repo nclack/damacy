@@ -88,7 +88,9 @@ extern "C"
     const struct damacy_sample* end;
   };
 
-  // Performance + resource-sizing knobs.
+  // Performance + resource-sizing knobs. damacy_create requires explicit
+  // numeric values; use damacy_config_validate_with_defaults() to expand
+  // defaultable zero/invalid knobs before create.
   struct damacy_tuning
   {
     // Primary GPU budget. Hard cap on total GPU memory damacy will
@@ -96,23 +98,24 @@ extern "C"
     // Required — no default; a value too small for the requested
     // geometry returns DAMACY_BUDGET from damacy_create.
     uint64_t max_gpu_memory_bytes;
-    // 0 → DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES.
+    // Default helper: DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES.
     uint32_t max_chunk_uncompressed_bytes;
-    // 0 → DAMACY_DEFAULT_READ_OP_MAX_BYTES.
+    // Default helper: DAMACY_DEFAULT_READ_OP_MAX_BYTES.
     uint64_t max_read_op_bytes;
-    // Pinned-host slab pool depth, in waves. 0 →
-    // DAMACY_DEFAULT_HOST_BUFFER_WAVES. Clamped to
+    // Pinned-host slab pool depth, in waves. Default helper:
+    // DAMACY_DEFAULT_HOST_BUFFER_WAVES, clamped to
     // [DAMACY_N_WAVES, DAMACY_MAX_HOST_BUFFER_WAVES].
     uint8_t host_buffer_waves;
-    // 0 → DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE. Clamped to 0xFFFFu.
+    // Default helper: DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE. Clamped to
+    // 0xFFFFu.
     uint32_t max_chunks_per_wave;
-    // 0 → DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK. Clamped to
+    // Default helper: DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK. Clamped to
     // DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK.
     uint32_t max_substreams_per_chunk;
 
     // Bulk chunk-read worker threads. Wave IO uses this queue.
     uint32_t n_io_threads;
-    // Metadata/prefetch worker threads. 0 ->
+    // Metadata/prefetch worker threads. Default helper:
     // DAMACY_DEFAULT_PREFETCH_IO_THREADS.
     uint32_t n_prefetch_io_threads;
 
@@ -145,8 +148,8 @@ extern "C"
     int64_t sample_shape[DAMACY_MAX_RANK];
     uint8_t sample_rank;
     uint32_t samples_per_batch;
-    // User-push queue depth in samples, not batches. Must cover at least two
-    // full output batches for the current batch-shaped scheduler.
+    // User-push queue depth in samples, not batches. Must cover at least one
+    // full output batch. Default helper picks two full batches.
     uint32_t lookahead_samples;
 
     // -1 captures current CUcontext; >= 0 retains the primary for that
@@ -163,6 +166,13 @@ extern "C"
   // Create a damacy instance.
   enum damacy_status damacy_create(const struct damacy_config* cfg,
                                    struct damacy** out);
+
+  // Return a copy of cfg with defaultable numeric knobs expanded to explicit
+  // values. This helper preserves enum zero semantics (AUTO modes) and cannot
+  // supply required fields such as max_gpu_memory_bytes, samples_per_batch, or
+  // sample_shape; damacy_create still validates the returned config.
+  struct damacy_config damacy_config_validate_with_defaults(
+    const struct damacy_config* cfg);
 
   // Log (as LOG_INFO) a one-line-per-field description of the geometry damacy
   // would resolve from `cfg` at damacy_create time. Useful when diagnosing "why

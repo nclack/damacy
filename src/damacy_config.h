@@ -1,5 +1,5 @@
-// Internal config helpers: dtype mapping, validation, and the
-// "0 → default" knob resolvers.
+// Internal config helpers: dtype mapping, validation, and the defaulting
+// resolvers used by damacy_config_validate_with_defaults().
 #pragma once
 
 #include "damacy.h"

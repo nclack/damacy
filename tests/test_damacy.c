@@ -63,7 +63,7 @@ mk_cfg(const char* root, uint32_t samples_per_batch, int64_t sy, int64_t sx)
   };
   c.sample_shape[0] = sy;
   c.sample_shape[1] = sx;
-  return c;
+  return damacy_config_validate_with_defaults(&c);
 }
 
 static struct damacy_sample

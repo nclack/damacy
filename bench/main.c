@@ -113,13 +113,13 @@ struct scenario
   uint32_t lookahead_samples;
   uint32_t n_io_threads;
   uint32_t n_prefetch_io_threads;
-  uint64_t max_gpu_memory_bytes;         // 0 → library default
-  uint32_t max_chunk_uncompressed_bytes; // 0 → library default
-  uint64_t max_read_op_bytes;            // 0 → library default
+  uint64_t max_gpu_memory_bytes;
+  uint32_t max_chunk_uncompressed_bytes;
+  uint64_t max_read_op_bytes;
   uint32_t n_array_meta_cache;
   uint32_t n_shard_index_cache;
   uint32_t n_chunk_layout_cache;
-  uint8_t host_buffer_waves; // 0 → library default
+  uint8_t host_buffer_waves;
   uint8_t bypass_decode;
 
   double consumer_hold_ms;
@@ -410,17 +410,19 @@ parse_scenario(struct cslice src, struct scenario* sc)
     if (read_uint(src, p_io, countof(p_io), &v))
       return 1;
     sc->n_io_threads = (uint32_t)v;
-    read_uint_opt(src, p_pio, countof(p_pio), &v, 16);
+    read_uint_opt(
+      src, p_pio, countof(p_pio), &v, DAMACY_DEFAULT_PREFETCH_IO_THREADS);
     sc->n_prefetch_io_threads = (uint32_t)v;
     read_uint_opt(src, p_g, countof(p_g), &v, 0);
     sc->max_gpu_memory_bytes = v << 20;
     read_uint_opt(src, p_c, countof(p_c), &v, 0);
-    sc->max_chunk_uncompressed_bytes = (uint32_t)(v << 20);
+    sc->max_chunk_uncompressed_bytes =
+      v ? (uint32_t)(v << 20) : DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES;
     static const struct json_query p_ro[] = {
       { QUERY_KEY, .key = "pipeline" }, { QUERY_KEY, .key = "max_read_op_kb" }
     };
     read_uint_opt(src, p_ro, countof(p_ro), &v, 0);
-    sc->max_read_op_bytes = v << 10; // KB → bytes
+    sc->max_read_op_bytes = v ? v << 10 : DAMACY_DEFAULT_READ_OP_MAX_BYTES;
     read_uint_opt(src, p_zm, countof(p_zm), &v, 4096);
     sc->n_array_meta_cache = (uint32_t)v;
     read_uint_opt(src, p_sm, countof(p_sm), &v, 16384);
@@ -430,7 +432,8 @@ parse_scenario(struct cslice src, struct scenario* sc)
     static const struct json_query p_hw[] = { { QUERY_KEY, .key = "pipeline" },
                                               { QUERY_KEY,
                                                 .key = "host_buffer_waves" } };
-    read_uint_opt(src, p_hw, countof(p_hw), &v, 0);
+    read_uint_opt(
+      src, p_hw, countof(p_hw), &v, DAMACY_DEFAULT_HOST_BUFFER_WAVES);
     sc->host_buffer_waves = (uint8_t)v;
     static const struct json_query p_bd[] = {
       { QUERY_KEY, .key = "pipeline" }, { QUERY_KEY, .key = "bypass_decode" }
@@ -449,9 +452,9 @@ parse_scenario(struct cslice src, struct scenario* sc)
   }
 
   // sanity: all axes can fit a sample
-  if (sc->lookahead_samples < 2u * sc->samples_per_batch) {
+  if (sc->lookahead_samples < sc->samples_per_batch) {
     fprintf(stderr,
-            "scenario: lookahead_samples=%u must be at least 2 * "
+            "scenario: lookahead_samples=%u must be at least "
             "samples_per_batch=%u\n",
             sc->lookahead_samples,
             sc->samples_per_batch);
@@ -864,6 +867,8 @@ main(int argc, char** argv)
       .max_read_op_bytes = sc.max_read_op_bytes,
       .max_gpu_memory_bytes = sc.max_gpu_memory_bytes,
       .host_buffer_waves = sc.host_buffer_waves,
+      .max_chunks_per_wave = DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE,
+      .max_substreams_per_chunk = DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK,
       .n_prefetch_io_threads = sc.n_prefetch_io_threads,
     },
     .debug = { .bypass_decode = sc.bypass_decode },

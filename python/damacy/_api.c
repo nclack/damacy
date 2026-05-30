@@ -728,10 +728,11 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   unsigned int n_shard_index = 256;
   unsigned int n_chunk_layout = 64;
   PyObject* sample_shape_obj = NULL;
-  unsigned int host_buffer_waves = 0;
-  unsigned int max_chunks_per_wave = 0;
-  unsigned int max_substreams_per_chunk = 0;
-  unsigned long long max_read_op_bytes = 0;
+  unsigned int host_buffer_waves = DAMACY_DEFAULT_HOST_BUFFER_WAVES;
+  unsigned int max_chunks_per_wave = DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE;
+  unsigned int max_substreams_per_chunk =
+    DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK;
+  unsigned long long max_read_op_bytes = DAMACY_DEFAULT_READ_OP_MAX_BYTES;
   int device = -1;
   int enable_gds = DAMACY_GDS_AUTO;
   int numa_strategy = DAMACY_NUMA_AUTO;
@@ -838,6 +839,7 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
     cfg.sample_rank = (uint8_t)n;
     Py_DECREF(seq);
   }
+  cfg = damacy_config_validate_with_defaults(&cfg);
 
   struct damacy* d = NULL;
   enum damacy_status s;
@@ -1193,6 +1195,28 @@ api_register_types(PyObject* m)
   if (PyModule_AddIntConstant(m, "GDS_ON", DAMACY_GDS_ON) < 0)
     return -1;
   if (PyModule_AddIntConstant(m, "GDS_OFF", DAMACY_GDS_OFF) < 0)
+    return -1;
+  if (PyModule_AddIntConstant(m,
+                              "DEFAULT_CHUNK_UNCOMPRESSED_BYTES",
+                              DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES) < 0)
+    return -1;
+  if (PyModule_AddIntConstant(
+        m, "DEFAULT_READ_OP_MAX_BYTES", DAMACY_DEFAULT_READ_OP_MAX_BYTES) < 0)
+    return -1;
+  if (PyModule_AddIntConstant(
+        m, "DEFAULT_HOST_BUFFER_WAVES", DAMACY_DEFAULT_HOST_BUFFER_WAVES) < 0)
+    return -1;
+  if (PyModule_AddIntConstant(m,
+                              "DEFAULT_MAX_CHUNKS_PER_WAVE",
+                              DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE) < 0)
+    return -1;
+  if (PyModule_AddIntConstant(m,
+                              "DEFAULT_MAX_SUBSTREAMS_PER_CHUNK",
+                              DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK) < 0)
+    return -1;
+  if (PyModule_AddIntConstant(m,
+                              "DEFAULT_PREFETCH_IO_THREADS",
+                              DAMACY_DEFAULT_PREFETCH_IO_THREADS) < 0)
     return -1;
   return 0;
 }

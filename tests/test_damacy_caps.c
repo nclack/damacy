@@ -3,8 +3,8 @@
 // (derived from cfg.sample_shape).
 //
 // Test cases:
-//   test_create_default_caps        — chunk cap at 0 picks the C default
-//                                     (512 KB); instance comes up fine
+//   test_create_default_caps        — default helper expands chunk cap to
+//                                     512 KB; instance comes up fine
 //   test_oversize_chunk_rejected    — set chunk cap below the inner-chunk
 //                                     uncompressed size; planner returns
 //                                     DAMACY_BUDGET via damacy_pop
@@ -71,7 +71,7 @@ mk_cfg(const char* root, uint32_t samples_per_batch, int64_t sy, int64_t sx)
   };
   c.sample_shape[0] = sy;
   c.sample_shape[1] = sx;
-  return c;
+  return damacy_config_validate_with_defaults(&c);
 }
 
 static struct damacy_sample
@@ -83,8 +83,8 @@ mk_sample(const char* uri, int64_t y0, int64_t y1, int64_t x0, int64_t x1)
   return s;
 }
 
-// chunk_uncompressed_bytes at 0 picks the C default (512 KB) and brings
-// the pipeline up cleanly.
+// The default helper expands chunk_uncompressed_bytes=0 to the explicit
+// default cap (512 KB) and brings the pipeline up cleanly.
 static int
 test_create_default_caps(void)
 {
@@ -98,6 +98,7 @@ test_create_default_caps(void)
 
   struct damacy_config cfg = mk_cfg(root, 1, 8, 16);
   cfg.tuning.max_chunk_uncompressed_bytes = 0;
+  cfg = damacy_config_validate_with_defaults(&cfg);
 
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
@@ -253,6 +254,7 @@ test_pool_reserve_fits_default_budget(void)
       .max_gpu_memory_bytes = 1ull << 30,
     },
   };
+  cfg = damacy_config_validate_with_defaults(&cfg);
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
@@ -306,6 +308,7 @@ test_pool_exceeds_budget_rejected_at_create(void)
       .max_gpu_memory_bytes = 32ull << 20,
     },
   };
+  cfg = damacy_config_validate_with_defaults(&cfg);
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_BUDGET);
   EXPECT(d == NULL);

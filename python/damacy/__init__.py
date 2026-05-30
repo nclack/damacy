@@ -56,6 +56,12 @@ __all__ = [
     "BatchInfo",
     "BudgetExceeded",
     "Config",
+    "DEFAULT_CHUNK_UNCOMPRESSED_BYTES",
+    "DEFAULT_HOST_BUFFER_WAVES",
+    "DEFAULT_MAX_CHUNKS_PER_WAVE",
+    "DEFAULT_MAX_SUBSTREAMS_PER_CHUNK",
+    "DEFAULT_PREFETCH_IO_THREADS",
+    "DEFAULT_READ_OP_MAX_BYTES",
     "DamacyError",
     "DecodeError",
     "Dtype",
@@ -80,6 +86,12 @@ __all__ = [
 ]
 
 __version__: str = _native.__version__
+DEFAULT_CHUNK_UNCOMPRESSED_BYTES: int = _native.DEFAULT_CHUNK_UNCOMPRESSED_BYTES
+DEFAULT_READ_OP_MAX_BYTES: int = _native.DEFAULT_READ_OP_MAX_BYTES
+DEFAULT_HOST_BUFFER_WAVES: int = _native.DEFAULT_HOST_BUFFER_WAVES
+DEFAULT_MAX_CHUNKS_PER_WAVE: int = _native.DEFAULT_MAX_CHUNKS_PER_WAVE
+DEFAULT_MAX_SUBSTREAMS_PER_CHUNK: int = _native.DEFAULT_MAX_SUBSTREAMS_PER_CHUNK
+DEFAULT_PREFETCH_IO_THREADS: int = _native.DEFAULT_PREFETCH_IO_THREADS
 
 
 # ---- enums --------------------------------------------------------------
@@ -450,21 +462,19 @@ class Config:
             successfully-created instance never trip the cap.
         dtype: Destination dtype for assembled batches.
         lookahead_samples: User-side push-queue depth in samples. Defaults
-            to two full output batches.
+            to two full output batches and must cover at least one full batch.
         n_io_threads: Bulk data IO worker threads (>= 1).
-        n_prefetch_io_threads: Metadata/prefetch IO worker threads. 0
-            selects the native default.
+        n_prefetch_io_threads: Metadata/prefetch IO worker threads.
         n_array_meta_cache: LRU cap for zarr-metadata entries.
         n_shard_index_cache: LRU cap for shard-index entries.
         n_chunk_layout_cache: LRU cap for per-array blosc1 chunk-layout entries.
         max_chunk_uncompressed_bytes: Largest uncompressed chunk size
-            the pipeline accepts; 0 selects the C default (512 KB).
+            the pipeline accepts.
         max_read_op_bytes: Cap on the size of a single coalesced
-            read issued to storage. 0 selects the C default. Tune
-            against your storage tier: small values keep the queue
-            deep and the read pattern fine-grained; large values
-            amortize per-syscall overhead at the cost of latency
-            spikes.
+            read issued to storage. Tune against your storage tier:
+            small values keep the queue deep and the read pattern
+            fine-grained; large values amortize per-syscall overhead
+            at the cost of latency spikes.
         device: CUDA device index to bind. ``None`` (default) captures
             the current ``CUcontext`` on the calling thread; pass an
             int (e.g. ``local_rank``) to retain that device's primary
@@ -523,13 +533,13 @@ class Config:
         max_gpu_memory_bytes: int,
         dtype: Dtype | str | int = Dtype.F32,
         lookahead_samples: int | None = None,
-        max_chunk_uncompressed_bytes: int = 0,
-        max_read_op_bytes: int = 0,
-        host_buffer_waves: int = 0,
-        max_chunks_per_wave: int = 0,
-        max_substreams_per_chunk: int = 0,
+        max_chunk_uncompressed_bytes: int = DEFAULT_CHUNK_UNCOMPRESSED_BYTES,
+        max_read_op_bytes: int = DEFAULT_READ_OP_MAX_BYTES,
+        host_buffer_waves: int = DEFAULT_HOST_BUFFER_WAVES,
+        max_chunks_per_wave: int = DEFAULT_MAX_CHUNKS_PER_WAVE,
+        max_substreams_per_chunk: int = DEFAULT_MAX_SUBSTREAMS_PER_CHUNK,
         n_io_threads: int = 4,
-        n_prefetch_io_threads: int = 16,
+        n_prefetch_io_threads: int = DEFAULT_PREFETCH_IO_THREADS,
         n_array_meta_cache: int = 64,
         n_shard_index_cache: int = 256,
         n_chunk_layout_cache: int = 64,
@@ -549,35 +559,35 @@ class Config:
             )
         if lookahead_samples is None:
             lookahead_samples = 2 * samples_per_batch
-        if lookahead_samples < 2 * samples_per_batch:
+        if lookahead_samples < samples_per_batch:
             raise ValueError(
-                "lookahead_samples must cover at least two full batches "
+                "lookahead_samples must cover at least one full batch "
                 f"(got {lookahead_samples}, samples_per_batch={samples_per_batch})"
             )
         if n_io_threads < 1:
             raise ValueError(f"n_io_threads must be >= 1 (got {n_io_threads})")
-        if n_prefetch_io_threads < 0:
+        if n_prefetch_io_threads < 1:
             raise ValueError(
-                f"n_prefetch_io_threads must be >= 0 (got {n_prefetch_io_threads})"
+                f"n_prefetch_io_threads must be >= 1 (got {n_prefetch_io_threads})"
             )
-        if max_chunk_uncompressed_bytes < 0:
-            raise ValueError("max_chunk_uncompressed_bytes must be >= 0")
-        if max_read_op_bytes < 0:
-            raise ValueError("max_read_op_bytes must be >= 0")
+        if max_chunk_uncompressed_bytes < 1:
+            raise ValueError("max_chunk_uncompressed_bytes must be >= 1")
+        if max_read_op_bytes < 1:
+            raise ValueError("max_read_op_bytes must be >= 1")
         if max_gpu_memory_bytes < 1:
             raise ValueError(
                 f"max_gpu_memory_bytes must be >= 1 (got {max_gpu_memory_bytes})"
             )
-        if host_buffer_waves < 0:
-            raise ValueError("host_buffer_waves must be >= 0")
-        if max_chunks_per_wave < 0:
-            raise ValueError("max_chunks_per_wave must be >= 0")
+        if host_buffer_waves < 1:
+            raise ValueError("host_buffer_waves must be >= 1")
+        if max_chunks_per_wave < 1:
+            raise ValueError("max_chunks_per_wave must be >= 1")
         if max_chunks_per_wave > 0xFFFF:
             raise ValueError(
                 f"max_chunks_per_wave must be <= 0xFFFF (got {max_chunks_per_wave})"
             )
-        if max_substreams_per_chunk < 0:
-            raise ValueError("max_substreams_per_chunk must be >= 0")
+        if max_substreams_per_chunk < 1:
+            raise ValueError("max_substreams_per_chunk must be >= 1")
         if max_substreams_per_chunk > 0xFFFF:
             raise ValueError(
                 f"max_substreams_per_chunk must be <= 0xFFFF (got {max_substreams_per_chunk})"

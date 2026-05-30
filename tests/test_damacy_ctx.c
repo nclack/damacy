@@ -51,7 +51,7 @@ mk_cfg(const char* root, int64_t sy, int64_t sx)
   };
   c.sample_shape[0] = sy;
   c.sample_shape[1] = sx;
-  return c;
+  return damacy_config_validate_with_defaults(&c);
 }
 
 // Caller has a non-primary CUcontext current. damacy_create captures

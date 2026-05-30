@@ -46,17 +46,25 @@ validate_config(const struct damacy_config* cfg)
   CHECK_SILENT(Invalid, cfg);
   CHECK_SILENT(Invalid, cfg->samples_per_batch > 0);
   CHECK_SILENT(Invalid, cfg->tuning.max_gpu_memory_bytes > 0);
-  CHECK_SILENT(Invalid, cfg->lookahead_samples >= 2u * cfg->samples_per_batch);
+  CHECK_SILENT(Invalid, cfg->lookahead_samples >= cfg->samples_per_batch);
+  CHECK_SILENT(Invalid, cfg->tuning.max_chunk_uncompressed_bytes > 0);
+  CHECK_SILENT(Invalid, cfg->tuning.max_read_op_bytes > 0);
   CHECK_SILENT(Invalid, cfg->tuning.n_io_threads > 0);
   CHECK_SILENT(Invalid, cfg->tuning.n_io_threads <= DAMACY_MAX_IO_THREADS);
   CHECK_SILENT(Invalid,
-               cfg->tuning.n_prefetch_io_threads == 0 ||
+               cfg->tuning.n_prefetch_io_threads > 0 &&
                  cfg->tuning.n_prefetch_io_threads <= DAMACY_MAX_IO_THREADS);
-  CHECK_SILENT(
-    Invalid,
-    cfg->tuning.host_buffer_waves == 0 ||
-      (cfg->tuning.host_buffer_waves >= DAMACY_N_WAVES &&
-       cfg->tuning.host_buffer_waves <= DAMACY_MAX_HOST_BUFFER_WAVES));
+  CHECK_SILENT(Invalid,
+               cfg->tuning.host_buffer_waves >= DAMACY_N_WAVES &&
+                 cfg->tuning.host_buffer_waves <= DAMACY_MAX_HOST_BUFFER_WAVES);
+  CHECK_SILENT(Invalid, cfg->tuning.max_chunks_per_wave > 0);
+  CHECK_SILENT(Invalid,
+               cfg->tuning.max_chunks_per_wave <=
+                 DAMACY_HARD_MAX_CHUNKS_PER_WAVE);
+  CHECK_SILENT(Invalid, cfg->tuning.max_substreams_per_chunk > 0);
+  CHECK_SILENT(Invalid,
+               cfg->tuning.max_substreams_per_chunk <=
+                 DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK);
   CHECK_SILENT(Invalid, cfg->tuning.n_array_meta_cache > 0);
   CHECK_SILENT(Invalid, cfg->tuning.n_shard_index_cache > 0);
   CHECK_SILENT(Invalid, cfg->tuning.n_chunk_layout_cache > 0);
@@ -80,6 +88,36 @@ validate_config(const struct damacy_config* cfg)
   return DAMACY_OK;
 Invalid:
   return DAMACY_INVAL;
+}
+
+struct damacy_config
+damacy_config_validate_with_defaults(const struct damacy_config* cfg)
+{
+  struct damacy_config out = { 0 };
+  if (!cfg)
+    return out;
+
+  out = *cfg;
+
+  if (out.samples_per_batch > 0) {
+    uint32_t default_lookahead = out.samples_per_batch;
+    if (out.samples_per_batch <= UINT32_MAX / 2u)
+      default_lookahead = 2u * out.samples_per_batch;
+    if (out.lookahead_samples == 0)
+      out.lookahead_samples = default_lookahead;
+    else if (out.lookahead_samples < out.samples_per_batch)
+      out.lookahead_samples = out.samples_per_batch;
+  }
+
+  out.tuning.max_chunk_uncompressed_bytes =
+    (uint32_t)resolve_max_chunk_uncompressed(&out);
+  out.tuning.max_read_op_bytes = resolve_max_read_op_bytes(&out);
+  out.tuning.host_buffer_waves = resolve_host_buffer_waves(&out);
+  out.tuning.max_chunks_per_wave = resolve_max_chunks_per_wave(&out);
+  out.tuning.max_substreams_per_chunk = resolve_max_substreams_per_chunk(&out);
+  out.tuning.n_prefetch_io_threads = resolve_n_prefetch_io_threads(&out);
+
+  return out;
 }
 
 uint64_t

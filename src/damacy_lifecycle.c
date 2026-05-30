@@ -500,6 +500,8 @@ damacy_config_describe(const struct damacy_config* cfg)
     log_info("damacy_config_describe: NULL config");
     return;
   }
+  struct damacy_config explicit_cfg = damacy_config_validate_with_defaults(cfg);
+  cfg = &explicit_cfg;
   const uint64_t max_gpu = cfg->tuning.max_gpu_memory_bytes;
   const uint64_t runtime_chunk_cap = resolve_max_chunk_uncompressed(cfg);
   uint64_t pool_reserve = 0;

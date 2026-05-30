@@ -243,7 +243,7 @@ def _scenario_panel(r: Results) -> Panel:
         f"lookahead={sc.pipeline.lookahead_samples} "
         f"io_threads={sc.pipeline.n_io_threads} "
         f"prefetch_io_threads={sc.pipeline.n_prefetch_io_threads} "
-        f"max_gpu_mb={sc.pipeline.max_gpu_memory_mb or 'default'}"
+        f"max_gpu_mb={sc.pipeline.max_gpu_memory_mb or 'unset'}"
     )
     return Panel(body, title="scenario", border_style="cyan")
 
