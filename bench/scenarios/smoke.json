@@ -27,7 +27,8 @@
     "n_io_threads": 4,
     "max_gpu_memory_mb": 512,
     "max_chunk_uncompressed_mb": 1,
-    "n_zarrs_meta_cache": 16,
-    "n_shards_meta_cache": 64
+    "n_array_meta_cache": 16,
+    "n_shard_index_cache": 64,
+    "n_chunk_layout_cache": 16
   }
 }

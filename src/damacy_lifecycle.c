@@ -88,10 +88,6 @@ destroy_inner(struct damacy* self, int cuda_skip)
 
   planner_destroy(self->planner);
   self->planner = NULL;
-  zarr_shard_cache_destroy(self->shard_cache);
-  self->shard_cache = NULL;
-  zarr_meta_cache_destroy(self->meta_cache);
-  self->meta_cache = NULL;
   store_destroy(self->store_gds);
   self->store_gds = NULL;
   store_destroy(self->store_host);
@@ -293,20 +289,13 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     }
   }
 
-  self->meta_cache =
-    zarr_meta_cache_create(self->store_host, cfg->tuning.n_zarrs_meta_cache);
-  CHECK(Fail, self->meta_cache);
-  self->shard_cache =
-    zarr_shard_cache_create(self->store_host, cfg->tuning.n_shards_meta_cache);
-  CHECK(Fail, self->shard_cache);
-
   self->prefetch_io_q = io_queue_create(2, &self->numa);
   CHECK(Fail, self->prefetch_io_q);
   self->io_exec.post = damacy_io_exec_post;
   array_meta_fetcher_init(&self->array_meta_fetcher, self->store_host);
   {
     struct prefetch_cache_config amc_cfg = {
-      .capacity = cfg->tuning.n_zarrs_meta_cache,
+      .capacity = cfg->tuning.n_array_meta_cache,
       .max_probe = 16,
       .ops = &array_meta_ops,
       .fetcher = &self->array_meta_fetcher.base,
@@ -319,7 +308,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     &self->shard_index_fetcher, self->store_host, self->array_meta_cache);
   {
     struct prefetch_cache_config sic_cfg = {
-      .capacity = cfg->tuning.n_shards_meta_cache,
+      .capacity = cfg->tuning.n_shard_index_cache,
       .max_probe = 16,
       .ops = &shard_index_ops,
       .fetcher = &self->shard_index_fetcher.base,
@@ -335,7 +324,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
                             resolved_max_substreams_per_chunk);
   {
     struct prefetch_cache_config clc_cfg = {
-      .capacity = cfg->tuning.n_zarrs_meta_cache,
+      .capacity = cfg->tuning.n_chunk_layout_cache,
       .max_probe = 16,
       .ops = &chunk_layout_ops,
       .fetcher = &self->chunk_layout_fetcher.base,
@@ -377,8 +366,10 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     log_info("damacy: compressed reads via cuFile / GDS (skip bulk H2D)");
 
   struct planner_config pcfg = {
-    .meta_cache = self->meta_cache,
-    .shard_cache = self->shard_cache,
+    .array_meta_cache = self->array_meta_cache,
+    .chunk_layout_cache = self->chunk_layout_cache,
+    .shard_index_cache = self->shard_index_cache,
+    .dst_dtype = cfg->dtype,
     .page_alignment = self->page_alignment,
     .max_chunk_uncompressed_bytes = runtime_chunk_cap,
     .read_op_max_bytes = resolve_max_read_op_bytes(cfg),
@@ -405,8 +396,8 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     CHECK(Fail, self->prefetcher);
   }
 
-  self->batch_stage = (struct damacy_sample*)calloc(
-    cfg->batch_size, sizeof(struct damacy_sample));
+  self->batch_stage = (struct planner_sample*)calloc(
+    cfg->batch_size, sizeof(struct planner_sample));
   CHECK(Fail, self->batch_stage);
   self->staging = (struct prefetcher_ready*)calloc(
     cfg->batch_size, sizeof(struct prefetcher_ready));

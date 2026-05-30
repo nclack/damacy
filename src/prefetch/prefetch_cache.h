@@ -1,6 +1,7 @@
 // See dev/metadata_prefetch.md.
 #pragma once
 
+#include "prefetch/prefetch_handle.h"
 #include "util/lru.h"
 
 #include <stdint.h>
@@ -11,14 +12,6 @@ extern "C"
 #endif
 
   struct prefetch_cache;
-
-  struct prefetch_handle
-  {
-    uint32_t slot;
-    uint32_t generation;
-  };
-
-  static const struct prefetch_handle PREFETCH_HANDLE_NONE = { 0, 0 };
 
   // Layout: [error:1 | pending:63] — one atomic, one load.
   struct prefetch_gate

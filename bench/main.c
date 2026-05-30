@@ -115,8 +115,9 @@ struct scenario
   uint64_t max_gpu_memory_bytes;         // 0 → library default
   uint32_t max_chunk_uncompressed_bytes; // 0 → library default
   uint64_t max_read_op_bytes;            // 0 → library default
-  uint32_t n_zarrs_meta_cache;
-  uint32_t n_shards_meta_cache;
+  uint32_t n_array_meta_cache;
+  uint32_t n_shard_index_cache;
+  uint32_t n_chunk_layout_cache;
   uint8_t host_buffer_waves; // 0 → library default
   uint8_t bypass_decode;
 
@@ -292,8 +293,9 @@ parse_scenario(struct cslice src, struct scenario* sc)
 {
   memset(sc, 0, sizeof(*sc));
   sc->src = src;
-  sc->n_zarrs_meta_cache = 4096;
-  sc->n_shards_meta_cache = 16384;
+  sc->n_array_meta_cache = 4096;
+  sc->n_shard_index_cache = 16384;
+  sc->n_chunk_layout_cache = 4096;
 
   // dataset
   {
@@ -388,10 +390,14 @@ parse_scenario(struct cslice src, struct scenario* sc)
     };
     static const struct json_query p_zm[] = { { QUERY_KEY, .key = "pipeline" },
                                               { QUERY_KEY,
-                                                .key = "n_zarrs_meta_cache" } };
+                                                .key = "n_array_meta_cache" } };
     static const struct json_query p_sm[] = {
       { QUERY_KEY, .key = "pipeline" },
-      { QUERY_KEY, .key = "n_shards_meta_cache" }
+      { QUERY_KEY, .key = "n_shard_index_cache" }
+    };
+    static const struct json_query p_cl[] = {
+      { QUERY_KEY, .key = "pipeline" },
+      { QUERY_KEY, .key = "n_chunk_layout_cache" }
     };
     if (read_uint(src, p_la, countof(p_la), &v))
       return 1;
@@ -409,9 +415,11 @@ parse_scenario(struct cslice src, struct scenario* sc)
     read_uint_opt(src, p_ro, countof(p_ro), &v, 0);
     sc->max_read_op_bytes = v << 10; // KB → bytes
     read_uint_opt(src, p_zm, countof(p_zm), &v, 4096);
-    sc->n_zarrs_meta_cache = (uint32_t)v;
+    sc->n_array_meta_cache = (uint32_t)v;
     read_uint_opt(src, p_sm, countof(p_sm), &v, 16384);
-    sc->n_shards_meta_cache = (uint32_t)v;
+    sc->n_shard_index_cache = (uint32_t)v;
+    read_uint_opt(src, p_cl, countof(p_cl), &v, 4096);
+    sc->n_chunk_layout_cache = (uint32_t)v;
     static const struct json_query p_hw[] = { { QUERY_KEY, .key = "pipeline" },
                                               { QUERY_KEY,
                                                 .key = "host_buffer_waves" } };
@@ -711,17 +719,21 @@ emit_results(const struct scenario* sc, const struct run_metrics* rm, FILE* out)
   jw_key(&jw, "reads_issued");
   jw_uint(&jw, rm->stats.reads_issued);
   jw_key(&jw, "distinct_zarrs");
-  jw_uint(&jw, rm->stats.zarr_meta_misses);
+  jw_uint(&jw, rm->stats.array_meta.misses);
   jw_key(&jw, "distinct_shards");
-  jw_uint(&jw, rm->stats.shard_idx_misses);
-  jw_key(&jw, "zarr_meta_hits");
-  jw_uint(&jw, rm->stats.zarr_meta_hits);
-  jw_key(&jw, "zarr_meta_misses");
-  jw_uint(&jw, rm->stats.zarr_meta_misses);
-  jw_key(&jw, "shard_idx_hits");
-  jw_uint(&jw, rm->stats.shard_idx_hits);
-  jw_key(&jw, "shard_idx_misses");
-  jw_uint(&jw, rm->stats.shard_idx_misses);
+  jw_uint(&jw, rm->stats.shard_index.misses);
+  jw_key(&jw, "array_meta_hits");
+  jw_uint(&jw, rm->stats.array_meta.hits);
+  jw_key(&jw, "array_meta_misses");
+  jw_uint(&jw, rm->stats.array_meta.misses);
+  jw_key(&jw, "shard_index_hits");
+  jw_uint(&jw, rm->stats.shard_index.hits);
+  jw_key(&jw, "shard_index_misses");
+  jw_uint(&jw, rm->stats.shard_index.misses);
+  jw_key(&jw, "chunk_layout_hits");
+  jw_uint(&jw, rm->stats.chunk_layout.hits);
+  jw_key(&jw, "chunk_layout_misses");
+  jw_uint(&jw, rm->stats.chunk_layout.misses);
   jw_key(&jw, "gpu_bytes_committed");
   jw_uint(&jw, rm->stats.gpu_bytes_committed);
   jw_object_end(&jw);
@@ -829,8 +841,9 @@ main(int argc, char** argv)
     .device = -1,
     .tuning = {
       .n_io_threads = sc.n_io_threads,
-      .n_zarrs_meta_cache = sc.n_zarrs_meta_cache,
-      .n_shards_meta_cache = sc.n_shards_meta_cache,
+      .n_array_meta_cache = sc.n_array_meta_cache,
+      .n_shard_index_cache = sc.n_shard_index_cache,
+      .n_chunk_layout_cache = sc.n_chunk_layout_cache,
       .max_chunk_uncompressed_bytes = sc.max_chunk_uncompressed_bytes,
       .max_read_op_bytes = sc.max_read_op_bytes,
       .max_gpu_memory_bytes = sc.max_gpu_memory_bytes,

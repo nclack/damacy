@@ -15,6 +15,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 static int
 sync_post(struct prefetch_executor* self,
@@ -712,6 +713,40 @@ test_batch_table_recycles_after_release(void)
   return 0;
 }
 
+// Missing shards must not fail the whole sample — the planner needs to
+// see ERROR/NOTFOUND per-handle so it can emit fill for those chunks.
+static int
+test_missing_shard_reaches_ready(void)
+{
+  struct fixture fx = { 0 };
+  EXPECT(fixture_setup(&fx, "blosc-zstd") == 0);
+
+  char shard_path[512];
+  snprintf(shard_path, sizeof shard_path, "%s/foo/c/0/0", fx.root);
+  EXPECT(unlink(shard_path) == 0);
+
+  struct damacy_sample s = { .uri = "foo", .aabb = { .rank = 2 } };
+  s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
+  s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
+  EXPECT(lookahead_push_with_batch(&fx.lookahead, &s, 0) == 0);
+  EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
+
+  struct prefetcher_ready r = { 0 };
+  EXPECT(prefetcher_pop_ready(fx.p, &r) == 1);
+  EXPECT(r.state == PREFETCHER_READY);
+  EXPECT(r.n_shards == 1);
+  EXPECT(prefetch_handle_valid(r.h_layout));
+  int err = 0;
+  enum prefetch_state st =
+    prefetch_cache_query(fx.shard_index_cache, r.h_shards[0], NULL, &err);
+  EXPECT(st == PREFETCH_STATE_ERROR);
+  EXPECT(err == DAMACY_NOTFOUND);
+  prefetcher_ready_free(&r);
+
+  fixture_teardown(&fx);
+  return 0;
+}
+
 int
 main(void)
 {
@@ -736,6 +771,7 @@ main(void)
   RUN(test_advance_watermark_broadcasts);
   RUN(test_batch_capacity_saturation_surfaces_error);
   RUN(test_batch_table_recycles_after_release);
+  RUN(test_missing_shard_reaches_ready);
   log_info("all tests passed");
   return 0;
 }

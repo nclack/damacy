@@ -33,6 +33,7 @@ Variants reuse a base via :func:`dataclasses.replace`::
 
 from __future__ import annotations
 
+import contextlib
 import itertools
 import logging
 import os
@@ -450,8 +451,9 @@ class Config:
         dtype: Destination dtype for assembled batches.
         lookahead_batches: User-side push-queue depth (>= 2).
         n_io_threads: IO worker threads (>= 1).
-        n_zarrs_meta_cache: LRU cap for zarr-metadata entries.
-        n_shards_meta_cache: LRU cap for shard-index entries.
+        n_array_meta_cache: LRU cap for zarr-metadata entries.
+        n_shard_index_cache: LRU cap for shard-index entries.
+        n_chunk_layout_cache: LRU cap for per-array blosc1 chunk-layout entries.
         max_chunk_uncompressed_bytes: Largest uncompressed chunk size
             the pipeline accepts; 0 selects the C default (512 KB).
         max_read_op_bytes: Cap on the size of a single coalesced
@@ -499,8 +501,9 @@ class Config:
     max_chunks_per_wave: int
     max_substreams_per_chunk: int
     n_io_threads: int
-    n_zarrs_meta_cache: int
-    n_shards_meta_cache: int
+    n_array_meta_cache: int
+    n_shard_index_cache: int
+    n_chunk_layout_cache: int
     sample_shape: tuple[int, ...]
     device: int | None
     pop_timeout_s: float | None
@@ -522,8 +525,9 @@ class Config:
         max_chunks_per_wave: int = 0,
         max_substreams_per_chunk: int = 0,
         n_io_threads: int = 4,
-        n_zarrs_meta_cache: int = 64,
-        n_shards_meta_cache: int = 256,
+        n_array_meta_cache: int = 64,
+        n_shard_index_cache: int = 256,
+        n_chunk_layout_cache: int = 64,
         device: int | None = None,
         pop_timeout_s: float | None = 30.0,
         enable_gds: bool | None = None,
@@ -592,8 +596,9 @@ class Config:
         set_(self, "max_chunks_per_wave", max_chunks_per_wave)
         set_(self, "max_substreams_per_chunk", max_substreams_per_chunk)
         set_(self, "n_io_threads", n_io_threads)
-        set_(self, "n_zarrs_meta_cache", n_zarrs_meta_cache)
-        set_(self, "n_shards_meta_cache", n_shards_meta_cache)
+        set_(self, "n_array_meta_cache", n_array_meta_cache)
+        set_(self, "n_shard_index_cache", n_shard_index_cache)
+        set_(self, "n_chunk_layout_cache", n_chunk_layout_cache)
         set_(self, "sample_shape", shape_t)
         set_(self, "device", device)
         set_(self, "pop_timeout_s", pop_timeout_s)
@@ -661,10 +666,12 @@ class Stats:
     bind_wait: Metric
     pop_wait: Metric
     flush_wait: Metric
-    zarr_meta_hits: int
-    zarr_meta_misses: int
-    shard_idx_hits: int
-    shard_idx_misses: int
+    array_meta_hits: int
+    array_meta_misses: int
+    shard_index_hits: int
+    shard_index_misses: int
+    chunk_layout_hits: int
+    chunk_layout_misses: int
     batches_emitted: int
     batches_truncated: int
     waves_emitted: int
@@ -689,10 +696,12 @@ class Stats:
             bind_wait=m(st["bind_wait"]),
             pop_wait=m(st["pop_wait"]),
             flush_wait=m(st["flush_wait"]),
-            zarr_meta_hits=st["zarr_meta_hits"],
-            zarr_meta_misses=st["zarr_meta_misses"],
-            shard_idx_hits=st["shard_idx_hits"],
-            shard_idx_misses=st["shard_idx_misses"],
+            array_meta_hits=st["array_meta_hits"],
+            array_meta_misses=st["array_meta_misses"],
+            shard_index_hits=st["shard_index_hits"],
+            shard_index_misses=st["shard_index_misses"],
+            chunk_layout_hits=st["chunk_layout_hits"],
+            chunk_layout_misses=st["chunk_layout_misses"],
             batches_emitted=st["batches_emitted"],
             batches_truncated=st["batches_truncated"],
             waves_emitted=st["waves_emitted"],
@@ -1007,8 +1016,9 @@ class Pipeline:
                 max_chunks_per_wave=config.max_chunks_per_wave,
                 max_substreams_per_chunk=config.max_substreams_per_chunk,
                 n_io_threads=config.n_io_threads,
-                n_zarrs_meta_cache=config.n_zarrs_meta_cache,
-                n_shards_meta_cache=config.n_shards_meta_cache,
+                n_array_meta_cache=config.n_array_meta_cache,
+                n_shard_index_cache=config.n_shard_index_cache,
+                n_chunk_layout_cache=config.n_chunk_layout_cache,
                 sample_shape=tuple(config.sample_shape),
                 device=-1 if config.device is None else int(config.device),
                 enable_gds=_gds_to_native(config.enable_gds),
@@ -1103,11 +1113,16 @@ class Pipeline:
         generator, infinite generator, …); large or unbounded sources
         are pulled lazily as :meth:`pop` frees space.
 
-        Fatal errors from the C-side validator (``NotFound``,
-        ``DtypeMismatch``, ``RankMismatch``, …) raise the matching
-        :class:`DamacyError` subclass; the offending iterator is
-        discarded but samples accepted by earlier ``push`` calls are
-        unaffected.
+        Local validation (shape/rank against ``Config.sample_shape``)
+        raises the matching :class:`DamacyError` subclass here and
+        discards the offending iterator. Errors that depend on store
+        contents — :class:`NotFound`, :class:`DtypeMismatch`,
+        per-array :class:`RankMismatch`, decode failures — surface at
+        :meth:`pop` instead, since the pipeline fetches metadata
+        asynchronously after push returns. Once any such error fires,
+        the pipeline is terminal — rebuild a fresh :class:`Pipeline`
+        to recover. Calling :meth:`push` on a terminal pipeline raises
+        :class:`ShutdownError`.
         """
         self._check_open()
         self._pending.append(iter(samples))
@@ -1161,9 +1176,19 @@ class Pipeline:
         Raises :class:`PoolStarved` if no batch arrives within
         ``Config.pop_timeout_s`` seconds (default 30). Usually that
         means tensors from previous batches are still being held —
-        drop them, or ``.clone()`` if you need to keep them."""
+        drop them, or ``.clone()`` if you need to keep them.
+
+        Store-derived errors — :class:`NotFound`,
+        :class:`DtypeMismatch`, per-array :class:`RankMismatch`,
+        decode failures — surface here rather than at push. Once any
+        such error fires, the pipeline is terminal; subsequent calls
+        re-raise the same status."""
         self._check_open()
-        self._drain_pending()
+        # Swallow ShutdownError from drain so the sticky error from the
+        # native pipeline (NotFound/DtypeMismatch/…) surfaces from pop,
+        # not the secondary SHUTDOWN raised by re-pushing into a terminal.
+        with contextlib.suppress(ShutdownError):
+            self._drain_pending()
         timeout = self._config.pop_timeout_s
         if timeout is None:
             try:

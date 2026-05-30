@@ -239,14 +239,24 @@ fs_event_discard(struct store* s, struct store_event ev)
   (void)ev;
 }
 
-static int
+static enum store_stat_result
 fs_stat(struct store* s, const char* key, uint64_t* out)
 {
   struct store_fs* fs = (struct store_fs*)s;
   struct strbuf path = { 0 };
-  int rc = 1;
+  enum store_stat_result rc = STORE_STAT_ERROR;
   CHECK_SILENT(Out, strbuf_join_path(&path, fs->root, key) == 0);
-  rc = platform_path_size(strbuf_cstr(&path), out);
+  switch (platform_path_size(strbuf_cstr(&path), out)) {
+    case PLATFORM_STAT_OK:
+      rc = STORE_STAT_OK;
+      break;
+    case PLATFORM_STAT_NOT_FOUND:
+      rc = STORE_STAT_NOT_FOUND;
+      break;
+    case PLATFORM_STAT_ERROR:
+      rc = STORE_STAT_ERROR;
+      break;
+  }
 Out:
   strbuf_free(&path);
   return rc;

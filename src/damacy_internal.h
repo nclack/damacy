@@ -15,8 +15,6 @@
 #include "scheduler/scheduler.h"
 #include "store/store.h"
 #include "wave/wave_pool.h"
-#include "zarr/zarr_meta_cache.h"
-#include "zarr/zarr_shard_cache.h"
 
 #include <cuda.h>
 #include <stdint.h>
@@ -59,8 +57,6 @@ struct damacy
 
   struct store* store_host;
   struct store* store_gds;
-  struct zarr_meta_cache* meta_cache;
-  struct zarr_shard_cache* shard_cache;
   struct planner* planner;
 
   // Dedicated io_queue isolates metadata reads from the store's bulk
@@ -84,7 +80,7 @@ struct damacy
   // driven directly by the orchestrator (no per-call ctx building).
   struct wave_pool wave_pool;
 
-  struct damacy_sample* batch_stage;
+  struct planner_sample* batch_stage;
 
   struct damacy_batch handle;
   struct damacy_stats stats;

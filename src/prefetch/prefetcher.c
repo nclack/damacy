@@ -3,6 +3,7 @@
 #include "log/log.h"
 #include "lookahead/lookahead.h"
 #include "platform/platform.h"
+#include "prefetch/chunk_layout.h"
 #include "prefetch/shard_index.h"
 #include "util/hash.h"
 #include "util/prelude.h"
@@ -26,6 +27,7 @@ struct prefetcher_slot
   struct prefetch_gate* gate;
   struct prefetch_handle h_meta;
   struct prefetch_handle* h_shards;
+  uint64_t* shard_coords; // flat [n_shards][rank]
   uint32_t n_shards;
   struct prefetch_handle h_layout;
 };
@@ -145,6 +147,23 @@ slot_active(const struct prefetcher_slot* s)
          s->state == PREFETCHER_PENDING_CHUNK_LAYOUT;
 }
 
+static struct prefetch_handle
+request_chunk_layout(struct prefetcher* p, struct prefetcher_slot* s)
+{
+  struct chunk_layout_key key = {
+    .uri = s->uri,
+    .rank = s->aabb.rank,
+    .n_shards = s->n_shards,
+    .shard_coords = s->shard_coords,
+    .h_shards = s->h_shards,
+  };
+  return prefetch_cache_request(p->chunk_layout_cache,
+                                chunk_layout_key_hash(&key),
+                                &key,
+                                s->batch_id,
+                                s->gate);
+}
+
 static void
 fail_slot(struct prefetcher* p, struct prefetcher_slot* s, int err_code)
 {
@@ -177,11 +196,7 @@ advance_from_meta(struct prefetcher* p, struct prefetcher_slot* s)
 
   if (n == 0) {
     s->n_shards = 0;
-    s->h_layout = prefetch_cache_request(p->chunk_layout_cache,
-                                         hash_fnv1a_str(s->uri),
-                                         s->uri,
-                                         s->batch_id,
-                                         s->gate);
+    s->h_layout = request_chunk_layout(p, s);
     if (!prefetch_handle_valid(s->h_layout)) {
       err = DAMACY_OOM;
       goto Bad;
@@ -196,10 +211,19 @@ advance_from_meta(struct prefetcher* p, struct prefetcher_slot* s)
     err = DAMACY_OOM;
     goto Bad;
   }
+  s->shard_coords =
+    (uint64_t*)calloc((size_t)n * meta->rank, sizeof(*s->shard_coords));
+  if (!s->shard_coords) {
+    err = DAMACY_OOM;
+    goto Bad;
+  }
 
   struct shard_index_key probe = { .uri = s->uri, .rank = meta->rank };
   uint32_t i = 0;
   while (sample_shard_iterator_next(&it, probe.shard_coord)) {
+    memcpy(&s->shard_coords[(size_t)i * meta->rank],
+           probe.shard_coord,
+           (size_t)meta->rank * sizeof(uint64_t));
     s->h_shards[i] = prefetch_cache_request(p->shard_index_cache,
                                             shard_index_key_hash(&probe),
                                             &probe,
@@ -228,19 +252,20 @@ advance_from_shard(struct prefetcher* p, struct prefetcher_slot* s)
 {
   int err = 0;
   for (uint32_t i = 0; i < s->n_shards; ++i) {
-    enum prefetch_state st =
-      prefetch_cache_query(p->shard_index_cache, s->h_shards[i], NULL, &err);
+    int per_shard_err = 0;
+    enum prefetch_state st = prefetch_cache_query(
+      p->shard_index_cache, s->h_shards[i], NULL, &per_shard_err);
     if (st == PREFETCH_STATE_PENDING)
       return;
-    if (st == PREFETCH_STATE_ERROR)
+    if (st == PREFETCH_STATE_ERROR && per_shard_err != DAMACY_NOTFOUND) {
+      // Missing shards (NOTFOUND) are normal — the planner emits fill.
+      // Other errors fail the whole sample.
+      err = per_shard_err;
       goto Bad;
+    }
   }
 
-  s->h_layout = prefetch_cache_request(p->chunk_layout_cache,
-                                       hash_fnv1a_str(s->uri),
-                                       s->uri,
-                                       s->batch_id,
-                                       s->gate);
+  s->h_layout = request_chunk_layout(p, s);
   if (!prefetch_handle_valid(s->h_layout)) {
     err = DAMACY_OOM;
     goto Bad;
@@ -456,6 +481,7 @@ prefetcher_destroy(struct prefetcher* self)
     for (uint32_t i = 0; i < self->capacity; ++i) {
       free(self->slots[i].uri);
       free(self->slots[i].h_shards);
+      free(self->slots[i].shard_coords);
     }
     free(self->slots);
   }
@@ -554,6 +580,7 @@ pop_terminal_slot_locked(struct prefetcher* self,
     .h_layout = s->h_layout,
   };
   uint64_t batch_id = s->batch_id;
+  free(s->shard_coords);
   *s = (struct prefetcher_slot){ .state = PREFETCHER_FREE };
   batch_unref_locked(self, batch_id);
   return 1;
@@ -633,6 +660,8 @@ Bad:
   return 0;
 }
 
+// ERROR slots count as "ready" so pop doesn't latch AGAIN before the
+// scheduler drains the failure into damacy::failed_status.
 int
 prefetcher_has_ready(struct prefetcher* self)
 {

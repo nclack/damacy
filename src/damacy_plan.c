@@ -65,11 +65,9 @@ plan_reserve(struct damacy* self, uint16_t slot_idx, uint32_t n_samples)
         prefetcher_ready_free(&self->staging[j]);
       return DAMACY_AGAIN;
     }
-    if (self->staging[i].state == PREFETCHER_ERROR &&
-        self->staging[i].err_code != DAMACY_NOTFOUND) {
-      // PR-1 still routes (uri, aabb) through the legacy planner, which
-      // independently substitutes fill for NOTFOUND chunks. Surface other
-      // prefetch errors here; the planner will handle missing data.
+    // advance_from_shard absorbs NOTFOUND at the prefetcher level; a
+    // slot-level ERROR here is always a real error.
+    if (self->staging[i].state == PREFETCHER_ERROR) {
       enum damacy_status es = self->staging[i].err_code
                                 ? (enum damacy_status)self->staging[i].err_code
                                 : DAMACY_INVAL;
@@ -88,10 +86,17 @@ plan_reserve(struct damacy* self, uint16_t slot_idx, uint32_t n_samples)
     return status;
   }
   for (uint32_t i = 0; i < n_samples; ++i) {
-    // Steal uri into batch_stage; plan_commit frees the rest of staging[i].
+    // Steal uri + h_shards into batch_stage; plan_commit frees the rest
+    // of staging[i] (the bare handles are POD and safe to copy).
     self->batch_stage[i].uri = self->staging[i].uri;
     self->batch_stage[i].aabb = self->staging[i].aabb;
+    self->batch_stage[i].h_meta = self->staging[i].h_meta;
+    self->batch_stage[i].h_shards = self->staging[i].h_shards;
+    self->batch_stage[i].n_shards = self->staging[i].n_shards;
+    self->batch_stage[i].h_layout = self->staging[i].h_layout;
     self->staging[i].uri = NULL;
+    self->staging[i].h_shards = NULL;
+    self->staging[i].n_shards = 0;
   }
   slot->n_samples = n_samples;
   slot->state = BATCH_PLANNING;
@@ -158,10 +163,11 @@ plan_commit(struct damacy* self,
   struct damacy_batch_slot* slot = &self->batch_pool.slots[slot_idx];
   for (uint32_t i = 0; i < slot->n_samples; ++i) {
     prefetcher_ready_free(&self->staging[i]);
-    // plan_reserve stole uri from staging[i] into batch_stage[i]; planner
-    // is done reading it by now, so free here to close the leak.
+    // plan_reserve stole uri + h_shards from staging[i] into batch_stage[i];
+    // planner is done with them by now, free here to close the leak.
+    free(self->batch_stage[i].h_shards);
     free((char*)self->batch_stage[i].uri);
-    self->batch_stage[i].uri = NULL;
+    self->batch_stage[i] = (struct planner_sample){ 0 };
   }
   if (run_status != DAMACY_OK) {
     slot->state = BATCH_FREE;
