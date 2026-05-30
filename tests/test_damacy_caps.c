@@ -57,7 +57,7 @@ mk_cfg(const char* root, uint32_t samples_per_batch, int64_t sy, int64_t sx)
   (void)root;
   struct damacy_config c = {
     .samples_per_batch = samples_per_batch,
-    .lookahead_batches = 2,
+    .lookahead_samples = 2 * samples_per_batch,
     .dtype = DAMACY_F32,
     .sample_rank = 2,
     .device = -1,
@@ -240,7 +240,7 @@ test_pool_reserve_fits_default_budget(void)
   // comfortably fits the wave-resident geometry.
   struct damacy_config cfg = {
     .samples_per_batch = 20,
-    .lookahead_batches = 2,
+    .lookahead_samples = 40,
     .dtype = DAMACY_F32,
     .sample_shape = { 16, 1, 256, 256 },
     .sample_rank = 4,
@@ -293,7 +293,7 @@ test_pool_exceeds_budget_rejected_at_create(void)
   EXPECT(mkdtemp_root(root, sizeof root) == 0);
   struct damacy_config cfg = {
     .samples_per_batch = 20,
-    .lookahead_batches = 2,
+    .lookahead_samples = 40,
     .dtype = DAMACY_F32,
     .sample_shape = { 16, 1, 256, 256 },
     .sample_rank = 4,

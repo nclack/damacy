@@ -77,8 +77,9 @@ class Sampling(BaseModel):
 class Pipeline(BaseModel):
     # Destination dtype on the assembled batch. Sources cast to this.
     dtype: DstDType = "f32"
-    lookahead_batches: int = Field(gt=0)
+    lookahead_samples: int = Field(gt=0)
     n_io_threads: int = Field(gt=0)
+    n_prefetch_io_threads: int = Field(default=16, ge=0)
     max_gpu_memory_mb: int = 0  # 0 → library default
     max_chunk_uncompressed_mb: int = 0  # 0 → library default
     max_read_op_kb: int = 0  # cap on coalesced read_op size; 0 → library default

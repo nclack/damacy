@@ -49,7 +49,7 @@ mk_cfg(const char* root, uint32_t samples_per_batch, int64_t sy, int64_t sx)
   (void)root;
   struct damacy_config c = {
     .samples_per_batch = samples_per_batch,
-    .lookahead_batches = 2,
+    .lookahead_samples = 2 * samples_per_batch,
     .dtype = DAMACY_F32,
     .sample_rank = 2,
     .device = -1,
@@ -378,9 +378,8 @@ test_pipelined(void)
   EXPECT(fixture_write_zarr(p, shape, inner, shard, 2, "uint16", 0) == 0);
 
   struct damacy_config cfg = mk_cfg(root, 2, 4, 8);
-  // Bump lookahead so we can hold 4 batches' worth of samples up front
-  // (4 batches * 2 samples = 8 = lookahead_batches=4 * samples_per_batch=2).
-  cfg.lookahead_batches = 4;
+  // Bump lookahead so we can hold 4 batches' worth of samples up front.
+  cfg.lookahead_samples = 8;
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
@@ -452,9 +451,9 @@ test_lookahead_backpressure(void)
   int64_t shape[2] = { 4, 8 }, inner[2] = { 2, 4 }, shard[2] = { 4, 8 };
   EXPECT(fixture_write_zarr(p, shape, inner, shard, 2, "uint16", 0) == 0);
 
-  // samples_per_batch=1, lookahead_batches=2 → lookahead cap of 2 samples.
+  // samples_per_batch=1, lookahead_samples=2 → lookahead cap of 2 samples.
   struct damacy_config cfg = mk_cfg(root, 1, 4, 8);
-  cfg.lookahead_batches = 2;
+  cfg.lookahead_samples = 2;
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
@@ -612,7 +611,7 @@ test_release_event_blocks_assemble(void)
   EXPECT(fixture_write_zarr(p, shape, inner, shard, 2, "uint16", 0) == 0);
 
   struct damacy_config cfg = mk_cfg(root, 1, 4, 8);
-  cfg.lookahead_batches = 3; // pool has 2 slots; 3 pops forces reuse.
+  cfg.lookahead_samples = 3; // pool has 2 slots; 3 pops forces reuse.
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 

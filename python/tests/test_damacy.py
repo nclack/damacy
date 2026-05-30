@@ -124,7 +124,7 @@ def _base_config(dtype: str | int | damacy.Dtype = "f32") -> Config:
     return Config(
         samples_per_batch=1,
         dtype=dtype,
-        lookahead_batches=2,
+        lookahead_samples=2,
         n_io_threads=1,
         n_array_meta_cache=4,
         n_shard_index_cache=4,
@@ -396,11 +396,11 @@ def test_config_validates_eagerly():
     gpu = 1 << 30
     with pytest.raises(ValueError, match="samples_per_batch"):
         Config(samples_per_batch=0, sample_shape=ss, max_gpu_memory_bytes=gpu)
-    with pytest.raises(ValueError, match="lookahead_batches"):
+    with pytest.raises(ValueError, match="lookahead_samples"):
         Config(
             samples_per_batch=1,
             sample_shape=ss,
-            lookahead_batches=1,
+            lookahead_samples=1,
             max_gpu_memory_bytes=gpu,
         )
     with pytest.raises(ValueError, match="n_io_threads"):
@@ -408,6 +408,13 @@ def test_config_validates_eagerly():
             samples_per_batch=1,
             sample_shape=ss,
             n_io_threads=0,
+            max_gpu_memory_bytes=gpu,
+        )
+    with pytest.raises(ValueError, match="n_prefetch_io_threads"):
+        Config(
+            samples_per_batch=1,
+            sample_shape=ss,
+            n_prefetch_io_threads=-1,
             max_gpu_memory_bytes=gpu,
         )
     with pytest.raises(ValueError, match="max_chunk_uncompressed_bytes"):
@@ -490,8 +497,9 @@ def test_native_pipeline_rejects_out_of_range_enums(tiny_zarr):
     def _build(**override):
         return _native.Pipeline(
             samples_per_batch=1,
-            lookahead_batches=2,
+            lookahead_samples=2,
             n_io_threads=1,
+            n_prefetch_io_threads=1,
             n_array_meta_cache=4,
             n_shard_index_cache=4,
             n_chunk_layout_cache=4,
@@ -515,7 +523,7 @@ def test_config_dtype_coerced():
 
 def test_config_replace_for_variants():
     base = _base_config()
-    big = dataclasses.replace(base, samples_per_batch=4)
+    big = dataclasses.replace(base, samples_per_batch=4, lookahead_samples=8)
     assert base.samples_per_batch == 1 and big.samples_per_batch == 4
     # frozen
     with pytest.raises(dataclasses.FrozenInstanceError):

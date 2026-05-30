@@ -28,7 +28,7 @@ Typical use::
 
 Variants reuse a base via :func:`dataclasses.replace`::
 
-    big = dataclasses.replace(cfg, samples_per_batch=64)
+    big = dataclasses.replace(cfg, samples_per_batch=64, lookahead_samples=128)
 """
 
 from __future__ import annotations
@@ -418,7 +418,7 @@ class Config:
     ...               max_gpu_memory_bytes=1 << 30)
     >>> base.dtype is Dtype.F32
     True
-    >>> dataclasses.replace(base, samples_per_batch=64).samples_per_batch
+    >>> dataclasses.replace(base, samples_per_batch=64, lookahead_samples=128).samples_per_batch
     64
 
     ```
@@ -449,8 +449,11 @@ class Config:
             worst-case observe-and-grow footprint so grows inside a
             successfully-created instance never trip the cap.
         dtype: Destination dtype for assembled batches.
-        lookahead_batches: User-side push-queue depth (>= 2).
-        n_io_threads: IO worker threads (>= 1).
+        lookahead_samples: User-side push-queue depth in samples. Defaults
+            to two full output batches.
+        n_io_threads: Bulk data IO worker threads (>= 1).
+        n_prefetch_io_threads: Metadata/prefetch IO worker threads. 0
+            selects the native default.
         n_array_meta_cache: LRU cap for zarr-metadata entries.
         n_shard_index_cache: LRU cap for shard-index entries.
         n_chunk_layout_cache: LRU cap for per-array blosc1 chunk-layout entries.
@@ -493,7 +496,7 @@ class Config:
 
     samples_per_batch: int
     dtype: Dtype
-    lookahead_batches: int
+    lookahead_samples: int
     max_chunk_uncompressed_bytes: int
     max_read_op_bytes: int
     max_gpu_memory_bytes: int
@@ -501,6 +504,7 @@ class Config:
     max_chunks_per_wave: int
     max_substreams_per_chunk: int
     n_io_threads: int
+    n_prefetch_io_threads: int
     n_array_meta_cache: int
     n_shard_index_cache: int
     n_chunk_layout_cache: int
@@ -518,13 +522,14 @@ class Config:
         sample_shape: Sequence[int],
         max_gpu_memory_bytes: int,
         dtype: Dtype | str | int = Dtype.F32,
-        lookahead_batches: int = 2,
+        lookahead_samples: int | None = None,
         max_chunk_uncompressed_bytes: int = 0,
         max_read_op_bytes: int = 0,
         host_buffer_waves: int = 0,
         max_chunks_per_wave: int = 0,
         max_substreams_per_chunk: int = 0,
         n_io_threads: int = 4,
+        n_prefetch_io_threads: int = 16,
         n_array_meta_cache: int = 64,
         n_shard_index_cache: int = 256,
         n_chunk_layout_cache: int = 64,
@@ -542,12 +547,19 @@ class Config:
             raise ValueError(
                 f"samples_per_batch must be >= 1 (got {samples_per_batch})"
             )
-        if lookahead_batches < 2:
+        if lookahead_samples is None:
+            lookahead_samples = 2 * samples_per_batch
+        if lookahead_samples < 2 * samples_per_batch:
             raise ValueError(
-                f"lookahead_batches must be >= 2 (got {lookahead_batches})"
+                "lookahead_samples must cover at least two full batches "
+                f"(got {lookahead_samples}, samples_per_batch={samples_per_batch})"
             )
         if n_io_threads < 1:
             raise ValueError(f"n_io_threads must be >= 1 (got {n_io_threads})")
+        if n_prefetch_io_threads < 0:
+            raise ValueError(
+                f"n_prefetch_io_threads must be >= 0 (got {n_prefetch_io_threads})"
+            )
         if max_chunk_uncompressed_bytes < 0:
             raise ValueError("max_chunk_uncompressed_bytes must be >= 0")
         if max_read_op_bytes < 0:
@@ -590,7 +602,7 @@ class Config:
         set_ = object.__setattr__  # frozen=True forbids `self.x = ...`
         set_(self, "samples_per_batch", samples_per_batch)
         set_(self, "dtype", Dtype.coerce(dtype))
-        set_(self, "lookahead_batches", lookahead_batches)
+        set_(self, "lookahead_samples", lookahead_samples)
         set_(self, "max_chunk_uncompressed_bytes", max_chunk_uncompressed_bytes)
         set_(self, "max_read_op_bytes", max_read_op_bytes)
         set_(self, "max_gpu_memory_bytes", max_gpu_memory_bytes)
@@ -598,6 +610,7 @@ class Config:
         set_(self, "max_chunks_per_wave", max_chunks_per_wave)
         set_(self, "max_substreams_per_chunk", max_substreams_per_chunk)
         set_(self, "n_io_threads", n_io_threads)
+        set_(self, "n_prefetch_io_threads", n_prefetch_io_threads)
         set_(self, "n_array_meta_cache", n_array_meta_cache)
         set_(self, "n_shard_index_cache", n_shard_index_cache)
         set_(self, "n_chunk_layout_cache", n_chunk_layout_cache)
@@ -1009,7 +1022,7 @@ class Pipeline:
         try:
             self._native = _native.Pipeline(
                 samples_per_batch=config.samples_per_batch,
-                lookahead_batches=config.lookahead_batches,
+                lookahead_samples=config.lookahead_samples,
                 dtype=int(config.dtype),  # already coerced by Config.__init__
                 max_chunk_uncompressed_bytes=config.max_chunk_uncompressed_bytes,
                 max_read_op_bytes=config.max_read_op_bytes,
@@ -1018,6 +1031,7 @@ class Pipeline:
                 max_chunks_per_wave=config.max_chunks_per_wave,
                 max_substreams_per_chunk=config.max_substreams_per_chunk,
                 n_io_threads=config.n_io_threads,
+                n_prefetch_io_threads=config.n_prefetch_io_threads,
                 n_array_meta_cache=config.n_array_meta_cache,
                 n_shard_index_cache=config.n_shard_index_cache,
                 n_chunk_layout_cache=config.n_chunk_layout_cache,
@@ -1139,7 +1153,7 @@ class Pipeline:
         a single head iterator), not re-wrapped onto ``self._pending[0]``
         — successive backpressure events leave the buffer flat instead
         of nesting ``itertools.chain`` layers."""
-        cap = self._config.lookahead_batches * self._config.samples_per_batch
+        cap = self._config.lookahead_samples
         while True:
             # Top up buffer from the head iterator. Buffer is only ever
             # filled from one iterator at a time, so on push failure we

@@ -40,6 +40,10 @@ resolve_max_chunks_per_wave(const struct damacy_config* cfg);
 uint32_t
 resolve_max_substreams_per_chunk(const struct damacy_config* cfg);
 
+// 0 -> DAMACY_DEFAULT_PREFETCH_IO_THREADS; clamped to DAMACY_MAX_IO_THREADS.
+uint32_t
+resolve_n_prefetch_io_threads(const struct damacy_config* cfg);
+
 // Explicit config (ON/OFF) wins; AUTO defers to DAMACY_GDS_ENABLE=1.
 // damacy_create rejects with DAMACY_INVAL when this resolves to 1 but
 // libcufile.so.0 is not loadable / cuFileDriverOpen fails.

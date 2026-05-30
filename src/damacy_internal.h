@@ -56,6 +56,7 @@ struct damacy
   struct gpu_budget* budget;
 
   struct store* store_host;
+  struct store* store_meta;
   struct store* store_gds;
   struct planner* planner;
 

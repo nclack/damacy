@@ -110,7 +110,11 @@ extern "C"
     // DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK.
     uint32_t max_substreams_per_chunk;
 
+    // Bulk chunk-read worker threads. Wave IO uses this queue.
     uint32_t n_io_threads;
+    // Metadata/prefetch worker threads. 0 ->
+    // DAMACY_DEFAULT_PREFETCH_IO_THREADS.
+    uint32_t n_prefetch_io_threads;
 
     uint32_t n_array_meta_cache;
     uint32_t n_shard_index_cache;
@@ -141,7 +145,9 @@ extern "C"
     int64_t sample_shape[DAMACY_MAX_RANK];
     uint8_t sample_rank;
     uint32_t samples_per_batch;
-    uint32_t lookahead_batches; // user-push queue depth (>= 2)
+    // User-push queue depth in samples, not batches. Must cover at least two
+    // full output batches for the current batch-shaped scheduler.
+    uint32_t lookahead_samples;
 
     // -1 captures current CUcontext; >= 0 retains the primary for that
     // device internally and rejects a current context on another device.

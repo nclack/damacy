@@ -47,7 +47,7 @@ def _mk_cfg() -> Config:
     return Config(
         samples_per_batch=1,
         dtype="f32",
-        lookahead_batches=2,
+        lookahead_samples=2,
         n_io_threads=1,
         n_array_meta_cache=4,
         n_shard_index_cache=4,

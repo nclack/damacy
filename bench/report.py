@@ -240,8 +240,9 @@ def _scenario_panel(r: Results) -> Panel:
         f"samples_per_batch={sc.sampling.samples_per_batch} "
         f"sample_shape={sc.sampling.sample_shape}\n"
         f"[dim]pipeline[/dim] dst_dtype={sc.pipeline.dtype} "
-        f"lookahead={sc.pipeline.lookahead_batches} "
+        f"lookahead={sc.pipeline.lookahead_samples} "
         f"io_threads={sc.pipeline.n_io_threads} "
+        f"prefetch_io_threads={sc.pipeline.n_prefetch_io_threads} "
         f"max_gpu_mb={sc.pipeline.max_gpu_memory_mb or 'default'}"
     )
     return Panel(body, title="scenario", border_style="cyan")

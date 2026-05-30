@@ -19,7 +19,7 @@ mk_cfg(uint32_t chunk_cap)
 {
   return (struct damacy_config){
     .samples_per_batch = 4,
-    .lookahead_batches = 2,
+    .lookahead_samples = 8,
     .dtype = DAMACY_F32,
     .device = -1,
     .tuning = {

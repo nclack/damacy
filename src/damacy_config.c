@@ -46,9 +46,12 @@ validate_config(const struct damacy_config* cfg)
   CHECK_SILENT(Invalid, cfg);
   CHECK_SILENT(Invalid, cfg->samples_per_batch > 0);
   CHECK_SILENT(Invalid, cfg->tuning.max_gpu_memory_bytes > 0);
-  CHECK_SILENT(Invalid, cfg->lookahead_batches >= 2);
+  CHECK_SILENT(Invalid, cfg->lookahead_samples >= 2u * cfg->samples_per_batch);
   CHECK_SILENT(Invalid, cfg->tuning.n_io_threads > 0);
   CHECK_SILENT(Invalid, cfg->tuning.n_io_threads <= DAMACY_MAX_IO_THREADS);
+  CHECK_SILENT(Invalid,
+               cfg->tuning.n_prefetch_io_threads == 0 ||
+                 cfg->tuning.n_prefetch_io_threads <= DAMACY_MAX_IO_THREADS);
   CHECK_SILENT(
     Invalid,
     cfg->tuning.host_buffer_waves == 0 ||
@@ -129,6 +132,15 @@ resolve_max_substreams_per_chunk(const struct damacy_config* cfg)
     v = DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK;
   if (v > DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK)
     v = DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK;
+  return v;
+}
+
+uint32_t
+resolve_n_prefetch_io_threads(const struct damacy_config* cfg)
+{
+  uint32_t v = cfg->tuning.n_prefetch_io_threads;
+  if (v == 0)
+    v = DAMACY_DEFAULT_PREFETCH_IO_THREADS;
   return v;
 }
 

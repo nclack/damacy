@@ -37,7 +37,7 @@ mk_cfg(const char* root, int64_t sy, int64_t sx)
   (void)root;
   struct damacy_config c = {
     .samples_per_batch = 1,
-    .lookahead_batches = 2,
+    .lookahead_samples = 2,
     .dtype = DAMACY_F32,
     .sample_rank = 2,
     .device = -1,

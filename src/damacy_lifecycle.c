@@ -90,6 +90,8 @@ destroy_inner(struct damacy* self, int cuda_skip)
   self->planner = NULL;
   store_destroy(self->store_gds);
   self->store_gds = NULL;
+  store_destroy(self->store_meta);
+  self->store_meta = NULL;
   store_destroy(self->store_host);
   self->store_host = NULL;
   gpu_budget_destroy(self->budget);
@@ -278,6 +280,15 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     self->store_host = store_fs_create(&sc);
     CHECK(Fail, self->store_host);
   }
+  {
+    struct store_fs_config sc = {
+      .root = "",
+      .nthreads = (int)resolve_n_prefetch_io_threads(cfg),
+      .affinity = &self->numa,
+    };
+    self->store_meta = store_fs_create(&sc);
+    CHECK(Fail, self->store_meta);
+  }
   if (want_gds) {
     struct store_fs_gds_config sc = {
       .root = "",
@@ -290,10 +301,11 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     }
   }
 
-  self->prefetch_io_q = io_queue_create(2, &self->numa);
+  self->prefetch_io_q =
+    io_queue_create((int)resolve_n_prefetch_io_threads(cfg), &self->numa);
   CHECK(Fail, self->prefetch_io_q);
   self->io_exec.post = damacy_io_exec_post;
-  array_meta_fetcher_init(&self->array_meta_fetcher, self->store_host);
+  array_meta_fetcher_init(&self->array_meta_fetcher, self->store_meta);
   {
     struct prefetch_cache_config amc_cfg = {
       .capacity = cfg->tuning.n_array_meta_cache,
@@ -306,7 +318,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     CHECK(Fail, self->array_meta_cache);
   }
   shard_index_fetcher_init(
-    &self->shard_index_fetcher, self->store_host, self->array_meta_cache);
+    &self->shard_index_fetcher, self->store_meta, self->array_meta_cache);
   {
     struct prefetch_cache_config sic_cfg = {
       .capacity = cfg->tuning.n_shard_index_cache,
@@ -319,7 +331,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     CHECK(Fail, self->shard_index_cache);
   }
   chunk_layout_fetcher_init(&self->chunk_layout_fetcher,
-                            self->store_host,
+                            self->store_meta,
                             self->array_meta_cache,
                             self->shard_index_cache,
                             resolved_max_substreams_per_chunk);
@@ -380,9 +392,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   };
   CHECK(Fail, planner_create(&pcfg, &self->planner) == DAMACY_OK);
 
-  CHECK(Fail,
-        lookahead_init(&self->lookahead,
-                       cfg->lookahead_batches * cfg->samples_per_batch) == 0);
+  CHECK(Fail, lookahead_init(&self->lookahead, cfg->lookahead_samples) == 0);
 
   {
     struct prefetcher_config pf_cfg = {
@@ -390,9 +400,11 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
       .array_meta_cache = self->array_meta_cache,
       .shard_index_cache = self->shard_index_cache,
       .chunk_layout_cache = self->chunk_layout_cache,
-      .capacity = cfg->lookahead_batches * cfg->samples_per_batch,
+      .capacity = cfg->lookahead_samples,
       // +4 covers the admit→release_batch transit window per batch_id.
-      .batch_capacity = cfg->lookahead_batches + 4,
+      .batch_capacity = (cfg->lookahead_samples + cfg->samples_per_batch - 1u) /
+                          cfg->samples_per_batch +
+                        4u,
     };
     self->prefetcher = prefetcher_create(&pf_cfg);
     CHECK(Fail, self->prefetcher);

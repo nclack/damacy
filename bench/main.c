@@ -110,8 +110,9 @@ struct scenario
   uint64_t sampling_seed;
 
   // pipeline
-  uint32_t lookahead_batches;
+  uint32_t lookahead_samples;
   uint32_t n_io_threads;
+  uint32_t n_prefetch_io_threads;
   uint64_t max_gpu_memory_bytes;         // 0 → library default
   uint32_t max_chunk_uncompressed_bytes; // 0 → library default
   uint64_t max_read_op_bytes;            // 0 → library default
@@ -377,9 +378,13 @@ parse_scenario(struct cslice src, struct scenario* sc)
     uint64_t v;
     static const struct json_query p_la[] = { { QUERY_KEY, .key = "pipeline" },
                                               { QUERY_KEY,
-                                                .key = "lookahead_batches" } };
+                                                .key = "lookahead_samples" } };
     static const struct json_query p_io[] = {
       { QUERY_KEY, .key = "pipeline" }, { QUERY_KEY, .key = "n_io_threads" }
+    };
+    static const struct json_query p_pio[] = {
+      { QUERY_KEY, .key = "pipeline" },
+      { QUERY_KEY, .key = "n_prefetch_io_threads" }
     };
     static const struct json_query p_g[] = { { QUERY_KEY, .key = "pipeline" },
                                              { QUERY_KEY,
@@ -401,10 +406,12 @@ parse_scenario(struct cslice src, struct scenario* sc)
     };
     if (read_uint(src, p_la, countof(p_la), &v))
       return 1;
-    sc->lookahead_batches = (uint32_t)v;
+    sc->lookahead_samples = (uint32_t)v;
     if (read_uint(src, p_io, countof(p_io), &v))
       return 1;
     sc->n_io_threads = (uint32_t)v;
+    read_uint_opt(src, p_pio, countof(p_pio), &v, 16);
+    sc->n_prefetch_io_threads = (uint32_t)v;
     read_uint_opt(src, p_g, countof(p_g), &v, 0);
     sc->max_gpu_memory_bytes = v << 20;
     read_uint_opt(src, p_c, countof(p_c), &v, 0);
@@ -442,6 +449,14 @@ parse_scenario(struct cslice src, struct scenario* sc)
   }
 
   // sanity: all axes can fit a sample
+  if (sc->lookahead_samples < 2u * sc->samples_per_batch) {
+    fprintf(stderr,
+            "scenario: lookahead_samples=%u must be at least 2 * "
+            "samples_per_batch=%u\n",
+            sc->lookahead_samples,
+            sc->samples_per_batch);
+    return 1;
+  }
   for (uint8_t d = 0; d < sc->rank; ++d) {
     if (sc->sample_shape[d] > sc->zarr_shape[d]) {
       fprintf(stderr,
@@ -549,7 +564,7 @@ drive(struct damacy* d,
       double* push_out,
       double* pop_wait_out)
 {
-  const uint32_t pool_cap = sc->samples_per_batch * sc->lookahead_batches;
+  const uint32_t pool_cap = sc->lookahead_samples;
   const uint64_t samples_target =
     (uint64_t)n_target_batches * (uint64_t)sc->samples_per_batch;
   struct damacy_sample* pool =
@@ -836,7 +851,7 @@ main(int argc, char** argv)
 
   struct damacy_config cfg = {
     .samples_per_batch = sc.samples_per_batch,
-    .lookahead_batches = sc.lookahead_batches,
+    .lookahead_samples = sc.lookahead_samples,
     .dtype = sc.dtype,
     .sample_rank = sc.rank,
     .device = -1,
@@ -849,6 +864,7 @@ main(int argc, char** argv)
       .max_read_op_bytes = sc.max_read_op_bytes,
       .max_gpu_memory_bytes = sc.max_gpu_memory_bytes,
       .host_buffer_waves = sc.host_buffer_waves,
+      .n_prefetch_io_threads = sc.n_prefetch_io_threads,
     },
     .debug = { .bypass_decode = sc.bypass_decode },
   };

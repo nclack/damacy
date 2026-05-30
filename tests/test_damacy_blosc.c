@@ -53,7 +53,7 @@ mk_cfg(const char* root, uint32_t samples_per_batch, int64_t sy, int64_t sx)
   (void)root;
   struct damacy_config c = {
     .samples_per_batch = samples_per_batch,
-    .lookahead_batches = 2,
+    .lookahead_samples = 2 * samples_per_batch,
     .dtype = DAMACY_F32,
     .sample_rank = 2,
     .device = -1,
@@ -288,7 +288,7 @@ test_multi_wave_per_batch(void)
   // batch slot.
   struct damacy_config cfg = {
     .samples_per_batch = 4,
-    .lookahead_batches = 2,
+    .lookahead_samples = 8,
     .dtype = DAMACY_F32,
     .sample_shape = { 16, 32 },
     .sample_rank = 2,
@@ -351,7 +351,7 @@ test_multi_wave_per_batch(void)
 // (1024), forcing both the per-wave fanout SOA and the pool-shared
 // decoder scratch to grow on first dispatch. clevel=1 splits each
 // 512 KB inner chunk into 16 blocks. Two batches keep both waves in
-// flight simultaneously (lookahead_batches=2, samples_per_batch=1).
+// flight simultaneously (lookahead_samples=2, samples_per_batch=1).
 static int
 test_wave_grows_substream_cap(void)
 {
@@ -366,7 +366,7 @@ test_wave_grows_substream_cap(void)
 
   struct damacy_config cfg = {
     .samples_per_batch = 1,
-    .lookahead_batches = 2,
+    .lookahead_samples = 2,
     .dtype = DAMACY_F32,
     .sample_shape = { H, W },
     .sample_rank = 2,
@@ -443,7 +443,7 @@ test_grow_inside_tight_budget(void)
 
   struct damacy_config cfg = {
     .samples_per_batch = 1,
-    .lookahead_batches = 2,
+    .lookahead_samples = 2,
     .dtype = DAMACY_F32,
     .sample_shape = { 256, 32 },
     .sample_rank = 2,
@@ -502,7 +502,7 @@ test_layout_probe_avoids_decoder_grow(void)
 
   struct damacy_config cfg = {
     .samples_per_batch = 1,
-    .lookahead_batches = 2,
+    .lookahead_samples = 2,
     .dtype = DAMACY_F32,
     .sample_shape = { 256, 32 },
     .sample_rank = 2,

@@ -60,8 +60,9 @@ def test_native_damacy_error_carries_status_and_what():
     with pytest.raises(_native.DamacyError) as excinfo:
         _native.Pipeline(
             samples_per_batch=1,
-            lookahead_batches=2,
+            lookahead_samples=2,
             n_io_threads=1,
+            n_prefetch_io_threads=1,
             n_array_meta_cache=4,
             n_shard_index_cache=4,
             n_chunk_layout_cache=4,

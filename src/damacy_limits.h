@@ -67,6 +67,10 @@ _Static_assert(DAMACY_DEFAULT_READ_OP_MAX_BYTES <= UINT32_MAX,
 // workload demonstrates need.
 #define DAMACY_MAX_IO_THREADS 32u
 
+// Metadata prefetch is dominated by small, latency-bound reads. Keep its
+// default materially higher than the bulk IO default used by most examples.
+#define DAMACY_DEFAULT_PREFETCH_IO_THREADS 16u
+
 // Matches DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE. Must be a power of two —
 // io_queue indexes via bitmask.
 #define DAMACY_IO_QUEUE_INITIAL_CAP 512u

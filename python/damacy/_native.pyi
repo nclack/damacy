@@ -127,11 +127,12 @@ class Pipeline:
     def __init__(
         self,
         samples_per_batch: int,
-        lookahead_batches: int,
+        lookahead_samples: int,
         dtype: str | int,
         max_chunk_uncompressed_bytes: int,
         max_gpu_memory_bytes: int,
         n_io_threads: int,
+        n_prefetch_io_threads: int,
         n_array_meta_cache: int,
         n_shard_index_cache: int,
         n_chunk_layout_cache: int,

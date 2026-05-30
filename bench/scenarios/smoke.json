@@ -23,8 +23,9 @@
   },
   "pipeline": {
     "dtype": "f32",
-    "lookahead_batches": 4,
+    "lookahead_samples": 16,
     "n_io_threads": 4,
+    "n_prefetch_io_threads": 16,
     "max_gpu_memory_mb": 512,
     "max_chunk_uncompressed_mb": 1,
     "n_array_meta_cache": 16,
