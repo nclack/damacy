@@ -564,6 +564,12 @@ CudaFail:
   return DAMACY_CUDA;
 }
 
+static void
+wave_mark_h2d(struct damacy_wave* wave)
+{
+  wave->state = WAVE_H2D;
+}
+
 // Bulk H2D, GPU parse on stream_h2d, then h2d_end. stream_decode gates
 // on h2d_end before nvcomp launch.
 static enum damacy_status
@@ -600,7 +606,7 @@ kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
   if (s != DAMACY_OK)
     goto Error;
 
-  wave->state = WAVE_H2D;
+  wave_mark_h2d(wave);
   damacy_nvtx_range_pop(); // kick_h2d
   return DAMACY_OK;
 
@@ -757,6 +763,19 @@ Done:
   return rs;
 }
 
+static void
+wave_mark_post(struct damacy_wave* wave)
+{
+  wave->state = WAVE_POST;
+}
+
+static void
+wave_mark_free(struct damacy_wave* wave)
+{
+  wave->state = WAVE_FREE;
+  wave->n_chunks = 0;
+}
+
 // Wait on h2d_end, kick decode on stream_decode, kick post + assemble on
 // stream_post.
 static enum damacy_status
@@ -784,7 +803,7 @@ kick_compute(struct wave_pool* wp, struct damacy_wave* wave)
   if (st != DAMACY_OK)
     return st;
 
-  wave->state = WAVE_POST;
+  wave_mark_post(wave);
   return DAMACY_OK;
 CudaFail:
   return DAMACY_CUDA;
@@ -845,11 +864,35 @@ finalize_wave(struct wave_pool* wp, struct damacy_wave* wave)
               wave->h_blosc1_totals->n_codec_errors);
     out.status = DAMACY_DECODE;
   }
-  wave->state = WAVE_FREE;
-  wave->n_chunks = 0;
+  wave_mark_free(wave);
   damacy_nvtx_range_pop();
   return out;
 }
+
+static void
+mark_changed(int* changed);
+static void
+slot_begin_peeling(struct wave_pool* wp,
+                   struct host_slab_slot* hs,
+                   const struct wave_desc* desc);
+static void
+slot_rollback_peel(struct wave_pool* wp,
+                   struct host_slab_slot* hs,
+                   const struct wave_desc* desc,
+                   int* changed);
+static void
+slot_commit_io(struct host_slab_slot* hs, struct store_event ev, int* changed);
+static void
+slot_mark_ready(struct host_slab_slot* hs, int* changed);
+static void
+slot_mark_busy(struct host_slab_slot* hs);
+static void
+wave_bind_slot_fields(struct wave_pool* wp,
+                      struct damacy_wave* wave,
+                      const struct host_slab_slot* hs,
+                      int slot_idx);
+static void
+wave_unbind_slot(struct wave_pool* wp, struct damacy_wave* wave, int* changed);
 
 // --- peel: reserve [locked] → submit [unlocked] → commit [locked] -----------
 // submit does the async IO submit off the scheduler_lock. The slot
@@ -889,17 +932,7 @@ wave_pool_peel_reserve(struct wave_pool* wp,
     *err = s;
     return t;
   }
-  platform_toc(&hs->io_clock);
-  hs->is_fill_wave = desc.is_fill_wave;
-  hs->render_job_idx = desc.render_job_idx;
-  hs->batch_pool_slot = desc.batch_pool_slot;
-  hs->batch_chunk_offset = desc.batch_chunk_offset;
-  hs->n_chunks = desc.n_chunks;
-  hs->used_bytes = desc.host_used_bytes;
-  hs->io_bytes = desc.io_bytes;
-  hs->state = SLOT_PEELING;
-  wp->stats->waves_emitted++;
-  wp->stats->chunks_dispatched += desc.n_chunks;
+  slot_begin_peeling(wp, hs, &desc);
 
   t.slot_idx = slot_idx;
   t.n_reads = desc.n_reads;
@@ -934,19 +967,10 @@ wave_pool_peel_commit(struct wave_pool* wp,
     return DAMACY_OK;
   struct host_slab_slot* hs = &wp->slots[t->slot_idx];
   if (t->n_reads > 0 && ev.seq == 0) {
-    render_job_rollback_wave(
-      render_job_pool_get(wp->render_jobs, hs->render_job_idx), &t->desc);
-    wp->stats->waves_emitted--;
-    wp->stats->chunks_dispatched -= hs->n_chunks;
-    slot_release(hs);
-    if (changed)
-      *changed = 1;
+    slot_rollback_peel(wp, hs, &t->desc, changed);
     return DAMACY_IO;
   }
-  hs->io_event = ev;
-  hs->state = SLOT_IO;
-  if (changed)
-    *changed = 1;
+  slot_commit_io(hs, ev, changed);
   return DAMACY_OK;
 }
 
@@ -969,6 +993,91 @@ bind_slot_to_wave(struct wave_pool* wp, struct damacy_wave* wave, int slot_idx)
   }
   metric_record(
     &wp->stats->bind_wait, platform_toc(&hs->io_clock) * 1000.0f, 0, 0);
+  wave_bind_slot_fields(wp, wave, hs, slot_idx);
+
+  for (uint32_t i = 0; i < wave->n_chunks; ++i) {
+    struct chunk_plan* c = &job->chunk_plans[wave->batch_chunk_offset + i];
+    wave->decomp_in_bytes += c->compressed_nbytes;
+    wave->decomp_out_bytes += c->decompressed_nbytes;
+  }
+
+  slot_mark_busy(hs);
+  build_assemble_meta(wp, wave);
+  enum damacy_status s = kick_h2d(wp, wave);
+  if (s != DAMACY_OK) {
+    // kick_h2d failed before recording bulk_h2d_end (or after, but
+    // either way the slot is no longer in flight on the GPU since the
+    // wave never reaches WAVE_H2D's poll). Release the slot.
+    wave_unbind_slot(wp, wave, NULL);
+  }
+  damacy_nvtx_range_pop();
+  return s;
+}
+
+static void
+mark_changed(int* changed)
+{
+  if (changed)
+    *changed = 1;
+}
+
+static void
+slot_begin_peeling(struct wave_pool* wp,
+                   struct host_slab_slot* hs,
+                   const struct wave_desc* desc)
+{
+  platform_toc(&hs->io_clock);
+  hs->is_fill_wave = desc->is_fill_wave;
+  hs->render_job_idx = desc->render_job_idx;
+  hs->batch_pool_slot = desc->batch_pool_slot;
+  hs->batch_chunk_offset = desc->batch_chunk_offset;
+  hs->n_chunks = desc->n_chunks;
+  hs->used_bytes = desc->host_used_bytes;
+  hs->io_bytes = desc->io_bytes;
+  hs->state = SLOT_PEELING;
+  wp->stats->waves_emitted++;
+  wp->stats->chunks_dispatched += desc->n_chunks;
+}
+
+static void
+slot_rollback_peel(struct wave_pool* wp,
+                   struct host_slab_slot* hs,
+                   const struct wave_desc* desc,
+                   int* changed)
+{
+  render_job_rollback_wave(
+    render_job_pool_get(wp->render_jobs, hs->render_job_idx), desc);
+  wp->stats->waves_emitted--;
+  wp->stats->chunks_dispatched -= hs->n_chunks;
+  slot_release(hs);
+  mark_changed(changed);
+}
+
+static void
+slot_commit_io(struct host_slab_slot* hs, struct store_event ev, int* changed)
+{
+  hs->io_event = ev;
+  hs->state = SLOT_IO;
+  mark_changed(changed);
+}
+
+static void
+slot_mark_ready(struct host_slab_slot* hs, int* changed)
+{
+  // store_event_query reclaimed the ref; clear so wave_pool_destroy doesn't
+  // redundantly discard a stale impl pointer.
+  hs->io_event = (struct store_event){ 0 };
+  hs->io_ms = platform_toc(&hs->io_clock) * 1000.0f;
+  hs->state = SLOT_READY;
+  mark_changed(changed);
+}
+
+static void
+wave_bind_slot_fields(struct wave_pool* wp,
+                      struct damacy_wave* wave,
+                      const struct host_slab_slot* hs,
+                      int slot_idx)
+{
   wave->bound_slot = (int8_t)slot_idx;
   wave->host_slab = hs->buf;
   // GDS path: cuFile wrote directly into the slot's device staging
@@ -987,33 +1096,22 @@ bind_slot_to_wave(struct wave_pool* wp, struct damacy_wave* wave, int slot_idx)
   wave->decomp_in_bytes = 0;
   wave->decomp_out_bytes = 0;
   wave->assemble_out_bytes = 0;
-
-  for (uint32_t i = 0; i < wave->n_chunks; ++i) {
-    struct chunk_plan* c = &job->chunk_plans[wave->batch_chunk_offset + i];
-    wave->decomp_in_bytes += c->compressed_nbytes;
-    wave->decomp_out_bytes += c->decompressed_nbytes;
-  }
-
-  hs->state = SLOT_BUSY;
-  build_assemble_meta(wp, wave);
-  enum damacy_status s = kick_h2d(wp, wave);
-  if (s != DAMACY_OK) {
-    // kick_h2d failed before recording bulk_h2d_end (or after, but
-    // either way the slot is no longer in flight on the GPU since the
-    // wave never reaches WAVE_H2D's poll). Release the slot.
-    slot_release(hs);
-    wave->bound_slot = -1;
-    wave->host_slab = NULL;
-  }
-  damacy_nvtx_range_pop();
-  return s;
 }
 
 static void
-mark_changed(int* changed)
+wave_unbind_slot(struct wave_pool* wp, struct damacy_wave* wave, int* changed)
 {
-  if (changed)
-    *changed = 1;
+  if (wave->bound_slot >= 0)
+    slot_release(&wp->slots[wave->bound_slot]);
+  wave->bound_slot = -1;
+  wave->host_slab = NULL;
+  mark_changed(changed);
+}
+
+static void
+slot_mark_busy(struct host_slab_slot* hs)
+{
+  hs->state = SLOT_BUSY;
 }
 
 static enum damacy_status
@@ -1027,12 +1125,7 @@ advance_io_slots(struct wave_pool* wp, int* changed)
     if (!ready)
       continue;
 
-    // store_event_query reclaimed the ref; clear so wave_pool_destroy
-    // doesn't redundantly discard a stale impl pointer.
-    hs->io_event = (struct store_event){ 0 };
-    hs->io_ms = platform_toc(&hs->io_clock) * 1000.0f;
-    hs->state = SLOT_READY;
-    mark_changed(changed);
+    slot_mark_ready(hs, changed);
   }
   return DAMACY_OK;
 }
@@ -1065,10 +1158,7 @@ release_bound_slot_if_ready(struct wave_pool* wp,
 
   CUresult qb = cuEventQuery(wave->ev.bulk_h2d_end);
   if (qb == CUDA_SUCCESS) {
-    slot_release(&wp->slots[wave->bound_slot]);
-    wave->bound_slot = -1;
-    wave->host_slab = NULL;
-    mark_changed(changed);
+    wave_unbind_slot(wp, wave, changed);
     return DAMACY_OK;
   }
   return qb == CUDA_ERROR_NOT_READY ? DAMACY_OK : DAMACY_CUDA;
