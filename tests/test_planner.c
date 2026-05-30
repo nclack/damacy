@@ -163,8 +163,8 @@ struct fixture
   struct planner* planner;
   struct path_intern paths;
   struct prefetch_handle h_meta;
-  struct prefetch_handle h_layout;
   struct prefetch_handle* shard_arrays[32];
+  uint64_t* shard_coord_arrays[32];
   uint32_t n_shard_arrays;
 };
 
@@ -214,9 +214,6 @@ fixture_wire_caches(struct fixture* f)
   f->h_meta = prefetch_cache_request(
     f->array_meta_cache, hash_fnv1a_str("foo"), "foo", 0, NULL);
   EXPECT(prefetch_handle_valid(f->h_meta));
-  f->h_layout = prefetch_cache_request(
-    f->chunk_layout_cache, hash_fnv1a_str("foo"), "foo", 0, NULL);
-  EXPECT(prefetch_handle_valid(f->h_layout));
 
   struct planner_config pcfg = {
     .array_meta_cache = f->array_meta_cache,
@@ -271,8 +268,10 @@ fixture_destroy(struct fixture* f)
   prefetch_cache_destroy(f->array_meta_cache);
   store_destroy(f->store);
   path_intern_free(&f->paths);
-  for (uint32_t i = 0; i < f->n_shard_arrays; ++i)
+  for (uint32_t i = 0; i < f->n_shard_arrays; ++i) {
     free(f->shard_arrays[i]);
+    free(f->shard_coord_arrays[i]);
+  }
   fixture_rm_tree(f->root);
 }
 
@@ -288,7 +287,6 @@ mk_sample(struct fixture* f,
     .uri = "foo",
     .aabb = { .rank = 2 },
     .h_meta = f->h_meta,
-    .h_layout = f->h_layout,
   };
   s.aabb.dims[0] = (struct damacy_interval){ .beg = y0, .end = y1 };
   s.aabb.dims[1] = (struct damacy_interval){ .beg = x0, .end = x1 };
@@ -306,16 +304,39 @@ mk_sample(struct fixture* f,
   struct prefetch_handle* arr =
     (struct prefetch_handle*)calloc((size_t)n, sizeof(struct prefetch_handle));
   EXPECT(arr);
+  uint64_t* coords =
+    (uint64_t*)calloc((size_t)n * meta->rank, sizeof(uint64_t));
+  EXPECT(coords);
   struct shard_index_key probe = { .uri = "foo", .rank = meta->rank };
   uint32_t i = 0;
-  while (sample_shard_iterator_next(&it, probe.shard_coord))
+  while (sample_shard_iterator_next(&it, probe.shard_coord)) {
+    memcpy(&coords[(size_t)i * meta->rank],
+           probe.shard_coord,
+           (size_t)meta->rank * sizeof(uint64_t));
     arr[i++] = prefetch_cache_request(
       f->shard_index_cache, shard_index_key_hash(&probe), &probe, 0, NULL);
+  }
   s.h_shards = arr;
   s.n_shards = (uint32_t)n;
+  struct chunk_layout_key layout_key = {
+    .uri = "foo",
+    .rank = meta->rank,
+    // Planner unit fixtures use synthetic compressed bytes, so do not probe
+    // a real blosc header here. End-to-end/chunk-layout tests cover probing.
+    .n_shards = 0,
+    .shard_coords = NULL,
+    .h_shards = NULL,
+  };
+  s.h_layout = prefetch_cache_request(f->chunk_layout_cache,
+                                      chunk_layout_key_hash(&layout_key),
+                                      &layout_key,
+                                      0,
+                                      NULL);
+  EXPECT(prefetch_handle_valid(s.h_layout));
   EXPECT(f->n_shard_arrays <
          sizeof f->shard_arrays / sizeof f->shard_arrays[0]);
   f->shard_arrays[f->n_shard_arrays++] = arr;
+  f->shard_coord_arrays[f->n_shard_arrays - 1] = coords;
   *out = s;
   return 0;
 }

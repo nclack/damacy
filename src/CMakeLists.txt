@@ -99,7 +99,7 @@ add_src_lib(chunk_layout SOURCES prefetch/chunk_layout.h prefetch/chunk_layout.c
 )
 
 add_src_lib(prefetcher SOURCES prefetch/prefetcher.h prefetch/prefetcher.c
-    LINKS prefetch_cache shard_index zarr hash lookahead platform log
+    LINKS prefetch_cache chunk_layout shard_index zarr hash lookahead platform log
 )
 
 # Runtime GPU-memory committer: tracks bytes committed against a

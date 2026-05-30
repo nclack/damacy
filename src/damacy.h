@@ -229,13 +229,12 @@ extern "C"
   //   AGAIN     the lookahead queue filled mid-slice; caller should pop
   //             a batch (or wait) and retry with the returned suffix
   //   INVAL     bad arguments (samples.beg > samples.end, null d, etc.)
-  //   NOTFOUND  could not resolve a uri; result.unconsumed.beg points at it
-  //   DTYPE     zarr source dtype has no cast path to cfg.dtype;
-  //             result.unconsumed.beg points at the sample
-  //   RANK      sample rank incompatible with the resolved zarr's rank
+  //   RANK      sample rank incompatible with cfg.sample_rank
   //   SHUTDOWN  instance is in a failed state or being destroyed
-  // On any non-AGAIN error, the offending sample is at
-  // result.unconsumed.beg and was NOT consumed.
+  // Store-derived errors (missing uri, unsupported source dtype, per-array
+  // rank mismatch, decode failures) surface asynchronously from damacy_pop.
+  // On any push-side non-AGAIN error, the offending sample is at
+  // result.unconsumed.beg and was not consumed.
   struct damacy_push_result damacy_push(struct damacy* d,
                                         struct damacy_sample_slice samples);
 
