@@ -338,6 +338,11 @@ record_io_metric(const struct wave_pool* wp, const struct damacy_wave* wave)
   metric_record(&wp->stats->io, wave->io_ms, wave->io_bytes, wave->io_bytes);
 }
 
+struct h2d_submit_state
+{
+  uint8_t stream_work_queued;
+};
+
 // Phase 1: record h2d_start, queue the slab memcpy, record bulk_h2d_end.
 // On the GDS path the cuFileReadAsync calls submitted in peel were
 // queued on this same stream_h2d, so the memcpy is skipped — stream
@@ -345,9 +350,12 @@ record_io_metric(const struct wave_pool* wp, const struct damacy_wave* wave)
 // records on stream_h2d, now measuring the read time itself rather
 // than a separate H2D copy.
 static enum damacy_status
-submit_bulk_h2d(struct wave_pool* wp, struct damacy_wave* wave)
+submit_bulk_h2d(struct wave_pool* wp,
+                struct damacy_wave* wave,
+                struct h2d_submit_state* state)
 {
   CU(CudaFail, cuEventRecord(wave->ev.h2d_start, wp->stream_h2d));
+  state->stream_work_queued = 1;
   damacy_nvtx_range_push("bulk_h2d");
   if (!wp->use_gds) {
     CU(BulkCudaFail,
@@ -570,11 +578,6 @@ wave_mark_h2d(struct damacy_wave* wave)
   wave->state = WAVE_H2D;
 }
 
-struct h2d_submit_state
-{
-  uint8_t stream_work_queued;
-};
-
 static enum damacy_status
 prepare_h2d_parse_inputs(struct wave_pool* wp, struct damacy_wave* wave)
 {
@@ -602,11 +605,10 @@ submit_h2d_and_parse(struct wave_pool* wp,
 {
   state->stream_work_queued = 0;
 
-  enum damacy_status s = submit_bulk_h2d(wp, wave);
+  enum damacy_status s = submit_bulk_h2d(wp, wave, state);
   if (s != DAMACY_OK)
     return s;
 
-  state->stream_work_queued = 1;
   return gpu_parse(wp, wave);
 }
 
@@ -1214,25 +1216,27 @@ bind_ready_slots_to_free_waves(struct wave_pool* wp, int* changed)
 }
 
 static enum damacy_status
-release_bound_slot_after_bulk_h2d(struct wave_pool* wp,
-                                  struct damacy_wave* wave,
-                                  int* changed)
+release_bound_slot_after_input_consumed(struct wave_pool* wp,
+                                        struct damacy_wave* wave,
+                                        int* changed)
 {
   if (wave->bound_slot < 0)
     return DAMACY_OK;
 
-  CUresult qb = cuEventQuery(wave->ev.bulk_h2d_end);
-  if (qb == CUDA_SUCCESS) {
+  CUevent release_gate = wp->use_gds ? wave->ev.h2d_end : wave->ev.bulk_h2d_end;
+  CUresult q = cuEventQuery(release_gate);
+  if (q == CUDA_SUCCESS) {
     wave_unbind_slot(wp, wave, changed);
     return DAMACY_OK;
   }
-  return qb == CUDA_ERROR_NOT_READY ? DAMACY_OK : DAMACY_CUDA;
+  return q == CUDA_ERROR_NOT_READY ? DAMACY_OK : DAMACY_CUDA;
 }
 
 static enum damacy_status
 advance_h2d_wave(struct wave_pool* wp, struct damacy_wave* wave, int* changed)
 {
-  enum damacy_status s = release_bound_slot_after_bulk_h2d(wp, wave, changed);
+  enum damacy_status s =
+    release_bound_slot_after_input_consumed(wp, wave, changed);
   if (s != DAMACY_OK)
     return s;
 
@@ -1316,8 +1320,9 @@ run_advance_phases(struct wave_pool* wp, int* changed)
     advance_io_slots_to_ready,
     // SLOT_READY -> WAVE_H2D on free waves.
     bind_ready_slots_to_free_waves,
-    // WAVE_H2D -> WAVE_POST -> WAVE_FREE. Slots release after bulk_h2d_end,
-    // independent of h2d_end, so peel can refill them as early as possible.
+    // WAVE_H2D -> WAVE_POST -> WAVE_FREE. Host-staging slots release after
+    // bulk_h2d_end; GDS slots release after h2d_end because GPU parse still
+    // reads the slot-owned device buffer.
     advance_active_waves,
   };
 

@@ -31,11 +31,12 @@ struct damacy_wave
 {
   enum wave_state state;
   // Index into wave_pool.slots while bound, -1 otherwise. Set at bind;
-  // cleared when bulk_h2d_end fires and the slot returns to the pool.
+  // cleared when compressed input is consumed and the slot returns to the pool.
   int8_t bound_slot;
   // Copied from the bound slot at bind. The first three are read by
-  // kick_h2d / finalize / log paths; the host_slab pointer aliases the
-  // slot's pinned buffer for the lifetime of the bulk H2D.
+  // kick_h2d / finalize / log paths. host_slab aliases the slot's pinned
+  // buffer on the host-staging path; on GDS the bound slot owns the active
+  // compressed device buffer until h2d_end.
   uint16_t render_job_idx;
   uint16_t batch_pool_slot;
   uint32_t batch_chunk_offset;

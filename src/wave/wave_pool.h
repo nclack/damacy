@@ -143,8 +143,9 @@ any_slot_free(const struct wave_pool* wp);
 // Drive both the slot pool and the wave array one step:
 //   1. SLOT_IO → SLOT_READY when store_event_query succeeds.
 //   2. SLOT_READY → bound to a WAVE_FREE wave, then kick_h2d.
-//   3. WAVE_H2D: poll bulk_h2d_end → release slot; poll h2d_end → kick
-//      decode + post/assemble, advance to WAVE_POST.
+//   3. WAVE_H2D: release the bound slot once compressed input is consumed
+//      (bulk_h2d_end for host staging, h2d_end for GDS); poll h2d_end →
+//      kick decode + post/assemble, advance to WAVE_POST.
 //   4. WAVE_POST: poll asm_end → finalize.
 // Returns the first non-OK status encountered; the scheduler tick
 // latches it onto self->failed_status. *changed

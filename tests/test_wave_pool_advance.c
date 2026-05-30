@@ -209,6 +209,116 @@ test_failed_h2d_submit_drains_before_unbind(void)
   return 0;
 }
 
+static int
+test_failed_bulk_h2d_submit_drains_before_unbind(void)
+{
+  struct wave_pool wp;
+  struct damacy_batch_pool batch_pool;
+  struct render_job_pool jobs;
+  struct damacy_stats stats;
+  struct gpu_budget* budget = gpu_budget_new(UINT64_MAX);
+  struct chunk_plan chunk_plans[1];
+  struct sample_plan sample_plans[1];
+  memset(&wp, 0, sizeof(wp));
+  memset(&batch_pool, 0, sizeof(batch_pool));
+  memset(&jobs, 0, sizeof(jobs));
+  memset(&stats, 0, sizeof(stats));
+  memset(chunk_plans, 0, sizeof(chunk_plans));
+  memset(sample_plans, 0, sizeof(sample_plans));
+  EXPECT(budget != NULL);
+
+  EXPECT(wave_pool_init(&wp,
+                        &batch_pool,
+                        &jobs,
+                        NULL,
+                        &stats,
+                        DAMACY_F32,
+                        DAMACY_N_WAVES,
+                        1,
+                        1,
+                        4096,
+                        4096,
+                        4096,
+                        0,
+                        0,
+                        budget) == 0);
+
+  struct render_job* job = render_job_pool_get(&jobs, 0);
+  EXPECT(job != NULL);
+  job->chunk_plans = chunk_plans;
+  job->sample_plans = sample_plans;
+  chunk_plans[0].is_fill = 1;
+  chunk_plans[0].codec_id = (uint8_t)CODEC_FILL;
+  chunk_plans[0].decompressed_nbytes = 1;
+
+  batch_pool.rank = 1;
+  wp.slots[0].state = SLOT_READY;
+  wp.slots[0].render_job_idx = 0;
+  wp.slots[0].batch_pool_slot = 0;
+  wp.slots[0].n_chunks = 1;
+  wp.slots[0].used_bytes = 1;
+  wp.slots[0].io_bytes = 1;
+
+  g_host_func_ran = 0;
+  EXPECT(cuLaunchHostFunc(wp.stream_h2d, sleeping_host_func, NULL) ==
+         CUDA_SUCCESS);
+
+  void* saved_dev_compressed = wp.waves[0].dev_compressed;
+  wp.waves[0].dev_compressed = NULL;
+
+  int changed = 0;
+  damacy_log_set_quiet(1);
+  EXPECT(wave_pool_advance(&wp, &changed) == DAMACY_CUDA);
+  damacy_log_set_quiet(0);
+
+  EXPECT(changed == 0);
+  EXPECT(g_host_func_ran == 1);
+  EXPECT(cuStreamQuery(wp.stream_h2d) == CUDA_SUCCESS);
+  EXPECT(wp.slots[0].state == SLOT_FREE);
+  EXPECT(wp.waves[0].state == WAVE_FREE);
+  EXPECT(wp.waves[0].bound_slot == -1);
+  EXPECT(wp.waves[0].host_slab == NULL);
+
+  wp.waves[0].dev_compressed = saved_dev_compressed;
+  wave_pool_destroy(&wp, 0);
+  gpu_budget_destroy(budget);
+  return 0;
+}
+
+static int
+test_gds_slot_stays_bound_until_h2d_end(void)
+{
+  CUstream stream = NULL;
+  EXPECT(cuStreamCreate(&stream, CU_STREAM_DEFAULT) == CUDA_SUCCESS);
+
+  struct wave_pool wp;
+  memset(&wp, 0, sizeof(wp));
+  wp.use_gds = 1;
+  wp.n_slots = 1;
+  wp.waves[0].state = WAVE_H2D;
+  wp.waves[0].bound_slot = 0;
+  wp.slots[0].state = SLOT_BUSY;
+
+  EXPECT(create_wave_events(&wp.waves[0]) == 0);
+  EXPECT(cuEventRecord(wp.waves[0].ev.bulk_h2d_end, stream) == CUDA_SUCCESS);
+  EXPECT(cuStreamSynchronize(stream) == CUDA_SUCCESS);
+  g_host_func_ran = 0;
+  EXPECT(cuLaunchHostFunc(stream, sleeping_host_func, NULL) == CUDA_SUCCESS);
+  EXPECT(cuEventRecord(wp.waves[0].ev.h2d_end, stream) == CUDA_SUCCESS);
+
+  int changed = 0;
+  EXPECT(wave_pool_advance(&wp, &changed) == DAMACY_OK);
+  EXPECT(changed == 0);
+  EXPECT(wp.waves[0].bound_slot == 0);
+  EXPECT(wp.slots[0].state == SLOT_BUSY);
+  EXPECT(g_host_func_ran == 0);
+
+  EXPECT(cuStreamSynchronize(stream) == CUDA_SUCCESS);
+  destroy_wave_events(&wp.waves[0]);
+  cuStreamDestroy(stream);
+  return 0;
+}
+
 int
 main(void)
 {
@@ -218,6 +328,8 @@ main(void)
   }
   RUN(test_freed_wave_does_not_bind_until_next_tick);
   RUN(test_failed_h2d_submit_drains_before_unbind);
+  RUN(test_failed_bulk_h2d_submit_drains_before_unbind);
+  RUN(test_gds_slot_stays_bound_until_h2d_end);
   printf("all wave_pool_advance tests passed\n");
   return 0;
 }

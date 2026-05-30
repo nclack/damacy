@@ -70,9 +70,9 @@ slot_init(struct host_slab_slot* slot,
 void
 slot_destroy(struct host_slab_slot* slot, int cuda_skip);
 
-// SLOT_BUSY → SLOT_FREE. Called when bulk_h2d_end fires on stream_h2d
-// (the host bytes have been consumed by the GPU copy) or from the
-// failure cleanup path.
+// SLOT_BUSY → SLOT_FREE. Called when compressed input is consumed
+// (bulk_h2d_end for host staging, h2d_end for GDS) or from the failure
+// cleanup path.
 void
 slot_release(struct host_slab_slot* slot);
 
