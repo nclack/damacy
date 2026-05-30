@@ -570,39 +570,72 @@ wave_mark_h2d(struct damacy_wave* wave)
   wave->state = WAVE_H2D;
 }
 
-// Bulk H2D, GPU parse on stream_h2d, then h2d_end. stream_decode gates
-// on h2d_end before nvcomp launch.
-static enum damacy_status
-kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
+struct h2d_submit_state
 {
-  damacy_nvtx_range_pushf("kick_h2d/w%td", wave_index_of(wp, wave));
-  enum damacy_status s;
-  // Set between phases where bulk_h2d_end has been recorded but h2d_end
-  // has not. On those failures the cleanup path records h2d_end so the
-  // polling state machine doesn't hang on a never-recorded event.
-  int needs_end_record = 0;
+  uint8_t stream_work_queued;
+};
 
-  s = submit_bulk_h2d(wp, wave);
-  if (s != DAMACY_OK)
-    goto Error;
-
-  needs_end_record = 1;
+static enum damacy_status
+prepare_h2d_parse_inputs(struct wave_pool* wp, struct damacy_wave* wave)
+{
   if (!wave_chunks_eligible(wp, wave)) {
     // Probe gap (e.g. all-fill preceding waves never seeded the layout
     // cache) or unsupported dont_split=0 — not garbage in compressed
     // bytes, so DAMACY_INVAL rather than DAMACY_DECODE.
     log_error("blosc1: wave has a BLOSC_ZSTD chunk with unprobed layout "
               "or dont_split=0; cannot parse on device");
-    s = DAMACY_INVAL;
-    goto Error;
+    return DAMACY_INVAL;
   }
-  s = prepare_decode_caps(wp, wave);
+
+  enum damacy_status s = prepare_decode_caps(wp, wave);
+  if (s != DAMACY_OK)
+    return s;
+
+  build_gpu_parse_chunks(wp, wave);
+  return DAMACY_OK;
+}
+
+static enum damacy_status
+submit_h2d_and_parse(struct wave_pool* wp,
+                     struct damacy_wave* wave,
+                     struct h2d_submit_state* state)
+{
+  state->stream_work_queued = 0;
+
+  enum damacy_status s = submit_bulk_h2d(wp, wave);
+  if (s != DAMACY_OK)
+    return s;
+
+  state->stream_work_queued = 1;
+  return gpu_parse(wp, wave);
+}
+
+static enum damacy_status
+drain_failed_h2d_submit(struct wave_pool* wp,
+                        const struct h2d_submit_state* state)
+{
+  if (!state->stream_work_queued)
+    return DAMACY_OK;
+
+  // The caller releases the bound slot on kick_h2d failure. If stream_h2d work
+  // was already queued, drain it first so the slot's host/device staging memory
+  // is not recycled while the stream can still touch it.
+  CUresult r = cuStreamSynchronize(wp->stream_h2d);
+  return r == CUDA_SUCCESS ? DAMACY_OK : DAMACY_CUDA;
+}
+
+// Bulk H2D, GPU parse on stream_h2d, then h2d_end. stream_decode gates
+// on h2d_end before nvcomp launch.
+static enum damacy_status
+kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
+{
+  damacy_nvtx_range_pushf("kick_h2d/w%td", wave_index_of(wp, wave));
+  struct h2d_submit_state submit = { 0 };
+  enum damacy_status s = prepare_h2d_parse_inputs(wp, wave);
   if (s != DAMACY_OK)
     goto Error;
 
-  build_gpu_parse_chunks(wp, wave);
-  needs_end_record = 0; // gpu_parse records h2d_end itself
-  s = gpu_parse(wp, wave);
+  s = submit_h2d_and_parse(wp, wave, &submit);
   if (s != DAMACY_OK)
     goto Error;
 
@@ -613,12 +646,9 @@ kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
 Error:
   // Record IO metric on the failure path too so it doesn't bias rolling totals.
   record_io_metric(wp, wave);
-  if (needs_end_record) {
-    // Keep the polling state machine from hanging on a never-recorded
-    // h2d_end. submit_bulk_h2d failed before bulk_h2d_end was recorded,
-    // so this branch handles only the post-bulk_h2d failures.
-    cuEventRecord(wave->ev.h2d_end, wp->stream_h2d);
-  }
+  enum damacy_status drain = drain_failed_h2d_submit(wp, &submit);
+  if (drain != DAMACY_OK)
+    s = drain;
   damacy_nvtx_range_pop(); // kick_h2d
   return s;
 }
@@ -1005,9 +1035,8 @@ bind_slot_to_wave(struct wave_pool* wp, struct damacy_wave* wave, int slot_idx)
   build_assemble_meta(wp, wave);
   enum damacy_status s = kick_h2d(wp, wave);
   if (s != DAMACY_OK) {
-    // kick_h2d failed before recording bulk_h2d_end (or after, but
-    // either way the slot is no longer in flight on the GPU since the
-    // wave never reaches WAVE_H2D's poll). Release the slot.
+    // kick_h2d drains any submitted stream_h2d work before returning failure,
+    // so the bound staging slot can safely return to the pool.
     wave_unbind_slot(wp, wave, NULL);
   }
   damacy_nvtx_range_pop();
