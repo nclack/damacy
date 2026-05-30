@@ -451,39 +451,49 @@ test_lookahead_backpressure(void)
   int64_t shape[2] = { 4, 8 }, inner[2] = { 2, 4 }, shard[2] = { 4, 8 };
   EXPECT(fixture_write_zarr(p, shape, inner, shard, 2, "uint16", 0) == 0);
 
-  // samples_per_batch=1, lookahead_samples=2 → lookahead cap of 2 samples.
+  // samples_per_batch=1, lookahead_samples=2 -> lookahead cap of 2 samples.
   struct damacy_config cfg = mk_cfg(root, 1, 4, 8);
   cfg.lookahead_samples = 2;
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
-  // Try to push 3 samples; only 2 should land before AGAIN.
-  struct damacy_sample samples[3] = {
-    mk_sample(p, 0, 4, 0, 8),
-    mk_sample(p, 0, 4, 0, 8),
-    mk_sample(p, 0, 4, 0, 8),
+  // The prefetcher can concurrently move up to lookahead_samples entries out
+  // of the lookahead queue while damacy_push holds the scheduler lock. Push
+  // past lookahead + prefetch staging so backpressure is deterministic.
+  enum
+  {
+    n_samples = 5
   };
-  struct damacy_sample_slice slice = { .beg = samples, .end = samples + 3 };
+  struct damacy_sample samples[n_samples];
+  for (size_t i = 0; i < n_samples; ++i)
+    samples[i] = mk_sample(p, 0, 4, 0, 8);
+
+  struct damacy_sample_slice slice = { .beg = samples,
+                                       .end = samples + n_samples };
   struct damacy_push_result pr = damacy_push(d, slice);
   EXPECT(pr.status == DAMACY_AGAIN);
-  EXPECT(pr.unconsumed.beg == samples + 2);
-  EXPECT(pr.unconsumed.end == samples + 3);
+  size_t pushed = (size_t)(pr.unconsumed.beg - samples);
+  EXPECT(pushed >= cfg.lookahead_samples);
+  EXPECT(pushed < n_samples);
+  EXPECT(pr.unconsumed.end == samples + n_samples);
 
-  // Pop one batch to free up a slot (and a lookahead spot).
+  // Drain the accepted prefix, then push the saved suffix into an empty
+  // pipeline. That verifies callers can resume from unconsumed without
+  // depending on the prefetcher's exact drain timing.
   struct damacy_batch* b = NULL;
-  EXPECT(damacy_pop(d, &b) == DAMACY_OK);
-  damacy_release(d, b);
+  for (size_t i = 0; i < pushed; ++i) {
+    EXPECT(damacy_pop(d, &b) == DAMACY_OK);
+    damacy_release(d, b);
+  }
 
-  // Now push the rest — should succeed.
   pr = damacy_push(d, pr.unconsumed);
   EXPECT(pr.status == DAMACY_OK);
   EXPECT(pr.unconsumed.beg == pr.unconsumed.end);
 
-  // Drain the remaining batches.
-  EXPECT(damacy_pop(d, &b) == DAMACY_OK);
-  damacy_release(d, b);
-  EXPECT(damacy_pop(d, &b) == DAMACY_OK);
-  damacy_release(d, b);
+  for (size_t i = pushed; i < n_samples; ++i) {
+    EXPECT(damacy_pop(d, &b) == DAMACY_OK);
+    damacy_release(d, b);
+  }
 
   damacy_destroy(d);
   fixture_rm_tree(root);
