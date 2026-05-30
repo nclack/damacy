@@ -53,17 +53,21 @@ test_commit_and_find_oldest_work(void)
     .n_read_op_groups = 2,
   };
 
-  render_job_commit_plan(&pool.jobs[0], 0, 11, &out);
-  render_job_commit_plan(&pool.jobs[1], 1, 10, &out);
-  EXPECT(render_job_has_work(&pool.jobs[0]));
+  struct render_job* j0 = render_job_pool_for_batch_slot(&pool, 0);
+  struct render_job* j1 = render_job_pool_for_batch_slot(&pool, 1);
+  EXPECT(j0);
+  EXPECT(j1);
+  render_job_commit_plan(j0, 0, 11, &out);
+  render_job_commit_plan(j1, 1, 10, &out);
+  EXPECT(render_job_has_work(j0));
   EXPECT(find_render_job_with_work(&pool) == 1);
 
-  pool.jobs[1].n_chunks_dispatched = 3;
+  j1->n_chunks_dispatched = 3;
   EXPECT(find_render_job_with_work(&pool) == 0);
 
-  render_job_finish(&pool.jobs[0]);
-  EXPECT(pool.jobs[0].state == RENDER_JOB_FREE);
-  EXPECT(pool.jobs[0].n_chunks == 0);
+  render_job_finish(j0);
+  EXPECT(j0->state == RENDER_JOB_FREE);
+  EXPECT(j0->n_chunks == 0);
   EXPECT(find_render_job_with_work(&pool) == -1);
   return 0;
 }

@@ -57,8 +57,39 @@ render_job_pool_destroy(struct render_job_pool* pool, int cuda_skip)
 {
   if (!pool)
     return;
-  for (int i = 0; i < 2; ++i)
+  for (int i = 0; i < DAMACY_N_BATCH_SLOTS; ++i)
     render_job_destroy(&pool->jobs[i], cuda_skip);
+}
+
+struct render_job*
+render_job_pool_for_batch_slot(struct render_job_pool* pool,
+                               uint16_t batch_slot_idx)
+{
+  return render_job_pool_get(pool, batch_slot_idx);
+}
+
+const struct render_job*
+render_job_pool_for_batch_slot_const(const struct render_job_pool* pool,
+                                     uint16_t batch_slot_idx)
+{
+  return render_job_pool_get_const(pool, batch_slot_idx);
+}
+
+struct render_job*
+render_job_pool_get(struct render_job_pool* pool, uint16_t render_job_idx)
+{
+  if (!pool || render_job_idx >= DAMACY_N_BATCH_SLOTS)
+    return NULL;
+  return &pool->jobs[render_job_idx];
+}
+
+const struct render_job*
+render_job_pool_get_const(const struct render_job_pool* pool,
+                          uint16_t render_job_idx)
+{
+  if (!pool || render_job_idx >= DAMACY_N_BATCH_SLOTS)
+    return NULL;
+  return &pool->jobs[render_job_idx];
 }
 
 void
@@ -137,8 +168,8 @@ find_render_job_with_work(const struct render_job_pool* pool)
 {
   int best = -1;
   uint64_t best_id = UINT64_MAX;
-  for (int i = 0; i < 2; ++i) {
-    const struct render_job* job = &pool->jobs[i];
+  for (int i = 0; i < DAMACY_N_BATCH_SLOTS; ++i) {
+    const struct render_job* job = render_job_pool_get_const(pool, (uint16_t)i);
     if (render_job_has_work(job) && job->batch_id < best_id) {
       best = i;
       best_id = job->batch_id;

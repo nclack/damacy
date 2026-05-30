@@ -72,10 +72,14 @@ damacy_release(struct damacy* self, struct damacy_batch* b)
     return;
   }
   uint16_t s = b->slot_idx;
-  if (s >= 2) {
+  if (s >= DAMACY_N_BATCH_SLOTS) {
     log_warn("damacy_release: slot_idx=%u out of range", (unsigned)s);
     return;
   }
+  struct render_job* job =
+    render_job_pool_for_batch_slot(&self->render_jobs, s);
+  if (!job)
+    return;
   scheduler_lock(self->sched);
   if (self->batch_pool.slots[s].state != BATCH_HELD) {
     log_warn("damacy_release: slot %u not HELD (state=%d); double release?",
@@ -85,7 +89,7 @@ damacy_release(struct damacy* self, struct damacy_batch* b)
     return;
   }
   batch_slot_reset_for_reuse(&self->batch_pool.slots[s]);
-  render_job_reset(&self->render_jobs.jobs[s]);
+  render_job_reset(job);
   scheduler_unlock(self->sched);
 }
 
@@ -104,10 +108,14 @@ damacy_release_event(struct damacy* self, struct damacy_batch* b, void* event)
     return DAMACY_INVAL;
   }
   uint16_t s = b->slot_idx;
-  if (s >= 2) {
+  if (s >= DAMACY_N_BATCH_SLOTS) {
     log_warn("damacy_release_event: slot_idx=%u out of range", (unsigned)s);
     return DAMACY_INVAL;
   }
+  struct render_job* job =
+    render_job_pool_for_batch_slot(&self->render_jobs, s);
+  if (!job)
+    return DAMACY_INVAL;
 
   // Push the retained-primary context so cuStreamWaitEvent / cuEventRecord
   // land on the right device when the caller is on another thread.
@@ -137,7 +145,7 @@ damacy_release_event(struct damacy* self, struct damacy_batch* b, void* event)
     // Deferred wait couldn't be installed; fall back to immediate release
     // so the slot doesn't leak (caller would block forever in pop).
     batch_slot_reset_for_reuse(slot);
-    render_job_reset(&self->render_jobs.jobs[s]);
+    render_job_reset(job);
     r = DAMACY_CUDA;
     goto Done;
   }
@@ -145,7 +153,7 @@ damacy_release_event(struct damacy* self, struct damacy_batch* b, void* event)
 
   batch_slot_reset_for_reuse(slot);
   slot->deferred_release_pending = 1;
-  render_job_reset(&self->render_jobs.jobs[s]);
+  render_job_reset(job);
   r = DAMACY_OK;
 
 Done:
@@ -233,7 +241,7 @@ damacy_batch_info(const struct damacy_batch* b, struct damacy_batch_info* out)
   if (!out)
     return;
   memset(out, 0, sizeof(*out));
-  if (!b || !b->d || b->slot_idx >= 2)
+  if (!b || !b->d || b->slot_idx >= DAMACY_N_BATCH_SLOTS)
     return;
   const struct damacy* self = b->d;
   const struct damacy_batch_slot* slot = &self->batch_pool.slots[b->slot_idx];

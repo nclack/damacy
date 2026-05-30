@@ -136,9 +136,11 @@ plan_reserve(struct damacy* self,
 enum damacy_status
 plan_run(struct damacy* self, uint16_t slot_idx, float* out_elapsed_ms)
 {
+  struct render_job* job =
+    render_job_pool_for_batch_slot(&self->render_jobs, slot_idx);
+  CHECK(InvalidArg, job);
   struct damacy_batch_slot* slot = &self->batch_pool.slots[slot_idx];
   CHECK(InvalidArg, slot->state == BATCH_PLANNING);
-  struct render_job* job = &self->render_jobs.jobs[slot_idx];
   render_job_reset(job);
   struct planner_output plan_out =
     render_job_planner_output(job, self->cfg.samples_per_batch);
@@ -169,11 +171,17 @@ plan_commit(struct damacy* self,
             int* changed)
 {
   metric_record(&self->stats.plan, elapsed_ms, 0, 0);
+  struct render_job* job =
+    render_job_pool_for_batch_slot(&self->render_jobs, slot_idx);
+  if (!job) {
+    self->failed_status = DAMACY_INVAL;
+    return DAMACY_INVAL;
+  }
   struct damacy_batch_slot* slot = &self->batch_pool.slots[slot_idx];
   if (run_status != DAMACY_OK) {
     free_slot_stage_samples(slot);
     batch_slot_reset_for_reuse(slot);
-    render_job_reset(&self->render_jobs.jobs[slot_idx]);
+    render_job_reset(job);
     self->failed_status = run_status;
     if (changed)
       *changed = 1;
@@ -183,7 +191,6 @@ plan_commit(struct damacy* self,
     self->failed_status = DAMACY_INVAL;
     return DAMACY_INVAL;
   }
-  struct render_job* job = &self->render_jobs.jobs[slot_idx];
   slot->n_chunks = job->n_chunks;
   slot->chunks_remaining = (int32_t)slot->n_chunks;
 
@@ -271,7 +278,7 @@ planning_capacity_locked(struct damacy* self)
     if (slot->n_samples < self->cfg.samples_per_batch)
       cap += self->cfg.samples_per_batch - slot->n_samples;
   }
-  for (int s = 0; s < 2; ++s) {
+  for (int s = 0; s < DAMACY_N_BATCH_SLOTS; ++s) {
     if (self->batch_pool.slots[s].state == BATCH_FREE)
       cap += self->cfg.samples_per_batch;
   }

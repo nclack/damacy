@@ -44,7 +44,9 @@ struct render_job
 
 struct render_job_pool
 {
-  struct render_job jobs[2];
+  // V1 ownership: each batch slot has one paired render job with the same
+  // index. Keep all direct indexing behind the helpers below.
+  struct render_job jobs[DAMACY_N_BATCH_SLOTS];
 };
 
 struct store_read;
@@ -78,6 +80,21 @@ render_job_destroy(struct render_job* job, int cuda_skip);
 
 void
 render_job_pool_destroy(struct render_job_pool* pool, int cuda_skip);
+
+struct render_job*
+render_job_pool_for_batch_slot(struct render_job_pool* pool,
+                               uint16_t batch_slot_idx);
+
+const struct render_job*
+render_job_pool_for_batch_slot_const(const struct render_job_pool* pool,
+                                     uint16_t batch_slot_idx);
+
+struct render_job*
+render_job_pool_get(struct render_job_pool* pool, uint16_t render_job_idx);
+
+const struct render_job*
+render_job_pool_get_const(const struct render_job_pool* pool,
+                          uint16_t render_job_idx);
 
 void
 render_job_reset(struct render_job* job);

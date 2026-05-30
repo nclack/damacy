@@ -47,7 +47,7 @@ wave_index_of(const struct wave_pool* wp, const struct damacy_wave* wave)
 static inline struct render_job*
 wave_job(const struct wave_pool* wp, const struct damacy_wave* wave)
 {
-  return &wp->render_jobs->jobs[wave->render_job_idx];
+  return render_job_pool_get(wp->render_jobs, wave->render_job_idx);
 }
 
 int
@@ -864,7 +864,11 @@ wave_pool_peel_reserve(struct wave_pool* wp,
   struct wave_pool_peel_ticket t = { .slot_idx = -1,
                                      .n_reads = 0,
                                      .consumed = 0 };
-  struct render_job* job = &wp->render_jobs->jobs[render_job_idx];
+  struct render_job* job = render_job_pool_get(wp->render_jobs, render_job_idx);
+  if (!job) {
+    *err = DAMACY_INVAL;
+    return t;
+  }
   if (!render_job_has_work(job))
     return t;
   int slot_idx = host_slab_find_free(wp->slots, wp->n_slots);
@@ -930,8 +934,8 @@ wave_pool_peel_commit(struct wave_pool* wp,
     return DAMACY_OK;
   struct host_slab_slot* hs = &wp->slots[t->slot_idx];
   if (t->n_reads > 0 && ev.seq == 0) {
-    render_job_rollback_wave(&wp->render_jobs->jobs[hs->render_job_idx],
-                             &t->desc);
+    render_job_rollback_wave(
+      render_job_pool_get(wp->render_jobs, hs->render_job_idx), &t->desc);
     wp->stats->waves_emitted--;
     wp->stats->chunks_dispatched -= hs->n_chunks;
     slot_release(hs);
@@ -957,6 +961,12 @@ bind_slot_to_wave(struct wave_pool* wp, struct damacy_wave* wave, int slot_idx)
   struct host_slab_slot* hs = &wp->slots[slot_idx];
   damacy_nvtx_range_pushf(
     "bind/w%td/slot%d", wave_index_of(wp, wave), slot_idx);
+  struct render_job* job =
+    render_job_pool_get(wp->render_jobs, hs->render_job_idx);
+  if (!job) {
+    damacy_nvtx_range_pop();
+    return DAMACY_INVAL;
+  }
   metric_record(
     &wp->stats->bind_wait, platform_toc(&hs->io_clock) * 1000.0f, 0, 0);
   wave->bound_slot = (int8_t)slot_idx;
@@ -978,7 +988,6 @@ bind_slot_to_wave(struct wave_pool* wp, struct damacy_wave* wave, int slot_idx)
   wave->decomp_out_bytes = 0;
   wave->assemble_out_bytes = 0;
 
-  struct render_job* job = &wp->render_jobs->jobs[hs->render_job_idx];
   for (uint32_t i = 0; i < wave->n_chunks; ++i) {
     struct chunk_plan* c = &job->chunk_plans[wave->batch_chunk_offset + i];
     wave->decomp_in_bytes += c->compressed_nbytes;
@@ -1095,7 +1104,8 @@ retire_posted_wave(struct wave_pool* wp, struct damacy_wave* wave, int* changed)
   struct damacy_batch_slot* batch = &wp->pool->slots[o.batch_pool_slot];
   batch_slot_consume_chunks(batch, o.n_chunks_consumed);
   if (batch->state == BATCH_READY)
-    render_job_finish(&wp->render_jobs->jobs[wave->render_job_idx]);
+    render_job_finish(
+      render_job_pool_get(wp->render_jobs, wave->render_job_idx));
   mark_changed(changed);
   return o.status;
 }

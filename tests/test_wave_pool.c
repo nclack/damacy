@@ -19,6 +19,12 @@
 #include <stdio.h>
 #include <string.h>
 
+static struct render_job*
+job0(struct render_job_pool* jobs)
+{
+  return render_job_pool_for_batch_slot(jobs, 0);
+}
+
 // Construct just enough wave_pool state for peel_commit to run. The slot
 // is wired as if peel_reserve had just been called: SLOT_PEELING, n_chunks
 // set, batch_pool_slot points at slot 0 of the batch pool. Counters are
@@ -48,7 +54,7 @@ setup_post_reserve(struct wave_pool* wp,
   wp->slots[0].batch_pool_slot = 0;
   wp->slots[0].n_chunks = n_chunks;
 
-  jobs->jobs[0].n_chunks_dispatched = n_chunks;
+  job0(jobs)->n_chunks_dispatched = n_chunks;
   stats->waves_emitted = 1;
   stats->chunks_dispatched = n_chunks;
 }
@@ -79,7 +85,7 @@ test_peel_commit_rollback_once(void)
   EXPECT(t.consumed == 1);
   EXPECT(stats.waves_emitted == 0);
   EXPECT(stats.chunks_dispatched == 0);
-  EXPECT(jobs.jobs[0].n_chunks_dispatched == 0);
+  EXPECT(job0(&jobs)->n_chunks_dispatched == 0);
   EXPECT(wp.slots[0].state == SLOT_FREE);
 
   // Second call must NOT decrement again — that would underflow.
@@ -91,7 +97,7 @@ test_peel_commit_rollback_once(void)
   EXPECT(changed == 0);
   EXPECT(stats.waves_emitted == 0);
   EXPECT(stats.chunks_dispatched == 0);
-  EXPECT(jobs.jobs[0].n_chunks_dispatched == 0);
+  EXPECT(job0(&jobs)->n_chunks_dispatched == 0);
   return 0;
 }
 
@@ -151,7 +157,7 @@ test_peel_commit_rolls_back_groups(void)
   setup_post_reserve(&wp, &batch_pool, &jobs, &stats, &slot, n_chunks);
 
   // Simulate reserve having advanced from group 7 to group 9.
-  jobs.jobs[0].n_groups_dispatched = 9;
+  job0(&jobs)->n_groups_dispatched = 9;
 
   struct wave_pool_peel_ticket t = { .slot_idx = 0,
                                      .n_reads = 1,
@@ -164,7 +170,7 @@ test_peel_commit_rolls_back_groups(void)
   int changed = 0;
   EXPECT(wave_pool_peel_commit(&wp, &t, ev, &changed) == DAMACY_IO);
   EXPECT(changed == 1);
-  EXPECT(jobs.jobs[0].n_groups_dispatched == 7);
+  EXPECT(job0(&jobs)->n_groups_dispatched == 7);
   return 0;
 }
 
@@ -201,11 +207,12 @@ init_reserve_fixture(struct reserve_fixture* f,
   f->wp.slots[0].cap = host_cap;
   f->wp.slots[0].buf = f->host_buf;
   f->wp.slots[0].store_reads = f->store_reads;
-  f->jobs.jobs[0].state = RENDER_JOB_READY;
-  f->jobs.jobs[0].batch_pool_slot = 0;
-  f->jobs.jobs[0].chunk_plans = f->chunk_plans;
-  f->jobs.jobs[0].read_ops = f->read_ops;
-  f->jobs.jobs[0].read_op_groups = f->groups;
+  struct render_job* job = job0(&f->jobs);
+  job->state = RENDER_JOB_READY;
+  job->batch_pool_slot = 0;
+  job->chunk_plans = f->chunk_plans;
+  job->read_ops = f->read_ops;
+  job->read_op_groups = f->groups;
 }
 
 // dev_cap blocks group 1 after group 0 lands; group 1 must defer whole.
@@ -229,8 +236,8 @@ test_peel_reserve_defers_oversize_group(void)
   f.groups[1] = (struct read_op_group){
     .read_op_idx = 1, .first_chunk = 1, .n_chunks = 1, .total_decompressed = 200
   };
-  f.jobs.jobs[0].n_chunks = 2;
-  f.jobs.jobs[0].n_read_op_groups = 2;
+  job0(&f.jobs)->n_chunks = 2;
+  job0(&f.jobs)->n_read_op_groups = 2;
 
   enum damacy_status err = DAMACY_OK;
   struct wave_pool_peel_ticket t = wave_pool_peel_reserve(&f.wp, 0, &err);
@@ -239,8 +246,8 @@ test_peel_reserve_defers_oversize_group(void)
   EXPECT(t.slot_idx == 0);
   EXPECT(t.n_reads == 1);
   EXPECT(t.desc.prev_n_groups_dispatched == 0);
-  EXPECT(f.jobs.jobs[0].n_chunks_dispatched == 1);
-  EXPECT(f.jobs.jobs[0].n_groups_dispatched == 1);
+  EXPECT(job0(&f.jobs)->n_chunks_dispatched == 1);
+  EXPECT(job0(&f.jobs)->n_groups_dispatched == 1);
   EXPECT(f.wp.slots[0].n_chunks == 1);
   EXPECT(f.wp.slots[0].state == SLOT_PEELING);
   return 0;
@@ -260,8 +267,8 @@ test_peel_reserve_errors_when_first_group_too_big(void)
   f.groups[0] = (struct read_op_group){
     .read_op_idx = 0, .first_chunk = 0, .n_chunks = 1, .total_decompressed = 100
   };
-  f.jobs.jobs[0].n_chunks = 1;
-  f.jobs.jobs[0].n_read_op_groups = 1;
+  job0(&f.jobs)->n_chunks = 1;
+  job0(&f.jobs)->n_read_op_groups = 1;
 
   enum damacy_status err = DAMACY_OK;
   damacy_log_set_quiet(1);
@@ -270,8 +277,8 @@ test_peel_reserve_errors_when_first_group_too_big(void)
 
   EXPECT(err == DAMACY_BUDGET);
   EXPECT(t.slot_idx == -1);
-  EXPECT(f.jobs.jobs[0].n_chunks_dispatched == 0);
-  EXPECT(f.jobs.jobs[0].n_groups_dispatched == 0);
+  EXPECT(job0(&f.jobs)->n_chunks_dispatched == 0);
+  EXPECT(job0(&f.jobs)->n_groups_dispatched == 0);
   return 0;
 }
 

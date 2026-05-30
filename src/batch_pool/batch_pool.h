@@ -50,7 +50,7 @@ struct damacy_batch_slot
 
 struct damacy_batch_pool
 {
-  struct damacy_batch_slot slots[2];
+  struct damacy_batch_slot slots[DAMACY_N_BATCH_SLOTS];
   uint64_t n_bytes;                     // size of one slot's output
   uint8_t rank;                         // includes leading N axis
   int64_t shape[DAMACY_MAX_RANK + 1];   // [samples_per_batch, ...sample_axes]

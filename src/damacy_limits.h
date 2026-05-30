@@ -37,6 +37,10 @@ _Static_assert(DAMACY_DEFAULT_READ_OP_MAX_BYTES <= UINT32_MAX,
 // the device-side decode concurrency depth.
 #define DAMACY_N_WAVES 2
 
+// Caller-visible batch slots. The current orchestrator is double-buffered:
+// one slot may be held by the caller while the other accumulates/renders.
+#define DAMACY_N_BATCH_SLOTS 2
+
 // Default depth of the pinned-host slab pool, in waves. = N_WAVES is
 // the minimum; bumping higher lets IO for upcoming waves prefill before
 // a wave struct frees, useful for slow / variable-latency IO backends.

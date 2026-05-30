@@ -346,14 +346,15 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     CHECK(Fail, self->chunk_layout_cache);
   }
 
-  for (int b = 0; b < 2; ++b)
+  for (int b = 0; b < DAMACY_N_BATCH_SLOTS; ++b)
     CHECK(Fail,
           batch_slot_init(&self->batch_pool.slots[b], cfg->samples_per_batch) ==
             0);
-  for (int b = 0; b < 2; ++b)
-    CHECK(Fail,
-          render_job_init(&self->render_jobs.jobs[b], cfg->samples_per_batch) ==
-            0);
+  for (int b = 0; b < DAMACY_N_BATCH_SLOTS; ++b) {
+    struct render_job* job =
+      render_job_pool_for_batch_slot(&self->render_jobs, (uint16_t)b);
+    CHECK(Fail, render_job_init(job, cfg->samples_per_batch) == 0);
+  }
 
   s = DAMACY_OOM;
   // Pin the calling thread to the GPU's NUMA node for the duration of
