@@ -25,7 +25,8 @@
     "lookahead_batches": 4,
     "n_io_threads": 8,
     "max_gpu_memory_mb": 3072,
-    "n_zarrs_meta_cache": 4096,
-    "n_shards_meta_cache": 16384
+    "n_array_meta_cache": 4096,
+    "n_shard_index_cache": 16384,
+    "n_chunk_layout_cache": 4096
   }
 }

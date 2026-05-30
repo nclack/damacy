@@ -8,8 +8,9 @@
 // scheduler; the planner zeroes them.
 #pragma once
 
-#include "damacy.h"                 // damacy_status, damacy_sample, damacy_aabb
-#include "damacy_limits.h"          // DAMACY_MAX_RANK
+#include "damacy.h"        // damacy_status, damacy_sample, damacy_aabb
+#include "damacy_limits.h" // DAMACY_MAX_RANK
+#include "prefetch/prefetch_handle.h"
 #include "zarr/zarr_chunk_layout.h" // struct chunk_layout
 #include "zarr/zarr_metadata.h"     // DAMACY_MAX_DTYPE_BYTES
 
@@ -21,8 +22,7 @@ extern "C"
 {
 #endif
 
-  struct zarr_meta_cache;
-  struct zarr_shard_cache;
+  struct prefetch_cache;
   struct path_intern;
 
   // Page-aligned IO operation. Multiple chunk_plans may share one
@@ -125,15 +125,29 @@ extern "C"
   int read_op_group_iterator_next(struct read_op_group_iterator* it,
                                   struct read_op_group* out);
 
+  struct planner_sample
+  {
+    const char* uri;
+    struct damacy_aabb aabb;
+    struct prefetch_handle h_meta;
+    struct prefetch_handle* h_shards;
+    uint32_t n_shards;
+    struct prefetch_handle h_layout;
+  };
+
   struct planner_config
   {
-    struct zarr_meta_cache* meta_cache;
-    struct zarr_shard_cache* shard_cache;
+    struct prefetch_cache* array_meta_cache;
+    struct prefetch_cache* chunk_layout_cache;
+    struct prefetch_cache* shard_index_cache;
+    // Source dtype lacking a cast path to this fails planner_plan with
+    // DAMACY_DTYPE.
+    enum damacy_dtype dst_dtype;
     // Page alignment used for read_op.file_offset / nbytes. Typically
     // platform_page_alignment(), captured once at create.
     uint64_t page_alignment;
     // Runtime ceiling on per-chunk uncompressed bytes. Chunks exceeding
-    // this fail planner_plan with DAMACY_INVAL — earlier than the parse
+    // this fail planner_plan with DAMACY_BUDGET — earlier than the parse
     // kernel's nblocks check, and surfaces sample.uri to the caller.
     // 0 means "no extra cap beyond DAMACY_MAX_CHUNK_BYTES".
     uint64_t max_chunk_uncompressed_bytes;
@@ -199,7 +213,7 @@ extern "C"
   // a pointer across all emitted read_ops, and the storage lives until
   // planner_destroy.
   enum damacy_status planner_plan(struct planner* p,
-                                  const struct damacy_sample* samples,
+                                  const struct planner_sample* samples,
                                   uint32_t n_samples,
                                   uint16_t batch_pool_slot,
                                   const int64_t* dst_strides, // [rank+1]

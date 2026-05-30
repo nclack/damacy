@@ -14,6 +14,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 // shape=[64,1024], inner=[32,128], shard=[64,512] => n_inner_per_shard = 8.
 static const char* MINIMAL_ZARR_JSON =
@@ -55,10 +56,10 @@ struct fixture
 {
   char* root;
   struct store* store;
-  struct array_meta_fetcher amf;
-  struct prefetch_cache* amc;
-  struct shard_index_fetcher sif;
-  struct prefetch_cache* sic;
+  struct array_meta_fetcher array_meta_fetcher;
+  struct prefetch_cache* array_meta_cache;
+  struct shard_index_fetcher shard_index_fetcher;
+  struct prefetch_cache* shard_index_cache;
 };
 
 static int
@@ -104,37 +105,38 @@ fixture_setup(struct fixture* fx)
   fx->store = store_fs_create(&sc);
   EXPECT(fx->store);
 
-  array_meta_fetcher_init(&fx->amf, fx->store);
+  array_meta_fetcher_init(&fx->array_meta_fetcher, fx->store);
   struct prefetch_cache_config amc_cfg = {
     .capacity = 4,
     .max_probe = 16,
     .ops = &array_meta_ops,
-    .fetcher = &fx->amf.base,
+    .fetcher = &fx->array_meta_fetcher.base,
     .executor = &SYNC_EXECUTOR,
   };
-  fx->amc = prefetch_cache_create(&amc_cfg);
-  EXPECT(fx->amc);
+  fx->array_meta_cache = prefetch_cache_create(&amc_cfg);
+  EXPECT(fx->array_meta_cache);
 
-  shard_index_fetcher_init(&fx->sif, fx->store, fx->amc);
+  shard_index_fetcher_init(
+    &fx->shard_index_fetcher, fx->store, fx->array_meta_cache);
   struct prefetch_cache_config sic_cfg = {
     .capacity = 8,
     .max_probe = 16,
     .ops = &shard_index_ops,
-    .fetcher = &fx->sif.base,
+    .fetcher = &fx->shard_index_fetcher.base,
     .executor = &SYNC_EXECUTOR,
   };
-  fx->sic = prefetch_cache_create(&sic_cfg);
-  EXPECT(fx->sic);
+  fx->shard_index_cache = prefetch_cache_create(&sic_cfg);
+  EXPECT(fx->shard_index_cache);
   return 0;
 }
 
 static void
 fixture_teardown(struct fixture* fx)
 {
-  if (fx->sic)
-    prefetch_cache_destroy(fx->sic);
-  if (fx->amc)
-    prefetch_cache_destroy(fx->amc);
+  if (fx->shard_index_cache)
+    prefetch_cache_destroy(fx->shard_index_cache);
+  if (fx->array_meta_cache)
+    prefetch_cache_destroy(fx->array_meta_cache);
   if (fx->store)
     store_destroy(fx->store);
   if (fx->root) {
@@ -148,8 +150,8 @@ warm_meta(struct fixture* fx, const char* uri)
 {
   struct prefetch_gate gate;
   prefetch_gate_init(&gate);
-  struct prefetch_handle h =
-    prefetch_cache_request(fx->amc, hash_fnv1a_str(uri), uri, 0, &gate);
+  struct prefetch_handle h = prefetch_cache_request(
+    fx->array_meta_cache, hash_fnv1a_str(uri), uri, 0, &gate);
   EXPECT(prefetch_handle_valid(h));
   EXPECT(prefetch_gate_is_ready(&gate));
   EXPECT(!prefetch_gate_has_error(&gate));
@@ -174,13 +176,14 @@ test_shard_index_parses_footer(void)
   struct prefetch_gate gate;
   prefetch_gate_init(&gate);
   struct prefetch_handle h = prefetch_cache_request(
-    fx.sic, shard_index_key_hash(&probe), &probe, 0, &gate);
+    fx.shard_index_cache, shard_index_key_hash(&probe), &probe, 0, &gate);
   EXPECT(prefetch_handle_valid(h));
   EXPECT(prefetch_gate_is_ready(&gate));
   EXPECT(!prefetch_gate_has_error(&gate));
 
   const struct shard_index_value* v =
-    (const struct shard_index_value*)prefetch_cache_try_get(fx.sic, h);
+    (const struct shard_index_value*)prefetch_cache_try_get(
+      fx.shard_index_cache, h);
   EXPECT(v);
   EXPECT(v->n_entries == 8);
   EXPECT(v->entries[0].offset == 0 && v->entries[0].nbytes == 50);
@@ -206,14 +209,58 @@ test_missing_shard_returns_notfound(void)
   struct prefetch_gate gate;
   prefetch_gate_init(&gate);
   struct prefetch_handle h = prefetch_cache_request(
-    fx.sic, shard_index_key_hash(&probe), &probe, 0, &gate);
+    fx.shard_index_cache, shard_index_key_hash(&probe), &probe, 0, &gate);
   EXPECT(prefetch_handle_valid(h));
   EXPECT(prefetch_gate_has_error(&gate));
 
   int err = 0;
-  EXPECT(prefetch_cache_query(fx.sic, h, NULL, &err) == PREFETCH_STATE_ERROR);
+  EXPECT(prefetch_cache_query(fx.shard_index_cache, h, NULL, &err) ==
+         PREFETCH_STATE_ERROR);
   EXPECT(err == DAMACY_NOTFOUND);
 
+  fixture_teardown(&fx);
+  return 0;
+}
+
+// Guards against aliasing EACCES to NOTFOUND (the prefetcher tolerates the
+// latter). Root bypasses chmod 0, so skip.
+static int
+test_unreadable_shard_returns_io(void)
+{
+  if (geteuid() == 0) {
+    log_info("skip test_unreadable_shard_returns_io: running as root");
+    return 0;
+  }
+
+  struct fixture fx = { 0 };
+  EXPECT(fixture_setup(&fx) == 0);
+  EXPECT(write_array(fx.root, "foo", MINIMAL_ZARR_JSON) == 0);
+  EXPECT(write_shard(fx.root, "foo", 0, 0) == 0);
+  EXPECT(warm_meta(&fx, "foo") == 0);
+
+  char dir[512];
+  snprintf(dir, sizeof dir, "%s/foo/c/0", fx.root);
+  EXPECT(chmod(dir, 0) == 0);
+
+  struct shard_index_key probe = {
+    .uri = "foo",
+    .shard_coord = { 0, 0 },
+    .rank = 2,
+  };
+  struct prefetch_gate gate;
+  prefetch_gate_init(&gate);
+  struct prefetch_handle h = prefetch_cache_request(
+    fx.shard_index_cache, shard_index_key_hash(&probe), &probe, 0, &gate);
+  EXPECT(prefetch_handle_valid(h));
+  EXPECT(prefetch_gate_has_error(&gate));
+
+  int err = 0;
+  EXPECT(prefetch_cache_query(fx.shard_index_cache, h, NULL, &err) ==
+         PREFETCH_STATE_ERROR);
+  EXPECT(err == DAMACY_IO);
+
+  // Restore mode so fixture_rm_tree can recurse.
+  chmod(dir, 0755);
   fixture_teardown(&fx);
   return 0;
 }
@@ -239,15 +286,15 @@ test_different_coords_are_separate_entries(void)
                                      .rank = 2 };
 
   struct prefetch_handle h00 = prefetch_cache_request(
-    fx.sic, shard_index_key_hash(&probe00), &probe00, 0, &gate);
+    fx.shard_index_cache, shard_index_key_hash(&probe00), &probe00, 0, &gate);
   struct prefetch_handle h01 = prefetch_cache_request(
-    fx.sic, shard_index_key_hash(&probe01), &probe01, 0, &gate);
+    fx.shard_index_cache, shard_index_key_hash(&probe01), &probe01, 0, &gate);
   EXPECT(prefetch_handle_valid(h00));
   EXPECT(prefetch_handle_valid(h01));
   EXPECT(h00.slot != h01.slot);
 
   struct prefetch_cache_stats st;
-  prefetch_cache_stats_get(fx.sic, &st);
+  prefetch_cache_stats_get(fx.shard_index_cache, &st);
   EXPECT(st.size == 2);
   EXPECT(st.counters.misses == 2);
 
@@ -271,14 +318,14 @@ test_dedup_same_uri_same_coord(void)
   prefetch_gate_init(&gate);
 
   struct prefetch_handle h1 = prefetch_cache_request(
-    fx.sic, shard_index_key_hash(&probe), &probe, 0, &gate);
+    fx.shard_index_cache, shard_index_key_hash(&probe), &probe, 0, &gate);
   struct prefetch_handle h2 = prefetch_cache_request(
-    fx.sic, shard_index_key_hash(&probe), &probe, 0, &gate);
+    fx.shard_index_cache, shard_index_key_hash(&probe), &probe, 0, &gate);
   EXPECT(h1.slot == h2.slot);
   EXPECT(h1.generation == h2.generation);
 
   struct prefetch_cache_stats st;
-  prefetch_cache_stats_get(fx.sic, &st);
+  prefetch_cache_stats_get(fx.shard_index_cache, &st);
   EXPECT(st.counters.hits == 1);
   EXPECT(st.counters.misses == 1);
 
@@ -291,6 +338,7 @@ main(void)
 {
   RUN(test_shard_index_parses_footer);
   RUN(test_missing_shard_returns_notfound);
+  RUN(test_unreadable_shard_returns_io);
   RUN(test_different_coords_are_separate_entries);
   RUN(test_dedup_same_uri_same_coord);
   log_info("all tests passed");

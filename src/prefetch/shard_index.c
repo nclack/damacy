@@ -131,11 +131,24 @@ shard_index_fetch(struct prefetch_fetcher* self_,
   }
 
   uint64_t file_n_bytes = 0;
-  if (store_stat(self->store, strbuf_cstr(&path), &file_n_bytes) ||
-      file_n_bytes == 0) {
-    strbuf_free(&path);
-    *out_err = DAMACY_NOTFOUND;
-    return 1;
+  {
+    enum store_stat_result sr =
+      store_stat(self->store, strbuf_cstr(&path), &file_n_bytes);
+    if (sr == STORE_STAT_NOT_FOUND) {
+      strbuf_free(&path);
+      *out_err = DAMACY_NOTFOUND;
+      return 1;
+    }
+    if (sr != STORE_STAT_OK) {
+      strbuf_free(&path);
+      *out_err = DAMACY_IO;
+      return 1;
+    }
+    if (file_n_bytes == 0) {
+      strbuf_free(&path);
+      *out_err = DAMACY_DECODE;
+      return 1;
+    }
   }
 
   struct zarr_shard_entry* entries = (struct zarr_shard_entry*)calloc(

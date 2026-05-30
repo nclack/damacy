@@ -119,7 +119,7 @@ Most `Config` knobs apply per rank. Aggregate cost on a node is
 | `max_gpu_memory_bytes` | GPU budget: wave buffers, decoder scratch, batch-output pool |
 | `host_buffer_waves` | pinned-host slab pool, in waves |
 | `n_io_threads` | I/O worker threads |
-| `n_zarrs_meta_cache`, `n_shards_meta_cache` | LRU caps for parsed metadata |
+| `n_array_meta_cache`, `n_shard_index_cache`, `n_chunk_layout_cache` | LRU caps for parsed metadata |
 
 Tune `n_io_threads` to your storage tier (NVMe pool, parallel
 filesystem, object store). When stacking multiple ranks on one GPU

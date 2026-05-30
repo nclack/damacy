@@ -125,8 +125,9 @@ extern "C"
 
     uint32_t n_io_threads;
 
-    uint32_t n_zarrs_meta_cache;
-    uint32_t n_shards_meta_cache;
+    uint32_t n_array_meta_cache;
+    uint32_t n_shard_index_cache;
+    uint32_t n_chunk_layout_cache;
 
     // AUTO resolves the GPU's host-NUMA node; DISABLED is a no-op;
     // PIN_TO forces `numa_node`.
@@ -228,13 +229,12 @@ extern "C"
   //   AGAIN     the lookahead queue filled mid-slice; caller should pop
   //             a batch (or wait) and retry with the returned suffix
   //   INVAL     bad arguments (samples.beg > samples.end, null d, etc.)
-  //   NOTFOUND  could not resolve a uri; result.unconsumed.beg points at it
-  //   DTYPE     zarr source dtype has no cast path to cfg.dtype;
-  //             result.unconsumed.beg points at the sample
-  //   RANK      sample rank incompatible with the resolved zarr's rank
+  //   RANK      sample rank incompatible with cfg.sample_rank
   //   SHUTDOWN  instance is in a failed state or being destroyed
-  // On any non-AGAIN error, the offending sample is at
-  // result.unconsumed.beg and was NOT consumed.
+  // Store-derived errors (missing uri, unsupported source dtype, per-array
+  // rank mismatch, decode failures) surface asynchronously from damacy_pop.
+  // On any push-side non-AGAIN error, the offending sample is at
+  // result.unconsumed.beg and was not consumed.
   struct damacy_push_result damacy_push(struct damacy* d,
                                         struct damacy_sample_slice samples);
 
@@ -337,8 +337,11 @@ extern "C"
     struct damacy_metric pop_wait; // user thread blocked on the scheduler cv
     struct damacy_metric flush_wait;
 
-    uint64_t zarr_meta_hits, zarr_meta_misses;
-    uint64_t shard_idx_hits, shard_idx_misses;
+    struct
+    {
+      uint64_t hits;
+      uint64_t misses;
+    } array_meta, shard_index, chunk_layout;
     uint64_t batches_emitted;
     uint64_t batches_truncated;
     uint64_t waves_emitted;

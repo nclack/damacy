@@ -54,8 +54,9 @@ validate_config(const struct damacy_config* cfg)
     cfg->tuning.host_buffer_waves == 0 ||
       (cfg->tuning.host_buffer_waves >= DAMACY_N_WAVES &&
        cfg->tuning.host_buffer_waves <= DAMACY_MAX_HOST_BUFFER_WAVES));
-  CHECK_SILENT(Invalid, cfg->tuning.n_zarrs_meta_cache > 0);
-  CHECK_SILENT(Invalid, cfg->tuning.n_shards_meta_cache > 0);
+  CHECK_SILENT(Invalid, cfg->tuning.n_array_meta_cache > 0);
+  CHECK_SILENT(Invalid, cfg->tuning.n_shard_index_cache > 0);
+  CHECK_SILENT(Invalid, cfg->tuning.n_chunk_layout_cache > 0);
   CHECK_SILENT(Invalid, damacy_dtype_bpe(cfg->dtype) > 0);
   CHECK_SILENT(Invalid, cfg->sample_rank > 0);
   CHECK_SILENT(Invalid, cfg->sample_rank <= DAMACY_MAX_RANK);

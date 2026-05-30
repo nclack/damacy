@@ -99,16 +99,19 @@ platform_file_size(platform_file* f)
   return (uint64_t)st.st_size;
 }
 
-int
+enum platform_stat_result
 platform_path_size(const char* path, uint64_t* out)
 {
   if (!path || !out)
-    return 1;
+    return PLATFORM_STAT_ERROR;
   struct stat st;
-  if (stat(path, &st) != 0)
-    return 1;
+  if (stat(path, &st) != 0) {
+    if (errno == ENOENT || errno == ENOTDIR)
+      return PLATFORM_STAT_NOT_FOUND;
+    return PLATFORM_STAT_ERROR;
+  }
   *out = (uint64_t)st.st_size;
-  return 0;
+  return PLATFORM_STAT_OK;
 }
 
 int

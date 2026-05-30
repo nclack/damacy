@@ -99,7 +99,7 @@ add_src_lib(chunk_layout SOURCES prefetch/chunk_layout.h prefetch/chunk_layout.c
 )
 
 add_src_lib(prefetcher SOURCES prefetch/prefetcher.h prefetch/prefetcher.c
-    LINKS prefetch_cache shard_index zarr hash lookahead platform log
+    LINKS prefetch_cache chunk_layout shard_index zarr hash lookahead platform log
 )
 
 # Runtime GPU-memory committer: tracks bytes committed against a
@@ -188,16 +188,6 @@ add_src_lib(zarr_chunk_layout SOURCES zarr/zarr_chunk_layout.h zarr/zarr_chunk_l
     LINKS zarr store log
 )
 
-# damacy.h is header-included for the damacy_status enum; no link needed
-# (no symbols referenced).
-add_src_lib(zarr_meta_cache SOURCES zarr/zarr_meta_cache.h zarr/zarr_meta_cache.c
-    LINKS zarr zarr_chunk_layout lru store strbuf hash log
-)
-
-add_src_lib(zarr_shard_cache SOURCES zarr/zarr_shard_cache.h zarr/zarr_shard_cache.c
-    LINKS zarr lru store strbuf hash log
-)
-
 # Planner: samples + cached metadata → page-aligned read_ops + chunk_plans.
 # coalesce + group_chunks are the post-emit steps of the IO planning
 # pipeline (filter → sort → fuse-with-cap → group-by-read).
@@ -206,8 +196,8 @@ add_src_lib(planner
             planner/coalesce.h planner/coalesce.c
             planner/group_chunks.h planner/group_chunks.c
             planner/read_op_sort.h planner/read_op_sort.c
-    LINKS zarr_meta_cache zarr_shard_cache zarr dtype platform strbuf
-          path_intern log
+    LINKS prefetch_cache shard_index zarr dtype platform strbuf
+          path_intern log damacy_config
 )
 
 # GPU pieces — add_cuda_lib is a no-op under DAMACY_FUZZ.
@@ -235,9 +225,14 @@ add_cuda_lib(assemble SOURCES assemble/assemble.h assemble/assemble.cu
 # (cuMem*, cuStream*, cuEvent*); the runtime API is only pulled in
 # transitively via decoder/assemble (nvcomp's headers + the kernel
 # launch in assemble.cu).
-add_cuda_lib(damacy SOURCES damacy.h damacy.c damacy_status.c
-    LINKS platform planner zarr_meta_cache zarr_shard_cache zarr store
+add_cuda_lib(damacy
+    SOURCES damacy.h damacy_internal.h
+            damacy_lifecycle.c damacy_push.c damacy_plan.c damacy_pop.c
+            damacy_scheduler.c damacy_status.c
+    LINKS platform planner zarr store
           decoder assemble dtype log lookahead gpu_budget
           batch_pool wave_pool wave_budget damacy_stats damacy_config
-          damacy_nvtx strbuf scheduler CUDA::cuda_driver
+          damacy_nvtx strbuf scheduler io_queue
+          prefetch_cache prefetcher array_meta shard_index chunk_layout
+          CUDA::cuda_driver
 )
