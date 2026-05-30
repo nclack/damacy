@@ -27,7 +27,7 @@ struct damacy_wave
   uint32_t batch_chunk_offset;
   uint32_t n_chunks;
   uint64_t input_used_bytes;
-  void* host_slab; // borrowed from slot; NULL on GDS or when unbound
+  void* host_input; // borrowed from slot; NULL on GDS or when unbound
 
   // Wave-owned device buffers (per-wave; not pooled).
   // dev_compressed is active input; dev_compressed_owned is NULL when

@@ -201,7 +201,7 @@ test_failed_h2d_submit_drains_before_unbind(void)
   EXPECT(wp.slots[0].state == SLOT_FREE);
   EXPECT(wp.waves[0].state == WAVE_FREE);
   EXPECT(wp.waves[0].bound_slot == -1);
-  EXPECT(wp.waves[0].host_slab == NULL);
+  EXPECT(wp.waves[0].host_input == NULL);
 
   wp.waves[0].d_parse_chunks = saved_parse_chunks;
   wave_pool_destroy(&wp, 0);
@@ -279,7 +279,7 @@ test_failed_bulk_h2d_submit_drains_before_unbind(void)
   EXPECT(wp.slots[0].state == SLOT_FREE);
   EXPECT(wp.waves[0].state == WAVE_FREE);
   EXPECT(wp.waves[0].bound_slot == -1);
-  EXPECT(wp.waves[0].host_slab == NULL);
+  EXPECT(wp.waves[0].host_input == NULL);
 
   wp.waves[0].dev_compressed = saved_dev_compressed;
   wp.waves[0].dev_compressed_owned = saved_dev_compressed_owned;

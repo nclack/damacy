@@ -102,7 +102,7 @@ h2d_queue_ready(CUstream stream,
   damacy_nvtx_range_push("bulk_h2d");
   CU(BulkCudaFail,
      cuMemcpyHtoDAsync(CUDPTR(wave->dev_compressed),
-                       wave->host_slab,
+                       wave->host_input,
                        wave->input_used_bytes,
                        stream));
   CU(BulkCudaFail, cuEventRecord(wave->ev.bulk_h2d_end, stream));
