@@ -48,9 +48,7 @@ _Static_assert(DAMACY_DEFAULT_READ_OP_MAX_BYTES <= UINT32_MAX,
 // that outweighs the prefill benefit, so the default stays at N_WAVES.
 #define DAMACY_DEFAULT_HOST_BUFFER_WAVES DAMACY_N_WAVES
 
-// Upper bound on cfg.host_buffer_waves. 8 covers any realistic IO
-// look-ahead need; each extra slot costs one dev_compressed_per_wave of
-// pinned host memory.
+// Upper bound on cfg.host_buffer_waves.
 #define DAMACY_MAX_HOST_BUFFER_WAVES 8
 
 // Default for damacy_tuning.max_chunks_per_wave. nvcomp temp scratch is

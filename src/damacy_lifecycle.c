@@ -227,7 +227,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   {
     struct gpu_budget_breakdown predicted = { 0 };
     s = gpu_budget_predict(cfg,
-                           sizing.host_slab_per_wave,
+                           sizing.input_staging_per_wave,
                            sizing.dev_decompressed_per_wave,
                            &predicted);
     if (s != DAMACY_OK)
@@ -235,12 +235,12 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     gpu_budget_commit(self->budget, predicted.total);
     log_debug("damacy: resolved geometry from max_gpu_memory_bytes=%llu "
               "(pool_reserve=%llu, resolver_budget=%llu): "
-              "host_slab_per_wave=%llu dev_decompressed_per_wave=%llu "
+              "input_staging_per_wave=%llu dev_decompressed_per_wave=%llu "
               "initial_nvcomp_temp=%llu predicted_total=%llu",
               (unsigned long long)max_gpu,
               (unsigned long long)pool_reserve,
               (unsigned long long)resolver_budget,
-              (unsigned long long)sizing.host_slab_per_wave,
+              (unsigned long long)sizing.input_staging_per_wave,
               (unsigned long long)sizing.dev_decompressed_per_wave,
               (unsigned long long)predicted.nvcomp_temp,
               (unsigned long long)predicted.total);
@@ -372,7 +372,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
                                resolve_host_buffer_waves(cfg),
                                resolved_max_chunks_per_wave,
                                resolved_max_substreams_per_chunk,
-                               sizing.host_slab_per_wave,
+                               sizing.input_staging_per_wave,
                                sizing.dev_decompressed_per_wave,
                                runtime_chunk_cap,
                                (int)want_gds,
@@ -542,15 +542,15 @@ damacy_config_describe(const struct damacy_config* cfg)
   }
   struct gpu_budget_breakdown predicted = { 0 };
   if (gpu_budget_predict(cfg,
-                         sizing.host_slab_per_wave,
+                         sizing.input_staging_per_wave,
                          sizing.dev_decompressed_per_wave,
                          &predicted) != DAMACY_OK) {
     log_info("damacy_config_describe: gpu_budget_predict failed");
     return;
   }
-  log_info("damacy_config_describe: host_slab_per_wave=%llu "
+  log_info("damacy_config_describe: input_staging_per_wave=%llu "
            "dev_decompressed_per_wave=%llu",
-           (unsigned long long)sizing.host_slab_per_wave,
+           (unsigned long long)sizing.input_staging_per_wave,
            (unsigned long long)sizing.dev_decompressed_per_wave);
   log_info("damacy_config_describe: dev_compressed=%llu dev_decompressed=%llu "
            "blosc1_meta=%llu fanout_soa=%llu "

@@ -14,13 +14,6 @@
 
 #include <stddef.h>
 
-// Per-substream + per-batch upper bounds for the shared zstd decoder
-// given an externally-chosen substream-batch cap `substreams`. zstd_per is
-// the per-substream uncompressed upper bound (controls nvcomp's
-// per-block scratch); total_uncompressed is the per-batch sum, capped
-// at the per-wave decompressed arena since that's the real ceiling.
-// Used by initial sizing (substreams = initial floor), grow (substreams =
-// post-grow cap), and worst-case (substreams = structural ceiling).
 static void
 wave_decoder_caps(uint64_t substreams,
                   uint32_t max_chunks_per_wave,
@@ -29,18 +22,12 @@ wave_decoder_caps(uint64_t substreams,
                   uint64_t* out_zstd_per,
                   uint64_t* out_total_uncompressed)
 {
-  // Caller's config validation should preclude this; guard explicitly
-  // so downstream nvcomp queries never see zero-sized inputs.
   if (dev_decompressed_bytes == 0 || max_chunk_uncompressed_bytes == 0) {
     *out_zstd_per = 0;
     *out_total_uncompressed = 0;
     return;
   }
   const uint64_t runtime_chunk_cap = max_chunk_uncompressed_bytes;
-  // Tight upper bound on bytes nvcomp will emit per call: structural
-  // chunk-count cap × per-chunk cap. dev_decompressed_bytes is the arena
-  // limit, but with chunks-per-wave capped this is usually smaller and
-  // keeps nvcomp from over-allocating workspace for memory it won't use.
   const uint64_t chunks_cap_bytes =
     (uint64_t)max_chunks_per_wave * runtime_chunk_cap;
   const uint64_t subs_cap_bytes = substreams * runtime_chunk_cap;
@@ -58,14 +45,14 @@ wave_decoder_caps(uint64_t substreams,
 
 enum damacy_status
 wave_predict_bytes(uint32_t max_chunks_per_wave,
-                   uint64_t host_slab_bytes,
+                   uint64_t input_staging_bytes,
                    uint64_t dev_decompressed_bytes,
                    struct wave_alloc_summary* out)
 {
   const uint64_t cap = (uint64_t)max_chunks_per_wave;
   const uint64_t substreams = (uint64_t)DAMACY_BLOSC_ZSTD_INITIAL_BATCH_CAP;
 
-  out->dev_compressed = host_slab_bytes;
+  out->dev_compressed = input_staging_bytes;
   out->dev_decompressed = dev_decompressed_bytes;
   out->blosc1_meta =
     cap * sizeof(struct assemble_chunk) + sizeof(struct blosc1_totals);
@@ -74,10 +61,6 @@ wave_predict_bytes(uint32_t max_chunks_per_wave,
   return DAMACY_OK;
 }
 
-// Predicted nvcomp scratch bytes for the shared decoder at the given
-// substream batch cap. Includes nvcomp temp + actual-size + status
-// arrays. Shared between the initial-floor predictor, the resolver,
-// and the runtime grow path.
 static enum damacy_status
 predict_decoder_scratch_bytes(uint64_t substreams,
                               uint32_t max_chunks_per_wave,
@@ -119,20 +102,16 @@ wave_pool_shared_predict_bytes(uint32_t max_chunks_per_wave,
 
 enum damacy_status
 gpu_budget_predict(const struct damacy_config* cfg,
-                   uint64_t host_slab_per_wave,
+                   uint64_t input_staging_per_wave,
                    uint64_t dev_decompressed_per_wave,
                    struct gpu_budget_breakdown* out)
 {
   const uint64_t runtime_chunk_cap = resolve_max_chunk_uncompressed(cfg);
   const uint32_t max_chunks_per_wave = resolve_max_chunks_per_wave(cfg);
 
-  // Single source of truth for one wave's device-resident bytes lives
-  // in wave_predict_bytes. Pool-level totals are 2× because the
-  // orchestrator keeps two waves in flight. The shared nvcomp scratch
-  // is queried separately and counted once.
   struct wave_alloc_summary per_wave = { 0 };
   enum damacy_status s = wave_predict_bytes(max_chunks_per_wave,
-                                            host_slab_per_wave,
+                                            input_staging_per_wave,
                                             dev_decompressed_per_wave,
                                             &per_wave);
   if (s != DAMACY_OK)
@@ -179,15 +158,10 @@ decoder_initial_caps(uint32_t max_chunks_per_wave,
   *out_total_uncompressed = (size_t)total_uncompressed;
 }
 
-// Worst-case GPU footprint for one resolved geometry: assumes both
-// per-wave fanout SOAs and the shared decoder scratch grow all the way
-// to max_chunks_per_wave * max_substreams_per_chunk. Used by the
-// resolver so the chosen geometry leaves headroom for observe-and-grow
-// without the grow paths surprise-tripping the budget.
 static enum damacy_status
 predict_pool_total(uint32_t max_chunks_per_wave,
                    uint32_t max_substreams_per_wave,
-                   uint64_t host_slab_per_wave,
+                   uint64_t input_staging_per_wave,
                    uint64_t dev_per_wave,
                    uint64_t max_chunk_uncompressed_bytes,
                    uint32_t samples_per_batch,
@@ -195,7 +169,7 @@ predict_pool_total(uint32_t max_chunks_per_wave,
 {
   struct wave_alloc_summary per_wave = { 0 };
   enum damacy_status s = wave_predict_bytes(
-    max_chunks_per_wave, host_slab_per_wave, dev_per_wave, &per_wave);
+    max_chunks_per_wave, input_staging_per_wave, dev_per_wave, &per_wave);
   if (s != DAMACY_OK)
     return s;
 
@@ -209,8 +183,6 @@ predict_pool_total(uint32_t max_chunks_per_wave,
   if (s != DAMACY_OK)
     return s;
 
-  // Per-wave fanout SOA grown to the structural ceiling. wave_predict_bytes
-  // counted the *initial* slice; rewrite that component to assume max.
   const uint64_t substreams_init =
     (uint64_t)DAMACY_BLOSC_ZSTD_INITIAL_BATCH_CAP;
   const uint64_t bytes_per_sub = 2ull * sizeof(void*) + 2ull * sizeof(size_t);
@@ -238,11 +210,6 @@ wave_pool_resolve_sizing(uint32_t max_chunks_per_wave,
 {
   const uint32_t max_substreams_per_wave = damacy_max_substreams_per_wave(
     max_chunks_per_wave, max_substreams_per_chunk);
-  // Smallest viable geometry: hold at least one chunk at the runtime
-  // cap per wave. host_slab_per_wave needs to fit a compressed chunk;
-  // the dev arena holds it uncompressed. Use max_chunk_uncompressed_bytes
-  // for both — real compressed payload is bounded by the uncompressed
-  // size, so this is a tight lower bound.
   const uint64_t min_per_wave = max_chunk_uncompressed_bytes;
   uint64_t total_min = 0;
   enum damacy_status s = predict_pool_total(max_chunks_per_wave,
@@ -263,20 +230,12 @@ wave_pool_resolve_sizing(uint32_t max_chunks_per_wave,
     return DAMACY_BUDGET;
   }
 
-  // dev_compressed + dev_decompressed scale 1:1 with per_wave; 2× for
-  // two waves. 4 = 2 × 2.
-  //   total_min + 4 * delta_per_wave <= cap
-  //   ⇒ delta_per_wave_max = (cap - total_min) / 4
-  // Round down to 1 MB so logs are readable; the back-off loop catches
-  // any overshoot.
   const uint64_t headroom = max_gpu_memory_bytes - total_min;
   const uint64_t delta_per_wave_cap = headroom / 4;
   const uint64_t step = 1ull << 20; // 1 MB granularity
   uint64_t per_wave = min_per_wave + (delta_per_wave_cap / step) * step;
   if (per_wave < min_per_wave)
     per_wave = min_per_wave;
-  // chunks-per-wave caps per_wave usefulness — beyond that × per-chunk
-  // cap is wasted memory + slows nvcomp through inflated workspace.
   const uint64_t useful_max =
     (uint64_t)max_chunks_per_wave * max_chunk_uncompressed_bytes;
   if (per_wave > useful_max)
@@ -306,12 +265,7 @@ wave_pool_resolve_sizing(uint32_t max_chunks_per_wave,
     if (s != DAMACY_OK)
       return s;
   }
-  // Back-off loop terminates at per_wave == min_per_wave with
-  // predicted <= max_gpu_memory_bytes: the top-level check above
-  // already rejected total_min > max, and per_wave == min_per_wave
-  // reproduces total_min.
-
-  out->host_slab_per_wave = per_wave;
+  out->input_staging_per_wave = per_wave;
   out->dev_decompressed_per_wave = per_wave;
   out->worst_case_total_bytes = predicted;
   return DAMACY_OK;

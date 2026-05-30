@@ -19,8 +19,6 @@ wave_init(struct damacy_wave* wave,
           uint64_t dev_decompressed_bytes,
           int enable_gds)
 {
-  // Self-zero so wave_destroy on the failure path doesn't free
-  // uninitialized pointers — caller may have passed stack memory.
   memset(wave, 0, sizeof(*wave));
   wave->state = WAVE_FREE;
   wave->bound_slot = -1;
@@ -28,8 +26,6 @@ wave_init(struct damacy_wave* wave,
 
   CUdeviceptr dptr = 0;
   if (!enable_gds) {
-    // Host-staging path: wave owns its own compressed staging buffer.
-    // On the GDS path the slot owns it and bind aliases at use time.
     CU(Error, cuMemAlloc(&dptr, slot_cap_bytes));
     wave->dev_compressed_owned = (void*)(uintptr_t)dptr;
     wave->dev_compressed = wave->dev_compressed_owned;
@@ -51,8 +47,6 @@ wave_init(struct damacy_wave* wave,
   CU(Error, cuMemAlloc(&dptr, sizeof(struct blosc1_totals)));
   wave->d_blosc1_totals = (struct blosc1_totals*)(uintptr_t)dptr;
 
-  // GPU-parse buffers. Per-wave overhead at cap=512: 8 KB pinned host
-  // + 8 KB device for the input SOA, 12 B for counters. Negligible.
   CU(Error,
      cuMemAllocHost((void**)&wave->h_parse_chunks,
                     (size_t)cap * sizeof(struct gpu_parse_chunk)));
@@ -83,8 +77,6 @@ wave_init(struct damacy_wave* wave,
   CU(Error,
      cuMemAllocHost((void**)&wave->h_parse_counters, 3 * sizeof(uint32_t)));
 
-  // Initial per-wave fanout cap — kick_h2d grows this wave's SOA when
-  // n_chunks * MAX_BLOCKS exceeds it. Independent of the other wave.
   const size_t substreams = DAMACY_BLOSC_ZSTD_INITIAL_BATCH_CAP;
   if (fanout_alloc_pinned(&wave->h_zstd_fan, &wave->zstd_fan, substreams))
     goto Error;
@@ -107,8 +99,6 @@ wave_init(struct damacy_wave* wave,
 
   return 0;
 Error:
-  // Make the partial-init cleanup explicit instead of relying on the
-  // outer destroy_inner walking a zero-initialized wave.
   wave_destroy(wave, 0);
   return 1;
 }
@@ -128,11 +118,8 @@ wave_destroy(struct damacy_wave* wave, int cuda_skip)
     for (size_t i = 0; i < countof(host_ptrs); ++i)
       if (host_ptrs[i])
         cuMemFreeHost(host_ptrs[i]);
-    // Pinned fanout (host + device) — same NULL-safe per-pointer pattern.
     fanout_free_pinned(&wave->h_zstd_fan, &wave->zstd_fan);
     void* const dev_ptrs[] = {
-      // dev_compressed may be a borrowed alias to slot.dev_buf on GDS;
-      // free the owned alloc instead (NULL on GDS by construction).
       wave->dev_compressed_owned,
       wave->dev_decompressed,
       wave->d_assemble_chunks,

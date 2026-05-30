@@ -13,7 +13,7 @@
 #include "planner/planner.h"
 #include "render_job/render_job.h"
 #include "store/store.h"
-#include "store/store_fs_gds.h" // store_fs_gds_set_stream (GDS-only)
+#include "store/store_fs_gds.h"
 #include "util/cuda_check.h"
 #include "util/prelude.h"
 #include "wave_budget.h"
@@ -23,10 +23,6 @@
 #include <stdint.h>
 #include <string.h>
 
-// Defined in wave_budget.c — kept private to wave_pool because the
-// "grow" surface is an orchestration concern, while the math it
-// reuses (wave_decoder_caps, predict_decoder_scratch_bytes) lives
-// alongside the pure predictor.
 enum damacy_status
 decoder_scratch_grow(struct decoder_zstd* decoder,
                      CUstream stream_decode,
@@ -60,7 +56,7 @@ wave_pool_init(struct wave_pool* wp,
                uint8_t host_buffer_waves,
                uint32_t max_chunks_per_wave,
                uint32_t max_substreams_per_chunk,
-               uint64_t host_slab_per_wave,
+               uint64_t input_staging_per_wave,
                uint64_t dev_decompressed_per_wave,
                uint64_t max_chunk_uncompressed_bytes,
                int enable_gds,
@@ -85,9 +81,6 @@ wave_pool_init(struct wave_pool* wp,
   CU(Fail, cuStreamCreate(&wp->stream_h2d, CU_STREAM_NON_BLOCKING));
   CU(Fail, cuStreamCreate(&wp->stream_decode, CU_STREAM_NON_BLOCKING));
   CU(Fail, cuStreamCreate(&wp->stream_post, CU_STREAM_NON_BLOCKING));
-  // GDS path: cuFileReadAsync rides on stream_h2d. Set this before the
-  // first peel so submit_dev has a valid stream to schedule against.
-  // No-op (and harmless) when the store isn't a GDS-enabled store_fs.
   if (wp->use_gds)
     store_fs_gds_set_stream(store, wp->stream_h2d);
   for (size_t i = 0; i < countof(wp->decode_done_ring); ++i)
@@ -96,14 +89,10 @@ wave_pool_init(struct wave_pool* wp,
   damacy_nvtx_stream_name(wp->stream_decode, "damacy:decode");
   damacy_nvtx_stream_name(wp->stream_post, "damacy:post");
 
-  const uint64_t host_per_wave = host_slab_per_wave;
   const uint64_t dev_per_wave = dev_decompressed_per_wave;
   wp->dev_per_wave = dev_per_wave;
   wp->max_chunk_uncompressed_bytes = max_chunk_uncompressed_bytes;
 
-  // Initial floor for the shared decoder; decoder_scratch_grow bumps
-  // it lazily when a wave's substream count exceeds the current cap.
-  // Per-wave fanout SOAs grow independently via fanout_grow.
   size_t substreams = 0, zstd_per = 0, total_uncompressed = 0;
   decoder_initial_caps(max_chunks_per_wave,
                        dev_per_wave,
@@ -115,10 +104,8 @@ wave_pool_init(struct wave_pool* wp,
     decoder_zstd_create(substreams, zstd_per, total_uncompressed);
   CHECK(Fail, wp->zstd_decoder);
 
-  // GDS-only slots skip the pinned-host alloc; non-GDS slots skip the
-  // device alloc. Both code paths still need the store_reads array.
-  const uint64_t slot_host_cap = wp->use_gds ? 0ull : host_per_wave;
-  const uint64_t slot_dev_cap = wp->use_gds ? host_per_wave : 0ull;
+  const uint64_t slot_host_cap = wp->use_gds ? 0ull : input_staging_per_wave;
+  const uint64_t slot_dev_cap = wp->use_gds ? input_staging_per_wave : 0ull;
   for (uint8_t s = 0; s < host_buffer_waves; ++s)
     if (slot_init(
           &wp->slots[s], max_chunks_per_wave, slot_host_cap, slot_dev_cap) != 0)
@@ -127,7 +114,7 @@ wave_pool_init(struct wave_pool* wp,
     if (wave_init(&wp->waves[w],
                   max_chunks_per_wave,
                   wp->max_substreams_per_wave,
-                  host_per_wave,
+                  input_staging_per_wave,
                   dev_per_wave,
                   wp->use_gds) != 0)
       goto Fail;
@@ -343,12 +330,6 @@ struct h2d_submit_state
   uint8_t stream_work_queued;
 };
 
-// Phase 1: record h2d_start, queue the slab memcpy, record bulk_h2d_end.
-// On the GDS path the cuFileReadAsync calls submitted in peel were
-// queued on this same stream_h2d, so the memcpy is skipped — stream
-// FIFO orders the parse kernel after the reads. bulk_h2d_end still
-// records on stream_h2d, now measuring the read time itself rather
-// than a separate H2D copy.
 static enum damacy_status
 submit_bulk_h2d(struct wave_pool* wp,
                 struct damacy_wave* wave,
@@ -364,8 +345,6 @@ submit_bulk_h2d(struct wave_pool* wp,
                          wave->host_used_bytes,
                          wp->stream_h2d));
   }
-  // Record bulk_h2d_end before queueing fanout/op H2Ds so stats.h2d
-  // measures just the slab copy.
   CU(BulkCudaFail, cuEventRecord(wave->ev.bulk_h2d_end, wp->stream_h2d));
   damacy_nvtx_range_pop(); // bulk_h2d
   return DAMACY_OK;
@@ -619,15 +598,11 @@ drain_failed_h2d_submit(struct wave_pool* wp,
   if (!state->stream_work_queued)
     return DAMACY_OK;
 
-  // The caller releases the bound slot on kick_h2d failure. If stream_h2d work
-  // was already queued, drain it first so the slot's host/device staging memory
-  // is not recycled while the stream can still touch it.
+  // Slot staging may still be referenced by queued stream work.
   CUresult r = cuStreamSynchronize(wp->stream_h2d);
   return r == CUDA_SUCCESS ? DAMACY_OK : DAMACY_CUDA;
 }
 
-// Bulk H2D, GPU parse on stream_h2d, then h2d_end. stream_decode gates
-// on h2d_end before nvcomp launch.
 static enum damacy_status
 kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
 {
@@ -1042,11 +1017,6 @@ wave_pool_peel_commit(struct wave_pool* wp,
   return DAMACY_OK;
 }
 
-// Bind a SLOT_READY slot to a WAVE_FREE wave: copies slot fields onto
-// the wave, builds the assemble metadata, kicks H2D. The slot
-// transitions SLOT_READY → SLOT_BUSY; the wave WAVE_FREE → WAVE_H2D.
-// On kick_h2d failure the slot is released back to SLOT_FREE so the
-// scheduler doesn't deadlock on a stuck-busy slot.
 static enum damacy_status
 bind_slot_to_wave(struct wave_pool* wp, struct damacy_wave* wave, int slot_idx)
 {
@@ -1073,8 +1043,6 @@ bind_slot_to_wave(struct wave_pool* wp, struct damacy_wave* wave, int slot_idx)
   build_assemble_meta(wp, wave);
   enum damacy_status s = kick_h2d(wp, wave);
   if (s != DAMACY_OK) {
-    // kick_h2d drains any submitted stream_h2d work before returning failure,
-    // so the bound staging slot can safely return to the pool.
     wave_unbind_slot(wp, wave, NULL);
   }
   damacy_nvtx_range_pop();
@@ -1147,10 +1115,6 @@ wave_bind_slot_fields(struct wave_pool* wp,
 {
   wave->bound_slot = (int8_t)slot_idx;
   wave->host_slab = hs->buf;
-  // GDS path: cuFile wrote directly into the slot's device staging
-  // buffer; alias wave->dev_compressed to it so the parse + decode
-  // kernels read from the same memory the IO landed in. The slot
-  // retains ownership; the alias clears on finalize.
   if (wp->use_gds)
     wave->dev_compressed = hs->dev_buf;
   wave->render_job_idx = hs->render_job_idx;
@@ -1311,18 +1275,10 @@ typedef enum damacy_status (*wave_pool_advance_phase)(struct wave_pool* wp,
 static enum damacy_status
 run_advance_phases(struct wave_pool* wp, int* changed)
 {
-  // Phase order is load-bearing. Wave progress runs after ready-slot binding
-  // so a wave freed in this tick can only bind work on the next tick; reversing
-  // the order permits same-tick free-to-bind and complicates rollback paths.
+  // A wave freed in this tick binds new work on the next tick.
   static const wave_pool_advance_phase phases[] = {
-    // SLOT_IO -> SLOT_READY. Fill-only waves skip the IO query because no
-    // submission was made.
     advance_io_slots_to_ready,
-    // SLOT_READY -> WAVE_H2D on free waves.
     bind_ready_slots_to_free_waves,
-    // WAVE_H2D -> WAVE_POST -> WAVE_FREE. Host-staging slots release after
-    // bulk_h2d_end; GDS slots release after h2d_end because GPU parse still
-    // reads the slot-owned device buffer.
     advance_active_waves,
   };
 

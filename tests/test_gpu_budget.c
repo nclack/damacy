@@ -44,8 +44,6 @@ test_total_is_sum_of_parts(void)
   uint64_t expect = b.dev_compressed + b.dev_decompressed + b.blosc1_meta +
                     b.fanout_soa + b.nvcomp_temp + b.batch_metadata;
   EXPECT(b.total == expect);
-  // dev_compressed mirrors 2× host_slab_per_wave; dev_decompressed
-  // mirrors 2× dev_decompressed_per_wave.
   EXPECT(b.dev_compressed == 2 * host);
   EXPECT(b.dev_decompressed == 2 * dev);
   return 0;

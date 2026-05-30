@@ -1,13 +1,9 @@
-// Pinned-host slab slot — one wave's worth of compressed bytes plus
-// the store_read records that drove the IO. A pool of these slots
-// (>= DAMACY_N_WAVES) lets peel + IO for upcoming waves complete
-// before a wave struct is free, shrinking the wave-boundary gap on
-// stream_decode.
+// Input staging slot.
 //
 // Lifecycle:
 //   FREE → PEELING (peel reserve) → IO (peel commit, after async submit)
 //        → READY (store_event_query) → BUSY (bind to wave)
-//        → FREE (bulk_h2d_end on stream_h2d)
+//        → FREE
 #pragma once
 
 #include "platform/platform.h"
@@ -27,12 +23,8 @@ enum slot_state
 struct host_slab_slot
 {
   enum slot_state state;
-  // Pinned host buffer used by the host-staging IO path. NULL when the
-  // slot was allocated as device-only (GDS). Cap is the slot's logical
-  // capacity in either case; reads use cap to gate chunk packing.
+  // Exactly one of buf/dev_buf is allocated for input staging.
   void* buf;
-  // Device buffer used by the GDS path; cuFile reads land here
-  // directly. NULL when the slot is host-only.
   void* dev_buf;
   uint64_t cap;
   uint64_t used_bytes;
@@ -54,13 +46,7 @@ struct host_slab_slot
   uint64_t io_bytes;
 };
 
-// Allocate one slot's pinned buffer + store_reads array. `host_cap` is
-// the pinned host buffer size (0 = skip; GDS-only slots). `dev_cap`
-// is the device buffer size (0 = skip; host-staging-only slots). At
-// least one must be non-zero. Returns 0 on success, 1 on failure
-// (after self-cleanup). cuda_skip=1 in slot_destroy leaks the pinned
-// buffer (used when the CUDA context is no longer valid) but releases
-// the heap.
+// Allocate one input staging slot.
 int
 slot_init(struct host_slab_slot* slot,
           uint32_t max_chunks_per_wave,
@@ -70,9 +56,7 @@ slot_init(struct host_slab_slot* slot,
 void
 slot_destroy(struct host_slab_slot* slot, int cuda_skip);
 
-// SLOT_BUSY → SLOT_FREE. Called when compressed input is consumed
-// (bulk_h2d_end for host staging, h2d_end for GDS) or from the failure
-// cleanup path.
+// SLOT_BUSY → SLOT_FREE.
 void
 slot_release(struct host_slab_slot* slot);
 
