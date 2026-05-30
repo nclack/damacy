@@ -37,7 +37,7 @@ struct damacy
   enum damacy_status failed_status;
   uint64_t next_batch_id;
   // Push-side cursor: indexes into the stream of samples ever pushed.
-  // Divided by batch_size to label each lookahead push with its batch_id
+  // Divided by samples_per_batch to label each lookahead push with its batch_id
   // so the prefetcher can group samples for prefetcher_batch_full_ready.
   uint64_t pushed_samples;
   uint64_t page_alignment;

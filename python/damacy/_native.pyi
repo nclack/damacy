@@ -126,7 +126,7 @@ class Pipeline:
 
     def __init__(
         self,
-        batch_size: int,
+        samples_per_batch: int,
         lookahead_batches: int,
         dtype: str | int,
         max_chunk_uncompressed_bytes: int,

@@ -10,7 +10,7 @@ Typical use::
     import damacy, torch
 
     cfg = damacy.Config(
-        batch_size=8,
+        samples_per_batch=8,
         max_gpu_memory_bytes=1 << 30,
         dtype="bf16",
     )
@@ -21,14 +21,14 @@ Typical use::
 
     with damacy.Pipeline(cfg) as p:
         p.push(samples)
-        for batch in p.batches(len(samples) // cfg.batch_size):
+        for batch in p.batches(len(samples) // cfg.samples_per_batch):
             with batch as t:
                 x = torch.from_dlpack(t)
                 ...  # train step
 
 Variants reuse a base via :func:`dataclasses.replace`::
 
-    big = dataclasses.replace(cfg, batch_size=64)
+    big = dataclasses.replace(cfg, samples_per_batch=64)
 """
 
 from __future__ import annotations
@@ -414,11 +414,11 @@ class Config:
 
     ```pycon
     >>> import dataclasses
-    >>> base = Config(batch_size=8, sample_shape=(8, 16),
+    >>> base = Config(samples_per_batch=8, sample_shape=(8, 16),
     ...               max_gpu_memory_bytes=1 << 30)
     >>> base.dtype is Dtype.F32
     True
-    >>> dataclasses.replace(base, batch_size=64).batch_size
+    >>> dataclasses.replace(base, samples_per_batch=64).samples_per_batch
     64
 
     ```
@@ -429,15 +429,15 @@ class Config:
     ``dtype`` argument; the stored field is always a :class:`Dtype`.
 
     ```pycon
-    >>> Config(batch_size=0, sample_shape=(8, 16), max_gpu_memory_bytes=1 << 30)
+    >>> Config(samples_per_batch=0, sample_shape=(8, 16), max_gpu_memory_bytes=1 << 30)
     Traceback (most recent call last):
         ...
-    ValueError: batch_size must be >= 1 (got 0)
+    ValueError: samples_per_batch must be >= 1 (got 0)
 
     ```
 
     Attributes:
-        batch_size: Samples per batch (>= 1).
+        samples_per_batch: Samples per batch (>= 1).
         max_gpu_memory_bytes: Primary GPU budget knob. Hard cap on
             GPU memory allocated for wave-resident buffers, decoder
             scratch, per-wave fanout SOAs, and batch-output pools.
@@ -491,7 +491,7 @@ class Config:
             strategy rather than silently dropping it.
     """
 
-    batch_size: int
+    samples_per_batch: int
     dtype: Dtype
     lookahead_batches: int
     max_chunk_uncompressed_bytes: int
@@ -514,7 +514,7 @@ class Config:
     def __init__(
         self,
         *,
-        batch_size: int,
+        samples_per_batch: int,
         sample_shape: Sequence[int],
         max_gpu_memory_bytes: int,
         dtype: Dtype | str | int = Dtype.F32,
@@ -538,8 +538,10 @@ class Config:
         # signature accepts the polymorphic dtype input while reads of
         # `cfg.dtype` always type as Dtype. dataclass(init=False) keeps
         # the auto-generated __eq__ / __hash__ / __repr__.
-        if batch_size < 1:
-            raise ValueError(f"batch_size must be >= 1 (got {batch_size})")
+        if samples_per_batch < 1:
+            raise ValueError(
+                f"samples_per_batch must be >= 1 (got {samples_per_batch})"
+            )
         if lookahead_batches < 2:
             raise ValueError(
                 f"lookahead_batches must be >= 2 (got {lookahead_batches})"
@@ -586,7 +588,7 @@ class Config:
         if any(d <= 0 for d in shape_t):
             raise ValueError(f"sample_shape entries must be > 0 (got {shape_t})")
         set_ = object.__setattr__  # frozen=True forbids `self.x = ...`
-        set_(self, "batch_size", batch_size)
+        set_(self, "samples_per_batch", samples_per_batch)
         set_(self, "dtype", Dtype.coerce(dtype))
         set_(self, "lookahead_batches", lookahead_batches)
         set_(self, "max_chunk_uncompressed_bytes", max_chunk_uncompressed_bytes)
@@ -983,7 +985,7 @@ class Pipeline:
 
     Constructed from a :class:`Config`::
 
-        cfg = damacy.Config(batch_size=8, ...)
+        cfg = damacy.Config(samples_per_batch=8, ...)
         with damacy.Pipeline(cfg) as p:
             ...
 
@@ -1006,7 +1008,7 @@ class Pipeline:
     def __init__(self, config: Config) -> None:
         try:
             self._native = _native.Pipeline(
-                batch_size=config.batch_size,
+                samples_per_batch=config.samples_per_batch,
                 lookahead_batches=config.lookahead_batches,
                 dtype=int(config.dtype),  # already coerced by Config.__init__
                 max_chunk_uncompressed_bytes=config.max_chunk_uncompressed_bytes,
@@ -1137,7 +1139,7 @@ class Pipeline:
         a single head iterator), not re-wrapped onto ``self._pending[0]``
         — successive backpressure events leave the buffer flat instead
         of nesting ``itertools.chain`` layers."""
-        cap = self._config.lookahead_batches * self._config.batch_size
+        cap = self._config.lookahead_batches * self._config.samples_per_batch
         while True:
             # Top up buffer from the head iterator. Buffer is only ever
             # filled from one iterator at a time, so on push failure we

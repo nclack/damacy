@@ -35,12 +35,12 @@ struct gpu_budget_breakdown
   // 1× (zstd_temp + actual+status), pool-shared, sized off the initial
   // floor. Observe-and-grow applies here too.
   uint64_t nvcomp_temp;
-  uint64_t batch_metadata; // 2× cfg.batch_size × sizeof(sample_plan)
+  uint64_t batch_metadata; // 2× cfg.samples_per_batch × sizeof(sample_plan)
   uint64_t total;
 };
 
 // Per-wave host/device extents come from wave_pool_resolve_sizing.
-// max_chunk_uncompressed_bytes and batch_size come from cfg.
+// max_chunk_uncompressed_bytes and samples_per_batch come from cfg.
 enum damacy_status
 gpu_budget_predict(const struct damacy_config* cfg,
                    uint64_t host_slab_per_wave,
@@ -97,7 +97,7 @@ wave_pool_resolve_sizing(uint32_t max_chunks_per_wave,
                          uint32_t max_substreams_per_chunk,
                          uint64_t max_gpu_memory_bytes,
                          uint64_t max_chunk_uncompressed_bytes,
-                         uint32_t batch_size,
+                         uint32_t samples_per_batch,
                          struct wave_pool_sizing* out);
 
 // Initial substream + per-substream + per-batch caps used at

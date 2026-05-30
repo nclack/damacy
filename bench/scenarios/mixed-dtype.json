@@ -17,7 +17,7 @@
     "sample_shape": [128, 128, 128],
     "n_batches": 50,
     "n_warmup_batches": 5,
-    "batch_size": 64,
+    "samples_per_batch": 64,
     "seed": 1234
   },
   "pipeline": {

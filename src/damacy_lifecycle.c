@@ -199,11 +199,12 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     pool_reserve = 2ull * pool_bytes;
   }
   if (pool_reserve >= max_gpu) {
-    log_error("damacy: batch-output pool reserve=%llu >= "
-              "max_gpu_memory_bytes=%llu; nothing left for wave-resident "
-              "buffers (sample_shape × batch_size × dtype_bpe × 2 exceeds cap)",
-              (unsigned long long)pool_reserve,
-              (unsigned long long)max_gpu);
+    log_error(
+      "damacy: batch-output pool reserve=%llu >= "
+      "max_gpu_memory_bytes=%llu; nothing left for wave-resident "
+      "buffers (sample_shape × samples_per_batch × dtype_bpe × 2 exceeds cap)",
+      (unsigned long long)pool_reserve,
+      (unsigned long long)max_gpu);
     s = DAMACY_BUDGET;
     goto Fail;
   }
@@ -508,7 +509,7 @@ damacy_config_describe(const struct damacy_config* cfg)
     pool_reserve < max_gpu ? max_gpu - pool_reserve : 0;
   log_info("damacy_config_describe: max_gpu_memory_bytes=%llu "
            "(pool_reserve=%llu, resolver_budget=%llu, "
-           "max_chunk_uncompressed_bytes=%llu, batch_size=%u)",
+           "max_chunk_uncompressed_bytes=%llu, samples_per_batch=%u)",
            (unsigned long long)max_gpu,
            (unsigned long long)pool_reserve,
            (unsigned long long)resolver_budget,

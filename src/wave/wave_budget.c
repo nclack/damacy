@@ -190,7 +190,7 @@ predict_pool_total(uint32_t max_chunks_per_wave,
                    uint64_t host_slab_per_wave,
                    uint64_t dev_per_wave,
                    uint64_t max_chunk_uncompressed_bytes,
-                   uint32_t batch_size,
+                   uint32_t samples_per_batch,
                    uint64_t* out_total)
 {
   struct wave_alloc_summary per_wave = { 0 };
@@ -219,10 +219,11 @@ predict_pool_total(uint32_t max_chunks_per_wave,
   const uint64_t fanout_soa_worst =
     per_wave.fanout_soa - fanout_slice_init + fanout_slice_max;
 
-  uint64_t total = 2ull * (per_wave.dev_compressed + per_wave.dev_decompressed +
-                           per_wave.blosc1_meta + fanout_soa_worst) +
-                   nvcomp_temp_max +
-                   2ull * (uint64_t)batch_size * sizeof(struct sample_plan);
+  uint64_t total =
+    2ull * (per_wave.dev_compressed + per_wave.dev_decompressed +
+            per_wave.blosc1_meta + fanout_soa_worst) +
+    nvcomp_temp_max +
+    2ull * (uint64_t)samples_per_batch * sizeof(struct sample_plan);
   *out_total = total;
   return DAMACY_OK;
 }
@@ -232,7 +233,7 @@ wave_pool_resolve_sizing(uint32_t max_chunks_per_wave,
                          uint32_t max_substreams_per_chunk,
                          uint64_t max_gpu_memory_bytes,
                          uint64_t max_chunk_uncompressed_bytes,
-                         uint32_t batch_size,
+                         uint32_t samples_per_batch,
                          struct wave_pool_sizing* out)
 {
   const uint32_t max_substreams_per_wave = damacy_max_substreams_per_wave(
@@ -249,7 +250,7 @@ wave_pool_resolve_sizing(uint32_t max_chunks_per_wave,
                                             min_per_wave,
                                             min_per_wave,
                                             max_chunk_uncompressed_bytes,
-                                            batch_size,
+                                            samples_per_batch,
                                             &total_min);
   if (s != DAMACY_OK)
     return s;
@@ -287,7 +288,7 @@ wave_pool_resolve_sizing(uint32_t max_chunks_per_wave,
                          per_wave,
                          per_wave,
                          max_chunk_uncompressed_bytes,
-                         batch_size,
+                         samples_per_batch,
                          &predicted);
   if (s != DAMACY_OK)
     return s;
@@ -300,7 +301,7 @@ wave_pool_resolve_sizing(uint32_t max_chunks_per_wave,
                            per_wave,
                            per_wave,
                            max_chunk_uncompressed_bytes,
-                           batch_size,
+                           samples_per_batch,
                            &predicted);
     if (s != DAMACY_OK)
       return s;

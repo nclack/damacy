@@ -59,7 +59,7 @@ def main() -> None:
     torch.cuda.set_device(local_rank)
 
     cfg = damacy.Config(
-        batch_size=8,
+        samples_per_batch=8,
         sample_shape=(64, 256, 256),
         max_gpu_memory_bytes=1 << 30,   # per-rank GPU budget
         dtype="bf16",

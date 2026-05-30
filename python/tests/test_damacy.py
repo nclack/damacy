@@ -122,7 +122,7 @@ def _base_config(dtype: str | int | damacy.Dtype = "f32") -> Config:
     zarrs cast in-kernel; tiny_zarr is u16 → f32 here.
     """
     return Config(
-        batch_size=1,
+        samples_per_batch=1,
         dtype=dtype,
         lookahead_batches=2,
         n_io_threads=1,
@@ -270,7 +270,7 @@ def test_oversize_chunk_surfaces_at_pop(tmp_path, write_zarr_script):
 def test_batches_iterator_yields_n(tiny_zarr):
     uri = tiny_zarr
     samples = [Sample(uri=uri, aabb=[(0, 8), (0, 16)]) for _ in range(3)]
-    # Default lookahead (= 2 with batch_size=1, capacity=2) is now smaller
+    # Default lookahead (= 2 with samples_per_batch=1, capacity=2) is now smaller
     # than the push; the wrapper queues the overflow and drains as we pop.
     with Pipeline(_base_config()) as d:
         d.push(samples)
@@ -299,7 +299,7 @@ def test_push_overflows_queue_into_pending(tiny_zarr):
     """Pushing more samples than the native lookahead holds is silently
     handled by the Python-side queue; pop drives the drain."""
     uri = tiny_zarr
-    # default lookahead=2, batch_size=1 → capacity=2; we push 5.
+    # default lookahead=2, samples_per_batch=1 → capacity=2; we push 5.
     samples = [Sample(uri=uri, aabb=[(0, 8), (0, 16)]) for _ in range(5)]
     with Pipeline(_base_config()) as d:
         d.push(samples)
@@ -394,47 +394,52 @@ def test_pop_surfaces_sticky_error_over_drain(tiny_zarr):
 def test_config_validates_eagerly():
     ss = (8, 16)
     gpu = 1 << 30
-    with pytest.raises(ValueError, match="batch_size"):
-        Config(batch_size=0, sample_shape=ss, max_gpu_memory_bytes=gpu)
+    with pytest.raises(ValueError, match="samples_per_batch"):
+        Config(samples_per_batch=0, sample_shape=ss, max_gpu_memory_bytes=gpu)
     with pytest.raises(ValueError, match="lookahead_batches"):
         Config(
-            batch_size=1,
+            samples_per_batch=1,
             sample_shape=ss,
             lookahead_batches=1,
             max_gpu_memory_bytes=gpu,
         )
     with pytest.raises(ValueError, match="n_io_threads"):
-        Config(batch_size=1, sample_shape=ss, n_io_threads=0, max_gpu_memory_bytes=gpu)
+        Config(
+            samples_per_batch=1,
+            sample_shape=ss,
+            n_io_threads=0,
+            max_gpu_memory_bytes=gpu,
+        )
     with pytest.raises(ValueError, match="max_chunk_uncompressed_bytes"):
         Config(
-            batch_size=1,
+            samples_per_batch=1,
             sample_shape=ss,
             max_chunk_uncompressed_bytes=-1,
             max_gpu_memory_bytes=gpu,
         )
     with pytest.raises(ValueError, match="max_gpu_memory_bytes"):
-        Config(batch_size=1, sample_shape=ss, max_gpu_memory_bytes=0)
+        Config(samples_per_batch=1, sample_shape=ss, max_gpu_memory_bytes=0)
     with pytest.raises(ValueError, match="sample_shape"):
-        Config(batch_size=1, sample_shape=(), max_gpu_memory_bytes=gpu)
+        Config(samples_per_batch=1, sample_shape=(), max_gpu_memory_bytes=gpu)
     with pytest.raises(ValueError, match="sample_shape"):
-        Config(batch_size=1, sample_shape=(8, 0), max_gpu_memory_bytes=gpu)
+        Config(samples_per_batch=1, sample_shape=(8, 0), max_gpu_memory_bytes=gpu)
     with pytest.raises(ValueError, match="max_read_op_bytes"):
         Config(
-            batch_size=1,
+            samples_per_batch=1,
             sample_shape=ss,
             max_read_op_bytes=-1,
             max_gpu_memory_bytes=gpu,
         )
     with pytest.raises(ValueError, match="numa_node"):
         Config(
-            batch_size=1,
+            samples_per_batch=1,
             sample_shape=ss,
             max_gpu_memory_bytes=gpu,
             numa_strategy="pin_to",
         )
     with pytest.raises(ValueError, match="numa_node"):
         Config(
-            batch_size=1,
+            samples_per_batch=1,
             sample_shape=ss,
             max_gpu_memory_bytes=gpu,
             numa_strategy="auto",
@@ -484,7 +489,7 @@ def test_native_pipeline_rejects_out_of_range_enums(tiny_zarr):
 
     def _build(**override):
         return _native.Pipeline(
-            batch_size=1,
+            samples_per_batch=1,
             lookahead_batches=2,
             n_io_threads=1,
             n_array_meta_cache=4,
@@ -510,11 +515,11 @@ def test_config_dtype_coerced():
 
 def test_config_replace_for_variants():
     base = _base_config()
-    big = dataclasses.replace(base, batch_size=4)
-    assert base.batch_size == 1 and big.batch_size == 4
+    big = dataclasses.replace(base, samples_per_batch=4)
+    assert base.samples_per_batch == 1 and big.samples_per_batch == 4
     # frozen
     with pytest.raises(dataclasses.FrozenInstanceError):
-        base.batch_size = 99  # type: ignore[misc]
+        base.samples_per_batch = 99  # type: ignore[misc]
 
 
 # ---- stats --------------------------------------------------------------

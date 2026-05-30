@@ -696,7 +696,7 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
 {
   // kws[] / format string / variable list mirror struct damacy_config —
   // keep all three in sync when adding a field.
-  static char* kws[] = { "batch_size",
+  static char* kws[] = { "samples_per_batch",
                          "lookahead_batches",
                          "dtype",
                          "max_chunk_uncompressed_bytes",
@@ -716,7 +716,7 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                          "numa_node",
                          "bypass_decode",
                          NULL };
-  unsigned int batch_size = 0;
+  unsigned int samples_per_batch = 0;
   unsigned int lookahead = 2;
   PyObject* dtype_obj = NULL;
   unsigned int max_chunk_uncompressed = 0;
@@ -739,7 +739,7 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                                    kw,
                                    "IIOIKIIIIO|IIIKiiiip",
                                    kws,
-                                   &batch_size,
+                                   &samples_per_batch,
                                    &lookahead,
                                    &dtype_obj,
                                    &max_chunk_uncompressed,
@@ -779,7 +779,7 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
     return -1;
 
   struct damacy_config cfg = {
-    .samples_per_batch = batch_size,
+    .samples_per_batch = samples_per_batch,
     .lookahead_batches = lookahead,
     .dtype = dt,
     .device = device,

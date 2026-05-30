@@ -59,7 +59,7 @@ def test_native_damacy_error_carries_status_and_what():
     # Cheapest INVAL trigger: max_gpu_memory_bytes=0.
     with pytest.raises(_native.DamacyError) as excinfo:
         _native.Pipeline(
-            batch_size=1,
+            samples_per_batch=1,
             lookahead_batches=2,
             n_io_threads=1,
             n_array_meta_cache=4,

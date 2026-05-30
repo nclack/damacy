@@ -45,7 +45,7 @@ def one_zarr(tmp_path: Path, write_zarr_script: Path) -> str:
 
 def _mk_cfg() -> Config:
     return Config(
-        batch_size=1,
+        samples_per_batch=1,
         dtype="f32",
         lookahead_batches=2,
         n_io_threads=1,

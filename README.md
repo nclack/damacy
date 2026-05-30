@@ -22,7 +22,7 @@ import damacy
 import torch
 
 cfg = damacy.Config(
-    batch_size=8,
+    samples_per_batch=8,
     # Resource caps are fixed at construction; nothing grows after.
     max_gpu_memory_bytes=1 << 30,  # primary GPU budget
     dtype="bf16",                  # source dtype is cast on assemble
@@ -50,7 +50,7 @@ samples = [random_crop() for _ in range(64)]
 
 with damacy.Pipeline(cfg) as p:
     p.push(samples)                                # producer side
-    for batch in p.batches(len(samples) // cfg.batch_size):
+    for batch in p.batches(len(samples) // cfg.samples_per_batch):
         with batch as t:                           # consumer side
             x = torch.from_dlpack(t)               # zero-copy + stream-fenced
             ...                                    # train step

@@ -190,8 +190,8 @@ damacy_flush(struct damacy* self)
     goto Done;
   }
 
-  // Worker only plans at full batch_size; flush emits the truncated tail.
-  // Drain the prefetcher first so the tail count is stable: in-flight
+  // Worker only plans at full samples_per_batch; flush emits the truncated
+  // tail. Drain the prefetcher first so the tail count is stable: in-flight
   // samples may still be admitted, fetched, and reach READY. Reading
   // lookahead size or ready_count_for_batch before settle would miss
   // them.
@@ -277,7 +277,8 @@ damacy_batch_info(const struct damacy_batch* b, struct damacy_batch_info* out)
   out->batch_id = slot->batch_id;
   for (uint8_t d = 0; d < self->batch_pool.rank; ++d)
     out->shape[d] = self->batch_pool.shape[d];
-  // shape[0] reflects actual sample count (< batch_size for flushed partials).
+  // shape[0] reflects actual sample count (< samples_per_batch for flushed
+  // partials).
   out->shape[0] = (int64_t)slot->n_samples;
 }
 

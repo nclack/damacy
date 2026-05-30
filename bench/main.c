@@ -106,7 +106,7 @@ struct scenario
   int64_t sample_shape[DAMACY_MAX_RANK];
   uint32_t n_batches;
   uint32_t n_warmup_batches;
-  uint32_t batch_size;
+  uint32_t samples_per_batch;
   uint64_t sampling_seed;
 
   // pipeline
@@ -356,9 +356,9 @@ parse_scenario(struct cslice src, struct scenario* sc)
     static const struct json_query p_w[] = {
       { QUERY_KEY, .key = "sampling" }, { QUERY_KEY, .key = "n_warmup_batches" }
     };
-    static const struct json_query p_bs[] = {
-      { QUERY_KEY, .key = "sampling" }, { QUERY_KEY, .key = "batch_size" }
-    };
+    static const struct json_query p_bs[] = { { QUERY_KEY, .key = "sampling" },
+                                              { QUERY_KEY,
+                                                .key = "samples_per_batch" } };
     static const struct json_query p_s[] = { { QUERY_KEY, .key = "sampling" },
                                              { QUERY_KEY, .key = "seed" } };
     if (read_uint(src, p_b, countof(p_b), &v))
@@ -368,7 +368,7 @@ parse_scenario(struct cslice src, struct scenario* sc)
     sc->n_warmup_batches = (uint32_t)v;
     if (read_uint(src, p_bs, countof(p_bs), &v))
       return 1;
-    sc->batch_size = (uint32_t)v;
+    sc->samples_per_batch = (uint32_t)v;
     read_uint_opt(src, p_s, countof(p_s), &sc->sampling_seed, 1234);
   }
 
@@ -528,7 +528,7 @@ struct run_metrics
   struct damacy_stats stats;
 };
 
-// Push exactly n_target_batches * batch_size samples and pop
+// Push exactly n_target_batches * samples_per_batch samples and pop
 // n_target_batches batches. When hold_ms > 0, sleeps after a successful
 // pop and before release to simulate the consumer holding the batch.
 // block_out accumulates wait time between releasing batch i-1 (or drive
@@ -549,9 +549,9 @@ drive(struct damacy* d,
       double* push_out,
       double* pop_wait_out)
 {
-  const uint32_t pool_cap = sc->batch_size * sc->lookahead_batches;
+  const uint32_t pool_cap = sc->samples_per_batch * sc->lookahead_batches;
   const uint64_t samples_target =
-    (uint64_t)n_target_batches * (uint64_t)sc->batch_size;
+    (uint64_t)n_target_batches * (uint64_t)sc->samples_per_batch;
   struct damacy_sample* pool =
     (struct damacy_sample*)calloc(pool_cap, sizeof(*pool));
   if (!pool)
@@ -744,7 +744,8 @@ emit_results(const struct scenario* sc, const struct run_metrics* rm, FILE* out)
   for (uint8_t d = 0; d < sc->rank; ++d)
     sample_volume *= (uint64_t)sc->sample_shape[d];
   double sample_bytes_total = (double)rm->stats.batches_emitted *
-                              (double)sc->batch_size * (double)sample_volume;
+                              (double)sc->samples_per_batch *
+                              (double)sample_volume;
   double wall_s = rm->wall_ms / 1e3;
   double throughput_mb_s =
     wall_s > 0.0 ? (sample_bytes_total / 1e6) / wall_s : 0.0;
@@ -834,7 +835,7 @@ main(int argc, char** argv)
           sc.n_warmup_batches);
 
   struct damacy_config cfg = {
-    .samples_per_batch = sc.batch_size,
+    .samples_per_batch = sc.samples_per_batch,
     .lookahead_batches = sc.lookahead_batches,
     .dtype = sc.dtype,
     .sample_rank = sc.rank,
@@ -925,7 +926,7 @@ main(int argc, char** argv)
 
   rm.ttfb_ms = (t_first_pop > 0.0 ? (t_first_pop - t_first_push) : 0.0) * 1e3;
 
-  // Steady-state run. drive() pushes exactly n_batches * batch_size
+  // Steady-state run. drive() pushes exactly n_batches * samples_per_batch
   // samples and pops exactly n_batches batches, so no trailing flush is
   // needed.
   uint64_t pushed_steady = 0, popped_steady = 0;

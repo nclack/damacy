@@ -8,9 +8,10 @@
 // the shape + offset without needing a shared RNG.
 //
 // Test cases:
-//   test_full_array              — single zarr, batch_size=1, full AABB
+//   test_full_array              — single zarr, samples_per_batch=1, full AABB
 //   test_partial_crossing_chunks — single zarr, sub-window across 4 chunks
-//   test_multi_batch             — single zarr, batch_size=2, 3 pop-release
+//   test_multi_batch             — single zarr, samples_per_batch=2, 3
+//   pop-release
 //                                  cycles with distinct AABBs per batch
 //   test_multi_zarr              — two zarrs distinguished by fill offset;
 //                                  batch with one sample from each
@@ -43,11 +44,11 @@ expected_f32_from_u16_2d(int64_t y, int64_t x, int64_t cols, int64_t off)
 }
 
 static struct damacy_config
-mk_cfg(const char* root, uint32_t batch_size, int64_t sy, int64_t sx)
+mk_cfg(const char* root, uint32_t samples_per_batch, int64_t sy, int64_t sx)
 {
   (void)root;
   struct damacy_config c = {
-    .samples_per_batch = batch_size,
+    .samples_per_batch = samples_per_batch,
     .lookahead_batches = 2,
     .dtype = DAMACY_F32,
     .sample_rank = 2,
@@ -176,7 +177,7 @@ test_partial_crossing_chunks(void)
   return 0;
 }
 
-// Three sequential batches off one zarr, each batch_size=2 with
+// Three sequential batches off one zarr, each samples_per_batch=2 with
 // distinct per-sample AABBs. Exercises pop-release-pop slot recycling
 // (the failure mode step 5 needs to handle once batches overlap).
 static int
@@ -378,7 +379,7 @@ test_pipelined(void)
 
   struct damacy_config cfg = mk_cfg(root, 2, 4, 8);
   // Bump lookahead so we can hold 4 batches' worth of samples up front
-  // (4 batches * 2 samples = 8 = lookahead_batches=4 * batch_size=2).
+  // (4 batches * 2 samples = 8 = lookahead_batches=4 * samples_per_batch=2).
   cfg.lookahead_batches = 4;
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
@@ -451,7 +452,7 @@ test_lookahead_backpressure(void)
   int64_t shape[2] = { 4, 8 }, inner[2] = { 2, 4 }, shard[2] = { 4, 8 };
   EXPECT(fixture_write_zarr(p, shape, inner, shard, 2, "uint16", 0) == 0);
 
-  // batch_size=1, lookahead_batches=2 → lookahead cap of 2 samples.
+  // samples_per_batch=1, lookahead_batches=2 → lookahead cap of 2 samples.
   struct damacy_config cfg = mk_cfg(root, 1, 4, 8);
   cfg.lookahead_batches = 2;
   struct damacy* d = NULL;

@@ -52,11 +52,11 @@ mkdtemp_root(char* root, size_t cap)
 }
 
 static struct damacy_config
-mk_cfg(const char* root, uint32_t batch_size, int64_t sy, int64_t sx)
+mk_cfg(const char* root, uint32_t samples_per_batch, int64_t sy, int64_t sx)
 {
   (void)root;
   struct damacy_config c = {
-    .samples_per_batch = batch_size,
+    .samples_per_batch = samples_per_batch,
     .lookahead_batches = 2,
     .dtype = DAMACY_F32,
     .sample_rank = 2,
@@ -214,7 +214,7 @@ test_config_describe(void)
 }
 
 // Issue #59 regime: a non-trivial batch-output pool (sample volume ×
-// batch_size × dtype_bpe × 2) at the default cap. The resolver carves
+// samples_per_batch × dtype_bpe × 2) at the default cap. The resolver carves
 // out pool_reserve from max_gpu_memory_bytes before sizing the wave-
 // resident buffers, so create + push + pop succeed and the committed
 // counter stays at or below the cap after the pop. Pre-fix, the lazy
@@ -235,7 +235,7 @@ test_pool_reserve_fits_default_budget(void)
   EXPECT(fixture_write_zarr_codec(
            p, shape, inner, shard, 4, "uint16", 0, "blosc-zstd") == 0);
 
-  // batch_size=20, sample=(16,1,256,256) f32 → 80 MB per slot, 160 MB
+  // samples_per_batch=20, sample=(16,1,256,256) f32 → 80 MB per slot, 160 MB
   // double-buffered. 1 GiB cap leaves ~860 MB for the resolver,
   // comfortably fits the wave-resident geometry.
   struct damacy_config cfg = {

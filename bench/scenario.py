@@ -70,7 +70,7 @@ class Sampling(BaseModel):
     sample_shape: list[int]
     n_batches: int = Field(gt=0)
     n_warmup_batches: int = 0
-    batch_size: int = Field(gt=0)
+    samples_per_batch: int = Field(gt=0)
     seed: int = 1234
 
 

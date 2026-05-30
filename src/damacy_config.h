@@ -54,7 +54,7 @@ resolve_sample_shape(const struct damacy_config* cfg,
                      int64_t* out_shape,
                      uint8_t* out_rank);
 
-// product(sample_shape) × batch_size × dtype_bpe(dtype). Writes the
+// product(sample_shape) × samples_per_batch × dtype_bpe(dtype). Writes the
 // value into *out_bytes. Returns DAMACY_INVAL on a bad sample_shape /
 // rank (same conditions as resolve_sample_shape).
 enum damacy_status

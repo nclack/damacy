@@ -24,7 +24,7 @@ Compute the *floor* — the smallest budget that admits the
 configuration — then round up generously:
 
 ```text
-pool_reservation       = 2 × batch_size × prod(sample_shape) × dtype_bytes
+pool_reservation       = 2 × samples_per_batch × prod(sample_shape) × dtype_bytes
 one_chunk_per_wave     ≈ max_chunk_uncompressed_bytes × 2   # compressed + decoded buffers, one chunk
 both_waves_one_chunk   ≈ 2 × one_chunk_per_wave             # two GPU waves resident at once
 budget_floor           ≈ pool_reservation + both_waves_one_chunk + scratch_slack
@@ -44,7 +44,7 @@ wave at the configured chunk cap. Any budget headroom above the
 floor lets damacy size each wave to hold many chunks at once —
 fewer wave turnovers per batch, better overlap.
 
-A worked example for `batch_size=8`, `bf16` (2 bytes/element),
+A worked example for `samples_per_batch=8`, `bf16` (2 bytes/element),
 `sample_shape=(64, 256, 256)`, `max_chunk_uncompressed_bytes=4 MiB`:
 
 ```text
@@ -103,7 +103,7 @@ Four buckets share `max_gpu_memory_bytes`:
 
 | Bucket                  | What it holds                                              | Scales with                                              |
 | ----------------------- | ---------------------------------------------------------- | -------------------------------------------------------- |
-| Output batch pool       | The batches you `pop`, double-buffered                     | `batch_size`, `sample_shape`, dtype                      |
+| Output batch pool       | The batches you `pop`, double-buffered                     | `samples_per_batch`, `sample_shape`, dtype                      |
 | Wave-resident buffers   | Compressed + decoded chunk bytes for the two in-flight waves | budget headroom, in `max_chunk_uncompressed_bytes` steps |
 | Decoder scratch         | nvcomp's working memory                                    | Peak sub-stream count in the dataset                     |
 | Per-wave metadata       | Pointer/size arrays for the decoder                        | Peak sub-stream count                                    |
@@ -156,7 +156,7 @@ with a logged breakdown of what it tried to reserve, before any
 streaming has started. The fix is one of:
 
 1. Raise `max_gpu_memory_bytes`. This is the usual answer.
-2. Reduce `batch_size` or `sample_shape`. The pool reservation
+2. Reduce `samples_per_batch` or `sample_shape`. The pool reservation
    scales linearly with both, and it is the part of the budget
    you control most directly.
 3. Reduce `max_chunk_uncompressed_bytes` if your dataset happens

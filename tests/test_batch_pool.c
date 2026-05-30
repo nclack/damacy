@@ -20,7 +20,7 @@ test_compute_layout_simple(void)
 {
   struct damacy_batch_pool pool = { 0 };
   const int64_t shape[2] = { 32, 64 };
-  // batch_size=8, bpe=4 → 8 × 32 × 64 × 4 = 65536
+  // samples_per_batch=8, bpe=4 → 8 × 32 × 64 × 4 = 65536
   EXPECT(batch_pool_compute_layout(&pool, shape, 2, 8, 4) == DAMACY_OK);
   EXPECT(pool.layout_set == 1);
   EXPECT(pool.allocated == 0);

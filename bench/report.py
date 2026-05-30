@@ -237,7 +237,7 @@ def _scenario_panel(r: Results) -> Panel:
         f"src_dtypes={sc.dataset.dtypes}\n"
         f"[dim]sampling[/dim] n_batches={sc.sampling.n_batches} "
         f"(warmup={sc.sampling.n_warmup_batches}) "
-        f"batch_size={sc.sampling.batch_size} "
+        f"samples_per_batch={sc.sampling.samples_per_batch} "
         f"sample_shape={sc.sampling.sample_shape}\n"
         f"[dim]pipeline[/dim] dst_dtype={sc.pipeline.dtype} "
         f"lookahead={sc.pipeline.lookahead_batches} "

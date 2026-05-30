@@ -42,7 +42,7 @@ struct damacy_batch_slot
   struct chunk_plan* chunk_plans;       // size DAMACY_MAX_CHUNKS_PER_BATCH
   struct read_op_group* read_op_groups; // size DAMACY_MAX_CHUNKS_PER_BATCH
   uint32_t n_read_op_groups;
-  struct sample_plan* sample_plans; // size cfg.batch_size
+  struct sample_plan* sample_plans; // size cfg.samples_per_batch
   // Reset before each plan into the slot; bounds the working set to
   // distinct shard paths in one batch.
   struct path_intern paths;
@@ -68,7 +68,7 @@ struct damacy_batch_pool
   struct damacy_batch_slot slots[2];
   uint64_t n_bytes;                     // size of one slot's output
   uint8_t rank;                         // includes leading N axis
-  int64_t shape[DAMACY_MAX_RANK + 1];   // [batch_size, ...sample_axes]
+  int64_t shape[DAMACY_MAX_RANK + 1];   // [samples_per_batch, ...sample_axes]
   int64_t strides[DAMACY_MAX_RANK + 1]; // row-major elements
   int layout_set;                       // shape/strides/n_bytes computed
   int allocated;                        // dev_ptrs alloc'd (implies layout_set)
@@ -76,7 +76,7 @@ struct damacy_batch_pool
 
 // Returns 0 on success, non-zero on alloc failure.
 int
-batch_slot_init(struct damacy_batch_slot* slot, uint32_t batch_size_cap);
+batch_slot_init(struct damacy_batch_slot* slot, uint32_t samples_per_batch_cap);
 void
 batch_slot_destroy(struct damacy_batch_slot* slot, int cuda_skip);
 void
@@ -92,7 +92,7 @@ enum damacy_status
 batch_pool_compute_layout(struct damacy_batch_pool* pool,
                           const int64_t* sample_shape,
                           uint8_t sample_rank,
-                          uint32_t batch_size,
+                          uint32_t samples_per_batch,
                           uint32_t bpe);
 
 // Allocates dev_ptr for both slots (size pool->n_bytes each). Requires

@@ -10,7 +10,7 @@
 #include <string.h>
 
 int
-batch_slot_init(struct damacy_batch_slot* slot, uint32_t batch_size_cap)
+batch_slot_init(struct damacy_batch_slot* slot, uint32_t samples_per_batch_cap)
 {
   slot->read_ops = (struct read_op*)calloc(DAMACY_MAX_CHUNKS_PER_BATCH,
                                            sizeof(struct read_op));
@@ -21,11 +21,12 @@ batch_slot_init(struct damacy_batch_slot* slot, uint32_t batch_size_cap)
   slot->read_op_groups = (struct read_op_group*)calloc(
     DAMACY_MAX_CHUNKS_PER_BATCH, sizeof(struct read_op_group));
   CHECK(Error, slot->read_op_groups);
-  slot->sample_plans =
-    (struct sample_plan*)calloc(batch_size_cap, sizeof(struct sample_plan));
+  slot->sample_plans = (struct sample_plan*)calloc(samples_per_batch_cap,
+                                                   sizeof(struct sample_plan));
   CHECK(Error, slot->sample_plans);
   CUdeviceptr dptr = 0;
-  if (cuMemAlloc(&dptr, (size_t)batch_size_cap * sizeof(struct sample_plan)) !=
+  if (cuMemAlloc(&dptr,
+                 (size_t)samples_per_batch_cap * sizeof(struct sample_plan)) !=
       CUDA_SUCCESS)
     goto Error;
   slot->d_sample_plans = (void*)(uintptr_t)dptr;
@@ -68,7 +69,7 @@ enum damacy_status
 batch_pool_compute_layout(struct damacy_batch_pool* pool,
                           const int64_t* sample_shape,
                           uint8_t sample_rank,
-                          uint32_t batch_size,
+                          uint32_t samples_per_batch,
                           uint32_t bpe)
 {
   if (pool->layout_set)
@@ -80,7 +81,7 @@ batch_pool_compute_layout(struct damacy_batch_pool* pool,
   CHECK_SILENT(Rank, full_rank <= DAMACY_MAX_RANK + 1);
 
   int64_t spatial_volume = 1;
-  pool->shape[0] = (int64_t)batch_size;
+  pool->shape[0] = (int64_t)samples_per_batch;
   for (uint8_t d = 0; d < sample_rank; ++d) {
     CHECK_SILENT(Invalid, sample_shape[d] > 0);
     pool->shape[d + 1] = sample_shape[d];
@@ -91,7 +92,7 @@ batch_pool_compute_layout(struct damacy_batch_pool* pool,
   for (int d = (int)full_rank - 2; d >= 0; --d)
     pool->strides[d] = pool->strides[d + 1] * pool->shape[d + 1];
   pool->n_bytes =
-    (uint64_t)batch_size * (uint64_t)spatial_volume * (uint64_t)bpe;
+    (uint64_t)samples_per_batch * (uint64_t)spatial_volume * (uint64_t)bpe;
   pool->layout_set = 1;
   return DAMACY_OK;
 Rank:
