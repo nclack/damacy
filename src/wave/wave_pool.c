@@ -1115,7 +1115,7 @@ slot_mark_busy(struct host_slab_slot* hs)
 }
 
 static enum damacy_status
-advance_io_slots(struct wave_pool* wp, int* changed)
+advance_io_slots_to_ready(struct wave_pool* wp, int* changed)
 {
   for (uint8_t s = 0; s < wp->n_slots; ++s) {
     struct host_slab_slot* hs = &wp->slots[s];
@@ -1131,7 +1131,7 @@ advance_io_slots(struct wave_pool* wp, int* changed)
 }
 
 static enum damacy_status
-bind_ready_slots(struct wave_pool* wp, int* changed)
+bind_ready_slots_to_free_waves(struct wave_pool* wp, int* changed)
 {
   for (int w = 0; w < DAMACY_N_WAVES; ++w) {
     struct damacy_wave* wave = &wp->waves[w];
@@ -1149,9 +1149,9 @@ bind_ready_slots(struct wave_pool* wp, int* changed)
 }
 
 static enum damacy_status
-release_bound_slot_if_ready(struct wave_pool* wp,
-                            struct damacy_wave* wave,
-                            int* changed)
+release_bound_slot_after_bulk_h2d(struct wave_pool* wp,
+                                  struct damacy_wave* wave,
+                                  int* changed)
 {
   if (wave->bound_slot < 0)
     return DAMACY_OK;
@@ -1167,7 +1167,7 @@ release_bound_slot_if_ready(struct wave_pool* wp,
 static enum damacy_status
 advance_h2d_wave(struct wave_pool* wp, struct damacy_wave* wave, int* changed)
 {
-  enum damacy_status s = release_bound_slot_if_ready(wp, wave, changed);
+  enum damacy_status s = release_bound_slot_after_bulk_h2d(wp, wave, changed);
   if (s != DAMACY_OK)
     return s;
 
@@ -1226,7 +1226,7 @@ advance_one_wave(struct wave_pool* wp, struct damacy_wave* wave, int* changed)
 }
 
 static enum damacy_status
-advance_waves(struct wave_pool* wp, int* changed)
+advance_active_waves(struct wave_pool* wp, int* changed)
 {
   for (int w = 0; w < DAMACY_N_WAVES; ++w) {
     enum damacy_status s = advance_one_wave(wp, &wp->waves[w], changed);
@@ -1236,24 +1236,36 @@ advance_waves(struct wave_pool* wp, int* changed)
   return DAMACY_OK;
 }
 
+typedef enum damacy_status (*wave_pool_advance_phase)(struct wave_pool* wp,
+                                                      int* changed);
+
+static enum damacy_status
+run_advance_phases(struct wave_pool* wp, int* changed)
+{
+  // Phase order is load-bearing. Wave progress runs after ready-slot binding
+  // so a wave freed in this tick can only bind work on the next tick; reversing
+  // the order permits same-tick free-to-bind and complicates rollback paths.
+  static const wave_pool_advance_phase phases[] = {
+    // SLOT_IO -> SLOT_READY. Fill-only waves skip the IO query because no
+    // submission was made.
+    advance_io_slots_to_ready,
+    // SLOT_READY -> WAVE_H2D on free waves.
+    bind_ready_slots_to_free_waves,
+    // WAVE_H2D -> WAVE_POST -> WAVE_FREE. Slots release after bulk_h2d_end,
+    // independent of h2d_end, so peel can refill them as early as possible.
+    advance_active_waves,
+  };
+
+  for (size_t i = 0; i < sizeof(phases) / sizeof(phases[0]); ++i) {
+    enum damacy_status s = phases[i](wp, changed);
+    if (s != DAMACY_OK)
+      return s;
+  }
+  return DAMACY_OK;
+}
+
 enum damacy_status
 wave_pool_advance(struct wave_pool* wp, int* changed)
 {
-  // Pass 1: SLOT_IO → SLOT_READY when IO completes. Fill-only waves
-  // (is_fill_wave) skip the IO query — no submission was made.
-  enum damacy_status s = advance_io_slots(wp, changed);
-  if (s != DAMACY_OK)
-    return s;
-
-  // Pass 2: bind SLOT_READY to WAVE_FREE waves.
-  s = bind_ready_slots(wp, changed);
-  if (s != DAMACY_OK)
-    return s;
-
-  // Pass 3: drive wave state machine. Release slots on bulk_h2d_end
-  // (independent of h2d_end) so peel can refill them as early as
-  // possible. Ordering vs Pass 2 is load-bearing: a wave freed here
-  // only rebinds on the next tick. Running Pass 3 before Pass 2 would
-  // let a same-tick free→bind happen and could compound rollback paths.
-  return advance_waves(wp, changed);
+  return run_advance_phases(wp, changed);
 }
