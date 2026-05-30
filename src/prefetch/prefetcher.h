@@ -21,14 +21,10 @@ extern "C"
     uint32_t batch_capacity;
   };
 
-  enum prefetcher_sample_state
+  enum prefetcher_result
   {
-    PREFETCHER_FREE = 0,
-    PREFETCHER_PENDING_ARRAY_META,
-    PREFETCHER_PENDING_SHARD_INDEX,
-    PREFETCHER_PENDING_CHUNK_LAYOUT,
-    PREFETCHER_READY,
-    PREFETCHER_ERROR,
+    PREFETCHER_RESULT_READY = 0,
+    PREFETCHER_RESULT_ERROR,
   };
 
   struct prefetcher_stats
@@ -58,8 +54,8 @@ extern "C"
   // saturation path).
   struct prefetcher_ready
   {
-    enum prefetcher_sample_state state; // READY or ERROR
-    int err_code;                       // damacy_status when state == ERROR
+    enum prefetcher_result result;
+    int err_code; // damacy_status when result == PREFETCHER_RESULT_ERROR
     char* uri;
     struct damacy_aabb aabb;
     uint64_t batch_id;
@@ -94,7 +90,7 @@ extern "C"
 
   // NULL if no in-flight samples; valid until released or destroyed.
   // Returns NULL when the batch is unknown OR was rejected at batch-capacity
-  // saturation; in the saturation case a PREFETCHER_ERROR slot with
+  // saturation; in the saturation case a PREFETCHER_RESULT_ERROR slot with
   // DAMACY_OOM appears via pop_ready.
   const struct prefetch_gate* prefetcher_batch_gate(struct prefetcher* p,
                                                     uint64_t batch_id);

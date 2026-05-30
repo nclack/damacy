@@ -298,7 +298,7 @@ test_pop_ready_returns_completed_sample(void)
 
   struct prefetcher_ready r = { 0 };
   EXPECT(prefetcher_pop_ready(fx.p, &r) == 1);
-  EXPECT(r.state == PREFETCHER_READY);
+  EXPECT(r.result == PREFETCHER_RESULT_READY);
   EXPECT(strcmp(r.uri, "foo") == 0);
   EXPECT(r.batch_id == 7);
   EXPECT(r.n_shards == 1);
@@ -328,7 +328,7 @@ test_pop_ready_surfaces_error_state(void)
 
   struct prefetcher_ready r = { 0 };
   EXPECT(prefetcher_pop_ready(fx.p, &r) == 1);
-  EXPECT(r.state == PREFETCHER_ERROR);
+  EXPECT(r.result == PREFETCHER_RESULT_ERROR);
   EXPECT(r.err_code != 0);
   EXPECT(strcmp(r.uri, "missing") == 0);
   prefetcher_ready_free(&r);
@@ -525,7 +525,7 @@ test_admit_fail_releases_batch_entry(void)
 
   struct prefetcher_ready r = { 0 };
   EXPECT(prefetcher_pop_ready(fx.p, &r) == 1);
-  EXPECT(r.state == PREFETCHER_ERROR);
+  EXPECT(r.result == PREFETCHER_RESULT_ERROR);
   EXPECT(r.batch_id == 99);
   EXPECT(r.err_code == DAMACY_OOM);
   prefetcher_ready_free(&r);
@@ -652,7 +652,7 @@ test_batch_capacity_saturation_surfaces_error(void)
   for (int i = 0; i < 8; ++i) {
     struct prefetcher_ready r = { 0 };
     EXPECT(prefetcher_pop_ready(fx.p, &r) == 1);
-    EXPECT(r.state == PREFETCHER_READY);
+    EXPECT(r.result == PREFETCHER_RESULT_READY);
     prefetcher_ready_free(&r);
   }
 
@@ -661,7 +661,7 @@ test_batch_capacity_saturation_surfaces_error(void)
 
   struct prefetcher_ready r = { 0 };
   EXPECT(prefetcher_pop_ready(fx.p, &r) == 1);
-  EXPECT(r.state == PREFETCHER_ERROR);
+  EXPECT(r.result == PREFETCHER_RESULT_ERROR);
   EXPECT(r.batch_id == 99);
   EXPECT(r.err_code == DAMACY_OOM);
   prefetcher_ready_free(&r);
@@ -690,7 +690,7 @@ test_batch_table_recycles_after_release(void)
   for (uint64_t i = 0; i < 8; ++i) {
     struct prefetcher_ready r = { 0 };
     EXPECT(prefetcher_pop_ready(fx.p, &r) == 1);
-    EXPECT(r.state == PREFETCHER_READY);
+    EXPECT(r.result == PREFETCHER_RESULT_READY);
     prefetcher_ready_free(&r);
     prefetcher_release_batch(fx.p, i);
     EXPECT(prefetcher_batch_gate(fx.p, i) == NULL);
@@ -703,7 +703,7 @@ test_batch_table_recycles_after_release(void)
   for (uint64_t i = 100; i < 108; ++i) {
     struct prefetcher_ready r = { 0 };
     EXPECT(prefetcher_pop_ready(fx.p, &r) == 1);
-    EXPECT(r.state == PREFETCHER_READY);
+    EXPECT(r.result == PREFETCHER_RESULT_READY);
     EXPECT(r.err_code == 0);
     prefetcher_ready_free(&r);
     prefetcher_release_batch(fx.p, i);
@@ -733,7 +733,7 @@ test_missing_shard_reaches_ready(void)
 
   struct prefetcher_ready r = { 0 };
   EXPECT(prefetcher_pop_ready(fx.p, &r) == 1);
-  EXPECT(r.state == PREFETCHER_READY);
+  EXPECT(r.result == PREFETCHER_RESULT_READY);
   EXPECT(r.n_shards == 1);
   EXPECT(prefetch_handle_valid(r.h_layout));
   int err = 0;

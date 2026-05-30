@@ -14,9 +14,36 @@
 #include <stdlib.h>
 #include <string.h>
 
+struct prefetcher;
+struct prefetcher_slot;
+
+struct prefetcher_state
+{
+  const char* name;
+  void (*advance)(struct prefetcher*, struct prefetcher_slot*);
+};
+
+static void
+advance_from_meta(struct prefetcher* p, struct prefetcher_slot* s);
+static void
+advance_from_shard(struct prefetcher* p, struct prefetcher_slot* s);
+static void
+advance_from_layout(struct prefetcher* p, struct prefetcher_slot* s);
+
+#define DEFINE_PREFETCHER_STATE(id, advance_fn)                                \
+  static const struct prefetcher_state state_##id = { .name = #id,             \
+                                                      .advance = advance_fn }
+
+DEFINE_PREFETCHER_STATE(free, NULL);
+DEFINE_PREFETCHER_STATE(pending_meta, advance_from_meta);
+DEFINE_PREFETCHER_STATE(pending_shards, advance_from_shard);
+DEFINE_PREFETCHER_STATE(pending_layout, advance_from_layout);
+DEFINE_PREFETCHER_STATE(ready, NULL);
+DEFINE_PREFETCHER_STATE(error, NULL);
+
 struct prefetcher_slot
 {
-  enum prefetcher_sample_state state;
+  const struct prefetcher_state* state;
   int err_code;
   char* uri;
   struct damacy_aabb aabb;
@@ -140,11 +167,62 @@ batch_sweep_locked(struct prefetcher* p)
 }
 
 static int
+slot_free(const struct prefetcher_slot* s)
+{
+  return !s->state || s->state == &state_free;
+}
+
+static int
 slot_active(const struct prefetcher_slot* s)
 {
-  return s->state == PREFETCHER_PENDING_ARRAY_META ||
-         s->state == PREFETCHER_PENDING_SHARD_INDEX ||
-         s->state == PREFETCHER_PENDING_CHUNK_LAYOUT;
+  return s->state && s->state->advance != NULL;
+}
+
+static int
+slot_terminal(const struct prefetcher_slot* s)
+{
+  return s->state == &state_ready || s->state == &state_error;
+}
+
+static int
+slot_failed(const struct prefetcher_slot* s)
+{
+  return s->state == &state_error;
+}
+
+static void
+slot_set_state(struct prefetcher_slot* s, const struct prefetcher_state* state)
+{
+  s->state = state;
+}
+
+static void
+slot_reset_free(struct prefetcher_slot* s)
+{
+  *s = (struct prefetcher_slot){ .state = &state_free };
+}
+
+static enum prefetcher_result
+slot_result(const struct prefetcher_slot* s)
+{
+  return slot_failed(s) ? PREFETCHER_RESULT_ERROR : PREFETCHER_RESULT_READY;
+}
+
+static void
+slot_fail(struct prefetcher* p, struct prefetcher_slot* s, int err_code)
+{
+  if (s->gate)
+    prefetch_gate_set_error(s->gate);
+  slot_set_state(s, &state_error);
+  s->err_code = err_code ? err_code : DAMACY_INVAL;
+  p->errored++;
+}
+
+static void
+slot_mark_ready(struct prefetcher* p, struct prefetcher_slot* s)
+{
+  slot_set_state(s, &state_ready);
+  p->ready++;
 }
 
 static struct prefetch_handle
@@ -162,15 +240,6 @@ request_chunk_layout(struct prefetcher* p, struct prefetcher_slot* s)
                                 &key,
                                 s->batch_id,
                                 s->gate);
-}
-
-static void
-fail_slot(struct prefetcher* p, struct prefetcher_slot* s, int err_code)
-{
-  prefetch_gate_set_error(s->gate);
-  s->state = PREFETCHER_ERROR;
-  s->err_code = err_code ? err_code : DAMACY_INVAL;
-  p->errored++;
 }
 
 static void
@@ -201,7 +270,7 @@ advance_from_meta(struct prefetcher* p, struct prefetcher_slot* s)
       err = DAMACY_OOM;
       goto Bad;
     }
-    s->state = PREFETCHER_PENDING_CHUNK_LAYOUT;
+    slot_set_state(s, &state_pending_layout);
     return;
   }
 
@@ -241,10 +310,10 @@ advance_from_meta(struct prefetcher* p, struct prefetcher_slot* s)
     i++;
   }
   s->n_shards = (uint32_t)n;
-  s->state = PREFETCHER_PENDING_SHARD_INDEX;
+  slot_set_state(s, &state_pending_shards);
   return;
 Bad:
-  fail_slot(p, s, err);
+  slot_fail(p, s, err);
 }
 
 static void
@@ -270,10 +339,10 @@ advance_from_shard(struct prefetcher* p, struct prefetcher_slot* s)
     err = DAMACY_OOM;
     goto Bad;
   }
-  s->state = PREFETCHER_PENDING_CHUNK_LAYOUT;
+  slot_set_state(s, &state_pending_layout);
   return;
 Bad:
-  fail_slot(p, s, err);
+  slot_fail(p, s, err);
 }
 
 static void
@@ -286,11 +355,10 @@ advance_from_layout(struct prefetcher* p, struct prefetcher_slot* s)
     return;
   if (st == PREFETCH_STATE_ERROR)
     goto Bad;
-  s->state = PREFETCHER_READY;
-  p->ready++;
+  slot_mark_ready(p, s);
   return;
 Bad:
-  fail_slot(p, s, err);
+  slot_fail(p, s, err);
 }
 
 // Lock order: p->lock outermost. advance_all may take cache locks inside;
@@ -300,19 +368,8 @@ advance_all(struct prefetcher* p)
 {
   for (uint32_t i = 0; i < p->capacity; ++i) {
     struct prefetcher_slot* s = &p->slots[i];
-    switch (s->state) {
-      case PREFETCHER_PENDING_ARRAY_META:
-        advance_from_meta(p, s);
-        break;
-      case PREFETCHER_PENDING_SHARD_INDEX:
-        advance_from_shard(p, s);
-        break;
-      case PREFETCHER_PENDING_CHUNK_LAYOUT:
-        advance_from_layout(p, s);
-        break;
-      default:
-        break;
-    }
+    if (slot_active(s))
+      s->state->advance(p, s);
   }
 }
 
@@ -325,7 +382,7 @@ scan_slots_locked(struct prefetcher* p,
   *out_has_in_flight = 0;
   for (uint32_t i = 0; i < p->capacity; ++i) {
     struct prefetcher_slot* s = &p->slots[i];
-    if (!*out_free && s->state == PREFETCHER_FREE)
+    if (!*out_free && slot_free(s))
       *out_free = s;
     else if (slot_active(s))
       *out_has_in_flight = 1;
@@ -340,19 +397,16 @@ emit_error_slot_locked(struct prefetcher* p,
                        struct prefetch_gate* gate,
                        int err_code)
 {
-  prefetch_gate_set_error(gate);
   // Assign admit_seq so pop_terminal_slot_locked returns this ERROR slot
   // in push order; without this it lands at admit_seq=0 and pops first.
   *slot = (struct prefetcher_slot){
-    .state = PREFETCHER_ERROR,
-    .err_code = err_code,
     .uri = popped->uri,
     .aabb = popped->aabb,
     .batch_id = popped->batch_id,
     .admit_seq = p->next_admit_seq++,
     .gate = gate,
   };
-  p->errored++;
+  slot_fail(p, slot, err_code);
 }
 
 static void
@@ -382,7 +436,6 @@ admit_locked(struct prefetcher* p,
     return;
   }
   *slot = (struct prefetcher_slot){
-    .state = PREFETCHER_PENDING_ARRAY_META,
     .uri = popped->uri,
     .aabb = popped->aabb,
     .batch_id = popped->batch_id,
@@ -390,6 +443,7 @@ admit_locked(struct prefetcher* p,
     .gate = gate,
     .h_meta = h,
   };
+  slot_set_state(slot, &state_pending_meta);
   p->submitted++;
   return;
 Drop:
@@ -459,6 +513,8 @@ prefetcher_create(const struct prefetcher_config* cfg)
   self->slots =
     (struct prefetcher_slot*)calloc(cfg->capacity, sizeof(*self->slots));
   CHECK(Error, self->slots);
+  for (uint32_t i = 0; i < cfg->capacity; ++i)
+    slot_reset_free(&self->slots[i]);
   self->batches = (struct prefetcher_batch_entry*)calloc(
     cfg->batch_capacity, sizeof(*self->batches));
   CHECK(Error, self->batches);
@@ -555,7 +611,7 @@ pop_terminal_slot_locked(struct prefetcher* self,
   uint64_t best_seq = 0;
   for (uint32_t i = 0; i < self->capacity; ++i) {
     struct prefetcher_slot* s = &self->slots[i];
-    if (s->state != PREFETCHER_READY && s->state != PREFETCHER_ERROR)
+    if (!slot_terminal(s))
       continue;
     if (match_batch_id && s->batch_id != *match_batch_id)
       continue;
@@ -569,7 +625,7 @@ pop_terminal_slot_locked(struct prefetcher* self,
 
   struct prefetcher_slot* s = &self->slots[best];
   *out = (struct prefetcher_ready){
-    .state = s->state,
+    .result = slot_result(s),
     .err_code = s->err_code,
     .uri = s->uri,
     .aabb = s->aabb,
@@ -581,7 +637,7 @@ pop_terminal_slot_locked(struct prefetcher* self,
   };
   uint64_t batch_id = s->batch_id;
   free(s->shard_coords);
-  *s = (struct prefetcher_slot){ .state = PREFETCHER_FREE };
+  slot_reset_free(s);
   batch_unref_locked(self, batch_id);
   return 1;
 }
@@ -624,8 +680,7 @@ prefetcher_ready_count_for_batch(struct prefetcher* self, uint64_t batch_id)
   uint32_t n = 0;
   for (uint32_t i = 0; i < self->capacity; ++i) {
     const struct prefetcher_slot* s = &self->slots[i];
-    if ((s->state == PREFETCHER_READY || s->state == PREFETCHER_ERROR) &&
-        s->batch_id == batch_id)
+    if (slot_terminal(s) && s->batch_id == batch_id)
       n++;
   }
   platform_mutex_unlock(self->lock);
@@ -670,7 +725,7 @@ prefetcher_has_ready(struct prefetcher* self)
   int found = 0;
   for (uint32_t i = 0; i < self->capacity; ++i) {
     const struct prefetcher_slot* s = &self->slots[i];
-    if (s->state == PREFETCHER_READY || s->state == PREFETCHER_ERROR) {
+    if (slot_terminal(s)) {
       found = 1;
       break;
     }
