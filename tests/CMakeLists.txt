@@ -58,22 +58,34 @@ add_damacy_test(test_scheduler scheduler platform log)
 # DAMACY_FUZZ (which disables the CUDA-linked damacy target). Also
 # requires `uv` on PATH at test time (provided by flake.nix devShell).
 if(NOT DAMACY_FUZZ)
+    add_library(cuda_test_util STATIC cuda_init.c cuda_init.h)
+    target_include_directories(
+        cuda_test_util
+        PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    target_link_libraries(cuda_test_util PRIVATE warnings)
+    target_link_libraries(cuda_test_util PUBLIC CUDA::cuda_driver)
+
     add_damacy_test(test_damacy damacy test_fixture)
     target_sources(test_damacy PRIVATE spin_kernel.cu)
-    target_link_libraries(test_damacy PRIVATE CUDA::cudart_static)
+    target_link_libraries(
+        test_damacy
+        PRIVATE CUDA::cudart_static cuda_test_util
+    )
     add_damacy_test(test_damacy_blosc damacy test_fixture)
-    add_damacy_test(test_damacy_caps damacy decoder test_fixture CUDA::cuda_driver)
+    target_link_libraries(test_damacy_blosc PRIVATE cuda_test_util)
+    add_damacy_test(test_damacy_caps damacy decoder test_fixture cuda_test_util)
     add_damacy_test(test_damacy_ctx damacy test_fixture CUDA::cuda_driver)
     add_damacy_test(test_batch_pool batch_pool log CUDA::cuda_driver)
     add_damacy_test(test_render_job render_job log CUDA::cuda_driver)
     add_damacy_test(test_wave_dispatcher render_job log CUDA::cuda_driver)
     add_damacy_test(test_wave_pool wave_pool render_job log CUDA::cuda_driver)
-    add_damacy_test(test_wave_pool_advance wave_pool render_job gpu_budget log CUDA::cuda_driver)
-    add_damacy_test(test_gpu_budget wave_budget log CUDA::cuda_driver)
+    add_damacy_test(test_wave_pool_advance wave_pool render_job gpu_budget log cuda_test_util)
+    add_damacy_test(test_gpu_budget wave_budget log cuda_test_util)
     add_damacy_test(test_assemble assemble CUDA::cuda_driver CUDA::cudart_static)
     add_damacy_test(test_decoder decoder CUDA::cuda_driver)
     if(DAMACY_ENABLE_GDS)
-        add_damacy_test(test_store_fs_gds store lru hash log CUDA::cuda_driver)
+        add_damacy_test(test_store_fs_gds store lru hash log cuda_test_util)
         set_tests_properties(test_store_fs_gds PROPERTIES LABELS DAMACY_GDS)
     endif()
 endif()

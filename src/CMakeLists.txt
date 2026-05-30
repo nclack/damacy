@@ -6,10 +6,8 @@
 add_src_lib(log SOURCES log/log.h log/log.c ${PROJECT_SOURCE_DIR}/src/damacy_log.h LINKS platform)
 
 # Phase 6 observability: NVTX wrappers + named CUDA streams.
-# DAMACY_NVTX_ENABLED=ON (default for non-fuzz builds) links the
-# header-only NVTX v3 against CUDA::nvtx3 and compiles the wrappers in
-# nvtx/nvtx.c. OFF picks up the inline no-op flavor in nvtx/nvtx.h
-# instead — call sites stay zero-cost. Toggle via:
+# DAMACY_NVTX_ENABLED=ON (default for non-fuzz builds) links NVTX v3
+# against CUDA::nvtx3. OFF uses no-op wrapper definitions. Toggle via:
 #   cmake -B build -DDAMACY_NVTX_ENABLED=ON|OFF
 # Fuzz builds always OFF (no CUDA, and the timeline isn't interesting
 # in libFuzzer). The .c is always in the source list (gives the static
@@ -219,6 +217,7 @@ add_cuda_lib(decoder
             decoder/decoder_memcpy.h decoder/decoder_memcpy.cu
             decoder/blosc1.h
             decoder/blosc1_parse.h decoder/blosc1_parse.cu
+            decoder/launch_check.h decoder/launch_check.cu
             decoder/status_reduce.h decoder/status_reduce.cu
     LINKS CUDA::cudart_static CUDA::cuda_driver nvcomp::nvcomp log zarr
           planner assemble zarr_chunk_layout

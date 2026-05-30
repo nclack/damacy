@@ -211,7 +211,7 @@ wave_pool_resolve_sizing(uint32_t max_chunks_per_wave,
                          uint32_t samples_per_batch,
                          struct wave_pool_sizing* out)
 {
-  const uint32_t max_substreams_per_wave = damacy_max_substreams_per_wave(
+  const uint32_t max_substreams_per_wave = DAMACY_MAX_SUBSTREAMS_PER_WAVE(
     max_chunks_per_wave, max_substreams_per_chunk);
   const uint64_t min_per_wave = max_chunk_uncompressed_bytes;
   uint64_t total_min = 0;

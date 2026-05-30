@@ -73,7 +73,7 @@ wave_pool_init(struct wave_pool* wp,
   wp->input = input;
   wp->bypass_decode = (uint8_t)(bypass_decode != 0);
   wp->max_chunks_per_wave = max_chunks_per_wave;
-  wp->max_substreams_per_wave = damacy_max_substreams_per_wave(
+  wp->max_substreams_per_wave = DAMACY_MAX_SUBSTREAMS_PER_WAVE(
     max_chunks_per_wave, max_substreams_per_chunk);
 
   // NON_BLOCKING so we don't serialize against the legacy default stream.

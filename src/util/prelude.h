@@ -11,8 +11,6 @@
 /// countof / container_of can include prelude.h alone (e.g. parse-only
 /// modules that don't want a logger dependency).
 ///
-/// Macros only — no `static inline` definitions. Anything that needs a
-/// real function lives in its own .c file (see util/hash.c).
 #pragma once
 
 #include <stddef.h>
