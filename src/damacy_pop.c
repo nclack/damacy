@@ -137,7 +137,7 @@ damacy_release_event(struct damacy* self, struct damacy_batch* b, void* event)
 
   // Defer reuse on stream_post (where assemble writes the slot's
   // dev_ptr). stream_post is FIFO, so any subsequent kick_assemble — for
-  // either slot — picks up this wait. The flag is read by plan_into_slot
+  // either slot — picks up this wait. The flag is read by plan_commit
   // to host-sync stream_post before its sync cuMemsetD8 (which targets the
   // legacy null stream and would otherwise race).
   uint64_t batch_id = slot->batch_id;
@@ -177,7 +177,7 @@ damacy_flush(struct damacy* self)
   if (!self)
     return DAMACY_INVAL;
 
-  // plan_into_slot below issues cuMemcpyHtoD on this thread; push the
+  // plan_run below issues cuMemcpyHtoD on this thread; push the
   // retained primary so the call lands in the right context.
   struct ctx_guard cg = { 0 };
   enum damacy_status r = ctx_guard_enter(self, &cg);

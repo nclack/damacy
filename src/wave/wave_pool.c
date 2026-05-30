@@ -305,7 +305,7 @@ build_gpu_parse_chunks(const struct wave_pool* wp, struct damacy_wave* wave)
 
     // CODEC_BLOSC_ZSTD: defer to Kernel A (memcpyed flag) + Kernel B
     // (per-block bstart/cb walk). nblocks is known per-sample from the
-    // probed layout; wave_can_use_gpu_parse asserted layout_probed.
+    // probed layout; wave_chunks_eligible asserted layout_probed.
     const struct sample_plan* sp = &slot->sample_plans[c->sample_idx_in_batch];
     uint32_t nblocks = sp->layout.nblocks;
     wave->h_blosc_chunk_indices[n_blosc_chunks++] = i;
@@ -1047,27 +1047,37 @@ bind_slot_to_wave(struct wave_pool* wp, struct damacy_wave* wave, int slot_idx)
   return s;
 }
 
-enum damacy_status
-wave_pool_advance(struct wave_pool* wp, int* changed)
+static void
+mark_changed(int* changed)
 {
-  // Pass 1: SLOT_IO → SLOT_READY when IO completes. Fill-only waves
-  // (is_fill_wave) skip the IO query — no submission was made.
+  if (changed)
+    *changed = 1;
+}
+
+static enum damacy_status
+advance_io_slots(struct wave_pool* wp, int* changed)
+{
   for (uint8_t s = 0; s < wp->n_slots; ++s) {
     struct host_slab_slot* hs = &wp->slots[s];
     if (hs->state != SLOT_IO)
       continue;
     int ready = hs->is_fill_wave || store_event_query(wp->store, hs->io_event);
-    if (ready) {
-      // store_event_query reclaimed the ref; clear so wave_pool_destroy
-      // doesn't redundantly discard a stale impl pointer.
-      hs->io_event = (struct store_event){ 0 };
-      hs->io_ms = platform_toc(&hs->io_clock) * 1000.0f;
-      hs->state = SLOT_READY;
-      *changed = 1;
-    }
-  }
+    if (!ready)
+      continue;
 
-  // Pass 2: bind SLOT_READY to WAVE_FREE waves.
+    // store_event_query reclaimed the ref; clear so wave_pool_destroy
+    // doesn't redundantly discard a stale impl pointer.
+    hs->io_event = (struct store_event){ 0 };
+    hs->io_ms = platform_toc(&hs->io_clock) * 1000.0f;
+    hs->state = SLOT_READY;
+    mark_changed(changed);
+  }
+  return DAMACY_OK;
+}
+
+static enum damacy_status
+bind_ready_slots(struct wave_pool* wp, int* changed)
+{
   for (int w = 0; w < DAMACY_N_WAVES; ++w) {
     struct damacy_wave* wave = &wp->waves[w];
     if (wave->state != WAVE_FREE)
@@ -1078,61 +1088,121 @@ wave_pool_advance(struct wave_pool* wp, int* changed)
     enum damacy_status s = bind_slot_to_wave(wp, wave, rs);
     if (s != DAMACY_OK)
       return s;
-    *changed = 1;
+    mark_changed(changed);
   }
+  return DAMACY_OK;
+}
+
+static enum damacy_status
+release_bound_slot_if_ready(struct wave_pool* wp,
+                            struct damacy_wave* wave,
+                            int* changed)
+{
+  if (wave->bound_slot < 0)
+    return DAMACY_OK;
+
+  CUresult qb = cuEventQuery(wave->ev.bulk_h2d_end);
+  if (qb == CUDA_SUCCESS) {
+    slot_release(&wp->slots[wave->bound_slot]);
+    wave->bound_slot = -1;
+    wave->host_slab = NULL;
+    mark_changed(changed);
+    return DAMACY_OK;
+  }
+  return qb == CUDA_ERROR_NOT_READY ? DAMACY_OK : DAMACY_CUDA;
+}
+
+static enum damacy_status
+advance_h2d_wave(struct wave_pool* wp, struct damacy_wave* wave, int* changed)
+{
+  enum damacy_status s = release_bound_slot_if_ready(wp, wave, changed);
+  if (s != DAMACY_OK)
+    return s;
+
+  CUresult qe = cuEventQuery(wave->ev.h2d_end);
+  if (qe == CUDA_ERROR_NOT_READY)
+    return DAMACY_OK;
+  if (qe != CUDA_SUCCESS)
+    return DAMACY_CUDA;
+
+  // Both kicks enqueue decode + status-reduce against the shared decoder
+  // scratch on stream_decode. Safety relies on stream FIFO: wave A fully
+  // retires those uses before wave B's decode launches.
+  s = kick_compute(wp, wave);
+  if (s != DAMACY_OK)
+    return s;
+  mark_changed(changed);
+  return DAMACY_OK;
+}
+
+static enum damacy_status
+retire_assembled_wave(struct wave_pool* wp,
+                      struct damacy_wave* wave,
+                      int* changed)
+{
+  struct wave_outcome o = finalize_wave(wp, wave);
+  batch_slot_consume_chunks(&wp->pool->slots[o.batch_pool_slot],
+                            o.n_chunks_consumed);
+  mark_changed(changed);
+  return o.status;
+}
+
+static enum damacy_status
+advance_assemble_wave(struct wave_pool* wp,
+                      struct damacy_wave* wave,
+                      int* changed)
+{
+  CUresult qe = cuEventQuery(wave->ev.asm_end);
+  if (qe == CUDA_ERROR_NOT_READY)
+    return DAMACY_OK;
+  if (qe != CUDA_SUCCESS)
+    return DAMACY_CUDA;
+  return retire_assembled_wave(wp, wave, changed);
+}
+
+static enum damacy_status
+advance_one_wave(struct wave_pool* wp, struct damacy_wave* wave, int* changed)
+{
+  switch (wave->state) {
+    case WAVE_FREE:
+      return DAMACY_OK;
+    case WAVE_H2D:
+      return advance_h2d_wave(wp, wave, changed);
+    case WAVE_ASSEMBLE:
+      return advance_assemble_wave(wp, wave, changed);
+  }
+  return DAMACY_OK;
+}
+
+static enum damacy_status
+advance_waves(struct wave_pool* wp, int* changed)
+{
+  for (int w = 0; w < DAMACY_N_WAVES; ++w) {
+    enum damacy_status s = advance_one_wave(wp, &wp->waves[w], changed);
+    if (s != DAMACY_OK)
+      return s;
+  }
+  return DAMACY_OK;
+}
+
+enum damacy_status
+wave_pool_advance(struct wave_pool* wp, int* changed)
+{
+  // Pass 1: SLOT_IO → SLOT_READY when IO completes. Fill-only waves
+  // (is_fill_wave) skip the IO query — no submission was made.
+  enum damacy_status s = advance_io_slots(wp, changed);
+  if (s != DAMACY_OK)
+    return s;
+
+  // Pass 2: bind SLOT_READY to WAVE_FREE waves.
+  s = bind_ready_slots(wp, changed);
+  if (s != DAMACY_OK)
+    return s;
 
   // Pass 3: drive wave state machine. Release slots on bulk_h2d_end
   // (independent of h2d_end) so peel can refill them as early as
   // possible. Ordering vs Pass 2 is load-bearing: a wave freed here
   // only rebinds on the next tick. Running Pass 3 before Pass 2 would
   // let a same-tick free→bind happen and could compound rollback paths.
-  for (int w = 0; w < DAMACY_N_WAVES; ++w) {
-    struct damacy_wave* wave = &wp->waves[w];
-    switch (wave->state) {
-      case WAVE_FREE:
-        break;
-      case WAVE_H2D: {
-        if (wave->bound_slot >= 0) {
-          CUresult qb = cuEventQuery(wave->ev.bulk_h2d_end);
-          if (qb == CUDA_SUCCESS) {
-            slot_release(&wp->slots[wave->bound_slot]);
-            wave->bound_slot = -1;
-            wave->host_slab = NULL;
-            *changed = 1;
-          } else if (qb != CUDA_ERROR_NOT_READY) {
-            return DAMACY_CUDA;
-          }
-        }
-        CUresult qe = cuEventQuery(wave->ev.h2d_end);
-        if (qe == CUDA_SUCCESS) {
-          // Both kicks enqueue decode + status-reduce against the
-          // shared decoder scratch (d_temp, d_statuses,
-          // d_uncompressed_actual_sizes) on stream_decode. Safety
-          // relies on stream FIFO: wave A's decode + status-reduce
-          // fully retire before wave B's decode launches. Reordering
-          // this loop would break the invariant.
-          enum damacy_status s = kick_compute(wp, wave);
-          if (s != DAMACY_OK)
-            return s;
-          *changed = 1;
-        } else if (qe != CUDA_ERROR_NOT_READY) {
-          return DAMACY_CUDA;
-        }
-      } break;
-      case WAVE_ASSEMBLE: {
-        CUresult qe = cuEventQuery(wave->ev.asm_end);
-        if (qe == CUDA_SUCCESS) {
-          struct wave_outcome o = finalize_wave(wp, wave);
-          batch_slot_consume_chunks(&wp->pool->slots[o.batch_pool_slot],
-                                    o.n_chunks_consumed);
-          *changed = 1;
-          if (o.status != DAMACY_OK)
-            return o.status;
-        } else if (qe != CUDA_ERROR_NOT_READY) {
-          return DAMACY_CUDA;
-        }
-      } break;
-    }
-  }
-  return DAMACY_OK;
+  return advance_waves(wp, changed);
 }

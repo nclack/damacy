@@ -7,6 +7,9 @@
     claude-code.url = "github:sadjow/claude-code-nix";
     claude-code.inputs.nixpkgs.follows = "nixpkgs";
     claude-code.inputs.flake-utils.follows = "flake-utils";
+    codex-cli-nix.url = "github:sadjow/codex-cli-nix";
+    codex-cli-nix.inputs.nixpkgs.follows = "nixpkgs";
+    codex-cli-nix.inputs.flake-utils.follows = "flake-utils";
     git-hooks.url = "github:cachix/git-hooks.nix";
     git-hooks.inputs.nixpkgs.follows = "nixpkgs";
   };
@@ -17,6 +20,7 @@
       nixpkgs,
       flake-utils,
       claude-code,
+      codex-cli-nix,
       git-hooks,
     }:
     flake-utils.lib.eachDefaultSystem (
@@ -69,6 +73,7 @@
 
           nativeBuildInputs = with pkgs; [
             claude-code.packages.${system}.default
+            codex-cli-nix.packages.${system}.default
             cmake
             ninja
             pkg-config
@@ -98,6 +103,7 @@
             # Kept in the devShell so multi-socket dev boxes resolve a node.
             numactl
             lldb
+            perf
             gh
             man-pages
             man-pages-posix

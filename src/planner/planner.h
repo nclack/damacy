@@ -2,10 +2,9 @@
 // transform records ready for the wave scheduler / IO pool / decompress
 // / assemble pipeline.
 //
-// Build-order step 3: page-aligned reads from day 1, one read_op per
-// chunk (no coalescing, no waves). chunk_plan wave-scheduler fields
-// (host_buf_offset, dev_decompressed_offset) are filled in by the
-// scheduler; the planner zeroes them.
+// chunk_plan wave-scheduler fields (host_buf_offset,
+// dev_decompressed_offset) are filled in by the scheduler; the planner
+// zeroes them.
 #pragma once
 
 #include "damacy.h"        // damacy_status, damacy_sample, damacy_aabb
@@ -26,7 +25,7 @@ extern "C"
   struct path_intern;
 
   // Page-aligned IO operation. Multiple chunk_plans may share one
-  // read_op once coalescing lands; pre-step-7 it's 1:1 with chunk_plans.
+  // read_op after coalescing.
   // shard_path is interned by the planner; equal paths share a pointer,
   // and the pointer is valid for the planner's lifetime — long enough
   // for the wave scheduler's plan queue to outlive any batch. Fills set

@@ -1,5 +1,18 @@
 # dev log
 
+## 2026-05-18
+
+Investigating some of the threading primitives that showed up in a perf scan.
+Maybe a futex etc will help.
+
+Found some other good leads in store_fs.
+
+
+## 2026-05-17
+
+Getting things back into consistently using the platform layer. Got a speed
+up out of this which is weird.
+
 ## 2026-05-16
 
 Looking to measure backpressure, so added a hold time to the benchmark.

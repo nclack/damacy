@@ -46,8 +46,8 @@ struct damacy_batch_slot
   // Reset before each plan into the slot; bounds the working set to
   // distinct shard paths in one batch.
   struct path_intern paths;
-  void* d_sample_plans; // device mirror, uploaded once per batch
-  uint32_t n_sample_plans;          // == n_samples on success
+  void* d_sample_plans;    // device mirror, uploaded once per batch
+  uint32_t n_sample_plans; // == n_samples on success
   uint32_t n_chunks;
   uint32_t n_chunks_to_load;    // non-fill chunks (filter survivors)
   uint32_t n_loads_issued;      // real read_ops after coalesce
@@ -56,7 +56,7 @@ struct damacy_batch_slot
   int32_t chunks_remaining;     // n_chunks - chunks completed via waves
 
   // Set by damacy_release_event when a deferred-release wait has been
-  // queued on stream_post. plan_into_slot's degenerate (zero-chunk) path
+  // queued on stream_post. plan_commit's degenerate (zero-chunk) path
   // reads this and host-syncs stream_post before its sync cuMemsetD8;
   // the normal reuse path is already gated by the cuStreamWaitEvent on
   // stream_post itself.

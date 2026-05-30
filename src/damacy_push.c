@@ -14,8 +14,8 @@ sample_aabb_extents_match_cfg(const struct damacy_config* cfg,
   return 1;
 }
 
-// Cfg-only validations; URI / dtype / per-array rank checks now surface
-// at decode time via the prefetcher pipeline.
+// Cfg-only validations; URI / dtype / per-array rank checks surface
+// asynchronously through prefetch / plan / pop.
 static enum damacy_status
 push_one(struct damacy* self, const struct damacy_sample* sample)
 {

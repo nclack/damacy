@@ -68,11 +68,11 @@ add_src_lib(io_queue SOURCES io_queue/io_queue.h LINKS platform_io log numa)
 add_platform_sources(io_queue io_queue/io_queue)
 
 # Internal stats helpers (cumulative damacy_metric record / reset, plus a
-# project-local monotonic clock). Shared between damacy.c and wave/.
+# project-local monotonic clock). Shared by API and wave orchestration.
 add_src_lib(damacy_stats SOURCES damacy_stats.h damacy_stats.c)
 
 # Internal config helpers: dtype mapping, validate_config, and the
-# "0 means use the ceiling" knob resolvers. Shared between damacy.c,
+# "0 means use the ceiling" knob resolvers. Shared by lifecycle,
 # gpu_budget/, and wave/.
 add_src_lib(damacy_config SOURCES damacy_config.h damacy_config.c
     LINKS dtype log platform
@@ -221,7 +221,7 @@ add_cuda_lib(assemble SOURCES assemble/assemble.h assemble/assemble.cu
     LINKS CUDA::cudart_static CUDA::cuda_driver log
 )
 
-# Public damacy surface. damacy.c uses the CUDA driver API exclusively
+# Public damacy surface. The API implementation uses the CUDA driver API
 # (cuMem*, cuStream*, cuEvent*); the runtime API is only pulled in
 # transitively via decoder/assemble (nvcomp's headers + the kernel
 # launch in assemble.cu).

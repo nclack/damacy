@@ -142,8 +142,8 @@ any_slot_free(const struct wave_pool* wp);
 //   3. WAVE_H2D: poll bulk_h2d_end → release slot; poll h2d_end → kick
 //      decode + assemble, advance to WAVE_ASSEMBLE.
 //   4. WAVE_ASSEMBLE: poll asm_end → finalize.
-// Returns the first non-OK status encountered; the caller (scheduler
-// tick in damacy.c) latches it onto self->failed_status. *changed
+// Returns the first non-OK status encountered; the scheduler tick
+// latches it onto self->failed_status. *changed
 // follows the contract documented at damacy_scheduler_step.
 enum damacy_status
 wave_pool_advance(struct wave_pool* wp, int* changed);
