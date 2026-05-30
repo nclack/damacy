@@ -119,17 +119,17 @@ test_wraparound(void)
 }
 
 static int
-test_push_with_batch_round_trip(void)
+test_push_with_sample_seq_round_trip(void)
 {
   struct damacy_lookahead la = { 0 };
   EXPECT(lookahead_init(&la, 4) == 0);
   struct damacy_sample s = mk_sample("k", 0, 1);
-  EXPECT(lookahead_push_with_batch(&la, &s, 42) == 0);
+  EXPECT(lookahead_push_with_sample_seq(&la, &s, 42) == 0);
 
   struct damacy_sample_slot out = { 0 };
   EXPECT(lookahead_pop_blocking(&la, &out) == 1);
   EXPECT(strcmp(out.uri, "k") == 0);
-  EXPECT(out.batch_id == 42);
+  EXPECT(out.sample_seq == 42);
   sample_slot_clear(&out);
 
   lookahead_destroy(&la);
@@ -142,13 +142,13 @@ test_pop_blocking_returns_existing_after_stop(void)
   struct damacy_lookahead la = { 0 };
   EXPECT(lookahead_init(&la, 4) == 0);
   struct damacy_sample s = mk_sample("k", 0, 1);
-  EXPECT(lookahead_push_with_batch(&la, &s, 7) == 0);
+  EXPECT(lookahead_push_with_sample_seq(&la, &s, 7) == 0);
 
   lookahead_signal_stop(&la);
 
   struct damacy_sample_slot out = { 0 };
   EXPECT(lookahead_pop_blocking(&la, &out) == 1);
-  EXPECT(out.batch_id == 7);
+  EXPECT(out.sample_seq == 7);
   sample_slot_clear(&out);
 
   EXPECT(lookahead_pop_blocking(&la, &out) == 0);
@@ -168,7 +168,7 @@ push_after_delay(void* arg)
   struct wake_ctx* ctx = (struct wake_ctx*)arg;
   platform_sleep_ns(10 * 1000 * 1000);
   struct damacy_sample s = mk_sample("late", 0, 1);
-  lookahead_push_with_batch(ctx->la, &s, 99);
+  lookahead_push_with_sample_seq(ctx->la, &s, 99);
 }
 
 static int
@@ -184,7 +184,7 @@ test_pop_blocking_wakes_on_push(void)
   struct damacy_sample_slot out = { 0 };
   EXPECT(lookahead_pop_blocking(&la, &out) == 1);
   EXPECT(strcmp(out.uri, "late") == 0);
-  EXPECT(out.batch_id == 99);
+  EXPECT(out.sample_seq == 99);
   sample_slot_clear(&out);
 
   platform_thread_join(t);
@@ -243,7 +243,7 @@ test_pop_blocking_timeout_pops_on_push(void)
   struct damacy_sample_slot out = { 0 };
   EXPECT(lookahead_pop_blocking_timeout(&la, &out, 1000) == 1);
   EXPECT(strcmp(out.uri, "late") == 0);
-  EXPECT(out.batch_id == 99);
+  EXPECT(out.sample_seq == 99);
   sample_slot_clear(&out);
 
   platform_thread_join(t);
@@ -259,7 +259,7 @@ main(void)
   RUN(test_full_returns_1);
   RUN(test_destroy_frees);
   RUN(test_wraparound);
-  RUN(test_push_with_batch_round_trip);
+  RUN(test_push_with_sample_seq_round_trip);
   RUN(test_pop_blocking_returns_existing_after_stop);
   RUN(test_pop_blocking_wakes_on_push);
   RUN(test_signal_stop_unblocks_empty_pop);

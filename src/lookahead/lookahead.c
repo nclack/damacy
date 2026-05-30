@@ -15,7 +15,7 @@ sample_slot_clear(struct damacy_sample_slot* slot)
   free(slot->uri);
   slot->uri = NULL;
   memset(&slot->aabb, 0, sizeof(slot->aabb));
-  slot->batch_id = 0;
+  slot->sample_seq = 0;
 }
 
 int
@@ -60,9 +60,9 @@ lookahead_destroy(struct damacy_lookahead* la)
 }
 
 int
-lookahead_push_with_batch(struct damacy_lookahead* la,
-                          const struct damacy_sample* sample,
-                          uint64_t batch_id)
+lookahead_push_with_sample_seq(struct damacy_lookahead* la,
+                               const struct damacy_sample* sample,
+                               uint64_t sample_seq)
 {
   CHECK(Bad, la);
   CHECK(Bad, sample);
@@ -77,7 +77,7 @@ lookahead_push_with_batch(struct damacy_lookahead* la,
   if (!slot->uri)
     goto Unlock;
   slot->aabb = sample->aabb;
-  slot->batch_id = batch_id;
+  slot->sample_seq = sample_seq;
   la->tail = (la->tail + 1) % la->cap;
   la->size++;
   platform_cond_broadcast(la->cond);
@@ -92,7 +92,7 @@ Bad:
 int
 lookahead_push(struct damacy_lookahead* la, const struct damacy_sample* sample)
 {
-  return lookahead_push_with_batch(la, sample, 0);
+  return lookahead_push_with_sample_seq(la, sample, 0);
 }
 
 static void

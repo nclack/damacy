@@ -343,18 +343,18 @@ emit_chunk(const struct emit_ctx* ctx,
 }
 
 enum damacy_status
-planner_plan(struct planner* self,
-             const struct planner_sample* samples,
-             uint32_t n_samples,
-             uint16_t batch_pool_slot,
-             const int64_t* dst_strides,
-             uint8_t dst_full_rank,
-             struct planner_output* out)
+planner_plan_segment(struct planner* self,
+                     const struct planner_sample* samples,
+                     const struct planner_placement* placement,
+                     const int64_t* dst_strides,
+                     uint8_t dst_full_rank,
+                     struct planner_output* out)
 {
   enum damacy_status status = DAMACY_OK;
 
   CHECK_SILENT(Invalid, self);
   CHECK_SILENT(Invalid, samples);
+  CHECK_SILENT(Invalid, placement);
   CHECK_SILENT(Invalid, out);
   CHECK_SILENT(Invalid, out->read_ops);
   CHECK_SILENT(Invalid, out->chunk_plans);
@@ -367,7 +367,10 @@ planner_plan(struct planner* self,
   out->n_chunk_plans = 0;
   out->n_sample_plans = 0;
 
-  for (uint32_t sample_idx = 0; sample_idx < n_samples; ++sample_idx) {
+  for (uint32_t sample_idx = 0; sample_idx < placement->n_samples;
+       ++sample_idx) {
+    uint32_t sample_idx_in_batch =
+      placement->sample_idx_begin_in_batch + sample_idx;
     const struct planner_sample* sample = &samples[sample_idx];
     if (!sample->uri) {
       status = DAMACY_INVAL;
@@ -434,17 +437,17 @@ planner_plan(struct planner* self,
       goto Cleanup;
     }
 
-    if (out->n_sample_plans >= out->sample_plans_cap) {
+    if (sample_idx_in_batch >= out->sample_plans_cap) {
       status = DAMACY_OOM;
       goto Cleanup;
     }
-    struct sample_plan* sp = &out->sample_plans[out->n_sample_plans];
+    struct sample_plan* sp = &out->sample_plans[sample_idx_in_batch];
     *sp = (struct sample_plan){
-      .batch_pool_slot = batch_pool_slot,
-      .sample_idx_in_batch = (uint16_t)sample_idx,
+      .batch_pool_slot = placement->batch_pool_slot,
+      .sample_idx_in_batch = (uint16_t)sample_idx_in_batch,
       .rank = meta->rank,
       .src_dtype = (uint8_t)meta->dtype,
-      .sample_dst_off_elems = (int64_t)sample_idx * dst_strides[0],
+      .sample_dst_off_elems = (int64_t)sample_idx_in_batch * dst_strides[0],
       .chunk_count = 0,
     };
     memcpy(sp->fill_value, meta->fill_value, sizeof sp->fill_value);
@@ -466,7 +469,8 @@ planner_plan(struct planner* self,
       chunk_count *= N;
     }
     sp->chunk_count = chunk_count;
-    out->n_sample_plans++;
+    if (out->n_sample_plans < sample_idx_in_batch + 1u)
+      out->n_sample_plans = sample_idx_in_batch + 1u;
 
     const void* layout_value = NULL;
     int layout_err = 0;
@@ -495,8 +499,8 @@ planner_plan(struct planner* self,
       .meta = meta,
       .inner_per_shard_dim = inner_per_shard_dim,
       .chunk_beg = chunk_beg,
-      .sample_idx_in_batch = sample_idx,
-      .batch_pool_slot = batch_pool_slot,
+      .sample_idx_in_batch = sample_idx_in_batch,
+      .batch_pool_slot = placement->batch_pool_slot,
       .codec_id = (uint8_t)meta->inner_codec.id,
       .decompressed_n_bytes = (uint32_t)decompressed_n_bytes,
       .page_alignment_bytes = self->cfg.page_alignment,
@@ -646,4 +650,22 @@ Cleanup:
 
 Invalid:
   return DAMACY_INVAL;
+}
+
+enum damacy_status
+planner_plan(struct planner* self,
+             const struct planner_sample* samples,
+             uint32_t n_samples,
+             uint16_t batch_pool_slot,
+             const int64_t* dst_strides,
+             uint8_t dst_full_rank,
+             struct planner_output* out)
+{
+  struct planner_placement placement = {
+    .batch_pool_slot = batch_pool_slot,
+    .sample_idx_begin_in_batch = 0,
+    .n_samples = n_samples,
+  };
+  return planner_plan_segment(
+    self, samples, &placement, dst_strides, dst_full_rank, out);
 }

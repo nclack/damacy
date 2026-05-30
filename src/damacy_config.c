@@ -46,7 +46,7 @@ validate_config(const struct damacy_config* cfg)
   CHECK_SILENT(Invalid, cfg);
   CHECK_SILENT(Invalid, cfg->samples_per_batch > 0);
   CHECK_SILENT(Invalid, cfg->tuning.max_gpu_memory_bytes > 0);
-  CHECK_SILENT(Invalid, cfg->lookahead_samples >= 2u * cfg->samples_per_batch);
+  CHECK_SILENT(Invalid, cfg->lookahead_samples >= cfg->samples_per_batch);
   CHECK_SILENT(Invalid, cfg->tuning.n_io_threads > 0);
   CHECK_SILENT(Invalid, cfg->tuning.n_io_threads <= DAMACY_MAX_IO_THREADS);
   CHECK_SILENT(Invalid,

@@ -11,7 +11,7 @@ struct damacy_sample_slot
 {
   char* uri;
   struct damacy_aabb aabb;
-  uint64_t batch_id;
+  uint64_t sample_seq;
 };
 
 struct damacy_lookahead
@@ -39,9 +39,9 @@ int
 lookahead_push(struct damacy_lookahead* la, const struct damacy_sample* sample);
 
 int
-lookahead_push_with_batch(struct damacy_lookahead* la,
-                          const struct damacy_sample* sample,
-                          uint64_t batch_id);
+lookahead_push_with_sample_seq(struct damacy_lookahead* la,
+                               const struct damacy_sample* sample,
+                               uint64_t sample_seq);
 
 void
 lookahead_drain(struct damacy_lookahead* la,

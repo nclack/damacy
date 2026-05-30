@@ -22,8 +22,8 @@ struct prefetch_slot
   void* value;
   enum prefetch_state state;
   int err;
-  uint64_t min_batch_id;
-  uint64_t max_batch_id;
+  uint64_t min_owner_id;
+  uint64_t max_owner_id;
   uint32_t generation;
 
   // Inline storage for the common case; heap takes over on overflow.
@@ -323,7 +323,7 @@ struct prefetch_handle
 prefetch_cache_request(struct prefetch_cache* self,
                        uint64_t key_hash,
                        const void* key,
-                       uint64_t batch_id,
+                       uint64_t owner_id,
                        struct prefetch_gate* gate)
 {
   CHECK(Bad, self);
@@ -334,10 +334,10 @@ prefetch_cache_request(struct prefetch_cache* self,
   struct lru_entry* hit = lru_get(self->idx, key_hash, key);
   if (hit) {
     struct prefetch_slot* s = (struct prefetch_slot*)lru_entry_value(hit);
-    if (batch_id > s->max_batch_id)
-      s->max_batch_id = batch_id;
-    if (batch_id < s->min_batch_id)
-      s->min_batch_id = batch_id;
+    if (owner_id > s->max_owner_id)
+      s->max_owner_id = owner_id;
+    if (owner_id < s->min_owner_id)
+      s->min_owner_id = owner_id;
 
     if (s->state == PREFETCH_STATE_PENDING) {
       gate_inc_pending(gate);
@@ -370,8 +370,8 @@ prefetch_cache_request(struct prefetch_cache* self,
     .key_hash = key_hash,
     .key = key_copy,
     .state = PREFETCH_STATE_PENDING,
-    .min_batch_id = batch_id,
-    .max_batch_id = batch_id,
+    .min_owner_id = owner_id,
+    .max_owner_id = owner_id,
     .generation = ++self->generation_counter,
     .cache = self,
     .active_idx = ACTIVE_IDX_UNLINKED,
@@ -579,7 +579,7 @@ prefetch_cache_advance_watermark(struct prefetch_cache* self,
   for (uint32_t i = 0; i < self->capacity; ++i) {
     struct prefetch_slot* s = self->active[i];
     if (s && s->state != PREFETCH_STATE_PENDING &&
-        s->max_batch_id < new_watermark && s->lru_ent) {
+        s->max_owner_id < new_watermark && s->lru_ent) {
       lru_entry_release(s->lru_ent);
       s->lru_ent = NULL;
     }

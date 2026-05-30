@@ -36,9 +36,9 @@ struct damacy
   struct damacy_config cfg;
   enum damacy_status failed_status;
   uint64_t next_batch_id;
-  // Push-side cursor: indexes into the stream of samples ever pushed.
-  // Divided by samples_per_batch to label each lookahead push with its batch_id
-  // so the prefetcher can group samples into wave tickets.
+  // Push-side cursor: indexes into the stream of samples ever pushed. The
+  // prefetcher consumes the same global sample_seq order independently of
+  // output batch placement.
   uint64_t pushed_samples;
   uint64_t page_alignment;
   int cuda_device;
@@ -71,8 +71,8 @@ struct damacy
   struct prefetch_cache* shard_index_cache;
   struct prefetch_cache* chunk_layout_cache;
   struct prefetcher* prefetcher;
-  // plan_reserve pops here and steals uri (NULLs the staging slot) into
-  // batch_stage; plan_commit frees the remaining handles.
+  // plan_ready_prefetch pops ready sample_seq intervals here, then
+  // plan_reserve copies each segment into the target batch slot.
   struct prefetcher_ready* staging;
 
   struct damacy_lookahead lookahead;
@@ -80,8 +80,6 @@ struct damacy
   // Owns the 4 streams + both waves; built once in damacy_create and
   // driven directly by the orchestrator (no per-call ctx building).
   struct wave_pool wave_pool;
-
-  struct planner_sample* batch_stage;
 
   struct damacy_batch handle;
   struct damacy_stats stats;
@@ -114,7 +112,9 @@ damacy_scheduler_step(void* arg);
 enum damacy_status
 plan_reserve(struct damacy* self,
              uint16_t slot_idx,
-             struct prefetcher_wave_ticket ticket);
+             struct prefetcher_ready* ready,
+             uint32_t n_ready,
+             int close_batch);
 
 enum damacy_status
 plan_run(struct damacy* self, uint16_t slot_idx, float* out_elapsed_ms);
@@ -125,3 +125,6 @@ plan_commit(struct damacy* self,
             enum damacy_status run_status,
             float elapsed_ms,
             int* changed);
+
+enum damacy_status
+plan_ready_prefetch(struct damacy* self, int close_partial, int* changed);

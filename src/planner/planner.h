@@ -134,6 +134,14 @@ extern "C"
     struct prefetch_handle h_layout;
   };
 
+  struct planner_placement
+  {
+    uint16_t batch_pool_slot;
+    uint64_t batch_id;
+    uint32_t sample_idx_begin_in_batch;
+    uint32_t n_samples;
+  };
+
   struct planner_config
   {
     struct prefetch_cache* array_meta_cache;
@@ -218,6 +226,14 @@ extern "C"
                                   const int64_t* dst_strides, // [rank+1]
                                   uint8_t dst_full_rank,      // rank+1
                                   struct planner_output* out);
+
+  enum damacy_status planner_plan_segment(
+    struct planner* p,
+    const struct planner_sample* samples,
+    const struct planner_placement* placement,
+    const int64_t* dst_strides, // [rank+1]
+    uint8_t dst_full_rank,      // rank+1
+    struct planner_output* out);
 
 #ifdef __cplusplus
 }

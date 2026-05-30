@@ -113,7 +113,7 @@ fixture_setup_layout(struct fixture* fx,
     .shard_index_cache = fx->shard_index_cache,
     .chunk_layout_cache = fx->chunk_layout_cache,
     .capacity = 16,
-    .batch_capacity = 8,
+    .owner_capacity = 8,
   };
   fx->p = prefetcher_create(&pcfg);
   EXPECT(fx->p);
@@ -160,7 +160,7 @@ test_single_sample_walks_all_stages(void)
   s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
   s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
 
-  EXPECT(lookahead_push_with_batch(&fx.lookahead, &s, 0) == 0);
+  EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 0) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
 
   struct prefetcher_stats st;
@@ -193,7 +193,7 @@ test_dedup_across_samples(void)
   s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
 
   for (int i = 0; i < 4; ++i)
-    EXPECT(lookahead_push_with_batch(&fx.lookahead, &s, (uint64_t)i) == 0);
+    EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, (uint64_t)i) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
 
   struct prefetcher_stats st;
@@ -223,7 +223,7 @@ test_error_propagates(void)
   s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
   s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
 
-  EXPECT(lookahead_push_with_batch(&fx.lookahead, &s, 0) == 0);
+  EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 0) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
 
   struct prefetcher_stats st;
@@ -262,7 +262,7 @@ test_multi_shard_sample_warms_all_shards(void)
   s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 32 };
   s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 64 };
 
-  EXPECT(lookahead_push_with_batch(&fx.lookahead, &s, 0) == 0);
+  EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 0) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
 
   struct prefetcher_stats st;
@@ -293,14 +293,14 @@ test_pop_ready_returns_completed_sample(void)
   s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
   s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
 
-  EXPECT(lookahead_push_with_batch(&fx.lookahead, &s, 7) == 0);
+  EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 0) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
 
   struct prefetcher_ready r = { 0 };
   EXPECT(prefetcher_pop_ready(fx.p, &r) == 1);
   EXPECT(r.result == PREFETCHER_RESULT_READY);
   EXPECT(strcmp(r.uri, "foo") == 0);
-  EXPECT(r.batch_id == 7);
+  EXPECT(r.sample_seq == 0);
   EXPECT(r.n_shards == 1);
   EXPECT(prefetch_handle_valid(r.h_meta));
   EXPECT(prefetch_handle_valid(r.h_shards[0]));
@@ -323,7 +323,7 @@ test_pop_ready_surfaces_error_state(void)
   s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
   s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
 
-  EXPECT(lookahead_push_with_batch(&fx.lookahead, &s, 0) == 0);
+  EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 0) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
 
   struct prefetcher_ready r = { 0 };
@@ -348,11 +348,12 @@ test_pop_ready_recycles_slot(void)
   s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
 
   for (int round = 0; round < 3; ++round) {
-    EXPECT(lookahead_push_with_batch(&fx.lookahead, &s, (uint64_t)round) == 0);
+    EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, (uint64_t)round) ==
+           0);
     EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
     struct prefetcher_ready r = { 0 };
     EXPECT(prefetcher_pop_ready(fx.p, &r) == 1);
-    EXPECT(r.batch_id == (uint64_t)round);
+    EXPECT(r.sample_seq == (uint64_t)round);
     prefetcher_ready_free(&r);
   }
 
@@ -378,7 +379,7 @@ test_pop_ready_empty_returns_zero(void)
 }
 
 static int
-test_batch_gate_ready_after_drain(void)
+test_sample_gate_ready_after_drain(void)
 {
   struct fixture fx = { 0 };
   EXPECT(fixture_setup(&fx, "blosc-zstd") == 0);
@@ -386,10 +387,10 @@ test_batch_gate_ready_after_drain(void)
   struct damacy_sample s = { .uri = "foo", .aabb = { .rank = 2 } };
   s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
   s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
-  EXPECT(lookahead_push_with_batch(&fx.lookahead, &s, 42) == 0);
+  EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 0) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
 
-  const struct prefetch_gate* g = prefetcher_batch_gate(fx.p, 42);
+  const struct prefetch_gate* g = prefetcher_sample_gate(fx.p, 0);
   EXPECT(g);
   EXPECT(prefetch_gate_is_ready(g));
   EXPECT(!prefetch_gate_has_error(g));
@@ -400,7 +401,7 @@ test_batch_gate_ready_after_drain(void)
 }
 
 static int
-test_batch_gate_error_on_failed_sample(void)
+test_sample_gate_error_on_failed_sample(void)
 {
   struct fixture fx = { 0 };
   EXPECT(fixture_setup(&fx, "blosc-zstd") == 0);
@@ -408,10 +409,10 @@ test_batch_gate_error_on_failed_sample(void)
   struct damacy_sample s = { .uri = "missing", .aabb = { .rank = 2 } };
   s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
   s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
-  EXPECT(lookahead_push_with_batch(&fx.lookahead, &s, 7) == 0);
+  EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 0) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
 
-  const struct prefetch_gate* g = prefetcher_batch_gate(fx.p, 7);
+  const struct prefetch_gate* g = prefetcher_sample_gate(fx.p, 0);
   EXPECT(g);
   EXPECT(prefetch_gate_has_error(g));
   EXPECT(prefetch_gate_pending(g) == 0);
@@ -421,7 +422,7 @@ test_batch_gate_error_on_failed_sample(void)
 }
 
 static int
-test_distinct_batches_get_separate_gates(void)
+test_distinct_samples_get_separate_gates(void)
 {
   struct fixture fx = { 0 };
   EXPECT(fixture_setup(&fx, "blosc-zstd") == 0);
@@ -429,12 +430,12 @@ test_distinct_batches_get_separate_gates(void)
   struct damacy_sample s = { .uri = "foo", .aabb = { .rank = 2 } };
   s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
   s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
-  EXPECT(lookahead_push_with_batch(&fx.lookahead, &s, 1) == 0);
-  EXPECT(lookahead_push_with_batch(&fx.lookahead, &s, 2) == 0);
+  EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 0) == 0);
+  EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 1) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
 
-  const struct prefetch_gate* g1 = prefetcher_batch_gate(fx.p, 1);
-  const struct prefetch_gate* g2 = prefetcher_batch_gate(fx.p, 2);
+  const struct prefetch_gate* g1 = prefetcher_sample_gate(fx.p, 0);
+  const struct prefetch_gate* g2 = prefetcher_sample_gate(fx.p, 1);
   EXPECT(g1);
   EXPECT(g2);
   EXPECT(g1 != g2);
@@ -444,7 +445,7 @@ test_distinct_batches_get_separate_gates(void)
 }
 
 static int
-test_release_batch_drops_gate(void)
+test_pop_drops_sample_gate(void)
 {
   struct fixture fx = { 0 };
   EXPECT(fixture_setup(&fx, "blosc-zstd") == 0);
@@ -452,23 +453,22 @@ test_release_batch_drops_gate(void)
   struct damacy_sample s = { .uri = "foo", .aabb = { .rank = 2 } };
   s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
   s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
-  EXPECT(lookahead_push_with_batch(&fx.lookahead, &s, 99) == 0);
+  EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 0) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
 
-  EXPECT(prefetcher_batch_gate(fx.p, 99));
+  EXPECT(prefetcher_sample_gate(fx.p, 0));
   struct prefetcher_ready r = { 0 };
   EXPECT(prefetcher_pop_ready(fx.p, &r) == 1);
   prefetcher_ready_free(&r);
 
-  prefetcher_release_batch(fx.p, 99);
-  EXPECT(prefetcher_batch_gate(fx.p, 99) == NULL);
+  EXPECT(prefetcher_sample_gate(fx.p, 0) == NULL);
 
   fixture_teardown(&fx);
   return 0;
 }
 
 static int
-test_release_before_pop_defers(void)
+test_sample_gate_lives_until_pop(void)
 {
   struct fixture fx = { 0 };
   EXPECT(fixture_setup(&fx, "blosc-zstd") == 0);
@@ -476,20 +476,18 @@ test_release_before_pop_defers(void)
   struct damacy_sample s = { .uri = "foo", .aabb = { .rank = 2 } };
   s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
   s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
-  EXPECT(lookahead_push_with_batch(&fx.lookahead, &s, 99) == 0);
+  EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 0) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
 
-  const struct prefetch_gate* g_before = prefetcher_batch_gate(fx.p, 99);
+  const struct prefetch_gate* g_before = prefetcher_sample_gate(fx.p, 0);
   EXPECT(g_before);
-
-  prefetcher_release_batch(fx.p, 99);
-  EXPECT(prefetcher_batch_gate(fx.p, 99) == g_before);
+  EXPECT(prefetcher_sample_gate(fx.p, 0) == g_before);
 
   struct prefetcher_ready r = { 0 };
   EXPECT(prefetcher_pop_ready(fx.p, &r) == 1);
   prefetcher_ready_free(&r);
 
-  EXPECT(prefetcher_batch_gate(fx.p, 99) == NULL);
+  EXPECT(prefetcher_sample_gate(fx.p, 0) == NULL);
 
   fixture_teardown(&fx);
   return 0;
@@ -509,8 +507,12 @@ test_admit_fail_releases_batch_entry(void)
     char uri[16];
     snprintf(uri, sizeof uri, "missing%d", i);
     s.uri = uri;
-    EXPECT(lookahead_push_with_batch(&fx.lookahead, &s, 0) == 0);
+    EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, (uint64_t)i) == 0);
   }
+  EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
+
+  s.uri = "missing_overflow";
+  EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 8) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
 
   for (int i = 0; i < 8; ++i) {
@@ -519,30 +521,25 @@ test_admit_fail_releases_batch_entry(void)
     prefetcher_ready_free(&r);
   }
 
-  s.uri = "missing_overflow";
-  EXPECT(lookahead_push_with_batch(&fx.lookahead, &s, 99) == 0);
-  EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
-
   struct prefetcher_ready r = { 0 };
   EXPECT(prefetcher_pop_ready(fx.p, &r) == 1);
   EXPECT(r.result == PREFETCHER_RESULT_ERROR);
-  EXPECT(r.batch_id == 99);
+  EXPECT(r.sample_seq == 8);
   EXPECT(r.err_code == DAMACY_OOM);
   prefetcher_ready_free(&r);
 
-  prefetcher_release_batch(fx.p, 99);
-  EXPECT(prefetcher_batch_gate(fx.p, 99) == NULL);
+  EXPECT(prefetcher_sample_gate(fx.p, 8) == NULL);
 
   fixture_teardown(&fx);
   return 0;
 }
 
 static int
-test_unknown_batch_gate_is_null(void)
+test_unknown_sample_gate_is_null(void)
 {
   struct fixture fx = { 0 };
   EXPECT(fixture_setup(&fx, "blosc-zstd") == 0);
-  EXPECT(prefetcher_batch_gate(fx.p, 12345) == NULL);
+  EXPECT(prefetcher_sample_gate(fx.p, 12345) == NULL);
   fixture_teardown(&fx);
   return 0;
 }
@@ -555,43 +552,70 @@ test_take_wave_yields_ticket(void)
 
   EXPECT(prefetcher_has_ready(fx.p) == 0);
   EXPECT(prefetcher_in_flight(fx.p) == 0);
-  EXPECT(prefetcher_ready_count_for_batch(fx.p, 0) == 0);
+  EXPECT(prefetcher_ready_prefix_count(fx.p) == 0);
 
   struct damacy_sample s = { .uri = "foo", .aabb = { .rank = 2 } };
   s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
   s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
 
-  EXPECT(lookahead_push_with_batch(&fx.lookahead, &s, 3) == 0);
-  EXPECT(lookahead_push_with_batch(&fx.lookahead, &s, 3) == 0);
-  EXPECT(lookahead_push_with_batch(&fx.lookahead, &s, 4) == 0);
+  EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 0) == 0);
+  EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 1) == 0);
+  EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 2) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
 
   EXPECT(prefetcher_has_ready(fx.p) == 1);
-  EXPECT(prefetcher_ready_count_for_batch(fx.p, 3) == 2);
-  EXPECT(prefetcher_ready_count_for_batch(fx.p, 4) == 1);
-  EXPECT(prefetcher_ready_count_for_batch(fx.p, 9) == 0);
+  EXPECT(prefetcher_ready_prefix_count(fx.p) == 3);
 
   struct prefetcher_ready ready[3] = { 0 };
   struct prefetcher_wave_ticket ticket = { 0 };
-  EXPECT(prefetcher_take_wave(fx.p, 3, 3, &ticket, ready) == 0);
-  EXPECT(ticket.n_samples == 0);
-
-  EXPECT(prefetcher_take_wave(fx.p, 3, 2, &ticket, ready) == 1);
-  EXPECT(ticket.batch_id == 3);
+  EXPECT(prefetcher_take_ready_wave(fx.p, 2, &ticket, ready) == 1);
+  EXPECT(ticket.sample_seq_begin == 0);
   EXPECT(ticket.n_samples == 2);
-  EXPECT(ticket.first_admit_seq == 0);
-  EXPECT(ready[0].batch_id == 3);
-  EXPECT(ready[1].batch_id == 3);
+  EXPECT(ready[0].sample_seq == 0);
+  EXPECT(ready[1].sample_seq == 1);
   prefetcher_ready_free(&ready[0]);
   prefetcher_ready_free(&ready[1]);
-  EXPECT(prefetcher_ready_count_for_batch(fx.p, 3) == 0);
+  EXPECT(prefetcher_ready_prefix_count(fx.p) == 1);
 
-  EXPECT(prefetcher_take_wave(fx.p, 4, 1, &ticket, ready) == 1);
-  EXPECT(ticket.batch_id == 4);
+  EXPECT(prefetcher_take_ready_wave(fx.p, 1, &ticket, ready) == 1);
+  EXPECT(ticket.sample_seq_begin == 2);
   EXPECT(ticket.n_samples == 1);
-  EXPECT(ticket.first_admit_seq == 2);
-  EXPECT(ready[0].batch_id == 4);
+  EXPECT(ready[0].sample_seq == 2);
   prefetcher_ready_free(&ready[0]);
+
+  fixture_teardown(&fx);
+  return 0;
+}
+
+static int
+test_ready_wave_waits_for_prefix(void)
+{
+  struct fixture fx = { 0 };
+  EXPECT(fixture_setup(&fx, "blosc-zstd") == 0);
+
+  struct damacy_sample s = { .uri = "foo", .aabb = { .rank = 2 } };
+  s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
+  s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
+
+  EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 1) == 0);
+  EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
+  EXPECT(prefetcher_has_ready(fx.p) == 0);
+  EXPECT(prefetcher_ready_prefix_count(fx.p) == 0);
+
+  struct prefetcher_ready ready[2] = { 0 };
+  struct prefetcher_wave_ticket ticket = { 0 };
+  EXPECT(prefetcher_take_ready_wave(fx.p, 2, &ticket, ready) == 0);
+  EXPECT(ticket.n_samples == 0);
+
+  EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 0) == 0);
+  EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
+  EXPECT(prefetcher_take_ready_wave(fx.p, 2, &ticket, ready) == 1);
+  EXPECT(ticket.sample_seq_begin == 0);
+  EXPECT(ticket.n_samples == 2);
+  EXPECT(ready[0].sample_seq == 0);
+  EXPECT(ready[1].sample_seq == 1);
+  prefetcher_ready_free(&ready[0]);
+  prefetcher_ready_free(&ready[1]);
 
   fixture_teardown(&fx);
   return 0;
@@ -625,7 +649,7 @@ test_advance_watermark_broadcasts(void)
 }
 
 static int
-test_batch_capacity_saturation_surfaces_error(void)
+test_owner_capacity_saturation_surfaces_error(void)
 {
   struct fixture fx = { 0 };
   EXPECT(fixture_setup(&fx, "blosc-zstd") == 0);
@@ -635,7 +659,10 @@ test_batch_capacity_saturation_surfaces_error(void)
   s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
 
   for (uint64_t i = 0; i < 8; ++i)
-    EXPECT(lookahead_push_with_batch(&fx.lookahead, &s, i) == 0);
+    EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, i) == 0);
+  EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
+
+  EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 8) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
 
   for (int i = 0; i < 8; ++i) {
@@ -645,25 +672,21 @@ test_batch_capacity_saturation_surfaces_error(void)
     prefetcher_ready_free(&r);
   }
 
-  EXPECT(lookahead_push_with_batch(&fx.lookahead, &s, 99) == 0);
-  EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
-
   struct prefetcher_ready r = { 0 };
   EXPECT(prefetcher_pop_ready(fx.p, &r) == 1);
   EXPECT(r.result == PREFETCHER_RESULT_ERROR);
-  EXPECT(r.batch_id == 99);
+  EXPECT(r.sample_seq == 8);
   EXPECT(r.err_code == DAMACY_OOM);
   prefetcher_ready_free(&r);
 
-  prefetcher_release_batch(fx.p, 99);
-  EXPECT(prefetcher_batch_gate(fx.p, 99) == NULL);
+  EXPECT(prefetcher_sample_gate(fx.p, 8) == NULL);
 
   fixture_teardown(&fx);
   return 0;
 }
 
 static int
-test_batch_table_recycles_after_release(void)
+test_owner_table_recycles_after_pop(void)
 {
   struct fixture fx = { 0 };
   EXPECT(fixture_setup(&fx, "blosc-zstd") == 0);
@@ -673,7 +696,7 @@ test_batch_table_recycles_after_release(void)
   s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
 
   for (uint64_t i = 0; i < 8; ++i)
-    EXPECT(lookahead_push_with_batch(&fx.lookahead, &s, i) == 0);
+    EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, i) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
 
   for (uint64_t i = 0; i < 8; ++i) {
@@ -681,21 +704,19 @@ test_batch_table_recycles_after_release(void)
     EXPECT(prefetcher_pop_ready(fx.p, &r) == 1);
     EXPECT(r.result == PREFETCHER_RESULT_READY);
     prefetcher_ready_free(&r);
-    prefetcher_release_batch(fx.p, i);
-    EXPECT(prefetcher_batch_gate(fx.p, i) == NULL);
+    EXPECT(prefetcher_sample_gate(fx.p, i) == NULL);
   }
 
-  for (uint64_t i = 100; i < 108; ++i)
-    EXPECT(lookahead_push_with_batch(&fx.lookahead, &s, i) == 0);
+  for (uint64_t i = 8; i < 16; ++i)
+    EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, i) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
 
-  for (uint64_t i = 100; i < 108; ++i) {
+  for (uint64_t i = 8; i < 16; ++i) {
     struct prefetcher_ready r = { 0 };
     EXPECT(prefetcher_pop_ready(fx.p, &r) == 1);
     EXPECT(r.result == PREFETCHER_RESULT_READY);
     EXPECT(r.err_code == 0);
     prefetcher_ready_free(&r);
-    prefetcher_release_batch(fx.p, i);
   }
 
   fixture_teardown(&fx);
@@ -717,7 +738,7 @@ test_missing_shard_reaches_ready(void)
   struct damacy_sample s = { .uri = "foo", .aabb = { .rank = 2 } };
   s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
   s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
-  EXPECT(lookahead_push_with_batch(&fx.lookahead, &s, 0) == 0);
+  EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 0) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
 
   struct prefetcher_ready r = { 0 };
@@ -748,17 +769,18 @@ main(void)
   RUN(test_pop_ready_surfaces_error_state);
   RUN(test_pop_ready_recycles_slot);
   RUN(test_pop_ready_empty_returns_zero);
-  RUN(test_batch_gate_ready_after_drain);
-  RUN(test_batch_gate_error_on_failed_sample);
-  RUN(test_distinct_batches_get_separate_gates);
-  RUN(test_release_batch_drops_gate);
-  RUN(test_release_before_pop_defers);
+  RUN(test_sample_gate_ready_after_drain);
+  RUN(test_sample_gate_error_on_failed_sample);
+  RUN(test_distinct_samples_get_separate_gates);
+  RUN(test_pop_drops_sample_gate);
+  RUN(test_sample_gate_lives_until_pop);
   RUN(test_admit_fail_releases_batch_entry);
-  RUN(test_unknown_batch_gate_is_null);
+  RUN(test_unknown_sample_gate_is_null);
   RUN(test_take_wave_yields_ticket);
+  RUN(test_ready_wave_waits_for_prefix);
   RUN(test_advance_watermark_broadcasts);
-  RUN(test_batch_capacity_saturation_surfaces_error);
-  RUN(test_batch_table_recycles_after_release);
+  RUN(test_owner_capacity_saturation_surfaces_error);
+  RUN(test_owner_table_recycles_after_pop);
   RUN(test_missing_shard_reaches_ready);
   log_info("all tests passed");
   return 0;

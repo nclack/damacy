@@ -75,11 +75,11 @@ extern "C"
   void prefetch_cache_destroy(struct prefetch_cache* c);
 
   // PREFETCH_HANDLE_NONE on saturation (every entry has
-  // max_batch_id >= watermark) or invalid args. gate may be NULL.
+  // max_owner_id >= watermark) or invalid args. gate may be NULL.
   struct prefetch_handle prefetch_cache_request(struct prefetch_cache* c,
                                                 uint64_t key_hash,
                                                 const void* key,
-                                                uint64_t batch_id,
+                                                uint64_t owner_id,
                                                 struct prefetch_gate* gate);
 
   // NULL on pending, error, stale generation, OR when the ready value happens
@@ -91,7 +91,7 @@ extern "C"
   // NULL unless READY. Doesn't widen the ordinal range or bump LRU recency;
   // caller is responsible for pinning. In particular, a fetcher that peeks
   // into an upstream cache must run before the scheduler advances the
-  // watermark past the batch_ids that pinned the upstream entry.
+  // watermark past the owner ids that pinned the upstream entry.
   const void* prefetch_cache_peek(const struct prefetch_cache* c,
                                   uint64_t key_hash,
                                   const void* key);

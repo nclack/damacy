@@ -24,6 +24,9 @@ batch_slot_init(struct damacy_batch_slot* slot, uint32_t samples_per_batch_cap)
   slot->sample_plans = (struct sample_plan*)calloc(samples_per_batch_cap,
                                                    sizeof(struct sample_plan));
   CHECK(Error, slot->sample_plans);
+  slot->stage_samples = (struct planner_sample*)calloc(
+    samples_per_batch_cap, sizeof(struct planner_sample));
+  CHECK(Error, slot->stage_samples);
   CUdeviceptr dptr = 0;
   if (cuMemAlloc(&dptr,
                  (size_t)samples_per_batch_cap * sizeof(struct sample_plan)) !=
@@ -46,6 +49,13 @@ batch_slot_destroy(struct damacy_batch_slot* slot, int cuda_skip)
   free(slot->chunk_plans);
   free(slot->read_op_groups);
   free(slot->sample_plans);
+  if (slot->stage_samples) {
+    for (uint32_t i = 0; i < slot->n_samples; ++i) {
+      free(slot->stage_samples[i].h_shards);
+      free((char*)slot->stage_samples[i].uri);
+    }
+  }
+  free(slot->stage_samples);
   path_intern_free(&slot->paths);
   if (!cuda_skip && slot->d_sample_plans)
     cuMemFree(CUDPTR(slot->d_sample_plans));
@@ -131,6 +141,21 @@ find_free_batch_slot(const struct damacy_batch_pool* pool)
 }
 
 int
+find_open_batch_slot(const struct damacy_batch_pool* pool)
+{
+  int best = -1;
+  uint64_t best_id = UINT64_MAX;
+  for (int s = 0; s < 2; ++s) {
+    if (pool->slots[s].state == BATCH_OPEN &&
+        pool->slots[s].batch_id < best_id) {
+      best = s;
+      best_id = pool->slots[s].batch_id;
+    }
+  }
+  return best;
+}
+
+int
 find_oldest_ready_slot(const struct damacy_batch_pool* pool)
 {
   int best = -1;
@@ -182,8 +207,8 @@ any_batch_in_flight(const struct damacy_batch_pool* pool)
 {
   for (int s = 0; s < 2; ++s) {
     enum batch_slot_state st = pool->slots[s].state;
-    if (st == BATCH_PLANNING || st == BATCH_FILLING || st == BATCH_READY ||
-        st == BATCH_HELD)
+    if (st == BATCH_OPEN || st == BATCH_PLANNING || st == BATCH_FILLING ||
+        st == BATCH_READY || st == BATCH_HELD)
       return 1;
   }
   return 0;

@@ -18,6 +18,7 @@
 enum batch_slot_state
 {
   BATCH_FREE = 0,
+  BATCH_OPEN,     // planned prefix, waiting for more samples or flush close
   BATCH_PLANNING, // reserve has drained samples; run/commit pending
   BATCH_FILLING,  // planner has emitted; chunks may or may not be dispatched
   BATCH_READY,    // chunks_remaining == 0; awaiting pop
@@ -30,11 +31,13 @@ struct read_op;
 struct chunk_plan;
 struct sample_plan;
 struct read_op_group;
+struct planner_sample;
 
 struct damacy_batch_slot
 {
   enum batch_slot_state state;
   uint64_t batch_id;
+  uint64_t sample_seq_begin;
   uint32_t n_samples; // shape[0]: number of complete samples
   void* dev_ptr;      // device output tensor (allocated lazily)
 
@@ -46,6 +49,7 @@ struct damacy_batch_slot
   // Reset before each plan into the slot; bounds the working set to
   // distinct shard paths in one batch.
   struct path_intern paths;
+  struct planner_sample* stage_samples; // size cfg.samples_per_batch
   void* d_sample_plans;    // device mirror, uploaded once per batch
   uint32_t n_sample_plans; // == n_samples on success
   uint32_t n_chunks;
@@ -61,6 +65,7 @@ struct damacy_batch_slot
   // the normal reuse path is already gated by the cuStreamWaitEvent on
   // stream_post itself.
   int deferred_release_pending;
+  int planning_close_batch;
 };
 
 struct damacy_batch_pool
@@ -106,6 +111,8 @@ batch_pool_alloc_dev(struct damacy_batch_pool* pool);
 // requires n_chunks_dispatched < n_chunks (used by the wave scheduler).
 int
 find_free_batch_slot(const struct damacy_batch_pool* pool);
+int
+find_open_batch_slot(const struct damacy_batch_pool* pool);
 int
 find_oldest_ready_slot(const struct damacy_batch_pool* pool);
 int

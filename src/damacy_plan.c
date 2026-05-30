@@ -8,6 +8,7 @@
 #include "util/prelude.h"
 
 #include <cuda.h>
+#include <stdlib.h>
 
 // Lazy batch-output pool sizing + GPU-budget enforcement. Geometry is
 // fixed by cfg->sample_shape at create-time; this only allocates the
@@ -46,69 +47,82 @@ batch_pool_allocate(struct damacy* self)
 // scheduler_lock. The slot sits in BATCH_PLANNING for the window so
 // pop (any_batch_in_flight) and flush (any_batch_planning) wait.
 
+static void
+free_stage_sample(struct planner_sample* s)
+{
+  if (!s)
+    return;
+  free(s->h_shards);
+  free((char*)s->uri);
+  *s = (struct planner_sample){ 0 };
+}
+
+static void
+free_slot_stage_samples(struct damacy_batch_slot* slot)
+{
+  if (!slot || !slot->stage_samples)
+    return;
+  for (uint32_t i = 0; i < slot->n_samples; ++i)
+    free_stage_sample(&slot->stage_samples[i]);
+}
+
 enum damacy_status
 plan_reserve(struct damacy* self,
              uint16_t slot_idx,
-             struct prefetcher_wave_ticket ticket)
+             struct prefetcher_ready* ready,
+             uint32_t n_ready,
+             int close_batch)
 {
-  if (ticket.n_samples == 0)
+  if (n_ready == 0)
     return DAMACY_OK;
-  if (ticket.batch_id != self->next_batch_id)
-    return DAMACY_INVAL;
   struct damacy_batch_slot* slot = &self->batch_pool.slots[slot_idx];
-  if (slot->state != BATCH_FREE)
+  if (slot->state != BATCH_FREE && slot->state != BATCH_OPEN)
     return DAMACY_INVAL;
-
-  struct prefetcher_wave_ticket consumed = { 0 };
-  if (!prefetcher_take_wave(self->prefetcher,
-                            ticket.batch_id,
-                            ticket.n_samples,
-                            &consumed,
-                            self->staging)) {
-    return DAMACY_AGAIN;
-  }
-  if (consumed.n_samples != ticket.n_samples ||
-      consumed.batch_id != ticket.batch_id) {
-    for (uint32_t i = 0; i < consumed.n_samples; ++i)
-      prefetcher_ready_free(&self->staging[i]);
+  uint32_t begin = slot->n_samples;
+  if (slot->state == BATCH_FREE) {
+    if (begin != 0)
+      return DAMACY_INVAL;
+    slot->batch_id = self->next_batch_id;
+    slot->sample_seq_begin = ready[0].sample_seq;
+  } else if (slot->batch_id != self->next_batch_id) {
     return DAMACY_INVAL;
   }
+  if (begin + n_ready > self->cfg.samples_per_batch)
+    return DAMACY_INVAL;
 
-  for (uint32_t i = 0; i < ticket.n_samples; ++i) {
+  for (uint32_t i = 0; i < n_ready; ++i) {
     // advance_from_shard absorbs NOTFOUND at the prefetcher level; a
     // slot-level ERROR here is always a real error.
-    if (self->staging[i].result == PREFETCHER_RESULT_ERROR) {
-      enum damacy_status es = self->staging[i].err_code
-                                ? (enum damacy_status)self->staging[i].err_code
+    if (ready[i].result == PREFETCHER_RESULT_ERROR) {
+      enum damacy_status es = ready[i].err_code
+                                ? (enum damacy_status)ready[i].err_code
                                 : DAMACY_INVAL;
-      for (uint32_t j = 0; j < ticket.n_samples; ++j)
-        prefetcher_ready_free(&self->staging[j]);
       self->failed_status = es;
       return es;
     }
+    if (ready[i].sample_seq != slot->sample_seq_begin + begin + i)
+      return DAMACY_INVAL;
   }
 
   enum damacy_status status = batch_pool_allocate(self);
   if (status != DAMACY_OK) {
-    for (uint32_t i = 0; i < ticket.n_samples; ++i)
-      prefetcher_ready_free(&self->staging[i]);
     self->failed_status = status;
     return status;
   }
-  for (uint32_t i = 0; i < ticket.n_samples; ++i) {
-    // Steal uri + h_shards into batch_stage; plan_commit frees the rest
-    // of staging[i] (the bare handles are POD and safe to copy).
-    self->batch_stage[i].uri = self->staging[i].uri;
-    self->batch_stage[i].aabb = self->staging[i].aabb;
-    self->batch_stage[i].h_meta = self->staging[i].h_meta;
-    self->batch_stage[i].h_shards = self->staging[i].h_shards;
-    self->batch_stage[i].n_shards = self->staging[i].n_shards;
-    self->batch_stage[i].h_layout = self->staging[i].h_layout;
-    self->staging[i].uri = NULL;
-    self->staging[i].h_shards = NULL;
-    self->staging[i].n_shards = 0;
+  for (uint32_t i = 0; i < n_ready; ++i) {
+    struct planner_sample* dst = &slot->stage_samples[begin + i];
+    dst->uri = ready[i].uri;
+    dst->aabb = ready[i].aabb;
+    dst->h_meta = ready[i].h_meta;
+    dst->h_shards = ready[i].h_shards;
+    dst->n_shards = ready[i].n_shards;
+    dst->h_layout = ready[i].h_layout;
+    ready[i].uri = NULL;
+    ready[i].h_shards = NULL;
+    ready[i].n_shards = 0;
   }
-  slot->n_samples = ticket.n_samples;
+  slot->n_samples = begin + n_ready;
+  slot->planning_close_batch = close_batch;
   slot->state = BATCH_PLANNING;
   return DAMACY_OK;
 }
@@ -135,7 +149,7 @@ plan_run(struct damacy* self, uint16_t slot_idx, float* out_elapsed_ms)
   struct platform_clock plan_clock = { 0 };
   platform_toc(&plan_clock);
   enum damacy_status status = planner_plan(self->planner,
-                                           self->batch_stage,
+                                           slot->stage_samples,
                                            slot->n_samples,
                                            slot_idx,
                                            self->batch_pool.strides,
@@ -171,17 +185,12 @@ plan_commit(struct damacy* self,
 {
   metric_record(&self->stats.plan, elapsed_ms, 0, 0);
   struct damacy_batch_slot* slot = &self->batch_pool.slots[slot_idx];
-  for (uint32_t i = 0; i < slot->n_samples; ++i) {
-    prefetcher_ready_free(&self->staging[i]);
-    // plan_reserve stole uri + h_shards from staging[i] into batch_stage[i];
-    // planner is done with them by now, free here to close the leak.
-    free(self->batch_stage[i].h_shards);
-    free((char*)self->batch_stage[i].uri);
-    self->batch_stage[i] = (struct planner_sample){ 0 };
-  }
   if (run_status != DAMACY_OK) {
+    free_slot_stage_samples(slot);
     slot->state = BATCH_FREE;
     slot->n_samples = 0;
+    slot->sample_seq_begin = 0;
+    slot->planning_close_batch = 0;
     slot->deferred_release_pending = 0;
     self->failed_status = run_status;
     if (changed)
@@ -191,8 +200,18 @@ plan_commit(struct damacy* self,
   slot->n_chunks_dispatched = 0;
   slot->n_groups_dispatched = 0;
   slot->chunks_remaining = (int32_t)slot->n_chunks;
-  slot->batch_id = self->next_batch_id++;
-  prefetcher_advance_watermark(self->prefetcher, self->next_batch_id);
+  if (!slot->planning_close_batch) {
+    slot->state = BATCH_OPEN;
+    if (changed)
+      *changed = 1;
+    return DAMACY_OK;
+  }
+
+  free_slot_stage_samples(slot);
+  prefetcher_advance_watermark(self->prefetcher,
+                               slot->sample_seq_begin + slot->n_samples);
+  self->next_batch_id++;
+  slot->planning_close_batch = 0;
   slot->state = BATCH_FILLING;
   self->stats.chunks_planned += slot->n_chunks;
   self->stats.chunks_to_load += slot->n_chunks_to_load;
@@ -212,6 +231,8 @@ plan_commit(struct damacy* self,
     if (cuMemsetD8(CUDPTR(slot->dev_ptr), 0, self->batch_pool.n_bytes) !=
         CUDA_SUCCESS) {
       slot->state = BATCH_FREE;
+      slot->n_samples = 0;
+      slot->sample_seq_begin = 0;
       self->failed_status = DAMACY_CUDA;
       return DAMACY_CUDA;
     }
@@ -220,4 +241,119 @@ plan_commit(struct damacy* self,
   // Non-degenerate path doesn't clear the flag: assemble on FIFO stream_post
   // already inherits the cuStreamWaitEvent, so host-side consumption is moot.
   return DAMACY_OK;
+}
+
+static uint32_t
+planning_capacity_locked(struct damacy* self)
+{
+  if (any_batch_planning(&self->batch_pool))
+    return 0;
+  uint32_t cap = 0;
+  int open_slot = find_open_batch_slot(&self->batch_pool);
+  if (open_slot >= 0) {
+    struct damacy_batch_slot* slot = &self->batch_pool.slots[open_slot];
+    if (slot->n_samples < self->cfg.samples_per_batch)
+      cap += self->cfg.samples_per_batch - slot->n_samples;
+  }
+  for (int s = 0; s < 2; ++s) {
+    if (self->batch_pool.slots[s].state == BATCH_FREE)
+      cap += self->cfg.samples_per_batch;
+  }
+  uint32_t staging_cap = 2u * self->cfg.samples_per_batch;
+  return cap < staging_cap ? cap : staging_cap;
+}
+
+static int
+next_plan_slot_locked(struct damacy* self)
+{
+  int open_slot = find_open_batch_slot(&self->batch_pool);
+  if (open_slot >= 0)
+    return open_slot;
+  return find_free_batch_slot(&self->batch_pool);
+}
+
+static void
+free_ready_range(struct prefetcher_ready* ready, uint32_t n)
+{
+  for (uint32_t i = 0; i < n; ++i)
+    prefetcher_ready_free(&ready[i]);
+}
+
+enum damacy_status
+plan_ready_prefetch(struct damacy* self, int close_partial, int* changed)
+{
+  enum damacy_status status = DAMACY_OK;
+  for (;;) {
+    if (close_partial && prefetcher_ready_prefix_count(self->prefetcher) == 0) {
+      int open_slot = find_open_batch_slot(&self->batch_pool);
+      if (open_slot >= 0) {
+        struct damacy_batch_slot* slot = &self->batch_pool.slots[open_slot];
+        int truncated = slot->n_samples < self->cfg.samples_per_batch;
+        slot->planning_close_batch = 1;
+        slot->state = BATCH_PLANNING;
+        scheduler_unlock(self->sched);
+        float plan_ms = 0.f;
+        enum damacy_status rs = plan_run(self, (uint16_t)open_slot, &plan_ms);
+        scheduler_lock(self->sched);
+        status = plan_commit(self, (uint16_t)open_slot, rs, plan_ms, changed);
+        if (status == DAMACY_OK && truncated)
+          self->stats.batches_truncated++;
+        return status;
+      }
+    }
+
+    uint32_t cap = planning_capacity_locked(self);
+    if (cap == 0)
+      return DAMACY_OK;
+
+    struct prefetcher_wave_ticket ticket = { 0 };
+    if (!prefetcher_take_ready_wave(
+          self->prefetcher, cap, &ticket, self->staging)) {
+      return DAMACY_OK;
+    }
+
+    uint32_t cursor = 0;
+    while (cursor < ticket.n_samples) {
+      int slot_idx = next_plan_slot_locked(self);
+      if (slot_idx < 0) {
+        free_ready_range(&self->staging[cursor], ticket.n_samples - cursor);
+        return DAMACY_INVAL;
+      }
+
+      struct damacy_batch_slot* slot = &self->batch_pool.slots[slot_idx];
+      uint32_t begin = slot->n_samples;
+      uint32_t room = self->cfg.samples_per_batch - begin;
+      uint32_t remaining = ticket.n_samples - cursor;
+      uint32_t n = remaining < room ? remaining : room;
+      int close_batch = (begin + n == self->cfg.samples_per_batch) ||
+                        (close_partial && ticket.n_samples < cap &&
+                         cursor + n == ticket.n_samples);
+      int truncated = close_batch && begin + n < self->cfg.samples_per_batch;
+
+      status = plan_reserve(
+        self, (uint16_t)slot_idx, &self->staging[cursor], n, close_batch);
+      if (status != DAMACY_OK) {
+        free_ready_range(&self->staging[cursor], ticket.n_samples - cursor);
+        return status;
+      }
+      free_ready_range(&self->staging[cursor], n);
+
+      scheduler_unlock(self->sched);
+      float plan_ms = 0.f;
+      enum damacy_status rs = plan_run(self, (uint16_t)slot_idx, &plan_ms);
+      scheduler_lock(self->sched);
+      status = plan_commit(self, (uint16_t)slot_idx, rs, plan_ms, changed);
+      if (status == DAMACY_OK && truncated)
+        self->stats.batches_truncated++;
+      if (status != DAMACY_OK) {
+        free_ready_range(&self->staging[cursor + n],
+                         ticket.n_samples - cursor - n);
+        return status;
+      }
+      cursor += n;
+    }
+
+    if (ticket.n_samples < cap)
+      return DAMACY_OK;
+  }
 }

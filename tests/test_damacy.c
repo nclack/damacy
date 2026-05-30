@@ -23,6 +23,7 @@
 #include "cuda_init.h"
 #include "damacy.h"
 #include "fixture.h"
+#include "platform/platform.h"
 #include "spin_kernel.h"
 
 #include <cuda_runtime.h>
@@ -298,6 +299,55 @@ test_multi_zarr(void)
       EXPECT(out[0 * 32 + y * 8 + x] == expected_f32_from_u16_2d(y, x, 8, 0));
       EXPECT(out[1 * 32 + y * 8 + x] ==
              expected_f32_from_u16_2d(y, x, 8, 1000));
+    }
+  }
+  damacy_release(d, b);
+
+  damacy_destroy(d);
+  fixture_rm_tree(root);
+  return 0;
+}
+
+static int
+test_incremental_batch_fill(void)
+{
+  char root[64];
+  EXPECT(mkdtemp_root(root, sizeof root) == 0);
+  char p[256];
+  snprintf(p, sizeof p, "%s/foo", root);
+  int64_t shape[2] = { 8, 16 }, inner[2] = { 2, 4 }, shard[2] = { 8, 16 };
+  EXPECT(fixture_write_zarr(p, shape, inner, shard, 2, "uint16", 0) == 0);
+
+  struct damacy_config cfg = mk_cfg(root, 2, 4, 8);
+  cfg.lookahead_samples = 2;
+  struct damacy* d = NULL;
+  EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
+
+  struct damacy_sample s0 = mk_sample(p, 0, 4, 0, 8);
+  struct damacy_sample s1 = mk_sample(p, 4, 8, 8, 16);
+  EXPECT(damacy_push(d, (struct damacy_sample_slice){ &s0, &s0 + 1 }).status ==
+         DAMACY_OK);
+  platform_sleep_ns(20000000);
+  EXPECT(damacy_push(d, (struct damacy_sample_slice){ &s1, &s1 + 1 }).status ==
+         DAMACY_OK);
+
+  struct damacy_batch* b = NULL;
+  EXPECT(damacy_pop(d, &b) == DAMACY_OK);
+  struct damacy_batch_info info;
+  damacy_batch_info(b, &info);
+  EXPECT(info.batch_id == 0);
+  EXPECT(info.shape[0] == 2);
+  EXPECT(info.shape[1] == 4);
+  EXPECT(info.shape[2] == 8);
+
+  float out[2 * 4 * 8] = { 0 };
+  EXPECT(cudaMemcpy(out, info.device_ptr, sizeof out, cudaMemcpyDeviceToHost) ==
+         cudaSuccess);
+  for (int y = 0; y < 4; ++y) {
+    for (int x = 0; x < 8; ++x) {
+      EXPECT(out[y * 8 + x] == expected_f32_from_u16_2d(y, x, 16, 0));
+      EXPECT(out[32 + y * 8 + x] ==
+             expected_f32_from_u16_2d(4 + y, 8 + x, 16, 0));
     }
   }
   damacy_release(d, b);
@@ -710,6 +760,7 @@ main(void)
   RUN(test_partial_crossing_chunks);
   RUN(test_multi_batch);
   RUN(test_multi_zarr);
+  RUN(test_incremental_batch_fill);
   RUN(test_heterogeneous_dtype);
   RUN(test_pipelined);
   RUN(test_lookahead_backpressure);

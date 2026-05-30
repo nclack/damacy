@@ -18,7 +18,7 @@ extern "C"
     struct prefetch_cache* shard_index_cache;
     struct prefetch_cache* chunk_layout_cache;
     uint32_t capacity;
-    uint32_t batch_capacity;
+    uint32_t owner_capacity;
   };
 
   enum prefetcher_result
@@ -49,16 +49,13 @@ extern "C"
   enum damacy_status prefetcher_drain(struct prefetcher* p);
 
   // uri + h_shards become caller-owned; release via prefetcher_ready_free.
-  // Always safe to call prefetcher_release_batch after popping any ERROR slot
-  // — it is a no-op if no batch entry was allocated (the batch-capacity-
-  // saturation path).
   struct prefetcher_ready
   {
     enum prefetcher_result result;
     int err_code; // damacy_status when result == PREFETCHER_RESULT_ERROR
     char* uri;
     struct damacy_aabb aabb;
-    uint64_t batch_id;
+    uint64_t sample_seq;
     struct prefetch_handle h_meta;
     // On ERROR mid-shard-allocation, h_shards may be non-NULL with n_shards
     // == 0; iterate by n_shards, never by (h_shards != NULL).
@@ -69,25 +66,23 @@ extern "C"
 
   struct prefetcher_wave_ticket
   {
-    uint64_t batch_id;
+    uint64_t sample_seq_begin;
     uint32_t n_samples;
-    uint64_t first_admit_seq;
   };
 
-  // Returns 1 if a terminal-state slot was popped into *out; 0 if no
-  // terminal-state slot is currently available.
+  // Returns 1 if the next sample_seq terminal-state slot was popped into
+  // *out; 0 if the contiguous prefix is not currently available.
   int prefetcher_pop_ready(struct prefetcher* p, struct prefetcher_ready* out);
 
-  // Atomically pops n terminal samples for batch_id into out[0..n). On
-  // success, ticket describes the consumed input wave.
-  int prefetcher_take_wave(struct prefetcher* p,
-                           uint64_t batch_id,
-                           uint32_t n,
-                           struct prefetcher_wave_ticket* ticket,
-                           struct prefetcher_ready* out);
+  // Atomically pops the contiguous ready/error prefix starting at the next
+  // unconsumed sample sequence, capped by max_samples. Returns 1 if at least
+  // one terminal sample was popped.
+  int prefetcher_take_ready_wave(struct prefetcher* p,
+                                 uint32_t max_samples,
+                                 struct prefetcher_wave_ticket* ticket,
+                                 struct prefetcher_ready* out);
 
-  uint32_t prefetcher_ready_count_for_batch(struct prefetcher* p,
-                                            uint64_t batch_id);
+  uint32_t prefetcher_ready_prefix_count(struct prefetcher* p);
 
   uint32_t prefetcher_in_flight(struct prefetcher* p);
 
@@ -95,18 +90,12 @@ extern "C"
 
   void prefetcher_ready_free(struct prefetcher_ready* r);
 
-  // NULL if no in-flight samples; valid until released or destroyed.
-  // Returns NULL when the batch is unknown OR was rejected at batch-capacity
-  // saturation; in the saturation case a PREFETCHER_RESULT_ERROR slot with
-  // DAMACY_OOM appears via pop_ready.
-  const struct prefetch_gate* prefetcher_batch_gate(struct prefetcher* p,
-                                                    uint64_t batch_id);
+  // NULL if no such sample is admitted; valid until the sample is popped and
+  // all cache waiters registered against it have resolved.
+  const struct prefetch_gate* prefetcher_sample_gate(struct prefetcher* p,
+                                                     uint64_t sample_seq);
 
-  // Marks the batch releasable; the entry is reclaimed once the last
-  // referencing slot is popped (so the gate can't alias mid-flight).
-  void prefetcher_release_batch(struct prefetcher* p, uint64_t batch_id);
-
-  // Entries with max_batch_id < watermark become evictable.
+  // Entries with max owner id < watermark become evictable.
   void prefetcher_advance_watermark(struct prefetcher* p, uint64_t watermark);
 
   void prefetcher_stats_get(const struct prefetcher* p,

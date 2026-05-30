@@ -81,8 +81,6 @@ destroy_inner(struct damacy* self, int cuda_skip)
 
   free(self->staging);
   self->staging = NULL;
-  free(self->batch_stage);
-  self->batch_stage = NULL;
   lookahead_destroy(&self->lookahead);
   batch_pool_destroy(&self->batch_pool, cuda_skip);
 
@@ -401,20 +399,14 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
       .shard_index_cache = self->shard_index_cache,
       .chunk_layout_cache = self->chunk_layout_cache,
       .capacity = cfg->lookahead_samples,
-      // +4 covers the admit→release_batch transit window per batch_id.
-      .batch_capacity = (cfg->lookahead_samples + cfg->samples_per_batch - 1u) /
-                          cfg->samples_per_batch +
-                        4u,
+      .owner_capacity = cfg->lookahead_samples + 4u,
     };
     self->prefetcher = prefetcher_create(&pf_cfg);
     CHECK(Fail, self->prefetcher);
   }
 
-  self->batch_stage = (struct planner_sample*)calloc(
-    cfg->samples_per_batch, sizeof(struct planner_sample));
-  CHECK(Fail, self->batch_stage);
   self->staging = (struct prefetcher_ready*)calloc(
-    cfg->samples_per_batch, sizeof(struct prefetcher_ready));
+    2u * (size_t)cfg->samples_per_batch, sizeof(struct prefetcher_ready));
   CHECK(Fail, self->staging);
 
   self->handle.d = self;
