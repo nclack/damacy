@@ -49,8 +49,9 @@ kick_peel_into_free_slots(struct damacy* self, int* changed)
 
 // One scheduler tick, under scheduler_lock. Lazy ctx push on first call.
 // *changed contract (authoritative): every transition site
-// (wave_pool_advance, plan_commit, wave_pool_peel_commit) OR-sets it on
-// a real state transition; the worker broadcasts iff non-zero.
+// (wave_pool_advance, plan_ready_prefetch/plan_commit,
+// wave_pool_peel_commit) OR-sets it on a real state transition; the worker
+// broadcasts iff non-zero.
 int
 damacy_scheduler_step(void* arg)
 {

@@ -42,10 +42,11 @@ batch_pool_allocate(struct damacy* self)
   return DAMACY_OK;
 }
 
-// --- plan: reserve [locked] → run [unlocked] → commit [locked] -------------
-// run does the planner CPU work + sample_plans H2D off the
-// scheduler_lock. The slot sits in BATCH_PLANNING for the window so
-// pop (any_batch_in_flight) and flush (any_batch_planning) wait.
+// --- plan: accumulate [locked] → run sealed [unlocked] → commit [locked] ----
+// Ready samples are staged cheaply while the batch is still open. Only a
+// sealed full/flush batch enters BATCH_PLANNING; plan_run then does planner
+// CPU work + sample_plans H2D off scheduler_lock. Pop and flush treat
+// BATCH_PLANNING as "planner work is outstanding".
 
 static void
 free_stage_sample(struct planner_sample* s)
@@ -104,10 +105,12 @@ plan_reserve(struct damacy* self,
       return DAMACY_INVAL;
   }
 
-  enum damacy_status status = batch_pool_allocate(self);
-  if (status != DAMACY_OK) {
-    self->failed_status = status;
-    return status;
+  if (close_batch) {
+    enum damacy_status status = batch_pool_allocate(self);
+    if (status != DAMACY_OK) {
+      self->failed_status = status;
+      return status;
+    }
   }
   for (uint32_t i = 0; i < n_ready; ++i) {
     struct planner_sample* dst = &slot->stage_samples[begin + i];
@@ -123,7 +126,7 @@ plan_reserve(struct damacy* self,
   }
   slot->n_samples = begin + n_ready;
   slot->planning_close_batch = close_batch;
-  slot->state = BATCH_PLANNING;
+  slot->state = close_batch ? BATCH_PLANNING : BATCH_ACCUMULATING;
   return DAMACY_OK;
 }
 
@@ -176,16 +179,13 @@ plan_commit(struct damacy* self,
       *changed = 1;
     return run_status;
   }
+  if (!slot->planning_close_batch) {
+    self->failed_status = DAMACY_INVAL;
+    return DAMACY_INVAL;
+  }
   struct render_job* job = &self->render_jobs.jobs[slot_idx];
   slot->n_chunks = job->n_chunks;
   slot->chunks_remaining = (int32_t)slot->n_chunks;
-  if (!slot->planning_close_batch) {
-    slot->state = BATCH_ACCUMULATING;
-    render_job_reset(job);
-    if (changed)
-      *changed = 1;
-    return DAMACY_OK;
-  }
 
   free_slot_stage_samples(slot);
   prefetcher_advance_watermark(self->prefetcher,
@@ -221,6 +221,42 @@ plan_commit(struct damacy* self,
   // Non-degenerate path doesn't clear the flag: assemble on FIFO stream_post
   // already inherits the cuStreamWaitEvent, so host-side consumption is moot.
   return DAMACY_OK;
+}
+
+static enum damacy_status
+seal_accumulating_slot(struct damacy* self, uint16_t slot_idx, int* changed)
+{
+  struct damacy_batch_slot* slot = &self->batch_pool.slots[slot_idx];
+  if (slot->state != BATCH_ACCUMULATING || slot->n_samples == 0)
+    return DAMACY_INVAL;
+  enum damacy_status status = batch_pool_allocate(self);
+  if (status != DAMACY_OK) {
+    self->failed_status = status;
+    return status;
+  }
+  slot->planning_close_batch = 1;
+  slot->state = BATCH_PLANNING;
+  if (changed)
+    *changed = 1;
+  return DAMACY_OK;
+}
+
+static enum damacy_status
+run_sealed_plan(struct damacy* self,
+                uint16_t slot_idx,
+                int* changed,
+                int* out_truncated)
+{
+  struct damacy_batch_slot* slot = &self->batch_pool.slots[slot_idx];
+  int truncated = slot->n_samples < self->cfg.samples_per_batch;
+  scheduler_unlock(self->sched);
+  float plan_ms = 0.f;
+  enum damacy_status rs = plan_run(self, slot_idx, &plan_ms);
+  scheduler_lock(self->sched);
+  enum damacy_status status = plan_commit(self, slot_idx, rs, plan_ms, changed);
+  if (out_truncated)
+    *out_truncated = truncated;
+  return status;
 }
 
 static uint32_t
@@ -267,15 +303,12 @@ plan_ready_prefetch(struct damacy* self, int close_partial, int* changed)
     if (close_partial && prefetcher_ready_prefix_count(self->prefetcher) == 0) {
       int open_slot = find_accumulating_batch_slot(&self->batch_pool);
       if (open_slot >= 0) {
-        struct damacy_batch_slot* slot = &self->batch_pool.slots[open_slot];
-        int truncated = slot->n_samples < self->cfg.samples_per_batch;
-        slot->planning_close_batch = 1;
-        slot->state = BATCH_PLANNING;
-        scheduler_unlock(self->sched);
-        float plan_ms = 0.f;
-        enum damacy_status rs = plan_run(self, (uint16_t)open_slot, &plan_ms);
-        scheduler_lock(self->sched);
-        status = plan_commit(self, (uint16_t)open_slot, rs, plan_ms, changed);
+        status = seal_accumulating_slot(self, (uint16_t)open_slot, changed);
+        if (status != DAMACY_OK)
+          return status;
+        int truncated = 0;
+        status =
+          run_sealed_plan(self, (uint16_t)open_slot, changed, &truncated);
         if (status == DAMACY_OK && truncated)
           self->stats.batches_truncated++;
         return status;
@@ -317,18 +350,20 @@ plan_ready_prefetch(struct damacy* self, int close_partial, int* changed)
         return status;
       }
       free_ready_range(&self->staging[cursor], n);
+      if (changed)
+        *changed = 1;
 
-      scheduler_unlock(self->sched);
-      float plan_ms = 0.f;
-      enum damacy_status rs = plan_run(self, (uint16_t)slot_idx, &plan_ms);
-      scheduler_lock(self->sched);
-      status = plan_commit(self, (uint16_t)slot_idx, rs, plan_ms, changed);
-      if (status == DAMACY_OK && truncated)
-        self->stats.batches_truncated++;
-      if (status != DAMACY_OK) {
-        free_ready_range(&self->staging[cursor + n],
-                         ticket.n_samples - cursor - n);
-        return status;
+      if (close_batch) {
+        int planned_truncated = 0;
+        status = run_sealed_plan(
+          self, (uint16_t)slot_idx, changed, &planned_truncated);
+        if (status == DAMACY_OK && (truncated || planned_truncated))
+          self->stats.batches_truncated++;
+        if (status != DAMACY_OK) {
+          free_ready_range(&self->staging[cursor + n],
+                           ticket.n_samples - cursor - n);
+          return status;
+        }
       }
       cursor += n;
     }

@@ -21,10 +21,10 @@
 enum wave_state
 {
   WAVE_FREE = 0,
-  WAVE_H2D,      // bound to a slot; kick_h2d submitted, polling bulk_h2d_end
-                 // (slot release) and h2d_end (state transition)
-  WAVE_ASSEMBLE, // covers decompress + assemble on stream_decode; polled on
-                 // asm_end
+  WAVE_H2D,  // bound to a slot; kick_h2d submitted, polling bulk_h2d_end
+             // (slot release) and h2d_end (state transition)
+  WAVE_POST, // decode submitted on stream_decode and post/assemble submitted
+             // on stream_post; polled on asm_end
 };
 
 struct damacy_wave

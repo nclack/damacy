@@ -389,7 +389,7 @@ chunk_substreams_upper_bound(const struct chunk_plan* c,
 
 // Fanout grow is per-wave (the OTHER wave's SOA is a separate allocation
 // and untouched here), so this can run safely while the other wave is in
-// WAVE_H2D / WAVE_ASSEMBLE. decoder_scratch_grow synchronizes
+// WAVE_H2D / WAVE_POST. decoder_scratch_grow synchronizes
 // stream_decode first.
 static enum damacy_status
 prepare_decode_caps(struct wave_pool* wp, struct damacy_wave* wave)
@@ -784,7 +784,7 @@ kick_compute(struct wave_pool* wp, struct damacy_wave* wave)
   if (st != DAMACY_OK)
     return st;
 
-  wave->state = WAVE_ASSEMBLE;
+  wave->state = WAVE_POST;
   return DAMACY_OK;
 CudaFail:
   return DAMACY_CUDA;
@@ -1089,9 +1089,7 @@ advance_h2d_wave(struct wave_pool* wp, struct damacy_wave* wave, int* changed)
 }
 
 static enum damacy_status
-retire_assembled_wave(struct wave_pool* wp,
-                      struct damacy_wave* wave,
-                      int* changed)
+retire_posted_wave(struct wave_pool* wp, struct damacy_wave* wave, int* changed)
 {
   struct wave_outcome o = finalize_wave(wp, wave);
   struct damacy_batch_slot* batch = &wp->pool->slots[o.batch_pool_slot];
@@ -1103,16 +1101,14 @@ retire_assembled_wave(struct wave_pool* wp,
 }
 
 static enum damacy_status
-advance_assemble_wave(struct wave_pool* wp,
-                      struct damacy_wave* wave,
-                      int* changed)
+advance_post_wave(struct wave_pool* wp, struct damacy_wave* wave, int* changed)
 {
   CUresult qe = cuEventQuery(wave->ev.asm_end);
   if (qe == CUDA_ERROR_NOT_READY)
     return DAMACY_OK;
   if (qe != CUDA_SUCCESS)
     return DAMACY_CUDA;
-  return retire_assembled_wave(wp, wave, changed);
+  return retire_posted_wave(wp, wave, changed);
 }
 
 static enum damacy_status
@@ -1123,8 +1119,8 @@ advance_one_wave(struct wave_pool* wp, struct damacy_wave* wave, int* changed)
       return DAMACY_OK;
     case WAVE_H2D:
       return advance_h2d_wave(wp, wave, changed);
-    case WAVE_ASSEMBLE:
-      return advance_assemble_wave(wp, wave, changed);
+    case WAVE_POST:
+      return advance_post_wave(wp, wave, changed);
   }
   return DAMACY_OK;
 }

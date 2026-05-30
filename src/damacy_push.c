@@ -47,7 +47,7 @@ damacy_push(struct damacy* self, struct damacy_sample_slice samples)
     return r;
   }
   // No ctx_guard: push touches no CUDA. The lock pairs lookahead_push
-  // with the worker's plan_reserve drain.
+  // with the worker's prefetch/plan drain.
   scheduler_lock(self->sched);
   if (self->failed_status != DAMACY_OK) {
     r.status = DAMACY_SHUTDOWN;

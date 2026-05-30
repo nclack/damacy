@@ -144,8 +144,8 @@ any_slot_free(const struct wave_pool* wp);
 //   1. SLOT_IO → SLOT_READY when store_event_query succeeds.
 //   2. SLOT_READY → bound to a WAVE_FREE wave, then kick_h2d.
 //   3. WAVE_H2D: poll bulk_h2d_end → release slot; poll h2d_end → kick
-//      decode + assemble, advance to WAVE_ASSEMBLE.
-//   4. WAVE_ASSEMBLE: poll asm_end → finalize.
+//      decode + post/assemble, advance to WAVE_POST.
+//   4. WAVE_POST: poll asm_end → finalize.
 // Returns the first non-OK status encountered; the scheduler tick
 // latches it onto self->failed_status. *changed
 // follows the contract documented at damacy_scheduler_step.

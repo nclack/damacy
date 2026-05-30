@@ -255,8 +255,10 @@ extern "C"
     int64_t shape[DAMACY_MAX_RANK + 1]; // [N, ...zarr axes]
     uint8_t rank;                       // includes leading N axis
     enum damacy_dtype dtype;
-    void* ready_stream; // CUstream
-    uint64_t batch_id;  // monotonic
+    // CUstream that last writes device_ptr. Consumers should wait on it
+    // before reading from another stream.
+    void* ready_stream;
+    uint64_t batch_id; // monotonic
   };
 
   void damacy_batch_info(const struct damacy_batch* b,
