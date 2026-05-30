@@ -18,7 +18,7 @@ static struct damacy_config
 mk_cfg(uint32_t chunk_cap)
 {
   return (struct damacy_config){
-    .batch_size = 4,
+    .samples_per_batch = 4,
     .lookahead_batches = 2,
     .dtype = DAMACY_F32,
     .device = -1,

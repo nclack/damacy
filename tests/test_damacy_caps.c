@@ -56,7 +56,7 @@ mk_cfg(const char* root, uint32_t batch_size, int64_t sy, int64_t sx)
 {
   (void)root;
   struct damacy_config c = {
-    .batch_size = batch_size,
+    .samples_per_batch = batch_size,
     .lookahead_batches = 2,
     .dtype = DAMACY_F32,
     .sample_rank = 2,
@@ -239,7 +239,7 @@ test_pool_reserve_fits_default_budget(void)
   // double-buffered. 1 GiB cap leaves ~860 MB for the resolver,
   // comfortably fits the wave-resident geometry.
   struct damacy_config cfg = {
-    .batch_size = 20,
+    .samples_per_batch = 20,
     .lookahead_batches = 2,
     .dtype = DAMACY_F32,
     .sample_shape = { 16, 1, 256, 256 },
@@ -292,7 +292,7 @@ test_pool_exceeds_budget_rejected_at_create(void)
   char root[64];
   EXPECT(mkdtemp_root(root, sizeof root) == 0);
   struct damacy_config cfg = {
-    .batch_size = 20,
+    .samples_per_batch = 20,
     .lookahead_batches = 2,
     .dtype = DAMACY_F32,
     .sample_shape = { 16, 1, 256, 256 },

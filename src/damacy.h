@@ -17,32 +17,28 @@ extern "C"
 {
 #endif
 
-  // Output dtype of an assembled batch. Sources can vary (per-zarr); the
-  // assemble kernel casts each source element to this destination type.
+  // Output dtype of an assembled batch.
   enum damacy_dtype
   {
     DAMACY_F32,
     DAMACY_BF16,
   };
 
-  // NUMA placement strategy for pinned-host allocations and worker
-  // threads. `AUTO` (default) resolves the GPU's host-NUMA node from
-  // the driver and pins; `DISABLED` is a full no-op (today's behavior);
-  // `PIN_TO` uses the explicit damacy_config.numa_node override.
+  // NUMA placement strategy for pinned-host allocations and worker threads.
   enum damacy_numa_strategy
   {
-    DAMACY_NUMA_AUTO = 0,
-    DAMACY_NUMA_DISABLED,
-    DAMACY_NUMA_PIN_TO,
+    DAMACY_NUMA_AUTO = 0, // resolve GPU's host-NUMA node using the driver
+    DAMACY_NUMA_DISABLED, // no-op
+    DAMACY_NUMA_PIN_TO,   // pin's to an explicit override
+                          // (damacy_config.numa_node)
   };
 
-  // AUTO defers to env DAMACY_GDS_ENABLE=1; ON/OFF override env. AUTO=0
-  // so designated-init callers get the env-controlled default.
+  // GPU Direct storage (GDS) enablement
   enum damacy_gds_mode
   {
-    DAMACY_GDS_AUTO = 0,
-    DAMACY_GDS_ON,
-    DAMACY_GDS_OFF,
+    DAMACY_GDS_AUTO = 0, // defer to env DAMACY_GDS_ENALE=1
+    DAMACY_GDS_ON,       // enable
+    DAMACY_GDS_OFF,      // disable
   };
 
   enum damacy_status
@@ -64,16 +60,14 @@ extern "C"
   // Human-readable name for a status code; safe for log/error messages.
   const char* damacy_status_str(enum damacy_status s);
 
-  // Half-open [beg, end) interval along one axis, in level-0 voxel indices.
+  // Half-open [beg, end) interval
   struct damacy_interval
   {
     int64_t beg, end;
   };
 
   // Variable-rank AABB. Only dims[0..rank) are read; axis order matches
-  // the zarr's stored axis order. rank <= DAMACY_MAX_RANK for sample
-  // AABBs. Storage is sized DAMACY_MAX_RANK + 1 to accommodate internal
-  // dst AABBs (sample rank + 1 leading batch axis); see chunk_plan.dst.
+  // the zarr's stored axis order.
   struct damacy_aabb
   {
     struct damacy_interval dims[DAMACY_MAX_RANK + 1];
@@ -94,15 +88,11 @@ extern "C"
     const struct damacy_sample* end;
   };
 
-  // Performance + resource-sizing knobs. Anything with `0 → DEFAULT_*`
-  // resolves to its DAMACY_DEFAULT_* sibling in damacy_limits.h.
+  // Performance + resource-sizing knobs.
   struct damacy_tuning
   {
     // Primary GPU budget. Hard cap on total GPU memory damacy will
-    // allocate for wave-resident buffers, the shared decoder scratch,
-    // per-wave fanout SOAs, and per-batch metadata. The resolver carves
-    // out the batch-output pool (2 × batch_size × product(sample_shape)
-    // × dtype_bpe) from this cap before sizing wave-resident buffers.
+    // allocate.
     // Required — no default; a value too small for the requested
     // geometry returns DAMACY_BUDGET from damacy_create.
     uint64_t max_gpu_memory_bytes;
@@ -126,50 +116,31 @@ extern "C"
     uint32_t n_shard_index_cache;
     uint32_t n_chunk_layout_cache;
 
-    // AUTO resolves the GPU's host-NUMA node; DISABLED is a no-op;
-    // PIN_TO forces `numa_node`.
     enum damacy_numa_strategy numa_strategy;
     int numa_node;
-    // GPUDirect Storage: cuFile reads compressed bytes straight to GPU.
-    // Requires libcufile.so.0 and a successful cuFileDriverOpen at
-    // damacy_create.
+
     enum damacy_gds_mode enable_gds;
   };
 
-  // Measurement/profiling switches. None of these should be set in
-  // production — they intentionally alter pipeline correctness to
-  // isolate stages for benchmarking.
+  // Measurement/profiling switches.
   struct damacy_debug_flags
   {
-    // Skip decode: planner, IO, and H2D run normally, but every chunk
-    // is flipped to is_fill at parse + assemble build. Assemble
-    // broadcasts the array's fill_value. CUevents on stream_decode
-    // are still recorded so the state machine advances, but the decode
-    // and decode_gap metrics are meaningless under this flag.
+    // Skip decode. Pipeline runs normally but instead of decompressing
+    // chunks, an array's fill value is used to fill the batch.
     uint8_t bypass_decode;
   };
 
-  // All resource caps fixed at create-time. Nothing grows after this.
-  // Output batches are double-buffered (B=2); waves are double-buffered
-  // internally. Neither is configurable.
+  // Configuration of the damacy pipeline
   struct damacy_config
   {
-    // Destination dtype of assembled batches. Source zarrs may carry
-    // any supported integer or float type; the assemble kernel casts
-    // each element (RNE float-promote, no overflow handling). Sources
-    // without a cast path error with DAMACY_DTYPE at push.
+    // Destination dtype of assembled batches.
     enum damacy_dtype dtype;
-    // Per-sample output extents (in dst voxels) along the zarr's axis
-    // order — same layout damacy_sample.aabb uses. The resolver carves
-    // out 2 × batch_size × product(sample_shape) × dtype_bpe from
-    // tuning.max_gpu_memory_bytes before sizing wave-resident buffers,
-    // so the batch-output pool is guaranteed to fit. damacy_push
-    // validates each sample's aabb extent against this shape and
-    // rejects mismatches with DAMACY_INVAL. sample_rank must be in
+    // Per-sample output extents (in voxels) along the zarr's axis order — same
+    // layout damacy_sample.aabb uses. sample_rank must be in
     // [1, DAMACY_MAX_RANK]; every sample_shape[d] must be > 0.
     int64_t sample_shape[DAMACY_MAX_RANK];
     uint8_t sample_rank;
-    uint32_t batch_size;        // samples per batch
+    uint32_t samples_per_batch;
     uint32_t lookahead_batches; // user-push queue depth (>= 2)
 
     // -1 captures current CUcontext; >= 0 retains the primary for that
@@ -183,26 +154,15 @@ extern "C"
   struct damacy;
   struct damacy_batch;
 
-  // Create a damacy instance. cfg->device < 0 captures the current
-  // CUcontext (DAMACY_INVAL if none); cfg->device >= 0 retains the
-  // primary for that device and pushes it on the calling thread.
+  // Create a damacy instance.
   enum damacy_status damacy_create(const struct damacy_config* cfg,
                                    struct damacy** out);
 
-  // Log a one-line-per-field description of the geometry damacy would
-  // resolve from `cfg` at damacy_create time: max_gpu_memory_bytes plus
-  // the derived host_slab_per_wave, dev_decompressed_per_wave, initial
-  // nvcomp temp, initial allocation, headroom reserved for the
-  // observe-and-grow paths, and remaining slack. Emitted at LOG_INFO
-  // through the standard log/log.h dispatcher. Useful when diagnosing
-  // "why does damacy use N MB" without standing the instance up.
+  // Log (as LOG_INFO) a one-line-per-field description of the geometry damacy
+  // would resolve from `cfg` at damacy_create time. Useful when diagnosing "why
+  // does damacy use N MB" without standing the instance up.
   //
-  // Requires a live CUDA context on the calling thread: the resolver
-  // and gpu_budget_predict call into nvcomp's decoder_zstd_query_temp_bytes
-  // to size scratch. With no current context the function still
-  // returns, but logs a "gpu_budget_predict failed" /
-  // "wave_pool_resolve_sizing failed" line and stops short of the
-  // per-component breakdown. NULL cfg is safe (logs and returns).
+  // Requires a live CUDA context on the calling thread.
   void damacy_config_describe(const struct damacy_config* cfg);
 
   // The CUDA device index this instance is bound to.
@@ -292,9 +252,6 @@ extern "C"
     void* ready_stream; // CUstream
     uint64_t batch_id;  // monotonic
   };
-  // device ordinal is derivable from device_ptr via
-  // cuPointerGetAttribute(..., CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL, ...)
-  // or from ready_stream via cuStreamGetCtx → cuCtxGetDevice.
 
   void damacy_batch_info(const struct damacy_batch* b,
                          struct damacy_batch_info* out);

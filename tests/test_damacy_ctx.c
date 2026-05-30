@@ -36,7 +36,7 @@ mk_cfg(const char* root, int64_t sy, int64_t sx)
 {
   (void)root;
   struct damacy_config c = {
-    .batch_size = 1,
+    .samples_per_batch = 1,
     .lookahead_batches = 2,
     .dtype = DAMACY_F32,
     .sample_rank = 2,
@@ -200,7 +200,7 @@ test_explicit_device_does_not_leak_ctx_between_calls(void)
 
   struct damacy_config cfg = mk_cfg(root, 4, 8);
   cfg.device = 0;
-  cfg.batch_size = 1;
+  cfg.samples_per_batch = 1;
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 

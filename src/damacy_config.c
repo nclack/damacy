@@ -44,7 +44,7 @@ enum damacy_status
 validate_config(const struct damacy_config* cfg)
 {
   CHECK_SILENT(Invalid, cfg);
-  CHECK_SILENT(Invalid, cfg->batch_size > 0);
+  CHECK_SILENT(Invalid, cfg->samples_per_batch > 0);
   CHECK_SILENT(Invalid, cfg->tuning.max_gpu_memory_bytes > 0);
   CHECK_SILENT(Invalid, cfg->lookahead_batches >= 2);
   CHECK_SILENT(Invalid, cfg->tuning.n_io_threads > 0);
@@ -176,6 +176,6 @@ resolve_sample_volume_bytes(const struct damacy_config* cfg,
   for (uint8_t d = 0; d < rank; ++d)
     volume *= (uint64_t)shape[d];
   *out_bytes =
-    volume * (uint64_t)cfg->batch_size * damacy_dtype_bpe(cfg->dtype);
+    volume * (uint64_t)cfg->samples_per_batch * damacy_dtype_bpe(cfg->dtype);
   return DAMACY_OK;
 }

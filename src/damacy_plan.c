@@ -23,7 +23,7 @@ batch_pool_allocate(struct damacy* self)
     batch_pool_compute_layout(pool,
                               self->cfg.sample_shape,
                               self->cfg.sample_rank,
-                              self->cfg.batch_size,
+                              self->cfg.samples_per_batch,
                               damacy_dtype_bpe(self->cfg.dtype));
   if (s != DAMACY_OK)
     return s;
@@ -117,7 +117,7 @@ plan_run(struct damacy* self, uint16_t slot_idx, float* out_elapsed_ms)
     .chunk_plans = slot->chunk_plans,
     .chunk_plans_cap = DAMACY_MAX_CHUNKS_PER_BATCH,
     .sample_plans = slot->sample_plans,
-    .sample_plans_cap = self->cfg.batch_size,
+    .sample_plans_cap = self->cfg.samples_per_batch,
     .read_op_groups = slot->read_op_groups,
     .read_op_groups_cap = DAMACY_MAX_CHUNKS_PER_BATCH,
     .paths = &slot->paths,

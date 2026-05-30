@@ -779,7 +779,7 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
     return -1;
 
   struct damacy_config cfg = {
-    .batch_size = batch_size,
+    .samples_per_batch = batch_size,
     .lookahead_batches = lookahead,
     .dtype = dt,
     .device = device,

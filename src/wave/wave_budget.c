@@ -152,7 +152,7 @@ gpu_budget_predict(const struct damacy_config* cfg,
   out->fanout_soa = 2ull * per_wave.fanout_soa;
   out->nvcomp_temp = nvcomp_temp;
   out->batch_metadata =
-    2ull * (uint64_t)cfg->batch_size * sizeof(struct sample_plan);
+    2ull * (uint64_t)cfg->samples_per_batch * sizeof(struct sample_plan);
   out->total = out->dev_compressed + out->dev_decompressed + out->blosc1_meta +
                out->fanout_soa + out->nvcomp_temp + out->batch_metadata;
   return DAMACY_OK;

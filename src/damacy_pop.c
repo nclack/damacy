@@ -205,7 +205,7 @@ damacy_flush(struct damacy* self)
   }
   uint32_t tail =
     prefetcher_ready_count_for_batch(self->prefetcher, self->next_batch_id);
-  if (tail > 0 && tail < self->cfg.batch_size) {
+  if (tail > 0 && tail < self->cfg.samples_per_batch) {
     while ((find_free_batch_slot(&self->batch_pool) < 0 ||
             any_batch_planning(&self->batch_pool)) &&
            self->failed_status == DAMACY_OK)

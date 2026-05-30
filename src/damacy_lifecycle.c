@@ -218,7 +218,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
                                resolved_max_substreams_per_chunk,
                                resolver_budget,
                                runtime_chunk_cap,
-                               cfg->batch_size,
+                               cfg->samples_per_batch,
                                &sizing);
   if (s != DAMACY_OK)
     goto Fail;
@@ -336,7 +336,8 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
 
   for (int b = 0; b < 2; ++b)
     CHECK(Fail,
-          batch_slot_init(&self->batch_pool.slots[b], cfg->batch_size) == 0);
+          batch_slot_init(&self->batch_pool.slots[b], cfg->samples_per_batch) ==
+            0);
 
   s = DAMACY_OOM;
   // Pin the calling thread to the GPU's NUMA node for the duration of
@@ -380,7 +381,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
 
   CHECK(Fail,
         lookahead_init(&self->lookahead,
-                       cfg->lookahead_batches * cfg->batch_size) == 0);
+                       cfg->lookahead_batches * cfg->samples_per_batch) == 0);
 
   {
     struct prefetcher_config pf_cfg = {
@@ -388,7 +389,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
       .array_meta_cache = self->array_meta_cache,
       .shard_index_cache = self->shard_index_cache,
       .chunk_layout_cache = self->chunk_layout_cache,
-      .capacity = cfg->lookahead_batches * cfg->batch_size,
+      .capacity = cfg->lookahead_batches * cfg->samples_per_batch,
       // +4 covers the admit→release_batch transit window per batch_id.
       .batch_capacity = cfg->lookahead_batches + 4,
     };
@@ -397,10 +398,10 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   }
 
   self->batch_stage = (struct planner_sample*)calloc(
-    cfg->batch_size, sizeof(struct planner_sample));
+    cfg->samples_per_batch, sizeof(struct planner_sample));
   CHECK(Fail, self->batch_stage);
   self->staging = (struct prefetcher_ready*)calloc(
-    cfg->batch_size, sizeof(struct prefetcher_ready));
+    cfg->samples_per_batch, sizeof(struct prefetcher_ready));
   CHECK(Fail, self->staging);
 
   self->handle.d = self;
@@ -512,7 +513,7 @@ damacy_config_describe(const struct damacy_config* cfg)
            (unsigned long long)pool_reserve,
            (unsigned long long)resolver_budget,
            (unsigned long long)runtime_chunk_cap,
-           (unsigned)cfg->batch_size);
+           (unsigned)cfg->samples_per_batch);
 
   struct wave_pool_sizing sizing = { 0 };
   enum damacy_status rs =
@@ -520,7 +521,7 @@ damacy_config_describe(const struct damacy_config* cfg)
                              resolve_max_substreams_per_chunk(cfg),
                              resolver_budget,
                              runtime_chunk_cap,
-                             cfg->batch_size,
+                             cfg->samples_per_batch,
                              &sizing);
   if (rs != DAMACY_OK) {
     log_info("damacy_config_describe: wave_pool_resolve_sizing failed (%s)",

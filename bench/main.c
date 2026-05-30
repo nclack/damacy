@@ -834,7 +834,7 @@ main(int argc, char** argv)
           sc.n_warmup_batches);
 
   struct damacy_config cfg = {
-    .batch_size = sc.batch_size,
+    .samples_per_batch = sc.batch_size,
     .lookahead_batches = sc.lookahead_batches,
     .dtype = sc.dtype,
     .sample_rank = sc.rank,

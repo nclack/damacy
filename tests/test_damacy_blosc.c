@@ -52,7 +52,7 @@ mk_cfg(const char* root, uint32_t batch_size, int64_t sy, int64_t sx)
 {
   (void)root;
   struct damacy_config c = {
-    .batch_size = batch_size,
+    .samples_per_batch = batch_size,
     .lookahead_batches = 2,
     .dtype = DAMACY_F32,
     .sample_rank = 2,
@@ -287,7 +287,7 @@ test_multi_wave_per_batch(void)
   // 4 KiB), so the 16-chunk batch spills into ≥2 waves of the same
   // batch slot.
   struct damacy_config cfg = {
-    .batch_size = 4,
+    .samples_per_batch = 4,
     .lookahead_batches = 2,
     .dtype = DAMACY_F32,
     .sample_shape = { 16, 32 },
@@ -365,7 +365,7 @@ test_wave_grows_substream_cap(void)
            p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd-l1") == 0);
 
   struct damacy_config cfg = {
-    .batch_size = 1,
+    .samples_per_batch = 1,
     .lookahead_batches = 2,
     .dtype = DAMACY_F32,
     .sample_shape = { H, W },
@@ -442,7 +442,7 @@ test_grow_inside_tight_budget(void)
            p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
 
   struct damacy_config cfg = {
-    .batch_size = 1,
+    .samples_per_batch = 1,
     .lookahead_batches = 2,
     .dtype = DAMACY_F32,
     .sample_shape = { 256, 32 },
@@ -501,7 +501,7 @@ test_layout_probe_avoids_decoder_grow(void)
            p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
 
   struct damacy_config cfg = {
-    .batch_size = 1,
+    .samples_per_batch = 1,
     .lookahead_batches = 2,
     .dtype = DAMACY_F32,
     .sample_shape = { 256, 32 },
