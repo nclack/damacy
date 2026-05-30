@@ -4,15 +4,22 @@
 #include "cuda_init.h"
 #include "damacy.h"
 #include "damacy_limits.h"
+#include "damacy_log.h"
 #include "expect.h"
+#include "gpu_budget/gpu_budget.h"
 #include "render_job/render_job.h"
 #include "wave/host_slab.h"
 #include "wave/wave_pool.h"
+#include "zarr/zarr_metadata.h"
 
 #include <cuda.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
+
+static volatile int g_host_func_ran;
 
 static int
 create_wave_events(struct damacy_wave* wave)
@@ -58,6 +65,15 @@ record_retired_wave_events(struct damacy_wave* wave, CUstream stream)
          cuEventRecord(wave->ev.asm_start, stream) != CUDA_SUCCESS ||
          cuEventRecord(wave->ev.asm_end, stream) != CUDA_SUCCESS ||
          cuStreamSynchronize(stream) != CUDA_SUCCESS;
+}
+
+static void CUDA_CB
+sleeping_host_func(void* user_data)
+{
+  (void)user_data;
+  const struct timespec delay = { .tv_sec = 0, .tv_nsec = 50 * 1000 * 1000 };
+  nanosleep(&delay, NULL);
+  g_host_func_ran = 1;
 }
 
 static int
@@ -117,6 +133,82 @@ test_freed_wave_does_not_bind_until_next_tick(void)
   return 0;
 }
 
+static int
+test_failed_h2d_submit_drains_before_unbind(void)
+{
+  struct wave_pool wp;
+  struct damacy_batch_pool batch_pool;
+  struct render_job_pool jobs;
+  struct damacy_stats stats;
+  struct gpu_budget* budget = gpu_budget_new(UINT64_MAX);
+  struct chunk_plan chunk_plans[1];
+  struct sample_plan sample_plans[1];
+  memset(&wp, 0, sizeof(wp));
+  memset(&batch_pool, 0, sizeof(batch_pool));
+  memset(&jobs, 0, sizeof(jobs));
+  memset(&stats, 0, sizeof(stats));
+  memset(chunk_plans, 0, sizeof(chunk_plans));
+  memset(sample_plans, 0, sizeof(sample_plans));
+  EXPECT(budget != NULL);
+
+  EXPECT(wave_pool_init(&wp,
+                        &batch_pool,
+                        &jobs,
+                        NULL,
+                        &stats,
+                        DAMACY_F32,
+                        DAMACY_N_WAVES,
+                        1,
+                        1,
+                        4096,
+                        4096,
+                        4096,
+                        0,
+                        0,
+                        budget) == 0);
+
+  struct render_job* job = render_job_pool_get(&jobs, 0);
+  EXPECT(job != NULL);
+  job->chunk_plans = chunk_plans;
+  job->sample_plans = sample_plans;
+  chunk_plans[0].is_fill = 1;
+  chunk_plans[0].codec_id = (uint8_t)CODEC_FILL;
+  chunk_plans[0].decompressed_nbytes = 1;
+
+  batch_pool.rank = 1;
+  wp.slots[0].state = SLOT_READY;
+  wp.slots[0].render_job_idx = 0;
+  wp.slots[0].batch_pool_slot = 0;
+  wp.slots[0].n_chunks = 1;
+  wp.slots[0].used_bytes = 1;
+  wp.slots[0].io_bytes = 1;
+
+  g_host_func_ran = 0;
+  EXPECT(cuLaunchHostFunc(wp.stream_h2d, sleeping_host_func, NULL) ==
+         CUDA_SUCCESS);
+
+  void* saved_parse_chunks = wp.waves[0].d_parse_chunks;
+  wp.waves[0].d_parse_chunks = NULL;
+
+  int changed = 0;
+  damacy_log_set_quiet(1);
+  EXPECT(wave_pool_advance(&wp, &changed) == DAMACY_CUDA);
+  damacy_log_set_quiet(0);
+
+  EXPECT(changed == 0);
+  EXPECT(g_host_func_ran == 1);
+  EXPECT(cuStreamQuery(wp.stream_h2d) == CUDA_SUCCESS);
+  EXPECT(wp.slots[0].state == SLOT_FREE);
+  EXPECT(wp.waves[0].state == WAVE_FREE);
+  EXPECT(wp.waves[0].bound_slot == -1);
+  EXPECT(wp.waves[0].host_slab == NULL);
+
+  wp.waves[0].d_parse_chunks = saved_parse_chunks;
+  wave_pool_destroy(&wp, 0);
+  gpu_budget_destroy(budget);
+  return 0;
+}
+
 int
 main(void)
 {
@@ -125,6 +217,7 @@ main(void)
     return 0;
   }
   RUN(test_freed_wave_does_not_bind_until_next_tick);
+  RUN(test_failed_h2d_submit_drains_before_unbind);
   printf("all wave_pool_advance tests passed\n");
   return 0;
 }
