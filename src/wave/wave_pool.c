@@ -806,37 +806,73 @@ wave_mark_free(struct damacy_wave* wave)
   wave->n_chunks = 0;
 }
 
+static enum damacy_status
+wait_decode_on_h2d_end(struct wave_pool* wp, const struct damacy_wave* wave)
+{
+  CU(CudaFail, cuStreamWaitEvent(wp->stream_decode, wave->ev.h2d_end, 0));
+  return DAMACY_OK;
+CudaFail:
+  return DAMACY_CUDA;
+}
+
+static struct blosc1_totals
+read_parse_totals(const struct damacy_wave* wave)
+{
+  // h_parse_counters were D2H'd to pinned host on stream_h2d before
+  // h2d_end was recorded; cuEventQuery(h2d_end) returning CUDA_SUCCESS
+  // (the wave_pool_advance gate that called us) means these host reads
+  // need no extra synchronization.
+  return (struct blosc1_totals){
+    .n_zstd = wave->h_parse_counters[0],
+    .n_memcpy = wave->h_parse_counters[1],
+    .n_parse_errors = wave->h_parse_counters[2],
+  };
+}
+
+static enum damacy_status
+validate_parse_totals(const struct blosc1_totals* tot)
+{
+  if (tot->n_parse_errors != 0) {
+    log_error("blosc1 gpu_parse: first parse err code=%u", tot->n_parse_errors);
+    return DAMACY_DECODE;
+  }
+  return DAMACY_OK;
+}
+
+static enum damacy_status
+submit_decode_and_assemble(struct wave_pool* wp,
+                           struct damacy_wave* wave,
+                           const struct blosc1_totals* tot)
+{
+  enum damacy_status st = kick_decode(wp, wave, tot);
+  if (st != DAMACY_OK)
+    return st;
+  st = kick_assemble(wp, wave, tot);
+  if (st != DAMACY_OK)
+    return st;
+  return DAMACY_OK;
+}
+
 // Wait on h2d_end, kick decode on stream_decode, kick post + assemble on
 // stream_post.
 static enum damacy_status
 kick_compute(struct wave_pool* wp, struct damacy_wave* wave)
 {
-  CU(CudaFail, cuStreamWaitEvent(wp->stream_decode, wave->ev.h2d_end, 0));
-
-  // h_parse_counters were D2H'd to pinned host on stream_h2d before
-  // h2d_end was recorded; cuEventQuery(h2d_end) returning CUDA_SUCCESS
-  // (the wave_pool_advance gate that called us) means this is safe to
-  // read without an explicit host sync.
-  struct blosc1_totals tot = {
-    .n_zstd = wave->h_parse_counters[0],
-    .n_memcpy = wave->h_parse_counters[1],
-    .n_parse_errors = wave->h_parse_counters[2],
-  };
-  if (tot.n_parse_errors != 0) {
-    log_error("blosc1 gpu_parse: first parse err code=%u", tot.n_parse_errors);
-    return DAMACY_DECODE;
-  }
-  enum damacy_status st = kick_decode(wp, wave, &tot);
+  enum damacy_status st = wait_decode_on_h2d_end(wp, wave);
   if (st != DAMACY_OK)
     return st;
-  st = kick_assemble(wp, wave, &tot);
+
+  struct blosc1_totals tot = read_parse_totals(wave);
+  st = validate_parse_totals(&tot);
+  if (st != DAMACY_OK)
+    return st;
+
+  st = submit_decode_and_assemble(wp, wave, &tot);
   if (st != DAMACY_OK)
     return st;
 
   wave_mark_post(wave);
   return DAMACY_OK;
-CudaFail:
-  return DAMACY_CUDA;
 }
 
 // All wave events have fired; pull elapsed times into stats.
