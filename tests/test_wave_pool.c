@@ -1,6 +1,6 @@
 // Unit tests for the host-side parts of src/wave/wave_pool.c.
 // wave_pool_init needs CUDA (creates streams); peel_reserve and
-// peel_commit don't — they touch stats, batch slot fields, host_slab
+// peel_commit don't — they touch stats, render_job cursors, host_slab
 // state, and chunk_plans / read_op_groups, all stack-constructible.
 
 #include "batch_pool/batch_pool.h"
@@ -9,6 +9,7 @@
 #include "damacy_log.h"
 #include "expect.h"
 #include "planner/planner.h"
+#include "render_job/render_job.h"
 #include "store/store.h"
 #include "wave/host_slab.h"
 #include "wave/wave_pool.h"
@@ -25,25 +26,29 @@
 static void
 setup_post_reserve(struct wave_pool* wp,
                    struct damacy_batch_pool* batch_pool,
+                   struct render_job_pool* jobs,
                    struct damacy_stats* stats,
                    struct host_slab_slot* slot,
                    uint32_t n_chunks)
 {
   memset(wp, 0, sizeof(*wp));
   memset(batch_pool, 0, sizeof(*batch_pool));
+  memset(jobs, 0, sizeof(*jobs));
   memset(stats, 0, sizeof(*stats));
   memset(slot, 0, sizeof(*slot));
 
   wp->pool = batch_pool;
+  wp->render_jobs = jobs;
   wp->stats = stats;
   wp->slots[0] = *slot; // placeholder; we use the pointer below
 
   // Wire the fields peel_commit actually reads.
   wp->slots[0].state = SLOT_PEELING;
+  wp->slots[0].render_job_idx = 0;
   wp->slots[0].batch_pool_slot = 0;
   wp->slots[0].n_chunks = n_chunks;
 
-  batch_pool->slots[0].n_chunks_dispatched = n_chunks;
+  jobs->jobs[0].n_chunks_dispatched = n_chunks;
   stats->waves_emitted = 1;
   stats->chunks_dispatched = n_chunks;
 }
@@ -53,14 +58,18 @@ test_peel_commit_rollback_once(void)
 {
   struct wave_pool wp;
   struct damacy_batch_pool batch_pool;
+  struct render_job_pool jobs;
   struct damacy_stats stats;
   struct host_slab_slot slot;
   const uint32_t n_chunks = 3;
-  setup_post_reserve(&wp, &batch_pool, &stats, &slot, n_chunks);
+  setup_post_reserve(&wp, &batch_pool, &jobs, &stats, &slot, n_chunks);
 
   // n_reads > 0 + ev.seq == 0 → submit-failure rollback path.
   struct wave_pool_peel_ticket t = { .slot_idx = 0,
                                      .n_reads = 2,
+                                     .desc = { .render_job_idx = 0,
+                                               .n_chunks = n_chunks,
+                                               .prev_n_groups_dispatched = 0 },
                                      .consumed = 0 };
   struct store_event ev = { .seq = 0 };
 
@@ -70,7 +79,7 @@ test_peel_commit_rollback_once(void)
   EXPECT(t.consumed == 1);
   EXPECT(stats.waves_emitted == 0);
   EXPECT(stats.chunks_dispatched == 0);
-  EXPECT(batch_pool.slots[0].n_chunks_dispatched == 0);
+  EXPECT(jobs.jobs[0].n_chunks_dispatched == 0);
   EXPECT(wp.slots[0].state == SLOT_FREE);
 
   // Second call must NOT decrement again — that would underflow.
@@ -82,7 +91,7 @@ test_peel_commit_rollback_once(void)
   EXPECT(changed == 0);
   EXPECT(stats.waves_emitted == 0);
   EXPECT(stats.chunks_dispatched == 0);
-  EXPECT(batch_pool.slots[0].n_chunks_dispatched == 0);
+  EXPECT(jobs.jobs[0].n_chunks_dispatched == 0);
   return 0;
 }
 
@@ -91,10 +100,11 @@ test_peel_commit_success_then_recommit(void)
 {
   struct wave_pool wp;
   struct damacy_batch_pool batch_pool;
+  struct render_job_pool jobs;
   struct damacy_stats stats;
   struct host_slab_slot slot;
   const uint32_t n_chunks = 4;
-  setup_post_reserve(&wp, &batch_pool, &stats, &slot, n_chunks);
+  setup_post_reserve(&wp, &batch_pool, &jobs, &stats, &slot, n_chunks);
 
   // Successful submit: ev.seq != 0 → slot advances to SLOT_IO.
   struct wave_pool_peel_ticket t = { .slot_idx = 0,
@@ -134,23 +144,27 @@ test_peel_commit_rolls_back_groups(void)
 {
   struct wave_pool wp;
   struct damacy_batch_pool batch_pool;
+  struct render_job_pool jobs;
   struct damacy_stats stats;
   struct host_slab_slot slot;
   const uint32_t n_chunks = 5;
-  setup_post_reserve(&wp, &batch_pool, &stats, &slot, n_chunks);
+  setup_post_reserve(&wp, &batch_pool, &jobs, &stats, &slot, n_chunks);
 
   // Simulate reserve having advanced from group 7 to group 9.
-  batch_pool.slots[0].n_groups_dispatched = 9;
+  jobs.jobs[0].n_groups_dispatched = 9;
 
-  struct wave_pool_peel_ticket t = {
-    .slot_idx = 0, .n_reads = 1, .prev_n_groups_dispatched = 7, .consumed = 0
-  };
+  struct wave_pool_peel_ticket t = { .slot_idx = 0,
+                                     .n_reads = 1,
+                                     .desc = { .render_job_idx = 0,
+                                               .n_chunks = n_chunks,
+                                               .prev_n_groups_dispatched = 7 },
+                                     .consumed = 0 };
   struct store_event ev = { .seq = 0 };
 
   int changed = 0;
   EXPECT(wave_pool_peel_commit(&wp, &t, ev, &changed) == DAMACY_IO);
   EXPECT(changed == 1);
-  EXPECT(batch_pool.slots[0].n_groups_dispatched == 7);
+  EXPECT(jobs.jobs[0].n_groups_dispatched == 7);
   return 0;
 }
 
@@ -161,6 +175,7 @@ struct reserve_fixture
 {
   struct wave_pool wp;
   struct damacy_batch_pool pool;
+  struct render_job_pool jobs;
   struct damacy_stats stats;
   uint8_t host_buf[8192];
   struct store_read store_reads[DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE];
@@ -176,6 +191,7 @@ init_reserve_fixture(struct reserve_fixture* f,
 {
   memset(f, 0, sizeof(*f));
   f->wp.pool = &f->pool;
+  f->wp.render_jobs = &f->jobs;
   f->wp.stats = &f->stats;
   f->wp.n_slots = 1;
   f->wp.use_gds = 0;
@@ -185,9 +201,11 @@ init_reserve_fixture(struct reserve_fixture* f,
   f->wp.slots[0].cap = host_cap;
   f->wp.slots[0].buf = f->host_buf;
   f->wp.slots[0].store_reads = f->store_reads;
-  f->pool.slots[0].chunk_plans = f->chunk_plans;
-  f->pool.slots[0].read_ops = f->read_ops;
-  f->pool.slots[0].read_op_groups = f->groups;
+  f->jobs.jobs[0].state = RENDER_JOB_READY;
+  f->jobs.jobs[0].batch_pool_slot = 0;
+  f->jobs.jobs[0].chunk_plans = f->chunk_plans;
+  f->jobs.jobs[0].read_ops = f->read_ops;
+  f->jobs.jobs[0].read_op_groups = f->groups;
 }
 
 // dev_cap blocks group 1 after group 0 lands; group 1 must defer whole.
@@ -211,8 +229,8 @@ test_peel_reserve_defers_oversize_group(void)
   f.groups[1] = (struct read_op_group){
     .read_op_idx = 1, .first_chunk = 1, .n_chunks = 1, .total_decompressed = 200
   };
-  f.pool.slots[0].n_chunks = 2;
-  f.pool.slots[0].n_read_op_groups = 2;
+  f.jobs.jobs[0].n_chunks = 2;
+  f.jobs.jobs[0].n_read_op_groups = 2;
 
   enum damacy_status err = DAMACY_OK;
   struct wave_pool_peel_ticket t = wave_pool_peel_reserve(&f.wp, 0, &err);
@@ -220,9 +238,9 @@ test_peel_reserve_defers_oversize_group(void)
   EXPECT(err == DAMACY_OK);
   EXPECT(t.slot_idx == 0);
   EXPECT(t.n_reads == 1);
-  EXPECT(t.prev_n_groups_dispatched == 0);
-  EXPECT(f.pool.slots[0].n_chunks_dispatched == 1);
-  EXPECT(f.pool.slots[0].n_groups_dispatched == 1);
+  EXPECT(t.desc.prev_n_groups_dispatched == 0);
+  EXPECT(f.jobs.jobs[0].n_chunks_dispatched == 1);
+  EXPECT(f.jobs.jobs[0].n_groups_dispatched == 1);
   EXPECT(f.wp.slots[0].n_chunks == 1);
   EXPECT(f.wp.slots[0].state == SLOT_PEELING);
   return 0;
@@ -242,8 +260,8 @@ test_peel_reserve_errors_when_first_group_too_big(void)
   f.groups[0] = (struct read_op_group){
     .read_op_idx = 0, .first_chunk = 0, .n_chunks = 1, .total_decompressed = 100
   };
-  f.pool.slots[0].n_chunks = 1;
-  f.pool.slots[0].n_read_op_groups = 1;
+  f.jobs.jobs[0].n_chunks = 1;
+  f.jobs.jobs[0].n_read_op_groups = 1;
 
   enum damacy_status err = DAMACY_OK;
   damacy_log_set_quiet(1);
@@ -252,8 +270,8 @@ test_peel_reserve_errors_when_first_group_too_big(void)
 
   EXPECT(err == DAMACY_BUDGET);
   EXPECT(t.slot_idx == -1);
-  EXPECT(f.pool.slots[0].n_chunks_dispatched == 0);
-  EXPECT(f.pool.slots[0].n_groups_dispatched == 0);
+  EXPECT(f.jobs.jobs[0].n_chunks_dispatched == 0);
+  EXPECT(f.jobs.jobs[0].n_groups_dispatched == 0);
   return 0;
 }
 
@@ -264,11 +282,14 @@ test_peel_commit_noop_ticket(void)
   // commit must short-circuit before touching anything.
   struct wave_pool wp;
   struct damacy_batch_pool batch_pool;
+  struct render_job_pool jobs;
   struct damacy_stats stats;
   memset(&wp, 0, sizeof(wp));
   memset(&batch_pool, 0, sizeof(batch_pool));
+  memset(&jobs, 0, sizeof(jobs));
   memset(&stats, 0, sizeof(stats));
   wp.pool = &batch_pool;
+  wp.render_jobs = &jobs;
   wp.stats = &stats;
 
   struct wave_pool_peel_ticket t = { .slot_idx = -1,

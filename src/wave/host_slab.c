@@ -69,6 +69,7 @@ slot_release(struct host_slab_slot* slot)
   slot->used_bytes = 0;
   slot->n_chunks = 0;
   slot->io_bytes = 0;
+  slot->render_job_idx = 0;
   slot->batch_pool_slot = 0;
   slot->batch_chunk_offset = 0;
   slot->io_event = (struct store_event){ 0 };

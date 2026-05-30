@@ -12,6 +12,7 @@
 #include "prefetch/prefetch_cache.h"
 #include "prefetch/prefetcher.h"
 #include "prefetch/shard_index.h"
+#include "render_job/render_job.h"
 #include "scheduler/scheduler.h"
 #include "store/store.h"
 #include "wave/wave_pool.h"
@@ -77,6 +78,7 @@ struct damacy
 
   struct damacy_lookahead lookahead;
   struct damacy_batch_pool batch_pool;
+  struct render_job_pool render_jobs;
   // Owns the 4 streams + both waves; built once in damacy_create and
   // driven directly by the orchestrator (no per-call ctx building).
   struct wave_pool wave_pool;

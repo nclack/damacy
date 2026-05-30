@@ -679,7 +679,8 @@ prefetcher_take_ready_wave(struct prefetcher* self,
   memset(out, 0, max_samples * sizeof(*out));
 
   platform_mutex_lock(self->lock);
-  uint32_t n = max(max_samples, ready_prefix_count_locked(self));
+  uint32_t ready = ready_prefix_count_locked(self);
+  uint32_t n = ready < max_samples ? ready : max_samples;
   if (n == 0) {
     platform_mutex_unlock(self->lock);
     *ticket = (struct prefetcher_wave_ticket){ 0 };

@@ -5,16 +5,15 @@
 
 #include <cuda.h>
 
-// Drains lookahead-planned batches into free host_slab_slots, planning
-// a fresh batch when no FILLING batch has chunks left to peel. Stops
-// when there are no free slots, no batches with work, and no room to
-// plan more.
+// Drains sealed render jobs into free host_slab_slots, planning a fresh
+// batch when no render job has chunks left to peel. Stops when there
+// are no free slots, no render jobs with work, and no room to plan more.
 static enum damacy_status
 kick_peel_into_free_slots(struct damacy* self, int* changed)
 {
   for (;;) {
-    int target_slot = find_filling_slot_with_work(&self->batch_pool);
-    if (target_slot < 0) {
+    int target_job = find_render_job_with_work(&self->render_jobs);
+    if (target_job < 0) {
       int plan_changed = 0;
       enum damacy_status s = plan_ready_prefetch(self, 0, &plan_changed);
       if (s != DAMACY_OK)
@@ -28,7 +27,7 @@ kick_peel_into_free_slots(struct damacy* self, int* changed)
 
     enum damacy_status err = DAMACY_OK;
     struct wave_pool_peel_ticket t =
-      wave_pool_peel_reserve(&self->wave_pool, (uint16_t)target_slot, &err);
+      wave_pool_peel_reserve(&self->wave_pool, (uint16_t)target_job, &err);
     if (err != DAMACY_OK)
       return err;
     if (t.slot_idx < 0)

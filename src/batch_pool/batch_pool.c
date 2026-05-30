@@ -12,27 +12,10 @@
 int
 batch_slot_init(struct damacy_batch_slot* slot, uint32_t samples_per_batch_cap)
 {
-  slot->read_ops = (struct read_op*)calloc(DAMACY_MAX_CHUNKS_PER_BATCH,
-                                           sizeof(struct read_op));
-  CHECK(Error, slot->read_ops);
-  slot->chunk_plans = (struct chunk_plan*)calloc(DAMACY_MAX_CHUNKS_PER_BATCH,
-                                                 sizeof(struct chunk_plan));
-  CHECK(Error, slot->chunk_plans);
-  slot->read_op_groups = (struct read_op_group*)calloc(
-    DAMACY_MAX_CHUNKS_PER_BATCH, sizeof(struct read_op_group));
-  CHECK(Error, slot->read_op_groups);
-  slot->sample_plans = (struct sample_plan*)calloc(samples_per_batch_cap,
-                                                   sizeof(struct sample_plan));
-  CHECK(Error, slot->sample_plans);
+  memset(slot, 0, sizeof(*slot));
   slot->stage_samples = (struct planner_sample*)calloc(
     samples_per_batch_cap, sizeof(struct planner_sample));
   CHECK(Error, slot->stage_samples);
-  CUdeviceptr dptr = 0;
-  if (cuMemAlloc(&dptr,
-                 (size_t)samples_per_batch_cap * sizeof(struct sample_plan)) !=
-      CUDA_SUCCESS)
-    goto Error;
-  slot->d_sample_plans = (void*)(uintptr_t)dptr;
   return 0;
 Error:
   return 1;
@@ -45,10 +28,6 @@ batch_slot_destroy(struct damacy_batch_slot* slot, int cuda_skip)
     return;
   // dev_ptr is owned by the pool's lazy allocation (batch_pool_alloc_dev)
   // and freed in batch_pool_destroy — leave it alone here.
-  free(slot->read_ops);
-  free(slot->chunk_plans);
-  free(slot->read_op_groups);
-  free(slot->sample_plans);
   if (slot->stage_samples) {
     for (uint32_t i = 0; i < slot->n_samples; ++i) {
       free(slot->stage_samples[i].h_shards);
@@ -56,9 +35,7 @@ batch_slot_destroy(struct damacy_batch_slot* slot, int cuda_skip)
     }
   }
   free(slot->stage_samples);
-  path_intern_free(&slot->paths);
-  if (!cuda_skip && slot->d_sample_plans)
-    cuMemFree(CUDPTR(slot->d_sample_plans));
+  (void)cuda_skip;
   memset(slot, 0, sizeof(*slot));
 }
 
@@ -141,12 +118,12 @@ find_free_batch_slot(const struct damacy_batch_pool* pool)
 }
 
 int
-find_open_batch_slot(const struct damacy_batch_pool* pool)
+find_accumulating_batch_slot(const struct damacy_batch_pool* pool)
 {
   int best = -1;
   uint64_t best_id = UINT64_MAX;
   for (int s = 0; s < 2; ++s) {
-    if (pool->slots[s].state == BATCH_OPEN &&
+    if (pool->slots[s].state == BATCH_ACCUMULATING &&
         pool->slots[s].batch_id < best_id) {
       best = s;
       best_id = pool->slots[s].batch_id;
@@ -171,32 +148,15 @@ find_oldest_ready_slot(const struct damacy_batch_pool* pool)
 }
 
 int
-find_oldest_filling_slot(const struct damacy_batch_pool* pool)
+find_oldest_rendering_slot(const struct damacy_batch_pool* pool)
 {
   int best = -1;
   uint64_t best_id = UINT64_MAX;
   for (int s = 0; s < 2; ++s) {
-    if (pool->slots[s].state == BATCH_FILLING &&
+    if (pool->slots[s].state == BATCH_RENDERING &&
         pool->slots[s].batch_id < best_id) {
       best = s;
       best_id = pool->slots[s].batch_id;
-    }
-  }
-  return best;
-}
-
-int
-find_filling_slot_with_work(const struct damacy_batch_pool* pool)
-{
-  int best = -1;
-  uint64_t best_id = UINT64_MAX;
-  for (int s = 0; s < 2; ++s) {
-    const struct damacy_batch_slot* slot = &pool->slots[s];
-    if (slot->state == BATCH_FILLING &&
-        slot->n_chunks_dispatched < slot->n_chunks &&
-        slot->batch_id < best_id) {
-      best = s;
-      best_id = slot->batch_id;
     }
   }
   return best;
@@ -207,8 +167,8 @@ any_batch_in_flight(const struct damacy_batch_pool* pool)
 {
   for (int s = 0; s < 2; ++s) {
     enum batch_slot_state st = pool->slots[s].state;
-    if (st == BATCH_OPEN || st == BATCH_PLANNING || st == BATCH_FILLING ||
-        st == BATCH_READY || st == BATCH_HELD)
+    if (st == BATCH_ACCUMULATING || st == BATCH_PLANNING ||
+        st == BATCH_RENDERING || st == BATCH_READY || st == BATCH_HELD)
       return 1;
   }
   return 0;
@@ -226,11 +186,26 @@ any_batch_planning(const struct damacy_batch_pool* pool)
 void
 batch_slot_consume_chunks(struct damacy_batch_slot* slot, uint32_t n_consumed)
 {
-  if (!slot || slot->state != BATCH_FILLING)
+  if (!slot || slot->state != BATCH_RENDERING)
     return;
   slot->chunks_remaining -= (int32_t)n_consumed;
   if (slot->chunks_remaining <= 0) {
     slot->chunks_remaining = 0;
     slot->state = BATCH_READY;
   }
+}
+
+void
+batch_slot_reset_for_reuse(struct damacy_batch_slot* slot)
+{
+  if (!slot)
+    return;
+  slot->state = BATCH_FREE;
+  slot->batch_id = 0;
+  slot->sample_seq_begin = 0;
+  slot->n_samples = 0;
+  slot->n_chunks = 0;
+  slot->chunks_remaining = 0;
+  slot->planning_close_batch = 0;
+  slot->deferred_release_pending = 0;
 }

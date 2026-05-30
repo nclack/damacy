@@ -588,6 +588,33 @@ test_take_wave_yields_ticket(void)
 }
 
 static int
+test_take_wave_caps_to_ready_prefix(void)
+{
+  struct fixture fx = { 0 };
+  EXPECT(fixture_setup(&fx, "blosc-zstd") == 0);
+
+  struct damacy_sample s = { .uri = "foo", .aabb = { .rank = 2 } };
+  s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
+  s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
+
+  EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 0) == 0);
+  EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
+  EXPECT(prefetcher_ready_prefix_count(fx.p) == 1);
+
+  struct prefetcher_ready ready[2] = { 0 };
+  struct prefetcher_wave_ticket ticket = { 0 };
+  EXPECT(prefetcher_take_ready_wave(fx.p, 2, &ticket, ready) == 1);
+  EXPECT(ticket.sample_seq_begin == 0);
+  EXPECT(ticket.n_samples == 1);
+  EXPECT(ready[0].sample_seq == 0);
+  prefetcher_ready_free(&ready[0]);
+  EXPECT(prefetcher_ready_prefix_count(fx.p) == 0);
+
+  fixture_teardown(&fx);
+  return 0;
+}
+
+static int
 test_ready_wave_waits_for_prefix(void)
 {
   struct fixture fx = { 0 };
@@ -777,6 +804,7 @@ main(void)
   RUN(test_admit_fail_releases_batch_entry);
   RUN(test_unknown_sample_gate_is_null);
   RUN(test_take_wave_yields_ticket);
+  RUN(test_take_wave_caps_to_ready_prefix);
   RUN(test_ready_wave_waits_for_prefix);
   RUN(test_advance_watermark_broadcasts);
   RUN(test_owner_capacity_saturation_surfaces_error);

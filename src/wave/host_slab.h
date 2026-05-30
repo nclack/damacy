@@ -37,6 +37,7 @@ struct host_slab_slot
   uint64_t cap;
   uint64_t used_bytes;
 
+  uint16_t render_job_idx;
   uint16_t batch_pool_slot;
   uint32_t batch_chunk_offset;
   uint32_t n_chunks;

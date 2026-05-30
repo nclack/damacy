@@ -84,14 +84,8 @@ damacy_release(struct damacy* self, struct damacy_batch* b)
     scheduler_unlock(self->sched);
     return;
   }
-  self->batch_pool.slots[s].state = BATCH_FREE;
-  self->batch_pool.slots[s].n_chunks = 0;
-  self->batch_pool.slots[s].n_chunks_dispatched = 0;
-  self->batch_pool.slots[s].n_groups_dispatched = 0;
-  self->batch_pool.slots[s].n_samples = 0;
-  self->batch_pool.slots[s].sample_seq_begin = 0;
-  self->batch_pool.slots[s].planning_close_batch = 0;
-  self->batch_pool.slots[s].deferred_release_pending = 0;
+  batch_slot_reset_for_reuse(&self->batch_pool.slots[s]);
+  render_job_reset(&self->render_jobs.jobs[s]);
   scheduler_unlock(self->sched);
 }
 
@@ -142,26 +136,16 @@ damacy_release_event(struct damacy* self, struct damacy_batch* b, void* event)
       CUDA_SUCCESS) {
     // Deferred wait couldn't be installed; fall back to immediate release
     // so the slot doesn't leak (caller would block forever in pop).
-    slot->state = BATCH_FREE;
-    slot->n_chunks = 0;
-    slot->n_chunks_dispatched = 0;
-    slot->n_groups_dispatched = 0;
-    slot->n_samples = 0;
-    slot->sample_seq_begin = 0;
-    slot->planning_close_batch = 0;
-    slot->deferred_release_pending = 0;
+    batch_slot_reset_for_reuse(slot);
+    render_job_reset(&self->render_jobs.jobs[s]);
     r = DAMACY_CUDA;
     goto Done;
   }
   slot->deferred_release_pending = 1;
 
-  slot->state = BATCH_FREE;
-  slot->n_chunks = 0;
-  slot->n_chunks_dispatched = 0;
-  slot->n_groups_dispatched = 0;
-  slot->n_samples = 0;
-  slot->sample_seq_begin = 0;
-  slot->planning_close_batch = 0;
+  batch_slot_reset_for_reuse(slot);
+  slot->deferred_release_pending = 1;
+  render_job_reset(&self->render_jobs.jobs[s]);
   r = DAMACY_OK;
 
 Done:
@@ -202,10 +186,10 @@ damacy_flush(struct damacy* self)
     goto Done;
   }
   while ((prefetcher_ready_prefix_count(self->prefetcher) > 0 ||
-          find_open_batch_slot(&self->batch_pool) >= 0) &&
+          find_accumulating_batch_slot(&self->batch_pool) >= 0) &&
          self->failed_status == DAMACY_OK) {
     while (((find_free_batch_slot(&self->batch_pool) < 0 &&
-             find_open_batch_slot(&self->batch_pool) < 0) ||
+             find_accumulating_batch_slot(&self->batch_pool) < 0) ||
             any_batch_planning(&self->batch_pool)) &&
            self->failed_status == DAMACY_OK)
       SCHEDULER_WAIT_DIAG(self->sched, 5000);
@@ -219,15 +203,15 @@ damacy_flush(struct damacy* self)
   }
 
   // any_slot_in_flight catches the SLOT_PEELING window: peel_reserve has
-  // already bumped n_chunks_dispatched (so find_oldest_filling_slot can
-  // be -1) but peel_submit hasn't run yet, no wave exists yet — without
+  // already advanced the render-job cursor (so no job may look dispatchable)
+  // but peel_submit hasn't run yet, no wave exists yet — without
   // this check, flush would return while the worker still has unposted
   // IO to submit. damacy_pop's AGAIN gate keeps the same invariant.
   struct platform_clock flush_clock = { 0 };
   platform_toc(&flush_clock);
   while ((any_wave_in_flight(&self->wave_pool) ||
           any_slot_in_flight(&self->wave_pool) ||
-          find_oldest_filling_slot(&self->batch_pool) >= 0 ||
+          find_oldest_rendering_slot(&self->batch_pool) >= 0 ||
           any_batch_planning(&self->batch_pool)) &&
          self->failed_status == DAMACY_OK)
     SCHEDULER_WAIT_DIAG(self->sched, 5000);

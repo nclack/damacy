@@ -13,6 +13,7 @@
 
 #include "damacy.h"
 #include "damacy_limits.h"
+#include "render_job/render_job.h"
 #include "wave/host_slab.h"
 #include "wave/wave.h"
 
@@ -23,6 +24,7 @@ struct damacy_batch_pool;
 struct damacy_stats;
 struct decoder_zstd;
 struct gpu_budget;
+struct render_job_pool;
 struct store;
 
 struct wave_pool
@@ -74,6 +76,7 @@ struct wave_pool
   // Borrowed (owned by struct damacy / its members). Set in wave_pool_init
   // and never updated.
   struct damacy_batch_pool* pool;
+  struct render_job_pool* render_jobs;
   struct store* store;
   struct damacy_stats* stats;
   enum damacy_dtype dtype;
@@ -103,6 +106,7 @@ struct wave_pool
 int
 wave_pool_init(struct wave_pool* wp,
                struct damacy_batch_pool* pool,
+               struct render_job_pool* render_jobs,
                struct store* store,
                struct damacy_stats* stats,
                enum damacy_dtype dtype,
@@ -158,14 +162,14 @@ struct wave_pool_peel_ticket
 {
   int slot_idx;
   uint32_t n_reads;
-  uint32_t prev_n_groups_dispatched;
+  struct wave_desc desc;
   uint8_t consumed;
 };
 
 // reserve: *err = DAMACY_BUDGET on the single-chunk-too-large path.
 struct wave_pool_peel_ticket
 wave_pool_peel_reserve(struct wave_pool* wp,
-                       uint16_t batch_slot_idx,
+                       uint16_t render_job_idx,
                        enum damacy_status* err);
 
 struct store_event

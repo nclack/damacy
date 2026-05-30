@@ -76,7 +76,7 @@ plan_reserve(struct damacy* self,
   if (n_ready == 0)
     return DAMACY_OK;
   struct damacy_batch_slot* slot = &self->batch_pool.slots[slot_idx];
-  if (slot->state != BATCH_FREE && slot->state != BATCH_OPEN)
+  if (slot->state != BATCH_FREE && slot->state != BATCH_ACCUMULATING)
     return DAMACY_INVAL;
   uint32_t begin = slot->n_samples;
   if (slot->state == BATCH_FREE) {
@@ -135,17 +135,10 @@ plan_run(struct damacy* self, uint16_t slot_idx, float* out_elapsed_ms)
 {
   struct damacy_batch_slot* slot = &self->batch_pool.slots[slot_idx];
   CHECK(InvalidArg, slot->state == BATCH_PLANNING);
-  struct planner_output plan_out = {
-    .read_ops = slot->read_ops,
-    .read_ops_cap = DAMACY_MAX_CHUNKS_PER_BATCH,
-    .chunk_plans = slot->chunk_plans,
-    .chunk_plans_cap = DAMACY_MAX_CHUNKS_PER_BATCH,
-    .sample_plans = slot->sample_plans,
-    .sample_plans_cap = self->cfg.samples_per_batch,
-    .read_op_groups = slot->read_op_groups,
-    .read_op_groups_cap = DAMACY_MAX_CHUNKS_PER_BATCH,
-    .paths = &slot->paths,
-  };
+  struct render_job* job = &self->render_jobs.jobs[slot_idx];
+  render_job_reset(job);
+  struct planner_output plan_out =
+    render_job_planner_output(job, self->cfg.samples_per_batch);
   struct platform_clock plan_clock = { 0 };
   platform_toc(&plan_clock);
   enum damacy_status status = planner_plan(self->planner,
@@ -158,19 +151,8 @@ plan_run(struct damacy* self, uint16_t slot_idx, float* out_elapsed_ms)
   *out_elapsed_ms = platform_toc(&plan_clock) * 1000.0f;
   if (status != DAMACY_OK)
     return status;
-  slot->n_chunks = plan_out.n_chunk_plans;
-  slot->n_chunks_to_load = plan_out.n_chunks_to_load;
-  slot->n_loads_issued = plan_out.n_loads_issued;
-  slot->n_sample_plans = plan_out.n_sample_plans;
-  slot->n_read_op_groups = plan_out.n_read_op_groups;
-  if (plan_out.n_sample_plans > 0) {
-    if (cuMemcpyHtoD(CUDPTR(slot->d_sample_plans),
-                     slot->sample_plans,
-                     (size_t)plan_out.n_sample_plans *
-                       sizeof(struct sample_plan)) != CUDA_SUCCESS)
-      return DAMACY_CUDA;
-  }
-  return DAMACY_OK;
+  render_job_commit_plan(job, slot_idx, slot->batch_id, &plan_out);
+  return render_job_upload_sample_plans(job);
 InvalidArg:
   return DAMACY_INVAL;
 }
@@ -187,21 +169,19 @@ plan_commit(struct damacy* self,
   struct damacy_batch_slot* slot = &self->batch_pool.slots[slot_idx];
   if (run_status != DAMACY_OK) {
     free_slot_stage_samples(slot);
-    slot->state = BATCH_FREE;
-    slot->n_samples = 0;
-    slot->sample_seq_begin = 0;
-    slot->planning_close_batch = 0;
-    slot->deferred_release_pending = 0;
+    batch_slot_reset_for_reuse(slot);
+    render_job_reset(&self->render_jobs.jobs[slot_idx]);
     self->failed_status = run_status;
     if (changed)
       *changed = 1;
     return run_status;
   }
-  slot->n_chunks_dispatched = 0;
-  slot->n_groups_dispatched = 0;
+  struct render_job* job = &self->render_jobs.jobs[slot_idx];
+  slot->n_chunks = job->n_chunks;
   slot->chunks_remaining = (int32_t)slot->n_chunks;
   if (!slot->planning_close_batch) {
-    slot->state = BATCH_OPEN;
+    slot->state = BATCH_ACCUMULATING;
+    render_job_reset(job);
     if (changed)
       *changed = 1;
     return DAMACY_OK;
@@ -212,10 +192,10 @@ plan_commit(struct damacy* self,
                                slot->sample_seq_begin + slot->n_samples);
   self->next_batch_id++;
   slot->planning_close_batch = 0;
-  slot->state = BATCH_FILLING;
+  slot->state = BATCH_RENDERING;
   self->stats.chunks_planned += slot->n_chunks;
-  self->stats.chunks_to_load += slot->n_chunks_to_load;
-  self->stats.reads_issued += slot->n_loads_issued;
+  self->stats.chunks_to_load += job->n_chunks_to_load;
+  self->stats.reads_issued += job->n_loads_issued;
   if (changed)
     *changed = 1;
 
@@ -230,13 +210,13 @@ plan_commit(struct damacy* self,
     }
     if (cuMemsetD8(CUDPTR(slot->dev_ptr), 0, self->batch_pool.n_bytes) !=
         CUDA_SUCCESS) {
-      slot->state = BATCH_FREE;
-      slot->n_samples = 0;
-      slot->sample_seq_begin = 0;
+      batch_slot_reset_for_reuse(slot);
+      render_job_reset(job);
       self->failed_status = DAMACY_CUDA;
       return DAMACY_CUDA;
     }
     slot->state = BATCH_READY;
+    render_job_finish(job);
   }
   // Non-degenerate path doesn't clear the flag: assemble on FIFO stream_post
   // already inherits the cuStreamWaitEvent, so host-side consumption is moot.
@@ -249,7 +229,7 @@ planning_capacity_locked(struct damacy* self)
   if (any_batch_planning(&self->batch_pool))
     return 0;
   uint32_t cap = 0;
-  int open_slot = find_open_batch_slot(&self->batch_pool);
+  int open_slot = find_accumulating_batch_slot(&self->batch_pool);
   if (open_slot >= 0) {
     struct damacy_batch_slot* slot = &self->batch_pool.slots[open_slot];
     if (slot->n_samples < self->cfg.samples_per_batch)
@@ -266,7 +246,7 @@ planning_capacity_locked(struct damacy* self)
 static int
 next_plan_slot_locked(struct damacy* self)
 {
-  int open_slot = find_open_batch_slot(&self->batch_pool);
+  int open_slot = find_accumulating_batch_slot(&self->batch_pool);
   if (open_slot >= 0)
     return open_slot;
   return find_free_batch_slot(&self->batch_pool);
@@ -285,7 +265,7 @@ plan_ready_prefetch(struct damacy* self, int close_partial, int* changed)
   enum damacy_status status = DAMACY_OK;
   for (;;) {
     if (close_partial && prefetcher_ready_prefix_count(self->prefetcher) == 0) {
-      int open_slot = find_open_batch_slot(&self->batch_pool);
+      int open_slot = find_accumulating_batch_slot(&self->batch_pool);
       if (open_slot >= 0) {
         struct damacy_batch_slot* slot = &self->batch_pool.slots[open_slot];
         int truncated = slot->n_samples < self->cfg.samples_per_batch;

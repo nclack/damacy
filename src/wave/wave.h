@@ -36,6 +36,7 @@ struct damacy_wave
   // Copied from the bound slot at bind. The first three are read by
   // kick_h2d / finalize / log paths; the host_slab pointer aliases the
   // slot's pinned buffer for the lifetime of the bulk H2D.
+  uint16_t render_job_idx;
   uint16_t batch_pool_slot;
   uint32_t batch_chunk_offset;
   uint32_t n_chunks;
@@ -105,7 +106,7 @@ struct damacy_wave
 
   // Assemble per-wave-chunk metadata (host + device). One record per
   // chunk: arena offset + (sample_idx, chunk_d). Per-sample constants
-  // live in the batch slot's d_sample_plans.
+  // live in the render job's d_sample_plans.
   struct assemble_chunk* h_assemble_chunks;
   struct assemble_chunk* d_assemble_chunks;
   uint32_t assemble_max_blocks_per_chunk;

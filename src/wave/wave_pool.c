@@ -11,6 +11,7 @@
 #include "log/log.h"
 #include "nvtx/nvtx.h"
 #include "planner/planner.h"
+#include "render_job/render_job.h"
 #include "store/store.h"
 #include "store/store_fs_gds.h" // store_fs_gds_set_stream (GDS-only)
 #include "util/cuda_check.h"
@@ -43,9 +44,16 @@ wave_index_of(const struct wave_pool* wp, const struct damacy_wave* wave)
   return wave - wp->waves;
 }
 
+static inline struct render_job*
+wave_job(const struct wave_pool* wp, const struct damacy_wave* wave)
+{
+  return &wp->render_jobs->jobs[wave->render_job_idx];
+}
+
 int
 wave_pool_init(struct wave_pool* wp,
                struct damacy_batch_pool* pool,
+               struct render_job_pool* render_jobs,
                struct store* store,
                struct damacy_stats* stats,
                enum damacy_dtype dtype,
@@ -61,6 +69,7 @@ wave_pool_init(struct wave_pool* wp,
 {
   memset(wp, 0, sizeof(*wp));
   wp->pool = pool;
+  wp->render_jobs = render_jobs;
   wp->store = store;
   wp->stats = stats;
   wp->dtype = dtype;
@@ -172,6 +181,7 @@ wave_pool_destroy(struct wave_pool* wp, int cuda_skip)
   }
   // Borrowed pointers — owner frees them.
   wp->pool = NULL;
+  wp->render_jobs = NULL;
   wp->store = NULL;
   wp->stats = NULL;
 }
@@ -217,15 +227,15 @@ wave_chunks_eligible(const struct wave_pool* wp, const struct damacy_wave* wave)
   // BLOSC_ZSTD layout-probe preconditions don't apply.
   if (wp->bypass_decode)
     return 1;
-  struct damacy_batch_slot* slot = &wp->pool->slots[wave->batch_pool_slot];
+  struct render_job* job = wave_job(wp, wave);
   for (uint32_t i = 0; i < wave->n_chunks; ++i) {
     const struct chunk_plan* c =
-      &slot->chunk_plans[wave->batch_chunk_offset + i];
+      &job->chunk_plans[wave->batch_chunk_offset + i];
     if (c->is_fill)
       continue;
     if (c->codec_id != (uint8_t)CODEC_BLOSC_ZSTD)
       continue;
-    const struct sample_plan* sp = &slot->sample_plans[c->sample_idx_in_batch];
+    const struct sample_plan* sp = &job->sample_plans[c->sample_idx_in_batch];
     if (!sp->layout_probed)
       return 0;
     if (!sp->layout.dont_split)
@@ -251,7 +261,7 @@ wave_chunks_eligible(const struct wave_pool* wp, const struct damacy_wave* wave)
 static void
 build_gpu_parse_chunks(const struct wave_pool* wp, struct damacy_wave* wave)
 {
-  struct damacy_batch_slot* slot = &wp->pool->slots[wave->batch_pool_slot];
+  struct render_job* job = wave_job(wp, wave);
   uint8_t* d_comp_base = (uint8_t*)wave->dev_compressed;
   uint8_t* d_decomp_base = (uint8_t*)wave->dev_decompressed;
   uint32_t n_host_memcpy = 0;
@@ -264,7 +274,7 @@ build_gpu_parse_chunks(const struct wave_pool* wp, struct damacy_wave* wave)
   // meaningless under bypass.
   uint8_t effective_fill_force = wp->bypass_decode;
   for (uint32_t i = 0; i < wave->n_chunks; ++i) {
-    struct chunk_plan* c = &slot->chunk_plans[wave->batch_chunk_offset + i];
+    struct chunk_plan* c = &job->chunk_plans[wave->batch_chunk_offset + i];
     struct gpu_parse_chunk* gc = &wave->h_parse_chunks[i];
     uint32_t comp_off =
       (uint32_t)(c->host_buf_offset + (uint64_t)c->offset_in_read);
@@ -306,7 +316,7 @@ build_gpu_parse_chunks(const struct wave_pool* wp, struct damacy_wave* wave)
     // CODEC_BLOSC_ZSTD: defer to Kernel A (memcpyed flag) + Kernel B
     // (per-block bstart/cb walk). nblocks is known per-sample from the
     // probed layout; wave_chunks_eligible asserted layout_probed.
-    const struct sample_plan* sp = &slot->sample_plans[c->sample_idx_in_batch];
+    const struct sample_plan* sp = &job->sample_plans[c->sample_idx_in_batch];
     uint32_t nblocks = sp->layout.nblocks;
     wave->h_blosc_chunk_indices[n_blosc_chunks++] = i;
     for (uint32_t b = 0; b < nblocks; ++b)
@@ -384,16 +394,15 @@ chunk_substreams_upper_bound(const struct chunk_plan* c,
 static enum damacy_status
 prepare_decode_caps(struct wave_pool* wp, struct damacy_wave* wave)
 {
-  struct damacy_batch_slot* slot = &wp->pool->slots[wave->batch_pool_slot];
+  struct render_job* job = wave_job(wp, wave);
   size_t need_substreams = 0;
   // bypass_decode flips every chunk to is_fill at build time, so the
   // wave needs zero zstd substream scratch.
   if (!wp->bypass_decode) {
     for (uint32_t i = 0; i < wave->n_chunks; ++i) {
       const struct chunk_plan* c =
-        &slot->chunk_plans[wave->batch_chunk_offset + i];
-      const struct sample_plan* sp =
-        &slot->sample_plans[c->sample_idx_in_batch];
+        &job->chunk_plans[wave->batch_chunk_offset + i];
+      const struct sample_plan* sp = &job->sample_plans[c->sample_idx_in_batch];
       uint32_t n = 0;
       enum damacy_status zs = chunk_substreams_upper_bound(c, sp, &n);
       if (zs != DAMACY_OK) {
@@ -505,13 +514,13 @@ gpu_parse(struct wave_pool* wp, struct damacy_wave* wave)
                      sizeof(struct blosc1_totals),
                      wp->stream_h2d));
 
-  struct damacy_batch_slot* slot = &wp->pool->slots[wave->batch_pool_slot];
+  struct render_job* job = wave_job(wp, wave);
   struct blosc1_parse_args pargs = {
     .d_compressed = (const uint8_t*)wave->dev_compressed,
     .d_decompressed = (uint8_t*)wave->dev_decompressed,
     .d_chunks = wave->d_parse_chunks,
-    .d_sample_plans = (const struct sample_plan*)slot->d_sample_plans,
-    .n_sample_plans = slot->n_sample_plans,
+    .d_sample_plans = (const struct sample_plan*)job->d_sample_plans,
+    .n_sample_plans = job->n_sample_plans,
     .d_blosc_chunk_indices = wave->d_blosc_chunk_indices,
     .n_blosc_zstd_chunks = wave->n_blosc_zstd_chunks,
     .d_block_chunk_map = wave->d_block_chunk_map,
@@ -611,13 +620,13 @@ Error:
 static void
 build_assemble_meta(const struct wave_pool* wp, struct damacy_wave* wave)
 {
-  struct damacy_batch_slot* slot = &wp->pool->slots[wave->batch_pool_slot];
+  struct render_job* job = wave_job(wp, wave);
   uint32_t bpe = damacy_dtype_bpe(wp->dtype);
   uint8_t spatial_rank = (uint8_t)(wp->pool->rank - 1);
   uint32_t max_bpc = 0;
   wave->assemble_rank = spatial_rank;
   for (uint32_t i = 0; i < wave->n_chunks; ++i) {
-    struct chunk_plan* c = &slot->chunk_plans[wave->batch_chunk_offset + i];
+    struct chunk_plan* c = &job->chunk_plans[wave->batch_chunk_offset + i];
     struct assemble_chunk* a = &wave->h_assemble_chunks[i];
     a->src_base_byte_off = (uint64_t)c->dev_decompressed_offset;
     a->sample_idx_in_batch = c->sample_idx_in_batch;
@@ -625,7 +634,7 @@ build_assemble_meta(const struct wave_pool* wp, struct damacy_wave* wave)
     for (uint8_t d = 0; d < spatial_rank; ++d)
       a->chunk_d[d] = c->chunk_d[d];
 
-    const struct sample_plan* sp = &slot->sample_plans[c->sample_idx_in_batch];
+    const struct sample_plan* sp = &job->sample_plans[c->sample_idx_in_batch];
     uint32_t bpc = assemble_blocks_per_chunk(spatial_rank, sp->dims);
     if (bpc > max_bpc)
       max_bpc = bpc;
@@ -706,6 +715,7 @@ kick_assemble(struct wave_pool* wp,
               const struct blosc1_totals* tot)
 {
   CUstream s = wp->stream_post;
+  struct render_job* job = wave_job(wp, wave);
   struct damacy_batch_slot* slot = &wp->pool->slots[wave->batch_pool_slot];
   enum damacy_status rs;
   damacy_nvtx_range_pushf("kick_assemble/w%td", wave_index_of(wp, wave));
@@ -725,8 +735,8 @@ kick_assemble(struct wave_pool* wp,
   CU(CudaFail, cuEventRecord(wave->ev.asm_start, s));
   if (assemble_launch(s,
                       wave->assemble_rank,
-                      (const struct sample_plan*)slot->d_sample_plans,
-                      slot->n_sample_plans,
+                      (const struct sample_plan*)job->d_sample_plans,
+                      job->n_sample_plans,
                       wave->d_assemble_chunks,
                       wave->n_chunks,
                       wave->assemble_max_blocks_per_chunk,
@@ -847,106 +857,49 @@ finalize_wave(struct wave_pool* wp, struct damacy_wave* wave)
 
 struct wave_pool_peel_ticket
 wave_pool_peel_reserve(struct wave_pool* wp,
-                       uint16_t batch_slot_idx,
+                       uint16_t render_job_idx,
                        enum damacy_status* err)
 {
   *err = DAMACY_OK;
   struct wave_pool_peel_ticket t = { .slot_idx = -1,
                                      .n_reads = 0,
                                      .consumed = 0 };
-  struct damacy_batch_slot* batch = &wp->pool->slots[batch_slot_idx];
-  uint32_t base = batch->n_chunks_dispatched;
-  if (base >= batch->n_chunks)
+  struct render_job* job = &wp->render_jobs->jobs[render_job_idx];
+  if (!render_job_has_work(job))
     return t;
   int slot_idx = host_slab_find_free(wp->slots, wp->n_slots);
   if (slot_idx < 0)
     return t;
   struct host_slab_slot* hs = &wp->slots[slot_idx];
 
-  uint64_t host_cursor = 0;
-  uint64_t dev_cursor = 0;
-  uint32_t take = 0;
-  uint32_t n_reads = 0;
-  uint32_t completed_groups = batch->n_groups_dispatched;
-  const uint64_t dev_cap = wp->waves[0].dev_decompressed_cap;
-
-  // coalesce caps each group at wp->max_chunks_per_wave chunks, so
-  // groups consume atomically — either the whole group fits this wave
-  // or it's deferred to the next.
-  {
-    struct read_op_group_iterator it;
-    read_op_group_iterator_init(&it,
-                                batch->read_op_groups,
-                                batch->n_read_op_groups,
-                                batch->n_groups_dispatched);
-    struct read_op_group g;
-    while (read_op_group_iterator_next(&it, &g)) {
-      struct read_op* r = &batch->read_ops[g.read_op_idx];
-      // Fill chunks each get a dedicated read_op (empty shard_path),
-      // so fill never mixes with non-fill in a group.
-      int is_fill_group = batch->chunk_plans[g.first_chunk].is_fill;
-      uint64_t host_add = is_fill_group ? 0 : r->nbytes;
-      if (host_cursor + host_add > hs->cap)
-        break;
-      if (take + g.n_chunks > wp->max_chunks_per_wave)
-        break;
-      if (dev_cursor + g.total_decompressed > dev_cap)
-        break;
-
-      uint64_t reserved_host_off = host_cursor;
-      if (!is_fill_group) {
-        void* dst = wp->use_gds ? (void*)((uint8_t*)hs->dev_buf + host_cursor)
-                                : (void*)((uint8_t*)hs->buf + host_cursor);
-        hs->store_reads[n_reads++] = (struct store_read){
-          .key = r->shard_path,
-          .dst = dst,
-          .offset = r->file_offset,
-          .len = r->nbytes,
-        };
-        host_cursor += host_add;
-      }
-      for (uint32_t i = 0; i < g.n_chunks; ++i) {
-        struct chunk_plan* c = &batch->chunk_plans[g.first_chunk + i];
-        c->host_buf_offset = is_fill_group ? 0 : reserved_host_off;
-        c->dev_decompressed_offset = dev_cursor;
-        dev_cursor += c->decompressed_nbytes;
-        take++;
-      }
-      completed_groups++;
-    }
-  }
-
-  if (take == 0) {
-    const struct read_op_group* g0 =
-      (batch->n_groups_dispatched < batch->n_read_op_groups)
-        ? &batch->read_op_groups[batch->n_groups_dispatched]
-        : NULL;
-    log_error("wave: group too large for slot "
-              "(group n_chunks=%u total_decompressed=%llu; "
-              "slot_cap=%llu dev_cap=%llu)",
-              g0 ? g0->n_chunks : 0u,
-              g0 ? (unsigned long long)g0->total_decompressed : 0ull,
-              (unsigned long long)hs->cap,
-              (unsigned long long)dev_cap);
-    *err = DAMACY_BUDGET;
+  const struct wave_pack_limits limits = {
+    .host_cap = hs->cap,
+    .dev_decompressed_cap = wp->waves[0].dev_decompressed_cap,
+    .max_chunks_per_wave = wp->max_chunks_per_wave,
+    .use_gds = wp->use_gds,
+  };
+  struct wave_desc desc = { 0 };
+  enum damacy_status s = wave_dispatcher_reserve(
+    job, render_job_idx, &limits, hs->store_reads, hs->buf, hs->dev_buf, &desc);
+  if (s != DAMACY_OK) {
+    *err = s;
     return t;
   }
   platform_toc(&hs->io_clock);
-  hs->is_fill_wave = (n_reads == 0);
-  hs->batch_pool_slot = batch_slot_idx;
-  hs->batch_chunk_offset = base;
-  hs->n_chunks = take;
-  hs->used_bytes = host_cursor;
-  hs->io_bytes = host_cursor;
+  hs->is_fill_wave = desc.is_fill_wave;
+  hs->render_job_idx = desc.render_job_idx;
+  hs->batch_pool_slot = desc.batch_pool_slot;
+  hs->batch_chunk_offset = desc.batch_chunk_offset;
+  hs->n_chunks = desc.n_chunks;
+  hs->used_bytes = desc.host_used_bytes;
+  hs->io_bytes = desc.io_bytes;
   hs->state = SLOT_PEELING;
-  t.prev_n_groups_dispatched = batch->n_groups_dispatched;
-  batch->n_chunks_dispatched += take;
-  batch->n_groups_dispatched = completed_groups;
   wp->stats->waves_emitted++;
-  wp->stats->chunks_dispatched += take;
+  wp->stats->chunks_dispatched += desc.n_chunks;
 
   t.slot_idx = slot_idx;
-  t.n_reads = n_reads;
+  t.n_reads = desc.n_reads;
+  t.desc = desc;
   return t;
 }
 
@@ -977,9 +930,8 @@ wave_pool_peel_commit(struct wave_pool* wp,
     return DAMACY_OK;
   struct host_slab_slot* hs = &wp->slots[t->slot_idx];
   if (t->n_reads > 0 && ev.seq == 0) {
-    struct damacy_batch_slot* batch = &wp->pool->slots[hs->batch_pool_slot];
-    batch->n_chunks_dispatched -= hs->n_chunks;
-    batch->n_groups_dispatched = t->prev_n_groups_dispatched;
+    render_job_rollback_wave(&wp->render_jobs->jobs[hs->render_job_idx],
+                             &t->desc);
     wp->stats->waves_emitted--;
     wp->stats->chunks_dispatched -= hs->n_chunks;
     slot_release(hs);
@@ -1015,6 +967,7 @@ bind_slot_to_wave(struct wave_pool* wp, struct damacy_wave* wave, int slot_idx)
   // retains ownership; the alias clears on finalize.
   if (wp->use_gds)
     wave->dev_compressed = hs->dev_buf;
+  wave->render_job_idx = hs->render_job_idx;
   wave->batch_pool_slot = hs->batch_pool_slot;
   wave->batch_chunk_offset = hs->batch_chunk_offset;
   wave->n_chunks = hs->n_chunks;
@@ -1025,9 +978,9 @@ bind_slot_to_wave(struct wave_pool* wp, struct damacy_wave* wave, int slot_idx)
   wave->decomp_out_bytes = 0;
   wave->assemble_out_bytes = 0;
 
-  struct damacy_batch_slot* batch = &wp->pool->slots[hs->batch_pool_slot];
+  struct render_job* job = &wp->render_jobs->jobs[hs->render_job_idx];
   for (uint32_t i = 0; i < wave->n_chunks; ++i) {
-    struct chunk_plan* c = &batch->chunk_plans[wave->batch_chunk_offset + i];
+    struct chunk_plan* c = &job->chunk_plans[wave->batch_chunk_offset + i];
     wave->decomp_in_bytes += c->compressed_nbytes;
     wave->decomp_out_bytes += c->decompressed_nbytes;
   }
@@ -1141,8 +1094,10 @@ retire_assembled_wave(struct wave_pool* wp,
                       int* changed)
 {
   struct wave_outcome o = finalize_wave(wp, wave);
-  batch_slot_consume_chunks(&wp->pool->slots[o.batch_pool_slot],
-                            o.n_chunks_consumed);
+  struct damacy_batch_slot* batch = &wp->pool->slots[o.batch_pool_slot];
+  batch_slot_consume_chunks(batch, o.n_chunks_consumed);
+  if (batch->state == BATCH_READY)
+    render_job_finish(&wp->render_jobs->jobs[wave->render_job_idx]);
   mark_changed(changed);
   return o.status;
 }

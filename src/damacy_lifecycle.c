@@ -78,6 +78,7 @@ destroy_inner(struct damacy* self, int cuda_skip)
   self->array_meta_cache = NULL;
 
   wave_pool_destroy(&self->wave_pool, cuda_skip);
+  render_job_pool_destroy(&self->render_jobs, cuda_skip);
 
   free(self->staging);
   self->staging = NULL;
@@ -349,6 +350,10 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     CHECK(Fail,
           batch_slot_init(&self->batch_pool.slots[b], cfg->samples_per_batch) ==
             0);
+  for (int b = 0; b < 2; ++b)
+    CHECK(Fail,
+          render_job_init(&self->render_jobs.jobs[b], cfg->samples_per_batch) ==
+            0);
 
   s = DAMACY_OOM;
   // Pin the calling thread to the GPU's NUMA node for the duration of
@@ -359,6 +364,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     numa_scope_enter(&self->numa, &saved_affinity);
     int wp_rc = wave_pool_init(&self->wave_pool,
                                &self->batch_pool,
+                               &self->render_jobs,
                                want_gds ? self->store_gds : self->store_host,
                                &self->stats,
                                cfg->dtype,

@@ -4,6 +4,8 @@
 //   test_compute_layout_idempotent — second call short-circuits
 //   test_compute_layout_rejects_zero_extent — zero/negative dim rejected
 //   test_state_predicates      — find_*_slot scan in batch_id order
+//   test_completion_accounting — rendering → ready on completed chunks
+//   test_reset_for_reuse       — reset clears caller-visible lifetime state
 //
 // We don't exercise batch_slot_init / batch_pool_alloc_dev: those need
 // a CUcontext and would belong in a CUDA-gated test.
@@ -67,34 +69,68 @@ test_state_predicates(void)
   // Both FREE
   EXPECT(find_free_batch_slot(&pool) == 0);
   EXPECT(find_oldest_ready_slot(&pool) == -1);
-  EXPECT(find_oldest_filling_slot(&pool) == -1);
-  EXPECT(find_filling_slot_with_work(&pool) == -1);
+  EXPECT(find_oldest_rendering_slot(&pool) == -1);
   EXPECT(any_batch_in_flight(&pool) == 0);
 
-  // slot[0] FILLING with work, slot[1] READY (newer batch_id)
-  pool.slots[0].state = BATCH_FILLING;
+  // slot[0] RENDERING, slot[1] READY (newer batch_id)
+  pool.slots[0].state = BATCH_RENDERING;
   pool.slots[0].batch_id = 10;
   pool.slots[0].n_chunks = 4;
-  pool.slots[0].n_chunks_dispatched = 2;
   pool.slots[1].state = BATCH_READY;
   pool.slots[1].batch_id = 11;
 
   EXPECT(find_free_batch_slot(&pool) == -1);
   EXPECT(find_oldest_ready_slot(&pool) == 1);
-  EXPECT(find_oldest_filling_slot(&pool) == 0);
-  EXPECT(find_filling_slot_with_work(&pool) == 0);
+  EXPECT(find_oldest_rendering_slot(&pool) == 0);
   EXPECT(any_batch_in_flight(&pool) == 1);
-
-  // FILLING but fully dispatched → not "with work"
-  pool.slots[0].n_chunks_dispatched = 4;
-  EXPECT(find_filling_slot_with_work(&pool) == -1);
-  EXPECT(find_oldest_filling_slot(&pool) == 0); // still filling
 
   // Two READY: oldest by batch_id wins
   pool.slots[0].state = BATCH_READY;
   pool.slots[0].batch_id = 9;
   pool.slots[1].batch_id = 10;
   EXPECT(find_oldest_ready_slot(&pool) == 0);
+  return 0;
+}
+
+static int
+test_completion_accounting(void)
+{
+  struct damacy_batch_slot slot = {
+    .state = BATCH_RENDERING,
+    .n_chunks = 5,
+    .chunks_remaining = 5,
+  };
+  batch_slot_consume_chunks(&slot, 2);
+  EXPECT(slot.state == BATCH_RENDERING);
+  EXPECT(slot.chunks_remaining == 3);
+  batch_slot_consume_chunks(&slot, 3);
+  EXPECT(slot.state == BATCH_READY);
+  EXPECT(slot.chunks_remaining == 0);
+  return 0;
+}
+
+static int
+test_reset_for_reuse(void)
+{
+  struct damacy_batch_slot slot = {
+    .state = BATCH_HELD,
+    .batch_id = 42,
+    .sample_seq_begin = 7,
+    .n_samples = 3,
+    .n_chunks = 4,
+    .chunks_remaining = 1,
+    .planning_close_batch = 1,
+    .deferred_release_pending = 1,
+  };
+  batch_slot_reset_for_reuse(&slot);
+  EXPECT(slot.state == BATCH_FREE);
+  EXPECT(slot.batch_id == 0);
+  EXPECT(slot.sample_seq_begin == 0);
+  EXPECT(slot.n_samples == 0);
+  EXPECT(slot.n_chunks == 0);
+  EXPECT(slot.chunks_remaining == 0);
+  EXPECT(slot.planning_close_batch == 0);
+  EXPECT(slot.deferred_release_pending == 0);
   return 0;
 }
 
@@ -105,6 +141,8 @@ main(void)
   RUN(test_compute_layout_idempotent);
   RUN(test_compute_layout_rejects_zero_extent);
   RUN(test_state_predicates);
+  RUN(test_completion_accounting);
+  RUN(test_reset_for_reuse);
   printf("all batch_pool tests passed\n");
   return 0;
 }

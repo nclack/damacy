@@ -112,10 +112,16 @@ add_cuda_lib(gpu_budget SOURCES gpu_budget/gpu_budget.h gpu_budget/gpu_budget.c
     LINKS log
 )
 
-# Two-slot batch state machine + lazy device-tensor pool. Owns planner
-# scratch (read_ops, chunk_plans, sample_plans + device mirror).
+# Two-slot batch state machine + lazy device-tensor pool. Owns the
+# caller-visible minibatch lifetime; render_job owns planner scratch.
 add_cuda_lib(batch_pool SOURCES batch_pool/batch_pool.h batch_pool/batch_pool.c
     LINKS planner path_intern log CUDA::cuda_driver
+)
+
+# Planner output plus dispatch cursor for one sealed batch. V1 keeps
+# one render job per batch slot.
+add_cuda_lib(render_job SOURCES render_job/render_job.h render_job/render_job.c
+    LINKS planner path_intern store log CUDA::cuda_driver
 )
 
 # Pinned-host slab slot pool: one slot per wave's worth of compressed
@@ -156,7 +162,7 @@ add_cuda_lib(wave SOURCES wave/wave.h wave/wave.c
 # state machine.
 add_cuda_lib(wave_pool SOURCES wave/wave_pool.h wave/wave_pool.c
     LINKS wave host_slab fanout wave_budget gpu_budget batch_pool decoder
-          assemble planner store damacy_stats damacy_config
+          assemble planner render_job store damacy_stats damacy_config
           damacy_nvtx log CUDA::cuda_driver
 )
 
@@ -231,7 +237,7 @@ add_cuda_lib(damacy
             damacy_scheduler.c damacy_status.c
     LINKS platform planner zarr store
           decoder assemble dtype log lookahead gpu_budget
-          batch_pool wave_pool wave_budget damacy_stats damacy_config
+          batch_pool render_job wave_pool wave_budget damacy_stats damacy_config
           damacy_nvtx strbuf scheduler io_queue
           prefetch_cache prefetcher array_meta shard_index chunk_layout
           CUDA::cuda_driver
