@@ -264,7 +264,9 @@ test_failed_bulk_h2d_submit_drains_before_unbind(void)
          CUDA_SUCCESS);
 
   void* saved_dev_compressed = wp.waves[0].dev_compressed;
+  void* saved_dev_compressed_owned = wp.waves[0].dev_compressed_owned;
   wp.waves[0].dev_compressed = NULL;
+  wp.waves[0].dev_compressed_owned = NULL;
 
   int changed = 0;
   damacy_log_set_quiet(1);
@@ -280,6 +282,7 @@ test_failed_bulk_h2d_submit_drains_before_unbind(void)
   EXPECT(wp.waves[0].host_slab == NULL);
 
   wp.waves[0].dev_compressed = saved_dev_compressed;
+  wp.waves[0].dev_compressed_owned = saved_dev_compressed_owned;
   wave_pool_destroy(&wp, 0);
   gpu_budget_destroy(budget);
   return 0;
@@ -293,7 +296,7 @@ test_gds_slot_stays_bound_until_h2d_end(void)
 
   struct wave_pool wp;
   memset(&wp, 0, sizeof(wp));
-  wp.use_gds = 1;
+  wp.input_path = wave_pool_compressed_input_path(COMPRESSED_INPUT_GDS);
   wp.n_slots = 1;
   wp.waves[0].state = WAVE_H2D;
   wp.waves[0].bound_slot = 0;

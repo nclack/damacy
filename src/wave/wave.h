@@ -102,9 +102,8 @@ int
 wave_init(struct damacy_wave* wave,
           uint32_t max_chunks_per_wave,
           uint32_t max_substreams_per_wave,
-          uint64_t slot_cap_bytes,
-          uint64_t dev_decompressed_bytes,
-          int enable_gds);
+          uint64_t input_staging_device_bytes,
+          uint64_t dev_decompressed_bytes);
 
 // cuda_skip=1 leaks GPU + pinned-host resources (used when the CUDA
 // context is no longer valid) but releases the non-pinned heap.

@@ -183,8 +183,7 @@ wave_dispatcher_reserve(struct render_job* job,
                         uint16_t render_job_idx,
                         const struct wave_pack_limits* limits,
                         struct store_read* reads,
-                        void* host_dst,
-                        void* dev_dst,
+                        void* input_dst,
                         struct wave_desc* out)
 {
   *out =
@@ -209,7 +208,7 @@ wave_dispatcher_reserve(struct render_job* job,
     struct read_op* r = &job->read_ops[g.read_op_idx];
     int is_fill_group = job->chunk_plans[g.first_chunk].is_fill;
     uint64_t host_add = is_fill_group ? 0 : r->nbytes;
-    if (host_cursor + host_add > limits->host_cap)
+    if (host_cursor + host_add > limits->input_cap)
       break;
     if (take + g.n_chunks > limits->max_chunks_per_wave)
       break;
@@ -218,8 +217,7 @@ wave_dispatcher_reserve(struct render_job* job,
 
     uint64_t reserved_host_off = host_cursor;
     if (!is_fill_group) {
-      void* dst = limits->use_gds ? (void*)((uint8_t*)dev_dst + host_cursor)
-                                  : (void*)((uint8_t*)host_dst + host_cursor);
+      void* dst = (void*)((uint8_t*)input_dst + host_cursor);
       reads[n_reads++] = (struct store_read){
         .key = r->shard_path,
         .dst = dst,
@@ -248,7 +246,7 @@ wave_dispatcher_reserve(struct render_job* job,
               "slot_cap=%llu dev_cap=%llu)",
               g0 ? g0->n_chunks : 0u,
               g0 ? (unsigned long long)g0->total_decompressed : 0ull,
-              (unsigned long long)limits->host_cap,
+              (unsigned long long)limits->input_cap,
               (unsigned long long)limits->dev_decompressed_cap);
     return DAMACY_BUDGET;
   }

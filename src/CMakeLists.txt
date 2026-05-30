@@ -142,7 +142,8 @@ add_cuda_lib(fanout SOURCES wave/fanout.h wave/fanout.c
 # decoder-scratch grow path that shares the same caps math. No state;
 # all functions pure aside from the decoder grow's
 # cuStreamSynchronize.
-add_cuda_lib(wave_budget SOURCES wave/wave_budget.h wave/wave_budget.c
+add_cuda_lib(wave_budget
+    SOURCES wave/compressed_input.h wave/wave_budget.h wave/wave_budget.c
     LINKS decoder fanout planner assemble gpu_budget damacy_config log
           CUDA::cuda_driver
 )
@@ -160,7 +161,8 @@ add_cuda_lib(wave SOURCES wave/wave.h wave/wave.c
 # ring, and is the home of the per-stage submitters (kick_h2d /
 # kick_decode / kick_assemble), wave_pool_peel, and the wave_pool_advance
 # state machine.
-add_cuda_lib(wave_pool SOURCES wave/wave_pool.h wave/wave_pool.c
+add_cuda_lib(wave_pool
+    SOURCES wave/compressed_input.h wave/wave_pool.h wave/wave_pool.c
     LINKS wave host_slab fanout wave_budget gpu_budget batch_pool decoder
           assemble planner render_job store damacy_stats damacy_config
           damacy_nvtx log CUDA::cuda_driver

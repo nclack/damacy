@@ -62,15 +62,13 @@ test_reserve_commits_cursor_and_desc(void)
   struct fixture f;
   init_fixture(&f);
   const struct wave_pack_limits limits = {
-    .host_cap = sizeof(f.host_buf),
+    .input_cap = sizeof(f.host_buf),
     .dev_decompressed_cap = 200,
     .max_chunks_per_wave = 2,
-    .use_gds = 0,
   };
   struct wave_desc desc;
   EXPECT(wave_dispatcher_reserve(
-           &f.job, 0, &limits, f.store_reads, f.host_buf, f.dev_buf, &desc) ==
-         DAMACY_OK);
+           &f.job, 0, &limits, f.store_reads, f.host_buf, &desc) == DAMACY_OK);
   EXPECT(desc.render_job_idx == 0);
   EXPECT(desc.batch_pool_slot == 1);
   EXPECT(desc.batch_chunk_offset == 0);
@@ -90,15 +88,13 @@ test_reserve_rolls_back_cursor(void)
   struct fixture f;
   init_fixture(&f);
   const struct wave_pack_limits limits = {
-    .host_cap = sizeof(f.host_buf),
+    .input_cap = sizeof(f.host_buf),
     .dev_decompressed_cap = 200,
     .max_chunks_per_wave = 2,
-    .use_gds = 0,
   };
   struct wave_desc desc;
   EXPECT(wave_dispatcher_reserve(
-           &f.job, 0, &limits, f.store_reads, f.host_buf, f.dev_buf, &desc) ==
-         DAMACY_OK);
+           &f.job, 0, &limits, f.store_reads, f.host_buf, &desc) == DAMACY_OK);
   render_job_rollback_wave(&f.job, &desc);
   EXPECT(f.job.n_chunks_dispatched == 0);
   EXPECT(f.job.n_groups_dispatched == 0);
@@ -111,14 +107,13 @@ test_first_group_too_large_errors_without_advancing(void)
   struct fixture f;
   init_fixture(&f);
   const struct wave_pack_limits limits = {
-    .host_cap = sizeof(f.host_buf),
+    .input_cap = sizeof(f.host_buf),
     .dev_decompressed_cap = 20,
     .max_chunks_per_wave = 2,
-    .use_gds = 0,
   };
   struct wave_desc desc;
   EXPECT(wave_dispatcher_reserve(
-           &f.job, 0, &limits, f.store_reads, f.host_buf, f.dev_buf, &desc) ==
+           &f.job, 0, &limits, f.store_reads, f.host_buf, &desc) ==
          DAMACY_BUDGET);
   EXPECT(f.job.n_chunks_dispatched == 0);
   EXPECT(f.job.n_groups_dispatched == 0);
@@ -126,20 +121,18 @@ test_first_group_too_large_errors_without_advancing(void)
 }
 
 static int
-test_gds_uses_device_staging_target(void)
+test_reserve_uses_supplied_input_target(void)
 {
   struct fixture f;
   init_fixture(&f);
   const struct wave_pack_limits limits = {
-    .host_cap = sizeof(f.host_buf),
+    .input_cap = sizeof(f.dev_buf),
     .dev_decompressed_cap = 200,
     .max_chunks_per_wave = 1,
-    .use_gds = 1,
   };
   struct wave_desc desc;
   EXPECT(wave_dispatcher_reserve(
-           &f.job, 0, &limits, f.store_reads, f.host_buf, f.dev_buf, &desc) ==
-         DAMACY_OK);
+           &f.job, 0, &limits, f.store_reads, f.dev_buf, &desc) == DAMACY_OK);
   EXPECT(f.store_reads[0].dst == f.dev_buf);
   EXPECT(desc.n_reads == 1);
   return 0;
@@ -151,7 +144,7 @@ main(void)
   RUN(test_reserve_commits_cursor_and_desc);
   RUN(test_reserve_rolls_back_cursor);
   RUN(test_first_group_too_large_errors_without_advancing);
-  RUN(test_gds_uses_device_staging_target);
+  RUN(test_reserve_uses_supplied_input_target);
   printf("all wave_dispatcher tests passed\n");
   return 0;
 }

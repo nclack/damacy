@@ -200,7 +200,7 @@ init_reserve_fixture(struct reserve_fixture* f,
   f->wp.render_jobs = &f->jobs;
   f->wp.stats = &f->stats;
   f->wp.n_slots = 1;
-  f->wp.use_gds = 0;
+  f->wp.input_path = wave_pool_compressed_input_path(COMPRESSED_INPUT_H2D);
   f->wp.max_chunks_per_wave = DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE;
   f->wp.waves[0].dev_decompressed_cap = dev_cap;
   f->wp.slots[0].state = SLOT_FREE;

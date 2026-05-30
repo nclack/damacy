@@ -3,6 +3,7 @@
 #pragma once
 
 #include "damacy.h"
+#include "wave/compressed_input.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -13,7 +14,7 @@ struct gpu_budget;
 // Pool-level prediction (2 waves + shared scratch + batch meta).
 struct gpu_budget_breakdown
 {
-  uint64_t dev_compressed;   // 2× compressed-input device staging
+  uint64_t dev_compressed;   // compressed-input device staging
   uint64_t dev_decompressed; // 2× dev_decompressed_per_wave
   uint64_t blosc1_meta;      // 2× per-wave parse + assemble metadata
   uint64_t fanout_soa;
@@ -24,7 +25,7 @@ struct gpu_budget_breakdown
 
 enum damacy_status
 gpu_budget_predict(const struct damacy_config* cfg,
-                   uint64_t input_staging_per_wave,
+                   const struct compressed_input_resources* input,
                    uint64_t dev_decompressed_per_wave,
                    struct gpu_budget_breakdown* out);
 
@@ -61,6 +62,7 @@ struct wave_pool_sizing
 enum damacy_status
 wave_pool_resolve_sizing(uint32_t max_chunks_per_wave,
                          uint32_t max_substreams_per_chunk,
+                         uint8_t input_staging_device_instances,
                          uint64_t max_gpu_memory_bytes,
                          uint64_t max_chunk_uncompressed_bytes,
                          uint32_t samples_per_batch,

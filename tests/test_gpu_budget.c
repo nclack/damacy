@@ -40,7 +40,9 @@ test_total_is_sum_of_parts(void)
   struct gpu_budget_breakdown b = { 0 };
   const uint64_t host = 2ull << 20;
   const uint64_t dev = 2ull << 20;
-  EXPECT(gpu_budget_predict(&cfg, host, dev, &b) == DAMACY_OK);
+  const struct compressed_input_resources input =
+    compressed_input_resources(COMPRESSED_INPUT_H2D, DAMACY_N_WAVES, host);
+  EXPECT(gpu_budget_predict(&cfg, &input, dev, &b) == DAMACY_OK);
   uint64_t expect = b.dev_compressed + b.dev_decompressed + b.blosc1_meta +
                     b.fanout_soa + b.nvcomp_temp + b.batch_metadata;
   EXPECT(b.total == expect);
@@ -54,8 +56,15 @@ test_scales_with_buffers(void)
 {
   struct damacy_config cfg = mk_cfg(0);
   struct gpu_budget_breakdown small = { 0 }, big = { 0 };
-  EXPECT(gpu_budget_predict(&cfg, 1ull << 20, 1ull << 20, &small) == DAMACY_OK);
-  EXPECT(gpu_budget_predict(&cfg, 2ull << 20, 2ull << 20, &big) == DAMACY_OK);
+  const struct compressed_input_resources small_input =
+    compressed_input_resources(
+      COMPRESSED_INPUT_H2D, DAMACY_N_WAVES, 1ull << 20);
+  const struct compressed_input_resources big_input =
+    compressed_input_resources(
+      COMPRESSED_INPUT_H2D, DAMACY_N_WAVES, 2ull << 20);
+  EXPECT(gpu_budget_predict(&cfg, &small_input, 1ull << 20, &small) ==
+         DAMACY_OK);
+  EXPECT(gpu_budget_predict(&cfg, &big_input, 2ull << 20, &big) == DAMACY_OK);
   EXPECT(big.dev_compressed == 2 * small.dev_compressed);
   EXPECT(big.dev_decompressed == 2 * small.dev_decompressed);
   // batch_metadata is independent of buffer sizes; identical across cfgs.
@@ -77,11 +86,32 @@ test_chunk_cap_shrinks_nvcomp_temp(void)
   struct gpu_budget_breakdown small = { 0 }, big = { 0 };
   const uint64_t host = 2ull << 20;
   const uint64_t dev = 256ull << 20;
-  EXPECT(gpu_budget_predict(&small_cap, host, dev, &small) == DAMACY_OK);
-  EXPECT(gpu_budget_predict(&big_cap, host, dev, &big) == DAMACY_OK);
+  const struct compressed_input_resources input =
+    compressed_input_resources(COMPRESSED_INPUT_H2D, DAMACY_N_WAVES, host);
+  EXPECT(gpu_budget_predict(&small_cap, &input, dev, &small) == DAMACY_OK);
+  EXPECT(gpu_budget_predict(&big_cap, &input, dev, &big) == DAMACY_OK);
   EXPECT(small.nvcomp_temp < big.nvcomp_temp);
   EXPECT(small.dev_compressed == big.dev_compressed);
   EXPECT(small.fanout_soa == big.fanout_soa);
+  return 0;
+}
+
+static int
+test_gds_counts_slot_device_staging(void)
+{
+  struct damacy_config cfg = mk_cfg(0);
+  const uint64_t staging = 2ull << 20;
+  const uint64_t dev = 2ull << 20;
+  struct gpu_budget_breakdown h2d = { 0 }, gds = { 0 };
+  const struct compressed_input_resources h2d_input =
+    compressed_input_resources(COMPRESSED_INPUT_H2D, 4, staging);
+  const struct compressed_input_resources gds_input =
+    compressed_input_resources(COMPRESSED_INPUT_GDS, 4, staging);
+  EXPECT(gpu_budget_predict(&cfg, &h2d_input, dev, &h2d) == DAMACY_OK);
+  EXPECT(gpu_budget_predict(&cfg, &gds_input, dev, &gds) == DAMACY_OK);
+  EXPECT(h2d.dev_compressed == 2 * staging);
+  EXPECT(gds.dev_compressed == 4 * staging);
+  EXPECT(gds.total == h2d.total + 2 * staging);
   return 0;
 }
 
@@ -95,6 +125,7 @@ main(void)
   RUN(test_total_is_sum_of_parts);
   RUN(test_scales_with_buffers);
   RUN(test_chunk_cap_shrinks_nvcomp_temp);
+  RUN(test_gds_counts_slot_device_staging);
   printf("all gpu_budget tests passed\n");
   return 0;
 }

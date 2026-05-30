@@ -66,10 +66,9 @@ struct wave_desc
 
 struct wave_pack_limits
 {
-  uint64_t host_cap;
+  uint64_t input_cap;
   uint64_t dev_decompressed_cap;
   uint32_t max_chunks_per_wave;
-  uint8_t use_gds;
 };
 
 int
@@ -122,8 +121,7 @@ wave_dispatcher_reserve(struct render_job* job,
                         uint16_t render_job_idx,
                         const struct wave_pack_limits* limits,
                         struct store_read* reads,
-                        void* host_dst,
-                        void* dev_dst,
+                        void* input_dst,
                         struct wave_desc* out);
 
 void

@@ -15,9 +15,8 @@ int
 wave_init(struct damacy_wave* wave,
           uint32_t max_chunks_per_wave,
           uint32_t max_substreams_per_wave,
-          uint64_t slot_cap_bytes,
-          uint64_t dev_decompressed_bytes,
-          int enable_gds)
+          uint64_t input_staging_device_bytes,
+          uint64_t dev_decompressed_bytes)
 {
   memset(wave, 0, sizeof(*wave));
   wave->state = WAVE_FREE;
@@ -25,8 +24,8 @@ wave_init(struct damacy_wave* wave,
   wave->dev_decompressed_cap = dev_decompressed_bytes;
 
   CUdeviceptr dptr = 0;
-  if (!enable_gds) {
-    CU(Error, cuMemAlloc(&dptr, slot_cap_bytes));
+  if (input_staging_device_bytes > 0) {
+    CU(Error, cuMemAlloc(&dptr, input_staging_device_bytes));
     wave->dev_compressed_owned = (void*)(uintptr_t)dptr;
     wave->dev_compressed = wave->dev_compressed_owned;
   }
