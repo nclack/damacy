@@ -24,25 +24,20 @@ input_reservation_rollback(struct wave_pool* wp,
   mark_changed(changed);
 }
 
-struct wave_input_reservation
+enum damacy_status
 wave_input_reserve(struct wave_pool* wp,
                    uint16_t render_job_idx,
-                   enum damacy_status* err)
+                   struct wave_input_reservation* out)
 {
-  *err = DAMACY_OK;
-  struct wave_input_reservation t = { .input_slot_idx = -1,
-                                      .n_reads = 0,
-                                      .committed = 0 };
+  *out = (struct wave_input_reservation){ 0 };
   struct render_job* job = render_job_pool_get(wp->render_jobs, render_job_idx);
-  if (!job) {
-    *err = DAMACY_INVAL;
-    return t;
-  }
+  if (!job)
+    return DAMACY_INVAL;
   if (!render_job_has_work(job))
-    return t;
+    return DAMACY_OK;
   int input_slot_idx = input_slot_find_free(wp->slots, wp->n_slots);
   if (input_slot_idx < 0)
-    return t;
+    return DAMACY_OK;
   struct input_slot* slot = &wp->slots[input_slot_idx];
 
   const struct wave_pack_limits limits = {
@@ -57,24 +52,23 @@ wave_input_reserve(struct wave_pool* wp,
                                                  slot->store_reads,
                                                  wp->input->read_base(slot),
                                                  &desc);
-  if (s != DAMACY_OK) {
-    *err = s;
-    return t;
-  }
+  if (s != DAMACY_OK)
+    return s;
   input_slot_begin_reservation(slot, &desc);
   wp->stats->waves_emitted++;
   wp->stats->chunks_dispatched += desc.n_chunks;
 
-  t.input_slot_idx = input_slot_idx;
-  t.n_reads = desc.n_reads;
-  t.desc = desc;
-  return t;
+  out->active = 1;
+  out->input_slot_idx = input_slot_idx;
+  out->n_reads = desc.n_reads;
+  out->desc = desc;
+  return DAMACY_OK;
 }
 
 struct store_event
 wave_input_submit(struct wave_pool* wp, const struct wave_input_reservation* t)
 {
-  if (t->input_slot_idx < 0 || t->n_reads == 0)
+  if (!t->active || t->n_reads == 0)
     return (struct store_event){ .seq = 0 };
   struct input_slot* slot = &wp->slots[t->input_slot_idx];
   return wp->input->submit_reads(wp->store, slot->store_reads, t->n_reads);
@@ -91,7 +85,7 @@ wave_input_commit(struct wave_pool* wp,
     return DAMACY_OK;
   }
   t->committed = 1;
-  if (t->input_slot_idx < 0)
+  if (!t->active)
     return DAMACY_OK;
   struct input_slot* slot = &wp->slots[t->input_slot_idx];
   if (t->n_reads > 0 && ev.seq == 0) {

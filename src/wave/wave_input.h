@@ -10,16 +10,17 @@ struct wave_pool;
 
 struct wave_input_reservation
 {
+  uint8_t active;
+  uint8_t committed;
   int input_slot_idx;
   uint32_t n_reads;
   struct wave_desc desc;
-  uint8_t committed;
 };
 
-struct wave_input_reservation
+enum damacy_status
 wave_input_reserve(struct wave_pool* wp,
                    uint16_t render_job_idx,
-                   enum damacy_status* err);
+                   struct wave_input_reservation* out);
 
 struct store_event
 wave_input_submit(struct wave_pool* wp, const struct wave_input_reservation* t);
