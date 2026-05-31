@@ -87,7 +87,7 @@ class Pipeline(BaseModel):
     n_shard_index_cache: int = 16384
     n_chunk_layout_cache: int = 4096
     # Bench bypass: skip decode by flipping chunks to fill at parse +
-    # assemble time. IO and H2D still run; assemble broadcasts the
+    # assemble time. IO and input transfer still run; assemble broadcasts the
     # array's fill_value. Useful for isolating decode cost.
     bypass_decode: bool = False
 

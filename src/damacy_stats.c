@@ -40,3 +40,15 @@ stats_init(struct damacy_stats* s)
   metric_init(&s->pop_wait, "pop_wait");
   metric_init(&s->flush_wait, "flush_wait");
 }
+
+struct damacy_metric*
+stats_input_transfer(struct damacy_stats* s)
+{
+  return &s->h2d;
+}
+
+const struct damacy_metric*
+stats_input_transfer_const(const struct damacy_stats* s)
+{
+  return &s->h2d;
+}

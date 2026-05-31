@@ -386,7 +386,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     CHECK(Fail, wp_rc == 0);
   }
   if (want_gds)
-    log_info("damacy: compressed reads via cuFile / GDS (skip bulk H2D)");
+    log_info("damacy: input transfer via cuFile / GDS");
 
   struct planner_config pcfg = {
     .array_meta_cache = self->array_meta_cache,
