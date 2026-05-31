@@ -79,10 +79,10 @@ test_input_commit_rollback_once(void)
                                                 .n_chunks = n_chunks,
                                                 .prev_n_groups_dispatched = 0 },
                                       .committed = 0 };
-  struct store_event ev = { .seq = 0 };
+  struct store_submit_result submit = { .status = DAMACY_IO };
 
   int changed = 0;
-  EXPECT(wave_input_commit(&wp, &t, DAMACY_IO, ev, &changed) == DAMACY_IO);
+  EXPECT(wave_input_commit(&wp, &t, submit, &changed) == DAMACY_IO);
   EXPECT(changed == 1);
   EXPECT(t.committed == 1);
   EXPECT(stats.waves_emitted == 0);
@@ -94,7 +94,8 @@ test_input_commit_rollback_once(void)
   // Re-entry intentionally trips a log_error; quiet the sink across it.
   changed = 0;
   damacy_log_set_quiet(1);
-  EXPECT(wave_input_commit(&wp, &t, DAMACY_OK, ev, &changed) == DAMACY_OK);
+  submit.status = DAMACY_OK;
+  EXPECT(wave_input_commit(&wp, &t, submit, &changed) == DAMACY_OK);
   damacy_log_set_quiet(0);
   EXPECT(changed == 0);
   EXPECT(stats.waves_emitted == 0);
@@ -114,14 +115,14 @@ test_input_commit_success_then_recommit(void)
   const uint32_t n_chunks = 4;
   setup_post_reserve(&wp, &batch_pool, &jobs, &stats, &slot, n_chunks);
 
-  // Successful submit: ev.seq != 0 → slot advances to SLOT_IO.
   struct wave_input_reservation t = {
     .active = 1, .input_slot_idx = 0, .n_reads = 3, .committed = 0
   };
-  struct store_event ev = { .seq = 42 };
+  struct store_submit_result submit = { .status = DAMACY_OK,
+                                        .event = { .seq = 42 } };
 
   int changed = 0;
-  EXPECT(wave_input_commit(&wp, &t, DAMACY_OK, ev, &changed) == DAMACY_OK);
+  EXPECT(wave_input_commit(&wp, &t, submit, &changed) == DAMACY_OK);
   EXPECT(changed == 1);
   EXPECT(t.committed == 1);
   EXPECT(wp.slots[0].state == SLOT_IO);
@@ -132,10 +133,10 @@ test_input_commit_success_then_recommit(void)
 
   // Second call: a stray re-commit (e.g. error retry) must not touch state.
   // Re-entry intentionally trips a log_error; quiet the sink across it.
-  struct store_event ev2 = { .seq = 0 };
+  submit.event = (struct store_event){ 0 };
   changed = 0;
   damacy_log_set_quiet(1);
-  EXPECT(wave_input_commit(&wp, &t, DAMACY_OK, ev2, &changed) == DAMACY_OK);
+  EXPECT(wave_input_commit(&wp, &t, submit, &changed) == DAMACY_OK);
   damacy_log_set_quiet(0);
   EXPECT(changed == 0);
   EXPECT(wp.slots[0].state == SLOT_IO);
@@ -144,9 +145,6 @@ test_input_commit_success_then_recommit(void)
   return 0;
 }
 
-// Submit-failure rollback must restore n_groups_dispatched from the
-// snapshot the ticket captured at reserve time — without it the next
-// input dispatch would skip past the groups this wave never actually issued.
 static int
 test_input_commit_rolls_back_groups(void)
 {
@@ -168,10 +166,10 @@ test_input_commit_rolls_back_groups(void)
                                                 .n_chunks = n_chunks,
                                                 .prev_n_groups_dispatched = 7 },
                                       .committed = 0 };
-  struct store_event ev = { .seq = 0 };
+  struct store_submit_result submit = { .status = DAMACY_IO };
 
   int changed = 0;
-  EXPECT(wave_input_commit(&wp, &t, DAMACY_IO, ev, &changed) == DAMACY_IO);
+  EXPECT(wave_input_commit(&wp, &t, submit, &changed) == DAMACY_IO);
   EXPECT(changed == 1);
   EXPECT(job0(&jobs)->n_groups_dispatched == 7);
   return 0;
@@ -304,7 +302,7 @@ test_input_reserve_inactive_when_not_ready(void)
 }
 
 static int
-test_input_commit_noop_ticket(void)
+test_input_commit_inactive_reservation(void)
 {
   // Inactive reservations must not touch state.
   struct wave_pool wp;
@@ -322,9 +320,9 @@ test_input_commit_noop_ticket(void)
   struct wave_input_reservation t = {
     .active = 0, .input_slot_idx = 0, .n_reads = 0, .committed = 0
   };
-  struct store_event ev = { .seq = 0 };
+  struct store_submit_result submit = { .status = DAMACY_OK };
   int changed = 0;
-  EXPECT(wave_input_commit(&wp, &t, DAMACY_OK, ev, &changed) == DAMACY_OK);
+  EXPECT(wave_input_commit(&wp, &t, submit, &changed) == DAMACY_OK);
   EXPECT(changed == 0);
   EXPECT(stats.waves_emitted == 0);
   EXPECT(stats.chunks_dispatched == 0);
@@ -376,7 +374,7 @@ main(void)
   RUN(test_input_reserve_defers_oversize_group);
   RUN(test_input_reserve_errors_when_first_group_too_big);
   RUN(test_input_reserve_inactive_when_not_ready);
-  RUN(test_input_commit_noop_ticket);
+  RUN(test_input_commit_inactive_reservation);
   RUN(test_chunk_substreams_unprobed_blosc);
   printf("all wave_pool tests passed\n");
   return 0;
