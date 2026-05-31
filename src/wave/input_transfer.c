@@ -101,6 +101,17 @@ CudaFail:
 }
 
 static enum damacy_status
+input_transfer_queue_marker(CUstream stream,
+                            struct damacy_wave* wave,
+                            struct input_transfer_queue_state* state)
+{
+  enum damacy_status s = input_transfer_begin(stream, wave, state);
+  if (s != DAMACY_OK)
+    return s;
+  return input_transfer_finish(stream, wave);
+}
+
+static enum damacy_status
 h2d_queue_input(CUstream stream,
                 struct damacy_wave* wave,
                 struct input_transfer_queue_state* state)
@@ -118,17 +129,6 @@ h2d_queue_input(CUstream stream,
 BulkCudaFail:
   damacy_nvtx_range_pop();
   return DAMACY_CUDA;
-}
-
-static enum damacy_status
-gds_queue_input(CUstream stream,
-                struct damacy_wave* wave,
-                struct input_transfer_queue_state* state)
-{
-  enum damacy_status s = input_transfer_begin(stream, wave, state);
-  if (s != DAMACY_OK)
-    return s;
-  return input_transfer_finish(stream, wave);
 }
 
 static enum damacy_status
@@ -180,7 +180,7 @@ static const struct input_transfer_ops k_gds = {
   .read_base = gds_read_base,
   .wave_input = gds_wave_input,
   .submit_reads = store_read_submit_dev,
-  .queue_input = gds_queue_input,
+  .queue_input = input_transfer_queue_marker,
   .slot_reuse_ready = gds_slot_reuse_ready,
 };
 
