@@ -280,6 +280,8 @@ extern "C"
   {
     struct damacy_metric plan;
     struct damacy_metric io;
+    // Legacy field name; metric.name is "input_transfer". In H2D mode this is
+    // the host-to-device copy, and in GDS mode it is the input-stream handoff.
     struct damacy_metric h2d;
     // decode: stream_decode work only (nvcomp + status_reduce).
     // post_decode: stream_post work — post-decode kernels + 4B D2H +

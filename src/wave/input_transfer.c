@@ -131,18 +131,35 @@ CudaFail:
   return DAMACY_CUDA;
 }
 
-static CUevent
-h2d_slot_release_gate(const struct damacy_wave* wave)
+static enum damacy_status
+event_ready(CUevent ev, int* ready)
 {
-  return wave->ev.input_transfer_done;
+  CUresult q = cuEventQuery(ev);
+  if (q == CUDA_SUCCESS) {
+    *ready = 1;
+    return DAMACY_OK;
+  }
+  if (q == CUDA_ERROR_NOT_READY) {
+    *ready = 0;
+    return DAMACY_OK;
+  }
+  return DAMACY_CUDA;
 }
 
-static CUevent
-gds_slot_release_gate(const struct damacy_wave* wave)
+static enum damacy_status
+h2d_slot_reuse_ready(const struct damacy_wave* wave, int* ready)
 {
-  if (wave->state != WAVE_POST)
-    return NULL;
-  return wave->ev.decomp_end;
+  return event_ready(wave->ev.input_transfer_done, ready);
+}
+
+static enum damacy_status
+gds_slot_reuse_ready(const struct damacy_wave* wave, int* ready)
+{
+  if (wave->state != WAVE_POST) {
+    *ready = 0;
+    return DAMACY_OK;
+  }
+  return event_ready(wave->ev.decomp_end, ready);
 }
 
 static const struct input_transfer_ops k_h2d = {
@@ -153,7 +170,7 @@ static const struct input_transfer_ops k_h2d = {
   .wave_input = h2d_wave_input,
   .submit_reads = h2d_submit_reads,
   .queue_ready = h2d_queue_ready,
-  .slot_release_gate = h2d_slot_release_gate,
+  .slot_reuse_ready = h2d_slot_reuse_ready,
 };
 
 static const struct input_transfer_ops k_gds = {
@@ -164,7 +181,7 @@ static const struct input_transfer_ops k_gds = {
   .wave_input = gds_wave_input,
   .submit_reads = gds_submit_reads,
   .queue_ready = gds_queue_ready,
-  .slot_release_gate = gds_slot_release_gate,
+  .slot_reuse_ready = gds_slot_reuse_ready,
 };
 
 const struct input_transfer_ops*

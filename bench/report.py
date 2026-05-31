@@ -86,6 +86,7 @@ def _stage_table(r: Results) -> Table:
     color = {
         "plan": "white",
         "io": "yellow",
+        "input_transfer": "magenta",
         "h2d": "magenta",
         "decode": "green",
         "post_decode": "green",
@@ -101,6 +102,7 @@ def _stage_table(r: Results) -> Table:
     unit_style = {
         "plan": "italic dim",
         "io": "italic dim",
+        "input_transfer": "bold dim",
         "decompress.parse": "italic dim",
         "h2d": "bold dim",
         "decode": "bold dim",

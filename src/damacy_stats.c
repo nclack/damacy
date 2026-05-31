@@ -31,7 +31,7 @@ stats_init(struct damacy_stats* s)
   memset(s, 0, sizeof(*s));
   metric_init(&s->plan, "plan");
   metric_init(&s->io, "io");
-  metric_init(&s->h2d, "h2d");
+  metric_init(&s->h2d, "input_transfer");
   metric_init(&s->decode, "decode");
   metric_init(&s->post_decode, "post_decode");
   metric_init(&s->decode_gap, "decode_gap");

@@ -1162,15 +1162,15 @@ release_bound_slot_after_input_consumed(struct wave_pool* wp,
   if (wave->bound_slot < 0)
     return DAMACY_OK;
 
-  CUevent release_gate = wp->input->slot_release_gate(wave);
-  if (!release_gate)
-    return DAMACY_OK;
-  CUresult q = cuEventQuery(release_gate);
-  if (q == CUDA_SUCCESS) {
+  int ready = 0;
+  enum damacy_status s = wp->input->slot_reuse_ready(wave, &ready);
+  if (s != DAMACY_OK)
+    return s;
+  if (ready) {
     wave_unbind_slot(wp, wave, changed);
     return DAMACY_OK;
   }
-  return q == CUDA_ERROR_NOT_READY ? DAMACY_OK : DAMACY_CUDA;
+  return DAMACY_OK;
 }
 
 static enum damacy_status

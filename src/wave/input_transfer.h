@@ -38,7 +38,8 @@ struct input_transfer_ops
   enum damacy_status (*queue_ready)(CUstream stream,
                                     struct damacy_wave* wave,
                                     struct input_transfer_submit_state* state);
-  CUevent (*slot_release_gate)(const struct damacy_wave* wave);
+  enum damacy_status (*slot_reuse_ready)(const struct damacy_wave* wave,
+                                         int* ready);
 };
 
 const struct input_transfer_ops*
