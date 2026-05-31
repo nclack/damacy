@@ -21,7 +21,7 @@ static void
 release_slot_after_event(struct damacy_batch_slot* slot, struct render_job* job)
 {
   release_slot_now(slot, job);
-  slot->deferred_release_pending = 1;
+  slot->deferred_reuse_pending = 1;
 }
 
 enum damacy_status

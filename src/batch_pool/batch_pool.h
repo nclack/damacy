@@ -1,13 +1,5 @@
-// Two batch slots in a state machine. Each slot owns the caller-visible
-// minibatch lifetime: id, staged samples while accumulating, lazy device
-// output tensor, ready/held/free transitions, deferred release, and
-// completion accounting. Render jobs own planner output and dispatch
-// cursors.
-//
-// Lifetime: batch_slot_init at create-time; batch_pool_compute_layout +
-// batch_pool_alloc_dev at the first push (idempotent); batch_pool_destroy
-// at destroy-time. cuda_skip=1 leaks GPU resources but releases the host
-// heap (used when the CUDA context is no longer valid).
+// Batch slots own caller-visible minibatch lifetime; render jobs own planner
+// output and dispatch cursors.
 #pragma once
 
 #include "damacy.h"
@@ -39,12 +31,7 @@ struct damacy_batch_slot
   uint32_t n_chunks;
   int32_t chunks_remaining; // n_chunks - chunks completed via waves
 
-  // Set by damacy_release_event when a deferred-release wait has been
-  // queued on stream_post. plan_commit's degenerate (zero-chunk) path
-  // reads this and host-syncs stream_post before its sync cuMemsetD8;
-  // the normal reuse path is already gated by the cuStreamWaitEvent on
-  // stream_post itself.
-  int deferred_release_pending;
+  int deferred_reuse_pending;
   int planning_close_batch;
 };
 

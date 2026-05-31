@@ -207,5 +207,5 @@ batch_slot_reset_for_reuse(struct damacy_batch_slot* slot)
   slot->n_chunks = 0;
   slot->chunks_remaining = 0;
   slot->planning_close_batch = 0;
-  slot->deferred_release_pending = 0;
+  slot->deferred_reuse_pending = 0;
 }

@@ -214,13 +214,10 @@ plan_commit(struct damacy* self,
     *changed = 1;
 
   if (slot->n_chunks == 0) {
-    // Degenerate batch: zero the output and skip to READY. cuMemsetD8
-    // runs on the legacy null stream; if a deferred release wait is
-    // pending on stream_post, sync it first so the memset can't race
-    // a still-in-flight consumer read.
-    if (slot->deferred_release_pending) {
+    // Degenerate batch: zero the output and skip to READY.
+    if (slot->deferred_reuse_pending) {
       cuStreamSynchronize(self->wave_pool.stream_post);
-      slot->deferred_release_pending = 0;
+      slot->deferred_reuse_pending = 0;
     }
     if (cuMemsetD8(CUDPTR(slot->dev_ptr), 0, self->batch_pool.n_bytes) !=
         CUDA_SUCCESS)

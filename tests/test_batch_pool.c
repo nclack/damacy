@@ -120,7 +120,7 @@ test_reset_for_reuse(void)
     .n_chunks = 4,
     .chunks_remaining = 1,
     .planning_close_batch = 1,
-    .deferred_release_pending = 1,
+    .deferred_reuse_pending = 1,
   };
   batch_slot_reset_for_reuse(&slot);
   EXPECT(slot.state == BATCH_FREE);
@@ -130,7 +130,7 @@ test_reset_for_reuse(void)
   EXPECT(slot.n_chunks == 0);
   EXPECT(slot.chunks_remaining == 0);
   EXPECT(slot.planning_close_batch == 0);
-  EXPECT(slot.deferred_release_pending == 0);
+  EXPECT(slot.deferred_reuse_pending == 0);
   return 0;
 }
 
