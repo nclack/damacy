@@ -79,10 +79,10 @@ gds_wave_input(struct damacy_wave* wave, const struct input_slot* slot)
 static enum damacy_status
 input_transfer_begin(CUstream stream,
                      struct damacy_wave* wave,
-                     struct input_transfer_queue_state* state)
+                     uint8_t* queued_stream_work)
 {
   CU(CudaFail, cuEventRecord(wave->ev.input_start, stream));
-  state->queued_stream_work = 1;
+  *queued_stream_work = 1;
   damacy_nvtx_range_push("input_transfer");
   return DAMACY_OK;
 CudaFail:
@@ -103,9 +103,9 @@ CudaFail:
 static enum damacy_status
 input_transfer_queue_marker(CUstream stream,
                             struct damacy_wave* wave,
-                            struct input_transfer_queue_state* state)
+                            uint8_t* queued_stream_work)
 {
-  enum damacy_status s = input_transfer_begin(stream, wave, state);
+  enum damacy_status s = input_transfer_begin(stream, wave, queued_stream_work);
   if (s != DAMACY_OK)
     return s;
   return input_transfer_finish(stream, wave);
@@ -114,9 +114,9 @@ input_transfer_queue_marker(CUstream stream,
 static enum damacy_status
 h2d_queue_input(CUstream stream,
                 struct damacy_wave* wave,
-                struct input_transfer_queue_state* state)
+                uint8_t* queued_stream_work)
 {
-  enum damacy_status s = input_transfer_begin(stream, wave, state);
+  enum damacy_status s = input_transfer_begin(stream, wave, queued_stream_work);
   if (s != DAMACY_OK)
     return s;
 

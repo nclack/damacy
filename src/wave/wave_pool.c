@@ -592,11 +592,12 @@ prepare_input_parse(struct wave_pool* wp, struct damacy_wave* wave)
 static enum damacy_status
 queue_input_and_parse(struct wave_pool* wp,
                       struct damacy_wave* wave,
-                      struct input_transfer_queue_state* state)
+                      uint8_t* queued_stream_work)
 {
-  state->queued_stream_work = 0;
+  *queued_stream_work = 0;
 
-  enum damacy_status s = wp->input->queue_input(wp->stream_input, wave, state);
+  enum damacy_status s =
+    wp->input->queue_input(wp->stream_input, wave, queued_stream_work);
   if (s != DAMACY_OK)
     return s;
 
@@ -604,10 +605,9 @@ queue_input_and_parse(struct wave_pool* wp,
 }
 
 static enum damacy_status
-drain_failed_input_work(struct wave_pool* wp,
-                        const struct input_transfer_queue_state* state)
+drain_failed_input_work(struct wave_pool* wp, uint8_t queued_stream_work)
 {
-  if (!state->queued_stream_work)
+  if (!queued_stream_work)
     return DAMACY_OK;
 
   CUresult r = cuStreamSynchronize(wp->stream_input);
@@ -618,12 +618,12 @@ static enum damacy_status
 kick_input(struct wave_pool* wp, struct damacy_wave* wave)
 {
   damacy_nvtx_range_pushf("kick_input/w%td", wave_index_of(wp, wave));
-  struct input_transfer_queue_state queue = { 0 };
+  uint8_t queued_stream_work = 0;
   enum damacy_status s = prepare_input_parse(wp, wave);
   if (s != DAMACY_OK)
     goto Error;
 
-  s = queue_input_and_parse(wp, wave, &queue);
+  s = queue_input_and_parse(wp, wave, &queued_stream_work);
   if (s != DAMACY_OK)
     goto Error;
 
@@ -634,7 +634,7 @@ kick_input(struct wave_pool* wp, struct damacy_wave* wave)
 Error:
   // Record IO metric on the failure path too so it doesn't bias rolling totals.
   record_io_metric(wp, wave);
-  enum damacy_status drain = drain_failed_input_work(wp, &queue);
+  enum damacy_status drain = drain_failed_input_work(wp, queued_stream_work);
   if (drain != DAMACY_OK)
     s = drain;
   damacy_nvtx_range_pop(); // kick_input
