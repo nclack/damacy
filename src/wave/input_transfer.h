@@ -1,4 +1,3 @@
-// Input transfer operations.
 #pragma once
 
 #include "damacy.h"

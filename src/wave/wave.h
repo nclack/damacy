@@ -1,11 +1,10 @@
-// Wave: one in-flight slice of a batch's chunks.
 #pragma once
 
 #include "assemble/assemble.h"
 #include "decoder/blosc1.h"
 #include "decoder/blosc1_parse.h"
 #include "decoder/decoder_memcpy.h"
-#include "wave/fanout.h" // struct nvcomp_fanout_host
+#include "wave/fanout.h"
 
 #include <cuda.h>
 #include <stdint.h>
@@ -22,23 +21,21 @@ enum wave_state
 struct damacy_wave
 {
   enum wave_state state;
-  // Index into wave_pool.slots while bound, -1 otherwise.
   int8_t bound_slot;
   uint16_t render_job_idx;
   uint16_t batch_pool_slot;
   uint32_t batch_chunk_offset;
   uint32_t n_chunks;
   uint64_t input_used_bytes;
-  void* host_input; // borrowed from slot; NULL on GDS or when unbound
+  void* host_input;
 
   // dev_compressed points at the active compressed input. It may be the
   // wave-owned buffer or a bound input slot buffer.
   void* dev_compressed;
   void* dev_compressed_owned;
-  void* dev_decompressed; // decode arena
+  void* dev_decompressed;
   uint64_t dev_decompressed_cap;
 
-  // GPU parse inputs and counters.
   struct gpu_parse_chunk* h_parse_chunks;
   struct gpu_parse_chunk* d_parse_chunks;
   uint32_t* h_blosc_chunk_indices;
@@ -53,28 +50,24 @@ struct damacy_wave
   uint32_t* d_n_zstd;
   uint32_t* d_n_memcpy;
   uint32_t* d_parse_err;
-  uint32_t* h_parse_counters; // [n_zstd, n_memcpy, parse_err]
+  uint32_t* h_parse_counters;
 
-  // Host-pre-filled SOA prefix for the zstd fanout.
   struct nvcomp_fanout_host h_zstd_fan;
   struct gpu_memcpy_op* h_memcpy_ops;
 
   struct blosc1_totals* d_blosc1_totals;
   struct blosc1_totals* h_blosc1_totals;
 
-  // Device SOA mirror of the host fanout.
   struct nvcomp_fanout zstd_fan;
   uint32_t fanout_cap;
 
   struct gpu_memcpy_op* d_memcpy_ops;
 
-  // Assemble per-wave chunk metadata.
   struct assemble_chunk* h_assemble_chunks;
   struct assemble_chunk* d_assemble_chunks;
   uint32_t assemble_max_blocks_per_chunk;
   uint8_t assemble_rank;
 
-  // Per-stage CUevents.
   struct wave_events
   {
     CUevent input_start;
@@ -91,14 +84,12 @@ struct damacy_wave
 
   float io_ms;
 
-  // Per-stage byte totals.
   uint64_t io_bytes;
   uint64_t decomp_in_bytes;
   uint64_t decomp_out_bytes;
   uint64_t assemble_out_bytes;
 };
 
-// Returns 0 on success, 1 on failure after self-cleanup.
 int
 wave_init(struct damacy_wave* wave,
           uint32_t max_chunks_per_wave,

@@ -1,4 +1,3 @@
-// Input staging slot.
 #pragma once
 
 #include "platform/platform.h"
@@ -66,8 +65,6 @@ input_slot_bind_wait_ms(struct input_slot* slot);
 void
 input_slot_release(struct input_slot* slot);
 
-// Linear scans across `slots[0..n)`. any_in_flight treats every non-FREE
-// state as active.
 int
 input_slot_find_free(const struct input_slot* slots, uint8_t n);
 int

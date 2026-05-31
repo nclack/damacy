@@ -1,4 +1,3 @@
-// wave_pool: the aggregate the scheduler drives.
 #pragma once
 
 #include "damacy.h"
@@ -23,7 +22,6 @@ struct wave_pool
 {
   struct damacy_wave waves[DAMACY_N_WAVES];
 
-  // Input staging slots. n_slots >= DAMACY_N_WAVES.
   struct input_slot slots[DAMACY_MAX_HOST_BUFFER_WAVES];
   uint8_t n_slots;
 
@@ -34,20 +32,16 @@ struct wave_pool
   CUstream stream_decode;
   CUstream stream_post;
 
-  // Separate anchors for decode_gap measurement.
   CUevent decode_done_ring[4];
   uint8_t decode_done_ring_idx;
 
-  // Pool-shared zstd decoder.
   struct decoder_zstd* zstd_decoder;
 
   uint64_t dev_per_wave;
   uint64_t max_chunk_uncompressed_bytes;
 
-  // Borrowed budget tracker.
   struct gpu_budget* budget;
 
-  // Borrowed orchestration dependencies.
   struct damacy_batch_pool* pool;
   struct render_job_pool* render_jobs;
   struct store* store;
@@ -56,11 +50,9 @@ struct wave_pool
 
   const struct input_transfer_ops* input;
 
-  // Bench bypass; see damacy_config.bypass_decode.
   uint8_t bypass_decode;
 };
 
-// Create streams, waves, slots, and shared decoder state.
 int
 wave_pool_init(struct wave_pool* wp,
                struct damacy_batch_pool* pool,
@@ -78,7 +70,6 @@ wave_pool_init(struct wave_pool* wp,
                int bypass_decode,
                struct gpu_budget* budget);
 
-// Destroy owned resources. cuda_skip=1 skips CUDA-owned frees.
 void
 wave_pool_destroy(struct wave_pool* wp, int cuda_skip);
 
@@ -89,11 +80,9 @@ any_slot_in_flight(const struct wave_pool* wp);
 int
 any_slot_free(const struct wave_pool* wp);
 
-// Drive both the slot pool and the wave array one step.
 enum damacy_status
 wave_pool_advance(struct wave_pool* wp, int* changed);
 
-// Handoff state for reserve -> submit -> commit.
 struct wave_pool_peel_ticket
 {
   int slot_idx;
@@ -117,9 +106,6 @@ wave_pool_peel_commit(struct wave_pool* wp,
                       struct store_event ev,
                       int* changed);
 
-// DAMACY_INVAL on unprobed BLOSC_ZSTD documents the wave-eligibility
-// gate's contract; wave_chunks_eligible is the only legitimate caller.
-// Exposed for gate-contract testing; internal otherwise.
 struct chunk_plan;
 struct sample_plan;
 enum damacy_status
