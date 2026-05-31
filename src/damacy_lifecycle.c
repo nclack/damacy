@@ -108,11 +108,18 @@ struct resolved_wave_geometry
   uint8_t want_gds;
 };
 
+enum wave_geometry_step
+{
+  WAVE_GEOMETRY_SIZING,
+  WAVE_GEOMETRY_PREDICT,
+};
+
 static enum damacy_status
 resolve_wave_geometry(const struct damacy_config* cfg,
                       uint64_t resolver_budget,
                       uint64_t runtime_chunk_cap,
-                      struct resolved_wave_geometry* out)
+                      struct resolved_wave_geometry* out,
+                      enum wave_geometry_step* failed_step)
 {
   *out = (struct resolved_wave_geometry){ 0 };
   out->max_chunks_per_wave = resolve_max_chunks_per_wave(cfg);
@@ -132,16 +139,22 @@ resolve_wave_geometry(const struct damacy_config* cfg,
                              runtime_chunk_cap,
                              cfg->samples_per_batch,
                              &out->sizing);
-  if (s != DAMACY_OK)
+  if (s != DAMACY_OK) {
+    if (failed_step)
+      *failed_step = WAVE_GEOMETRY_SIZING;
     return s;
+  }
 
   const struct input_transfer_resources input_resources =
     input_transfer_resources(
       out->input, out->host_buffer_waves, out->sizing.input_staging_per_wave);
-  return gpu_budget_predict(cfg,
-                            &input_resources,
-                            out->sizing.dev_decompressed_per_wave,
-                            &out->predicted);
+  s = gpu_budget_predict(cfg,
+                         &input_resources,
+                         out->sizing.dev_decompressed_per_wave,
+                         &out->predicted);
+  if (s != DAMACY_OK && failed_step)
+    *failed_step = WAVE_GEOMETRY_PREDICT;
+  return s;
 }
 
 enum damacy_status
@@ -259,7 +272,8 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   const uint64_t resolver_budget = max_gpu - pool_reserve;
 
   struct resolved_wave_geometry geom = { 0 };
-  s = resolve_wave_geometry(cfg, resolver_budget, runtime_chunk_cap, &geom);
+  s =
+    resolve_wave_geometry(cfg, resolver_budget, runtime_chunk_cap, &geom, NULL);
   if (s != DAMACY_OK)
     goto Fail;
   {
@@ -556,11 +570,15 @@ damacy_config_describe(const struct damacy_config* cfg)
            (unsigned)cfg->samples_per_batch);
 
   struct resolved_wave_geometry geom = { 0 };
-  enum damacy_status rs =
-    resolve_wave_geometry(cfg, resolver_budget, runtime_chunk_cap, &geom);
+  enum wave_geometry_step failed_step = WAVE_GEOMETRY_SIZING;
+  enum damacy_status rs = resolve_wave_geometry(
+    cfg, resolver_budget, runtime_chunk_cap, &geom, &failed_step);
   if (rs != DAMACY_OK) {
-    log_info("damacy_config_describe: wave geometry resolve failed (%s)",
-             damacy_status_str(rs));
+    const char* where = failed_step == WAVE_GEOMETRY_PREDICT
+                          ? "gpu_budget_predict"
+                          : "wave_pool_resolve_sizing";
+    log_info(
+      "damacy_config_describe: %s failed (%s)", where, damacy_status_str(rs));
     return;
   }
   log_info("damacy_config_describe: input_staging_per_wave=%llu "
