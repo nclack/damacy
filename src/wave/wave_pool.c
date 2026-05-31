@@ -193,24 +193,9 @@ any_slot_free(const struct wave_pool* wp)
   return input_slot_any_free(wp->slots, wp->n_slots);
 }
 
-// --- peel / advance -------------------------------------------------------
-
-// Precondition for the GPU parse: every BLOSC_ZSTD chunk in the wave
-// must have a probed per-sample layout with dont_split set. Kernel B
-// reads layout.blocksize / layout.nblocks per chunk; without a probed
-// layout we don't know nblocks ahead of launch, and dont_split=0 lets
-// blosc emit multiple substreams per block (out of scope for the
-// per-block fan-out kernel). dont_split is always 1 for blosc1-zstd in
-// practice; layout_probed is set on the first non-fill emit for any
-// sample touching the array. A missing probe is a configuration/probe
-// gap (all preceding waves were fill, so no non-fill emit ever fed the
-// cache) — surfaced as DAMACY_INVAL by the caller, distinct from
-// DAMACY_DECODE which signals malformed compressed bytes.
 static int
 wave_chunks_eligible(const struct wave_pool* wp, const struct damacy_wave* wave)
 {
-  // bypass_decode: parse/assemble flip every chunk to is_fill, so the
-  // BLOSC_ZSTD layout-probe preconditions don't apply.
   if (wp->bypass_decode)
     return 1;
   struct render_job* job = wave_job(wp, wave);
@@ -230,84 +215,113 @@ wave_chunks_eligible(const struct wave_pool* wp, const struct damacy_wave* wave)
   return 1;
 }
 
-// Build the per-wave parse inputs for the GPU path:
-//  - h_parse_chunks: arena-offset view of every chunk (kernel-resident).
-//  - h_assemble_chunks shuffle_* trio: defaulted to NONE for every chunk
-//    (Kernel A overrides for non-memcpyed BLOSC_ZSTD chunks).
-//  - h_memcpy_ops / h_zstd_fan prefixes: pre-emitted ops for CODEC_NONE
-//    and CODEC_ZSTD whole-chunk chunks. The kernel atomic-adds slots
-//    starting after these prefixes.
-//  - h_blosc_chunk_indices: list of wave-local indices of BLOSC_ZSTD
-//    chunks (input to Kernel A).
-//  - h_block_chunk_map: packed (chunk_idx<<16)|block_local_idx over
-//    every blosc block in every BLOSC_ZSTD chunk (input to Kernel B).
-//
-// Counts written to the wave: n_host_memcpy, n_host_zstd,
-// n_blosc_zstd_chunks, n_blosc_zstd_blocks.
+static uint32_t
+chunk_compressed_offset(const struct chunk_plan* c)
+{
+  return (uint32_t)(c->host_buf_offset + (uint64_t)c->offset_in_read);
+}
+
+static int
+chunk_effectively_fill(const struct chunk_plan* c, uint8_t force_fill)
+{
+  return c->is_fill || c->codec_id == (uint8_t)CODEC_FILL || force_fill;
+}
+
+static void
+set_parse_chunk(struct gpu_parse_chunk* out,
+                const struct chunk_plan* c,
+                uint8_t force_fill)
+{
+  out->compressed_offset = chunk_compressed_offset(c);
+  out->compressed_nbytes = c->compressed_nbytes;
+  out->decompressed_offset = c->dev_decompressed_offset;
+  out->decompressed_nbytes = c->decompressed_nbytes;
+  out->sample_idx_in_batch = c->sample_idx_in_batch;
+  out->codec_id = c->codec_id;
+  out->is_fill = c->is_fill | force_fill;
+}
+
+static void
+clear_parse_shuffle(struct assemble_chunk* out)
+{
+  out->shuffle_mode = (uint8_t)ASSEMBLE_SHUFFLE_NONE;
+  out->shuffle_typesize = 0;
+  out->shuffle_blocksize = 0;
+}
+
+static void
+append_memcpy_prefix(struct damacy_wave* wave,
+                     const struct chunk_plan* c,
+                     uint32_t comp_off,
+                     uint32_t* count)
+{
+  uint8_t* d_comp_base = (uint8_t*)wave->dev_compressed;
+  uint8_t* d_decomp_base = (uint8_t*)wave->dev_decompressed;
+  struct gpu_memcpy_op* op = &wave->h_memcpy_ops[(*count)++];
+  op->d_src = d_comp_base + comp_off;
+  op->d_dst = d_decomp_base + c->dev_decompressed_offset;
+  op->nbytes = c->decompressed_nbytes;
+}
+
+static void
+append_zstd_prefix(struct damacy_wave* wave,
+                   const struct chunk_plan* c,
+                   uint32_t comp_off,
+                   uint32_t* count)
+{
+  uint8_t* d_comp_base = (uint8_t*)wave->dev_compressed;
+  uint8_t* d_decomp_base = (uint8_t*)wave->dev_decompressed;
+  uint32_t idx = (*count)++;
+  wave->h_zstd_fan.comp_ptrs[idx] = d_comp_base + comp_off;
+  wave->h_zstd_fan.comp_sizes[idx] = c->compressed_nbytes;
+  wave->h_zstd_fan.decomp_ptrs[idx] =
+    d_decomp_base + c->dev_decompressed_offset;
+  wave->h_zstd_fan.decomp_buf_sizes[idx] = c->decompressed_nbytes;
+}
+
+static void
+append_blosc_parse_work(struct damacy_wave* wave,
+                        uint32_t wave_chunk_idx,
+                        const struct sample_plan* sp,
+                        uint32_t* n_blosc_chunks,
+                        uint32_t* n_blosc_blocks)
+{
+  wave->h_blosc_chunk_indices[(*n_blosc_chunks)++] = wave_chunk_idx;
+  for (uint32_t b = 0; b < sp->layout.nblocks; ++b)
+    wave->h_block_chunk_map[(*n_blosc_blocks)++] = (wave_chunk_idx << 16) | b;
+}
+
 static void
 build_gpu_parse_chunks(const struct wave_pool* wp, struct damacy_wave* wave)
 {
   struct render_job* job = wave_job(wp, wave);
-  uint8_t* d_comp_base = (uint8_t*)wave->dev_compressed;
-  uint8_t* d_decomp_base = (uint8_t*)wave->dev_decompressed;
   uint32_t n_host_memcpy = 0;
   uint32_t n_host_zstd = 0;
   uint32_t n_blosc_chunks = 0;
   uint32_t n_blosc_blocks = 0;
 
-  // bypass_decode flips every chunk to fill; kick_decode still records
-  // its events on stream_decode, but decode + decode_gap metrics are
-  // meaningless under bypass.
-  uint8_t effective_fill_force = wp->bypass_decode;
+  uint8_t force_fill = wp->bypass_decode;
   for (uint32_t i = 0; i < wave->n_chunks; ++i) {
     struct chunk_plan* c = &job->chunk_plans[wave->batch_chunk_offset + i];
-    struct gpu_parse_chunk* gc = &wave->h_parse_chunks[i];
-    uint32_t comp_off =
-      (uint32_t)(c->host_buf_offset + (uint64_t)c->offset_in_read);
-    gc->compressed_offset = comp_off;
-    gc->compressed_nbytes = c->compressed_nbytes;
-    gc->decompressed_offset = c->dev_decompressed_offset;
-    gc->decompressed_nbytes = c->decompressed_nbytes;
-    gc->sample_idx_in_batch = c->sample_idx_in_batch;
-    gc->codec_id = c->codec_id;
-    gc->is_fill = c->is_fill | effective_fill_force;
+    uint32_t comp_off = chunk_compressed_offset(c);
+    set_parse_chunk(&wave->h_parse_chunks[i], c, force_fill);
+    clear_parse_shuffle(&wave->h_assemble_chunks[i]);
 
-    struct assemble_chunk* a = &wave->h_assemble_chunks[i];
-    a->shuffle_mode = (uint8_t)ASSEMBLE_SHUFFLE_NONE;
-    a->shuffle_typesize = 0;
-    a->shuffle_blocksize = 0;
-
-    if (c->is_fill || c->codec_id == (uint8_t)CODEC_FILL ||
-        effective_fill_force)
+    if (chunk_effectively_fill(c, force_fill))
       continue;
 
     if (c->codec_id == (uint8_t)CODEC_NONE) {
-      struct gpu_memcpy_op* op = &wave->h_memcpy_ops[n_host_memcpy++];
-      op->d_src = d_comp_base + comp_off;
-      op->d_dst = d_decomp_base + c->dev_decompressed_offset;
-      op->nbytes = c->decompressed_nbytes;
+      append_memcpy_prefix(wave, c, comp_off, &n_host_memcpy);
       continue;
     }
 
     if (c->codec_id == (uint8_t)CODEC_ZSTD) {
-      wave->h_zstd_fan.comp_ptrs[n_host_zstd] = d_comp_base + comp_off;
-      wave->h_zstd_fan.comp_sizes[n_host_zstd] = c->compressed_nbytes;
-      wave->h_zstd_fan.decomp_ptrs[n_host_zstd] =
-        d_decomp_base + c->dev_decompressed_offset;
-      wave->h_zstd_fan.decomp_buf_sizes[n_host_zstd] = c->decompressed_nbytes;
-      n_host_zstd++;
+      append_zstd_prefix(wave, c, comp_off, &n_host_zstd);
       continue;
     }
 
-    // CODEC_BLOSC_ZSTD: defer to Kernel A (memcpyed flag) + Kernel B
-    // (per-block bstart/cb walk). nblocks is known per-sample from the
-    // probed layout; wave_chunks_eligible asserted layout_probed.
     const struct sample_plan* sp = &job->sample_plans[c->sample_idx_in_batch];
-    uint32_t nblocks = sp->layout.nblocks;
-    wave->h_blosc_chunk_indices[n_blosc_chunks++] = i;
-    for (uint32_t b = 0; b < nblocks; ++b)
-      // guarded by static_assert in damacy_limits.h
-      wave->h_block_chunk_map[n_blosc_blocks++] = (i << 16) | b;
+    append_blosc_parse_work(wave, i, sp, &n_blosc_chunks, &n_blosc_blocks);
   }
 
   wave->n_host_memcpy = n_host_memcpy;
@@ -316,8 +330,6 @@ build_gpu_parse_chunks(const struct wave_pool* wp, struct damacy_wave* wave)
   wave->n_blosc_zstd_blocks = n_blosc_blocks;
 }
 
-// IO timing already captured into wave->io_ms; push into stats.io so
-// failure paths don't bias the rolling totals.
 static void
 record_io_metric(const struct wave_pool* wp, const struct damacy_wave* wave)
 {
@@ -344,33 +356,39 @@ chunk_substreams_upper_bound(const struct chunk_plan* c,
   return DAMACY_OK;
 }
 
-// Fanout grow is per-wave (the OTHER wave's SOA is a separate allocation
-// and untouched here), so this can run safely while the other wave is in
-// WAVE_INPUT / WAVE_POST. decoder_scratch_grow synchronizes
-// stream_decode first.
+static enum damacy_status
+count_wave_substreams(const struct wave_pool* wp,
+                      const struct damacy_wave* wave,
+                      size_t* out)
+{
+  *out = 0;
+  if (wp->bypass_decode)
+    return DAMACY_OK;
+
+  const struct render_job* job = wave_job(wp, wave);
+  for (uint32_t i = 0; i < wave->n_chunks; ++i) {
+    const struct chunk_plan* c =
+      &job->chunk_plans[wave->batch_chunk_offset + i];
+    const struct sample_plan* sp = &job->sample_plans[c->sample_idx_in_batch];
+    uint32_t n = 0;
+    enum damacy_status s = chunk_substreams_upper_bound(c, sp, &n);
+    if (s != DAMACY_OK) {
+      log_error("prepare_decode_caps: chunk %u failed substream sizing", i);
+      return s;
+    }
+    *out += n;
+  }
+  return DAMACY_OK;
+}
+
 static enum damacy_status
 prepare_decode_caps(struct wave_pool* wp, struct damacy_wave* wave)
 {
-  struct render_job* job = wave_job(wp, wave);
   size_t need_substreams = 0;
-  // bypass_decode flips every chunk to is_fill at build time, so the
-  // wave needs zero zstd substream scratch.
-  if (!wp->bypass_decode) {
-    for (uint32_t i = 0; i < wave->n_chunks; ++i) {
-      const struct chunk_plan* c =
-        &job->chunk_plans[wave->batch_chunk_offset + i];
-      const struct sample_plan* sp = &job->sample_plans[c->sample_idx_in_batch];
-      uint32_t n = 0;
-      enum damacy_status zs = chunk_substreams_upper_bound(c, sp, &n);
-      if (zs != DAMACY_OK) {
-        log_error("prepare_decode_caps: chunk %u failed substream upper "
-                  "bound (gate-vs-sizer contract violated)",
-                  i);
-        return zs;
-      }
-      need_substreams += n;
-    }
-  }
+  enum damacy_status s = count_wave_substreams(wp, wave, &need_substreams);
+  if (s != DAMACY_OK)
+    return s;
+
   enum damacy_status gs = fanout_grow(&wave->h_zstd_fan,
                                       &wave->zstd_fan,
                                       &wave->fanout_cap,
