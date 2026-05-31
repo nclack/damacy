@@ -63,8 +63,8 @@ fanout_upload(CUstream s,
 // Caller responsibility: ensure no stream is reading the to-be-freed
 // SOA when calling — fanout_grow does NOT synchronize. The wave-pool
 // invariant is that the OWNING wave's fanout is only touched while
-// that wave is between bind and kick_h2d's fanout_upload, so the
-// other wave's stream_h2d work is independent.
+// that wave is between bind and kick_input's fanout_upload, so the
+// other wave's input-stream work is independent.
 enum damacy_status
 fanout_grow(struct nvcomp_fanout_host* h,
             struct nvcomp_fanout* d,

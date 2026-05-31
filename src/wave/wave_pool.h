@@ -30,7 +30,7 @@ struct wave_pool
   uint32_t max_chunks_per_wave;
   uint32_t max_substreams_per_wave;
 
-  CUstream stream_h2d;
+  CUstream stream_input;
   CUstream stream_decode;
   CUstream stream_post;
 

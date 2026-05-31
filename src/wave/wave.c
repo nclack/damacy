@@ -87,9 +87,9 @@ wave_init(struct damacy_wave* wave,
   CU(Error, cuMemAlloc(&dptr, (size_t)cap * sizeof(struct gpu_memcpy_op)));
   wave->d_memcpy_ops = (struct gpu_memcpy_op*)(uintptr_t)dptr;
 
-  CU(Error, cuEventCreate(&wave->ev.h2d_start, CU_EVENT_DEFAULT));
-  CU(Error, cuEventCreate(&wave->ev.bulk_h2d_end, CU_EVENT_DEFAULT));
-  CU(Error, cuEventCreate(&wave->ev.h2d_end, CU_EVENT_DEFAULT));
+  CU(Error, cuEventCreate(&wave->ev.input_start, CU_EVENT_DEFAULT));
+  CU(Error, cuEventCreate(&wave->ev.input_transfer_done, CU_EVENT_DEFAULT));
+  CU(Error, cuEventCreate(&wave->ev.input_parse_done, CU_EVENT_DEFAULT));
   CU(Error, cuEventCreate(&wave->ev.decomp_start, CU_EVENT_DEFAULT));
   CU(Error, cuEventCreate(&wave->ev.decode_done, CU_EVENT_DEFAULT));
   CU(Error, cuEventCreate(&wave->ev.decomp_end, CU_EVENT_DEFAULT));
@@ -135,10 +135,12 @@ wave_destroy(struct damacy_wave* wave, int cuda_skip)
     for (size_t i = 0; i < countof(dev_ptrs); ++i)
       if (dev_ptrs[i])
         cuMemFree(CUDPTR(dev_ptrs[i]));
-    CUevent* const events[] = { &wave->ev.h2d_start,   &wave->ev.bulk_h2d_end,
-                                &wave->ev.h2d_end,     &wave->ev.decomp_start,
-                                &wave->ev.decode_done, &wave->ev.decomp_end,
-                                &wave->ev.asm_start,   &wave->ev.asm_end };
+    CUevent* const events[] = {
+      &wave->ev.input_start,      &wave->ev.input_transfer_done,
+      &wave->ev.input_parse_done, &wave->ev.decomp_start,
+      &wave->ev.decode_done,      &wave->ev.decomp_end,
+      &wave->ev.asm_start,        &wave->ev.asm_end
+    };
     for (size_t i = 0; i < countof(events); ++i)
       if (*events[i])
         cuEventDestroy_v2(*events[i]);

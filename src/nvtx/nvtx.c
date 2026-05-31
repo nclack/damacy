@@ -11,7 +11,7 @@
 #include "platform/platform.h"
 
 // Per-thread printf buffer for damacy_nvtx_range_pushf. Range names are
-// short labels like "kick_h2d/w0" or "finalize_wave/w1" (well under 32
+// short labels like "kick_input/w0" or "finalize_wave/w1" (well under 32
 // chars); 128 is generous headroom. vsnprintf truncates silently on
 // overflow, which is acceptable for a profiling string — worst case is
 // a slightly less informative timeline entry.

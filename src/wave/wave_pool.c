@@ -77,13 +77,13 @@ wave_pool_init(struct wave_pool* wp,
     max_chunks_per_wave, max_substreams_per_chunk);
 
   // NON_BLOCKING so we don't serialize against the legacy default stream.
-  CU(Fail, cuStreamCreate(&wp->stream_h2d, CU_STREAM_NON_BLOCKING));
+  CU(Fail, cuStreamCreate(&wp->stream_input, CU_STREAM_NON_BLOCKING));
   CU(Fail, cuStreamCreate(&wp->stream_decode, CU_STREAM_NON_BLOCKING));
   CU(Fail, cuStreamCreate(&wp->stream_post, CU_STREAM_NON_BLOCKING));
-  wp->input->bind_stream(store, wp->stream_h2d);
+  wp->input->bind_stream(store, wp->stream_input);
   for (size_t i = 0; i < countof(wp->decode_done_ring); ++i)
     CU(Fail, cuEventCreate(&wp->decode_done_ring[i], CU_EVENT_DEFAULT));
-  damacy_nvtx_stream_name(wp->stream_h2d, "damacy:h2d");
+  damacy_nvtx_stream_name(wp->stream_input, "damacy:input");
   damacy_nvtx_stream_name(wp->stream_decode, "damacy:decode");
   damacy_nvtx_stream_name(wp->stream_post, "damacy:post");
 
@@ -132,7 +132,7 @@ wave_pool_destroy(struct wave_pool* wp, int cuda_skip)
     return;
   CUstream* const streams[] = { &wp->stream_post,
                                 &wp->stream_decode,
-                                &wp->stream_h2d };
+                                &wp->stream_input };
   if (!cuda_skip) {
     // Sync streams (but don't destroy yet) so any pending GPU work
     // touching wave + shared-decoder buffers has retired before we
@@ -346,7 +346,7 @@ chunk_substreams_upper_bound(const struct chunk_plan* c,
 
 // Fanout grow is per-wave (the OTHER wave's SOA is a separate allocation
 // and untouched here), so this can run safely while the other wave is in
-// WAVE_H2D / WAVE_POST. decoder_scratch_grow synchronizes
+// WAVE_INPUT / WAVE_POST. decoder_scratch_grow synchronizes
 // stream_decode first.
 static enum damacy_status
 prepare_decode_caps(struct wave_pool* wp, struct damacy_wave* wave)
@@ -393,9 +393,9 @@ prepare_decode_caps(struct wave_pool* wp, struct damacy_wave* wave)
 // per-codec indirection tables, host-emitted SOA prefixes), seed device
 // counters from the host-emitted counts (the kernels atomicAdd above),
 // clear the memcpyed bitset + parse_err + totals, launch the two parse
-// kernels, D2H counters, record h2d_end. The kernels write into
+// kernels, D2H counters, record input_parse_done. The kernels write into
 // d_memcpy_ops / zstd_fan / d_assemble_chunks in place; kick_compute
-// reads h_parse_counters after h2d_end fires.
+// reads h_parse_counters after input_parse_done fires.
 static enum damacy_status
 gpu_parse(struct wave_pool* wp, struct damacy_wave* wave)
 {
@@ -404,7 +404,7 @@ gpu_parse(struct wave_pool* wp, struct damacy_wave* wave)
      cuMemcpyHtoDAsync(CUDPTR(wave->d_parse_chunks),
                        wave->h_parse_chunks,
                        (size_t)wave->n_chunks * sizeof(struct gpu_parse_chunk),
-                       wp->stream_h2d));
+                       wp->stream_input));
   // assemble_chunks: build_assemble_meta filled geometry; build_gpu_parse
   // _chunks defaulted shuffle_* to NONE. Kernel A overrides for non-
   // memcpyed BLOSC_ZSTD chunks.
@@ -412,20 +412,20 @@ gpu_parse(struct wave_pool* wp, struct damacy_wave* wave)
      cuMemcpyHtoDAsync(CUDPTR(wave->d_assemble_chunks),
                        wave->h_assemble_chunks,
                        (size_t)wave->n_chunks * sizeof(struct assemble_chunk),
-                       wp->stream_h2d));
+                       wp->stream_input));
 
   if (wave->n_blosc_zstd_chunks > 0)
     CU(CudaFail,
        cuMemcpyHtoDAsync(CUDPTR(wave->d_blosc_chunk_indices),
                          wave->h_blosc_chunk_indices,
                          (size_t)wave->n_blosc_zstd_chunks * sizeof(uint32_t),
-                         wp->stream_h2d));
+                         wp->stream_input));
   if (wave->n_blosc_zstd_blocks > 0)
     CU(CudaFail,
        cuMemcpyHtoDAsync(CUDPTR(wave->d_block_chunk_map),
                          wave->h_block_chunk_map,
                          (size_t)wave->n_blosc_zstd_blocks * sizeof(uint32_t),
-                         wp->stream_h2d));
+                         wp->stream_input));
 
   // Host-pre-filled SOA prefixes (FILL/NONE/ZSTD whole-chunk ops). The
   // kernels' atomicAdd seeds skip past these slots.
@@ -435,8 +435,8 @@ gpu_parse(struct wave_pool* wp, struct damacy_wave* wave)
                          wave->h_memcpy_ops,
                          (size_t)wave->n_host_memcpy *
                            sizeof(struct gpu_memcpy_op),
-                         wp->stream_h2d));
-  if (wave->n_host_zstd > 0 && fanout_upload(wp->stream_h2d,
+                         wp->stream_input));
+  if (wave->n_host_zstd > 0 && fanout_upload(wp->stream_input,
                                              &wave->zstd_fan,
                                              &wave->h_zstd_fan,
                                              wave->n_host_zstd) != DAMACY_OK)
@@ -448,15 +448,15 @@ gpu_parse(struct wave_pool* wp, struct damacy_wave* wave)
      cuMemcpyHtoDAsync(CUDPTR(wave->d_n_zstd),
                        &wave->n_host_zstd,
                        sizeof(uint32_t),
-                       wp->stream_h2d));
+                       wp->stream_input));
   CU(CudaFail,
      cuMemcpyHtoDAsync(CUDPTR(wave->d_n_memcpy),
                        &wave->n_host_memcpy,
                        sizeof(uint32_t),
-                       wp->stream_h2d));
+                       wp->stream_input));
   CU(CudaFail,
      cuMemsetD8Async(
-       CUDPTR(wave->d_parse_err), 0, sizeof(uint32_t), wp->stream_h2d));
+       CUDPTR(wave->d_parse_err), 0, sizeof(uint32_t), wp->stream_input));
   // Bitset: one bit per wave-local chunk_idx. Kernel A atomic-ors a 1 in
   // for memcpyed chunks; Kernel B reads it and skips those chunks'
   // blocks.
@@ -464,12 +464,12 @@ gpu_parse(struct wave_pool* wp, struct damacy_wave* wave)
      cuMemsetD8Async(CUDPTR(wave->d_is_memcpyed),
                      0,
                      (size_t)((wave->n_chunks + 31u) / 32u) * sizeof(uint32_t),
-                     wp->stream_h2d));
+                     wp->stream_input));
   CU(CudaFail,
      cuMemsetD8Async(CUDPTR(wave->d_blosc1_totals),
                      0,
                      sizeof(struct blosc1_totals),
-                     wp->stream_h2d));
+                     wp->stream_input));
 
   struct render_job* job = wave_job(wp, wave);
   struct blosc1_parse_args pargs = {
@@ -490,30 +490,30 @@ gpu_parse(struct wave_pool* wp, struct damacy_wave* wave)
     .d_n_memcpy = wave->d_n_memcpy,
     .d_parse_err = wave->d_parse_err,
   };
-  if (blosc1_parse_launch(wp->stream_h2d, &pargs))
+  if (blosc1_parse_launch(wp->stream_input, &pargs))
     goto CudaFail;
 
   // D2H the 12 bytes (n_zstd, n_memcpy, parse_err). h_parse_counters is
   // pinned; the read in kick_compute sees this value because the
-  // wave_pool_advance polls h2d_end (recorded after this D2H) before
+  // wave_pool_advance polls input_parse_done (recorded after this D2H) before
   // calling kick_compute.
   CU(CudaFail,
      cuMemcpyDtoHAsync(wave->h_parse_counters,
                        CUDPTR(wave->d_n_zstd),
                        sizeof(uint32_t),
-                       wp->stream_h2d));
+                       wp->stream_input));
   CU(CudaFail,
      cuMemcpyDtoHAsync(wave->h_parse_counters + 1,
                        CUDPTR(wave->d_n_memcpy),
                        sizeof(uint32_t),
-                       wp->stream_h2d));
+                       wp->stream_input));
   CU(CudaFail,
      cuMemcpyDtoHAsync(wave->h_parse_counters + 2,
                        CUDPTR(wave->d_parse_err),
                        sizeof(uint32_t),
-                       wp->stream_h2d));
+                       wp->stream_input));
 
-  CU(CudaFail, cuEventRecord(wave->ev.h2d_end, wp->stream_h2d));
+  CU(CudaFail, cuEventRecord(wave->ev.input_parse_done, wp->stream_input));
   damacy_nvtx_range_pop(); // gpu_parse
   return DAMACY_OK;
 CudaFail:
@@ -522,13 +522,13 @@ CudaFail:
 }
 
 static void
-wave_mark_h2d(struct damacy_wave* wave)
+wave_mark_input(struct damacy_wave* wave)
 {
-  wave->state = WAVE_H2D;
+  wave->state = WAVE_INPUT;
 }
 
 static enum damacy_status
-prepare_h2d_parse_inputs(struct wave_pool* wp, struct damacy_wave* wave)
+prepare_input_parse_inputs(struct wave_pool* wp, struct damacy_wave* wave)
 {
   if (!wave_chunks_eligible(wp, wave)) {
     // Probe gap (e.g. all-fill preceding waves never seeded the layout
@@ -548,13 +548,13 @@ prepare_h2d_parse_inputs(struct wave_pool* wp, struct damacy_wave* wave)
 }
 
 static enum damacy_status
-submit_h2d_and_parse(struct wave_pool* wp,
-                     struct damacy_wave* wave,
-                     struct input_transfer_submit_state* state)
+submit_input_and_parse(struct wave_pool* wp,
+                       struct damacy_wave* wave,
+                       struct input_transfer_submit_state* state)
 {
   state->stream_work_queued = 0;
 
-  enum damacy_status s = wp->input->queue_ready(wp->stream_h2d, wave, state);
+  enum damacy_status s = wp->input->queue_ready(wp->stream_input, wave, state);
   if (s != DAMACY_OK)
     return s;
 
@@ -562,41 +562,41 @@ submit_h2d_and_parse(struct wave_pool* wp,
 }
 
 static enum damacy_status
-drain_failed_h2d_submit(struct wave_pool* wp,
-                        const struct input_transfer_submit_state* state)
+drain_failed_input_submit(struct wave_pool* wp,
+                          const struct input_transfer_submit_state* state)
 {
   if (!state->stream_work_queued)
     return DAMACY_OK;
 
   // Slot staging may still be referenced by queued stream work.
-  CUresult r = cuStreamSynchronize(wp->stream_h2d);
+  CUresult r = cuStreamSynchronize(wp->stream_input);
   return r == CUDA_SUCCESS ? DAMACY_OK : DAMACY_CUDA;
 }
 
 static enum damacy_status
-kick_h2d(struct wave_pool* wp, struct damacy_wave* wave)
+kick_input(struct wave_pool* wp, struct damacy_wave* wave)
 {
-  damacy_nvtx_range_pushf("kick_h2d/w%td", wave_index_of(wp, wave));
+  damacy_nvtx_range_pushf("kick_input/w%td", wave_index_of(wp, wave));
   struct input_transfer_submit_state submit = { 0 };
-  enum damacy_status s = prepare_h2d_parse_inputs(wp, wave);
+  enum damacy_status s = prepare_input_parse_inputs(wp, wave);
   if (s != DAMACY_OK)
     goto Error;
 
-  s = submit_h2d_and_parse(wp, wave, &submit);
+  s = submit_input_and_parse(wp, wave, &submit);
   if (s != DAMACY_OK)
     goto Error;
 
-  wave_mark_h2d(wave);
-  damacy_nvtx_range_pop(); // kick_h2d
+  wave_mark_input(wave);
+  damacy_nvtx_range_pop(); // kick_input
   return DAMACY_OK;
 
 Error:
   // Record IO metric on the failure path too so it doesn't bias rolling totals.
   record_io_metric(wp, wave);
-  enum damacy_status drain = drain_failed_h2d_submit(wp, &submit);
+  enum damacy_status drain = drain_failed_input_submit(wp, &submit);
   if (drain != DAMACY_OK)
     s = drain;
-  damacy_nvtx_range_pop(); // kick_h2d
+  damacy_nvtx_range_pop(); // kick_input
   return s;
 }
 
@@ -754,9 +754,11 @@ wave_mark_free(struct damacy_wave* wave)
 }
 
 static enum damacy_status
-wait_decode_on_h2d_end(struct wave_pool* wp, const struct damacy_wave* wave)
+wait_decode_on_input_parse_done(struct wave_pool* wp,
+                                const struct damacy_wave* wave)
 {
-  CU(CudaFail, cuStreamWaitEvent(wp->stream_decode, wave->ev.h2d_end, 0));
+  CU(CudaFail,
+     cuStreamWaitEvent(wp->stream_decode, wave->ev.input_parse_done, 0));
   return DAMACY_OK;
 CudaFail:
   return DAMACY_CUDA;
@@ -765,10 +767,10 @@ CudaFail:
 static struct blosc1_totals
 read_parse_totals(const struct damacy_wave* wave)
 {
-  // h_parse_counters were D2H'd to pinned host on stream_h2d before
-  // h2d_end was recorded; cuEventQuery(h2d_end) returning CUDA_SUCCESS
-  // (the wave_pool_advance gate that called us) means these host reads
-  // need no extra synchronization.
+  // h_parse_counters were D2H'd to pinned host on stream_input before
+  // input_parse_done was recorded; cuEventQuery(input_parse_done) returning
+  // CUDA_SUCCESS (the wave_pool_advance gate that called us) means these host
+  // reads need no extra synchronization.
   return (struct blosc1_totals){
     .n_zstd = wave->h_parse_counters[0],
     .n_memcpy = wave->h_parse_counters[1],
@@ -800,12 +802,12 @@ submit_decode_and_assemble(struct wave_pool* wp,
   return DAMACY_OK;
 }
 
-// Wait on h2d_end, kick decode on stream_decode, kick post + assemble on
-// stream_post.
+// Wait on input_parse_done, kick decode on stream_decode, kick post + assemble
+// on stream_post.
 static enum damacy_status
 kick_compute(struct wave_pool* wp, struct damacy_wave* wave)
 {
-  enum damacy_status st = wait_decode_on_h2d_end(wp, wave);
+  enum damacy_status st = wait_decode_on_input_parse_done(wp, wave);
   if (st != DAMACY_OK)
     return st;
 
@@ -830,8 +832,9 @@ drain_wave_metrics(const struct wave_pool* wp, struct damacy_wave* wave)
   record_io_metric(wp, wave);
 
   float ms = 0.f;
-  if (cuEventElapsedTime(&ms, wave->ev.h2d_start, wave->ev.bulk_h2d_end) ==
-      CUDA_SUCCESS)
+  if (cuEventElapsedTime(&ms,
+                         wave->ev.input_start,
+                         wave->ev.input_transfer_done) == CUDA_SUCCESS)
     metric_record(&st->h2d, ms, wave->io_bytes, wave->io_bytes);
   if (cuEventElapsedTime(&ms, wave->ev.decomp_start, wave->ev.decode_done) ==
       CUDA_SUCCESS)
@@ -1012,7 +1015,7 @@ bind_slot_to_wave(struct wave_pool* wp, struct damacy_wave* wave, int slot_idx)
 
   slot_mark_busy(slot);
   build_assemble_meta(wp, wave);
-  enum damacy_status s = kick_h2d(wp, wave);
+  enum damacy_status s = kick_input(wp, wave);
   if (s != DAMACY_OK) {
     wave_unbind_slot(wp, wave, NULL);
   }
@@ -1106,6 +1109,7 @@ wave_unbind_slot(struct wave_pool* wp, struct damacy_wave* wave, int* changed)
     slot_release(&wp->slots[wave->bound_slot]);
   wave->bound_slot = -1;
   wave->host_input = NULL;
+  wave->dev_compressed = wave->dev_compressed_owned;
   mark_changed(changed);
 }
 
@@ -1159,6 +1163,8 @@ release_bound_slot_after_input_consumed(struct wave_pool* wp,
     return DAMACY_OK;
 
   CUevent release_gate = wp->input->slot_release_gate(wave);
+  if (!release_gate)
+    return DAMACY_OK;
   CUresult q = cuEventQuery(release_gate);
   if (q == CUDA_SUCCESS) {
     wave_unbind_slot(wp, wave, changed);
@@ -1168,14 +1174,14 @@ release_bound_slot_after_input_consumed(struct wave_pool* wp,
 }
 
 static enum damacy_status
-poll_h2d_wave(struct wave_pool* wp, struct damacy_wave* wave, int* changed)
+poll_input_wave(struct wave_pool* wp, struct damacy_wave* wave, int* changed)
 {
   enum damacy_status s =
     release_bound_slot_after_input_consumed(wp, wave, changed);
   if (s != DAMACY_OK)
     return s;
 
-  CUresult qe = cuEventQuery(wave->ev.h2d_end);
+  CUresult qe = cuEventQuery(wave->ev.input_parse_done);
   if (qe == CUDA_ERROR_NOT_READY)
     return DAMACY_OK;
   if (qe != CUDA_SUCCESS)
@@ -1207,6 +1213,11 @@ retire_posted_wave(struct wave_pool* wp, struct damacy_wave* wave, int* changed)
 static enum damacy_status
 poll_post_wave(struct wave_pool* wp, struct damacy_wave* wave, int* changed)
 {
+  enum damacy_status s =
+    release_bound_slot_after_input_consumed(wp, wave, changed);
+  if (s != DAMACY_OK)
+    return s;
+
   CUresult qe = cuEventQuery(wave->ev.asm_end);
   if (qe == CUDA_ERROR_NOT_READY)
     return DAMACY_OK;
@@ -1221,8 +1232,8 @@ poll_one_wave(struct wave_pool* wp, struct damacy_wave* wave, int* changed)
   switch (wave->state) {
     case WAVE_FREE:
       return DAMACY_OK;
-    case WAVE_H2D:
-      return poll_h2d_wave(wp, wave, changed);
+    case WAVE_INPUT:
+      return poll_input_wave(wp, wave, changed);
     case WAVE_POST:
       return poll_post_wave(wp, wave, changed);
   }

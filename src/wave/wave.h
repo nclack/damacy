@@ -13,7 +13,7 @@
 enum wave_state
 {
   WAVE_FREE = 0,
-  WAVE_H2D,
+  WAVE_INPUT,
   WAVE_POST,
 };
 
@@ -76,9 +76,9 @@ struct damacy_wave
   // Per-stage CUevents.
   struct wave_events
   {
-    CUevent h2d_start;
-    CUevent bulk_h2d_end;
-    CUevent h2d_end;
+    CUevent input_start;
+    CUevent input_transfer_done;
+    CUevent input_parse_done;
     CUevent decomp_start;
     CUevent decode_done;
     CUevent decomp_end;

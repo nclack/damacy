@@ -159,7 +159,7 @@ add_cuda_lib(wave SOURCES wave/wave.h wave/wave.c
 
 # wave_pool: the conductor the scheduler drives. Owns both waves + the
 # input_slot pool + 3 streams + the shared zstd decoder + decode anchor
-# ring, and is the home of the per-stage submitters (kick_h2d /
+# ring, and is the home of the per-stage submitters (kick_input /
 # kick_decode / kick_assemble), wave_pool_peel, and the wave_pool_advance
 # state machine.
 add_cuda_lib(wave_pool

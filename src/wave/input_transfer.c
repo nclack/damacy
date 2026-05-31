@@ -97,19 +97,19 @@ h2d_queue_ready(CUstream stream,
                 struct damacy_wave* wave,
                 struct input_transfer_submit_state* state)
 {
-  CU(CudaFail, cuEventRecord(wave->ev.h2d_start, stream));
+  CU(CudaFail, cuEventRecord(wave->ev.input_start, stream));
   state->stream_work_queued = 1;
-  damacy_nvtx_range_push("bulk_h2d");
+  damacy_nvtx_range_push("input_transfer");
   CU(BulkCudaFail,
      cuMemcpyHtoDAsync(CUDPTR(wave->dev_compressed),
                        wave->host_input,
                        wave->input_used_bytes,
                        stream));
-  CU(BulkCudaFail, cuEventRecord(wave->ev.bulk_h2d_end, stream));
-  damacy_nvtx_range_pop(); // bulk_h2d
+  CU(BulkCudaFail, cuEventRecord(wave->ev.input_transfer_done, stream));
+  damacy_nvtx_range_pop(); // input_transfer
   return DAMACY_OK;
 BulkCudaFail:
-  damacy_nvtx_range_pop(); // bulk_h2d
+  damacy_nvtx_range_pop(); // input_transfer
 CudaFail:
   return DAMACY_CUDA;
 }
@@ -119,14 +119,14 @@ gds_queue_ready(CUstream stream,
                 struct damacy_wave* wave,
                 struct input_transfer_submit_state* state)
 {
-  CU(CudaFail, cuEventRecord(wave->ev.h2d_start, stream));
+  CU(CudaFail, cuEventRecord(wave->ev.input_start, stream));
   state->stream_work_queued = 1;
-  damacy_nvtx_range_push("bulk_h2d");
-  CU(BulkCudaFail, cuEventRecord(wave->ev.bulk_h2d_end, stream));
-  damacy_nvtx_range_pop(); // bulk_h2d
+  damacy_nvtx_range_push("input_transfer");
+  CU(BulkCudaFail, cuEventRecord(wave->ev.input_transfer_done, stream));
+  damacy_nvtx_range_pop(); // input_transfer
   return DAMACY_OK;
 BulkCudaFail:
-  damacy_nvtx_range_pop(); // bulk_h2d
+  damacy_nvtx_range_pop(); // input_transfer
 CudaFail:
   return DAMACY_CUDA;
 }
@@ -134,13 +134,15 @@ CudaFail:
 static CUevent
 h2d_slot_release_gate(const struct damacy_wave* wave)
 {
-  return wave->ev.bulk_h2d_end;
+  return wave->ev.input_transfer_done;
 }
 
 static CUevent
 gds_slot_release_gate(const struct damacy_wave* wave)
 {
-  return wave->ev.h2d_end;
+  if (wave->state != WAVE_POST)
+    return NULL;
+  return wave->ev.decomp_end;
 }
 
 static const struct input_transfer_ops k_h2d = {

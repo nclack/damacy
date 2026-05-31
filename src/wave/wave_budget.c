@@ -352,7 +352,7 @@ decoder_scratch_grow(struct decoder_zstd* decoder,
 CudaFail:
   // grow tried + failed: roll back the commit so committed reflects
   // the un-grown state. decoder_zstd_grow leaves the decoder zombie;
-  // subsequent kick_h2d calls short-circuit on cur_max_batch==0.
+  // subsequent kick_input calls short-circuit on cur_max_batch==0.
   gpu_budget_release(budget, delta_bytes);
   return DAMACY_CUDA;
 }

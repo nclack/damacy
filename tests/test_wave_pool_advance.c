@@ -24,10 +24,12 @@ static volatile int g_host_func_ran;
 static int
 create_wave_events(struct damacy_wave* wave)
 {
-  return cuEventCreate(&wave->ev.h2d_start, CU_EVENT_DEFAULT) != CUDA_SUCCESS ||
-         cuEventCreate(&wave->ev.bulk_h2d_end, CU_EVENT_DEFAULT) !=
+  return cuEventCreate(&wave->ev.input_start, CU_EVENT_DEFAULT) !=
            CUDA_SUCCESS ||
-         cuEventCreate(&wave->ev.h2d_end, CU_EVENT_DEFAULT) != CUDA_SUCCESS ||
+         cuEventCreate(&wave->ev.input_transfer_done, CU_EVENT_DEFAULT) !=
+           CUDA_SUCCESS ||
+         cuEventCreate(&wave->ev.input_parse_done, CU_EVENT_DEFAULT) !=
+           CUDA_SUCCESS ||
          cuEventCreate(&wave->ev.decomp_start, CU_EVENT_DEFAULT) !=
            CUDA_SUCCESS ||
          cuEventCreate(&wave->ev.decode_done, CU_EVENT_DEFAULT) !=
@@ -41,10 +43,12 @@ create_wave_events(struct damacy_wave* wave)
 static void
 destroy_wave_events(struct damacy_wave* wave)
 {
-  CUevent* events[] = { &wave->ev.h2d_start,   &wave->ev.bulk_h2d_end,
-                        &wave->ev.h2d_end,     &wave->ev.decomp_start,
-                        &wave->ev.decode_done, &wave->ev.decomp_end,
-                        &wave->ev.asm_start,   &wave->ev.asm_end };
+  CUevent* events[] = {
+    &wave->ev.input_start,      &wave->ev.input_transfer_done,
+    &wave->ev.input_parse_done, &wave->ev.decomp_start,
+    &wave->ev.decode_done,      &wave->ev.decomp_end,
+    &wave->ev.asm_start,        &wave->ev.asm_end
+  };
   for (size_t i = 0; i < sizeof(events) / sizeof(events[0]); ++i) {
     if (*events[i]) {
       cuEventDestroy(*events[i]);
@@ -56,9 +60,9 @@ destroy_wave_events(struct damacy_wave* wave)
 static int
 record_retired_wave_events(struct damacy_wave* wave, CUstream stream)
 {
-  return cuEventRecord(wave->ev.h2d_start, stream) != CUDA_SUCCESS ||
-         cuEventRecord(wave->ev.bulk_h2d_end, stream) != CUDA_SUCCESS ||
-         cuEventRecord(wave->ev.h2d_end, stream) != CUDA_SUCCESS ||
+  return cuEventRecord(wave->ev.input_start, stream) != CUDA_SUCCESS ||
+         cuEventRecord(wave->ev.input_transfer_done, stream) != CUDA_SUCCESS ||
+         cuEventRecord(wave->ev.input_parse_done, stream) != CUDA_SUCCESS ||
          cuEventRecord(wave->ev.decomp_start, stream) != CUDA_SUCCESS ||
          cuEventRecord(wave->ev.decode_done, stream) != CUDA_SUCCESS ||
          cuEventRecord(wave->ev.decomp_end, stream) != CUDA_SUCCESS ||
@@ -184,7 +188,7 @@ test_failed_h2d_submit_drains_before_unbind(void)
   wp.slots[0].io_bytes = 1;
 
   g_host_func_ran = 0;
-  EXPECT(cuLaunchHostFunc(wp.stream_h2d, sleeping_host_func, NULL) ==
+  EXPECT(cuLaunchHostFunc(wp.stream_input, sleeping_host_func, NULL) ==
          CUDA_SUCCESS);
 
   void* saved_parse_chunks = wp.waves[0].d_parse_chunks;
@@ -197,7 +201,7 @@ test_failed_h2d_submit_drains_before_unbind(void)
 
   EXPECT(changed == 0);
   EXPECT(g_host_func_ran == 1);
-  EXPECT(cuStreamQuery(wp.stream_h2d) == CUDA_SUCCESS);
+  EXPECT(cuStreamQuery(wp.stream_input) == CUDA_SUCCESS);
   EXPECT(wp.slots[0].state == SLOT_FREE);
   EXPECT(wp.waves[0].state == WAVE_FREE);
   EXPECT(wp.waves[0].bound_slot == -1);
@@ -260,7 +264,7 @@ test_failed_bulk_h2d_submit_drains_before_unbind(void)
   wp.slots[0].io_bytes = 1;
 
   g_host_func_ran = 0;
-  EXPECT(cuLaunchHostFunc(wp.stream_h2d, sleeping_host_func, NULL) ==
+  EXPECT(cuLaunchHostFunc(wp.stream_input, sleeping_host_func, NULL) ==
          CUDA_SUCCESS);
 
   void* saved_dev_compressed = wp.waves[0].dev_compressed;
@@ -275,7 +279,7 @@ test_failed_bulk_h2d_submit_drains_before_unbind(void)
 
   EXPECT(changed == 0);
   EXPECT(g_host_func_ran == 1);
-  EXPECT(cuStreamQuery(wp.stream_h2d) == CUDA_SUCCESS);
+  EXPECT(cuStreamQuery(wp.stream_input) == CUDA_SUCCESS);
   EXPECT(wp.slots[0].state == SLOT_FREE);
   EXPECT(wp.waves[0].state == WAVE_FREE);
   EXPECT(wp.waves[0].bound_slot == -1);
@@ -289,7 +293,7 @@ test_failed_bulk_h2d_submit_drains_before_unbind(void)
 }
 
 static int
-test_gds_slot_stays_bound_until_h2d_end(void)
+test_gds_slot_stays_bound_before_input_parse_done(void)
 {
   CUstream stream = NULL;
   EXPECT(cuStreamCreate(&stream, CU_STREAM_DEFAULT) == CUDA_SUCCESS);
@@ -298,16 +302,18 @@ test_gds_slot_stays_bound_until_h2d_end(void)
   memset(&wp, 0, sizeof(wp));
   wp.input = input_transfer_gds();
   wp.n_slots = 1;
-  wp.waves[0].state = WAVE_H2D;
+  wp.waves[0].state = WAVE_INPUT;
   wp.waves[0].bound_slot = 0;
   wp.slots[0].state = SLOT_BUSY;
 
   EXPECT(create_wave_events(&wp.waves[0]) == 0);
-  EXPECT(cuEventRecord(wp.waves[0].ev.bulk_h2d_end, stream) == CUDA_SUCCESS);
+  EXPECT(cuEventRecord(wp.waves[0].ev.input_transfer_done, stream) ==
+         CUDA_SUCCESS);
   EXPECT(cuStreamSynchronize(stream) == CUDA_SUCCESS);
   g_host_func_ran = 0;
   EXPECT(cuLaunchHostFunc(stream, sleeping_host_func, NULL) == CUDA_SUCCESS);
-  EXPECT(cuEventRecord(wp.waves[0].ev.h2d_end, stream) == CUDA_SUCCESS);
+  EXPECT(cuEventRecord(wp.waves[0].ev.input_parse_done, stream) ==
+         CUDA_SUCCESS);
 
   int changed = 0;
   EXPECT(wave_pool_advance(&wp, &changed) == DAMACY_OK);
@@ -322,6 +328,58 @@ test_gds_slot_stays_bound_until_h2d_end(void)
   return 0;
 }
 
+static int
+test_gds_slot_releases_after_decomp_end(void)
+{
+  CUstream stream = NULL;
+  CUstream asm_stream = NULL;
+  EXPECT(cuStreamCreate(&stream, CU_STREAM_DEFAULT) == CUDA_SUCCESS);
+  EXPECT(cuStreamCreate(&asm_stream, CU_STREAM_DEFAULT) == CUDA_SUCCESS);
+
+  struct wave_pool wp;
+  struct damacy_batch_pool batch_pool;
+  struct render_job_pool jobs;
+  struct damacy_stats stats;
+  struct blosc1_totals totals = { 0 };
+  memset(&wp, 0, sizeof(wp));
+  memset(&batch_pool, 0, sizeof(batch_pool));
+  memset(&jobs, 0, sizeof(jobs));
+  memset(&stats, 0, sizeof(stats));
+  wp.input = input_transfer_gds();
+  wp.pool = &batch_pool;
+  wp.render_jobs = &jobs;
+  wp.stats = &stats;
+  wp.n_slots = 1;
+  wp.waves[0].state = WAVE_POST;
+  wp.waves[0].bound_slot = 0;
+  wp.waves[0].dev_compressed = (void*)1;
+  wp.waves[0].h_blosc1_totals = &totals;
+  wp.waves[0].n_chunks = 1;
+  wp.slots[0].state = SLOT_BUSY;
+  batch_pool.slots[0].state = BATCH_RENDERING;
+  batch_pool.slots[0].chunks_remaining = 1;
+
+  EXPECT(create_wave_events(&wp.waves[0]) == 0);
+  EXPECT(cuEventRecord(wp.waves[0].ev.decomp_end, stream) == CUDA_SUCCESS);
+  EXPECT(cuStreamSynchronize(stream) == CUDA_SUCCESS);
+  g_host_func_ran = 0;
+  EXPECT(cuLaunchHostFunc(asm_stream, sleeping_host_func, NULL) ==
+         CUDA_SUCCESS);
+  EXPECT(cuEventRecord(wp.waves[0].ev.asm_end, asm_stream) == CUDA_SUCCESS);
+  int changed = 0;
+  EXPECT(wave_pool_advance(&wp, &changed) == DAMACY_OK);
+  EXPECT(changed == 1);
+  EXPECT(wp.waves[0].bound_slot == -1);
+  EXPECT(wp.slots[0].state == SLOT_FREE);
+  EXPECT(wp.waves[0].dev_compressed == NULL);
+
+  EXPECT(cuStreamSynchronize(asm_stream) == CUDA_SUCCESS);
+  destroy_wave_events(&wp.waves[0]);
+  cuStreamDestroy(asm_stream);
+  cuStreamDestroy(stream);
+  return 0;
+}
+
 int
 main(void)
 {
@@ -332,7 +390,8 @@ main(void)
   RUN(test_freed_wave_does_not_bind_until_next_tick);
   RUN(test_failed_h2d_submit_drains_before_unbind);
   RUN(test_failed_bulk_h2d_submit_drains_before_unbind);
-  RUN(test_gds_slot_stays_bound_until_h2d_end);
+  RUN(test_gds_slot_stays_bound_before_input_parse_done);
+  RUN(test_gds_slot_releases_after_decomp_end);
   printf("all wave_pool_advance tests passed\n");
   return 0;
 }
