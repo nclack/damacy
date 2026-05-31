@@ -74,8 +74,10 @@ wave_input_submit(struct wave_pool* wp,
   if (!t->active || t->n_reads == 0)
     return DAMACY_OK;
   struct input_slot* slot = &wp->slots[t->input_slot_idx];
-  *out = wp->input->submit_reads(wp->store, slot->store_reads, t->n_reads);
-  return out->seq != 0 ? DAMACY_OK : DAMACY_IO;
+  struct store_submit_result result =
+    wp->input->submit_reads(wp->store, slot->store_reads, t->n_reads);
+  *out = result.event;
+  return result.status;
 }
 
 enum damacy_status

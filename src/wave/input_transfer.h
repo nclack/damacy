@@ -27,9 +27,9 @@ struct input_transfer_ops
   void (*bind_stream)(struct store* store, CUstream stream);
   void* (*read_base)(struct input_slot* slot);
   void* (*wave_input)(struct damacy_wave* wave, const struct input_slot* slot);
-  struct store_event (*submit_reads)(struct store* store,
-                                     const struct store_read* reads,
-                                     size_t n_reads);
+  struct store_submit_result (*submit_reads)(struct store* store,
+                                             const struct store_read* reads,
+                                             size_t n_reads);
   enum damacy_status (*queue_input)(CUstream stream,
                                     struct damacy_wave* wave,
                                     uint8_t* queued_stream_work);

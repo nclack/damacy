@@ -294,7 +294,6 @@ static struct store_event
 gds_submit_dev(struct store* s, const struct store_read* reads, size_t n)
 {
   struct store_fs_gds* g = (struct store_fs_gds*)s;
-  // seq == 0 is the failure sentinel consumed by wave_pool (DAMACY_IO).
   struct store_event ev = { 0 };
 
   CUstream stream = (CUstream)g->gds_stream;
