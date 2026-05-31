@@ -32,13 +32,13 @@ decoder_scratch_grow(struct decoder_zstd* decoder,
                      struct gpu_budget* budget,
                      size_t need);
 
-static inline ptrdiff_t
+static ptrdiff_t
 wave_index_of(const struct wave_pool* wp, const struct damacy_wave* wave)
 {
   return wave - wp->waves;
 }
 
-static inline struct render_job*
+static struct render_job*
 wave_job(const struct wave_pool* wp, const struct damacy_wave* wave)
 {
   return render_job_pool_get(wp->render_jobs, wave->render_job_idx);
