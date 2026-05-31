@@ -4,6 +4,7 @@
 #include "store/store.h"
 
 #include <cuda.h>
+#include <stddef.h>
 #include <stdint.h>
 
 struct damacy_wave;
@@ -32,8 +33,8 @@ struct input_transfer_ops
   void* (*read_base)(struct input_slot* slot);
   void* (*wave_input)(struct damacy_wave* wave, const struct input_slot* slot);
   struct store_event (*submit_reads)(struct store* store,
-                                     struct store_read* reads,
-                                     uint32_t n_reads);
+                                     const struct store_read* reads,
+                                     size_t n_reads);
   enum damacy_status (*queue_input)(CUstream stream,
                                     struct damacy_wave* wave,
                                     struct input_transfer_queue_state* state);

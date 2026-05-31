@@ -76,22 +76,6 @@ gds_wave_input(struct damacy_wave* wave, const struct input_slot* slot)
   return slot->dev_buf;
 }
 
-static struct store_event
-h2d_submit_reads(struct store* store,
-                 struct store_read* reads,
-                 uint32_t n_reads)
-{
-  return store_read_submit(store, reads, n_reads);
-}
-
-static struct store_event
-gds_submit_reads(struct store* store,
-                 struct store_read* reads,
-                 uint32_t n_reads)
-{
-  return store_read_submit_dev(store, reads, n_reads);
-}
-
 static enum damacy_status
 input_transfer_begin(CUstream stream,
                      struct damacy_wave* wave,
@@ -184,7 +168,7 @@ static const struct input_transfer_ops k_h2d = {
   .bind_stream = h2d_bind_stream,
   .read_base = h2d_read_base,
   .wave_input = h2d_wave_input,
-  .submit_reads = h2d_submit_reads,
+  .submit_reads = store_read_submit,
   .queue_input = h2d_queue_input,
   .slot_reuse_ready = h2d_slot_reuse_ready,
 };
@@ -195,7 +179,7 @@ static const struct input_transfer_ops k_gds = {
   .bind_stream = gds_bind_stream,
   .read_base = gds_read_base,
   .wave_input = gds_wave_input,
-  .submit_reads = gds_submit_reads,
+  .submit_reads = store_read_submit_dev,
   .queue_input = gds_queue_input,
   .slot_reuse_ready = gds_slot_reuse_ready,
 };
