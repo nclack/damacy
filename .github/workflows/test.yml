@@ -33,6 +33,7 @@ jobs:
     # Self-hosted runner with a GPU exposed via CDI
     # (`docker run --device=nvidia.com/gpu=all`) and docker on PATH.
     runs-on: [self-hosted, gpu]
+    timeout-minutes: 15
 
     env:
       # Image tag derived from the SHA so concurrent runs don't trample
@@ -46,6 +47,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build docker image (Debug + coverage)
+        timeout-minutes: 5
         run: |
           docker build \
             --build-arg CMAKE_BUILD_TYPE=Debug \
@@ -53,6 +55,7 @@ jobs:
             --tag "$IMAGE" .
 
       - name: Run ctest + Python smoke + gcovr + codecov upload
+        timeout-minutes: 5
         # Single named (no --rm) container so .gcda files from ctest
         # survive for gcovr in the same invocation, and so the HTML
         # report is `docker cp`-able afterwards. CODECOV_TOKEN +

@@ -24,6 +24,7 @@ concurrency:
 jobs:
   tsan:
     runs-on: [self-hosted, gpu]
+    timeout-minutes: 15
 
     env:
       IMAGE: damacy:${{ github.sha }}-tsan
@@ -34,6 +35,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build docker image (Debug + TSan)
+        timeout-minutes: 5
         run: |
           docker build \
             --build-arg CMAKE_BUILD_TYPE=Debug \
@@ -41,6 +43,7 @@ jobs:
             --tag "$IMAGE" .
 
       - name: Run TSan-labeled tests
+        timeout-minutes: 5
         run: |
           docker run --rm --name "$CONTAINER" --device=nvidia.com/gpu=all \
             -e TSAN_OPTIONS="suppressions=/workspace/damacy/tests/tsan-suppressions.txt halt_on_error=1 second_deadlock_stack=1" \

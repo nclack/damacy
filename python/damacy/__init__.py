@@ -1116,8 +1116,8 @@ class Pipeline:
         # something we don't catch.
         try:
             if not self._closed:
-                self.flush()
-        except DamacyError:
+                self._native.flush()
+        except (DamacyError, _native.DamacyError):
             pass  # don't mask the user's exception
         finally:
             self.close()
@@ -1146,43 +1146,52 @@ class Pipeline:
 
     def _drain_pending(self) -> None:
         """Move samples from pending iterators into the native lookahead
-        until the lookahead is full or all pending iterators are
-        exhausted. Best-effort; safe to call any time.
+        until the lookahead is full or one bounded chunk has been
+        accepted. Best-effort; safe to call any time.
 
         Unconsumed samples sit in ``_pending_buf`` (always sourced from
         a single head iterator), not re-wrapped onto ``self._pending[0]``
         — successive backpressure events leave the buffer flat instead
         of nesting ``itertools.chain`` layers."""
         cap = self._config.lookahead_samples
-        while True:
-            # Top up buffer from the head iterator. Buffer is only ever
-            # filled from one iterator at a time, so on push failure we
-            # know exactly which iterator to drop.
-            if not self._pending_buf and self._pending:
-                taken = list(itertools.islice(self._pending[0], cap))
-                if not taken:
-                    self._pending.popleft()
-                    continue
-                self._pending_buf = taken
-            if not self._pending_buf:
-                return
-            try:
-                r = self._native.push([s._to_native() for s in self._pending_buf])
-            except _native.DamacyError as exc:
-                # Drop the failed iterator and any leftover items it
-                # had produced; other pending iterators keep their
-                # place and will retry on next drain.
-                self._pending_buf = []
-                if self._pending:
-                    self._pending.popleft()
-                _reraise_typed(exc)
-            consumed = int(r["consumed"])
-            if consumed < len(self._pending_buf):
-                # Native is full — keep the unconsumed tail in the
-                # buffer; the next drain (after a pop) resumes here.
-                del self._pending_buf[:consumed]
-                return
+        # Top up buffer from the head iterator. Buffer is only ever
+        # filled from one iterator at a time, so on push failure we know
+        # exactly which iterator to drop. Pull at most one lookahead
+        # window per drain call; otherwise an unbounded iterator can be
+        # chased forever if the native queue drains concurrently.
+        while not self._pending_buf and self._pending:
+            taken = list(itertools.islice(self._pending[0], cap))
+            if not taken:
+                self._pending.popleft()
+                continue
+            self._pending_buf = taken
+
+        if not self._pending_buf:
+            return
+
+        try:
+            r = self._native.push([s._to_native() for s in self._pending_buf])
+        except _native.DamacyError as exc:
+            # Drop the failed iterator and any leftover items it had
+            # produced; other pending iterators keep their place and
+            # will retry on next drain.
             self._pending_buf = []
+            if self._pending:
+                self._pending.popleft()
+            _reraise_typed(exc)
+        consumed = int(r["consumed"])
+        if consumed < len(self._pending_buf):
+            # Native is full — keep the unconsumed tail in the buffer;
+            # the next drain (after a pop) resumes here.
+            del self._pending_buf[:consumed]
+            return
+
+        self._pending_buf = []
+        if self._pending:
+            try:
+                self._pending_buf = [next(self._pending[0])]
+            except StopIteration:
+                self._pending.popleft()
 
     def pop(self) -> Batch:
         """Block until the next batch is on-device-ready. Returns a
