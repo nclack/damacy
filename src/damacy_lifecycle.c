@@ -97,6 +97,53 @@ destroy_inner(struct damacy* self, int cuda_skip)
   self->budget = NULL;
 }
 
+struct resolved_wave_geometry
+{
+  const struct input_transfer_ops* input;
+  struct wave_pool_sizing sizing;
+  struct gpu_budget_breakdown predicted;
+  uint32_t max_chunks_per_wave;
+  uint32_t max_substreams_per_chunk;
+  uint8_t host_buffer_waves;
+  uint8_t want_gds;
+};
+
+static enum damacy_status
+resolve_wave_geometry(const struct damacy_config* cfg,
+                      uint64_t resolver_budget,
+                      uint64_t runtime_chunk_cap,
+                      struct resolved_wave_geometry* out)
+{
+  *out = (struct resolved_wave_geometry){ 0 };
+  out->max_chunks_per_wave = resolve_max_chunks_per_wave(cfg);
+  out->max_substreams_per_chunk = resolve_max_substreams_per_chunk(cfg);
+  out->host_buffer_waves = resolve_host_buffer_waves(cfg);
+  out->want_gds = resolve_enable_gds(cfg);
+  out->input =
+    out->want_gds ? input_transfer_gds() : input_transfer_host_staging();
+
+  const struct input_transfer_resources min_input =
+    input_transfer_resources(out->input, out->host_buffer_waves, 0);
+  enum damacy_status s =
+    wave_pool_resolve_sizing(out->max_chunks_per_wave,
+                             out->max_substreams_per_chunk,
+                             min_input.device_staging_buffers,
+                             resolver_budget,
+                             runtime_chunk_cap,
+                             cfg->samples_per_batch,
+                             &out->sizing);
+  if (s != DAMACY_OK)
+    return s;
+
+  const struct input_transfer_resources input_resources =
+    input_transfer_resources(
+      out->input, out->host_buffer_waves, out->sizing.input_staging_per_wave);
+  return gpu_budget_predict(cfg,
+                            &input_resources,
+                            out->sizing.dev_decompressed_per_wave,
+                            &out->predicted);
+}
+
 enum damacy_status
 damacy_create(const struct damacy_config* cfg, struct damacy** out)
 {
@@ -211,36 +258,12 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   }
   const uint64_t resolver_budget = max_gpu - pool_reserve;
 
-  const uint32_t resolved_max_chunks_per_wave =
-    resolve_max_chunks_per_wave(cfg);
-  const uint32_t resolved_max_substreams_per_chunk =
-    resolve_max_substreams_per_chunk(cfg);
-  const uint8_t resolved_host_buffer_waves = resolve_host_buffer_waves(cfg);
-  const uint8_t want_gds = resolve_enable_gds(cfg);
-  const struct input_transfer_ops* input =
-    want_gds ? input_transfer_gds() : input_transfer_host_staging();
-  const struct input_transfer_resources min_input =
-    input_transfer_resources(input, resolved_host_buffer_waves, 0);
-  struct wave_pool_sizing sizing = { 0 };
-  s = wave_pool_resolve_sizing(resolved_max_chunks_per_wave,
-                               resolved_max_substreams_per_chunk,
-                               min_input.device_staging_buffers,
-                               resolver_budget,
-                               runtime_chunk_cap,
-                               cfg->samples_per_batch,
-                               &sizing);
+  struct resolved_wave_geometry geom = { 0 };
+  s = resolve_wave_geometry(cfg, resolver_budget, runtime_chunk_cap, &geom);
   if (s != DAMACY_OK)
     goto Fail;
   {
-    const struct input_transfer_resources input_resources =
-      input_transfer_resources(
-        input, resolved_host_buffer_waves, sizing.input_staging_per_wave);
-    struct gpu_budget_breakdown predicted = { 0 };
-    s = gpu_budget_predict(
-      cfg, &input_resources, sizing.dev_decompressed_per_wave, &predicted);
-    if (s != DAMACY_OK)
-      goto Fail;
-    gpu_budget_commit(self->budget, predicted.total);
+    gpu_budget_commit(self->budget, geom.predicted.total);
     log_debug("damacy: resolved geometry from max_gpu_memory_bytes=%llu "
               "(pool_reserve=%llu, resolver_budget=%llu): "
               "input_staging_per_wave=%llu dev_decompressed_per_wave=%llu "
@@ -248,10 +271,10 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
               (unsigned long long)max_gpu,
               (unsigned long long)pool_reserve,
               (unsigned long long)resolver_budget,
-              (unsigned long long)sizing.input_staging_per_wave,
-              (unsigned long long)sizing.dev_decompressed_per_wave,
-              (unsigned long long)predicted.nvcomp_temp,
-              (unsigned long long)predicted.total);
+              (unsigned long long)geom.sizing.input_staging_per_wave,
+              (unsigned long long)geom.sizing.dev_decompressed_per_wave,
+              (unsigned long long)geom.predicted.nvcomp_temp,
+              (unsigned long long)geom.predicted.total);
     // Resolver guarantees this fits; assert defensively in case the
     // accounting drifts. A breach here is a bug, not user input.
     if (gpu_budget_committed(self->budget) > gpu_budget_max(self->budget)) {
@@ -259,14 +282,14 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
         "damacy: post-resolve drift: total=%llu cap=%llu "
         "(dev_compressed=%llu dev_decompressed=%llu "
         "blosc1_meta=%llu fanout_soa=%llu nvcomp_temp=%llu batch_meta=%llu)",
-        (unsigned long long)predicted.total,
+        (unsigned long long)geom.predicted.total,
         (unsigned long long)gpu_budget_max(self->budget),
-        (unsigned long long)predicted.dev_compressed,
-        (unsigned long long)predicted.dev_decompressed,
-        (unsigned long long)predicted.blosc1_meta,
-        (unsigned long long)predicted.fanout_soa,
-        (unsigned long long)predicted.nvcomp_temp,
-        (unsigned long long)predicted.batch_metadata);
+        (unsigned long long)geom.predicted.dev_compressed,
+        (unsigned long long)geom.predicted.dev_decompressed,
+        (unsigned long long)geom.predicted.blosc1_meta,
+        (unsigned long long)geom.predicted.fanout_soa,
+        (unsigned long long)geom.predicted.nvcomp_temp,
+        (unsigned long long)geom.predicted.batch_metadata);
       s = DAMACY_BUDGET;
       goto Fail;
     }
@@ -294,7 +317,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     self->store_meta = store_fs_create(&sc);
     CHECK(Fail, self->store_meta);
   }
-  if (want_gds) {
+  if (geom.want_gds) {
     struct store_fs_gds_config sc = {
       .root = "",
       .fd_cache_capacity = 0,
@@ -339,7 +362,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
                             self->store_meta,
                             self->array_meta_cache,
                             self->shard_index_cache,
-                            resolved_max_substreams_per_chunk);
+                            geom.max_substreams_per_chunk);
   {
     struct prefetch_cache_config clc_cfg = {
       .capacity = cfg->tuning.n_chunk_layout_cache,
@@ -367,25 +390,26 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   {
     struct platform_cpu_mask saved_affinity;
     numa_scope_enter(&self->numa, &saved_affinity);
-    int wp_rc = wave_pool_init(&self->wave_pool,
-                               &self->batch_pool,
-                               &self->render_jobs,
-                               want_gds ? self->store_gds : self->store_host,
-                               &self->stats,
-                               cfg->dtype,
-                               resolved_host_buffer_waves,
-                               resolved_max_chunks_per_wave,
-                               resolved_max_substreams_per_chunk,
-                               sizing.input_staging_per_wave,
-                               sizing.dev_decompressed_per_wave,
-                               runtime_chunk_cap,
-                               input,
-                               cfg->debug.bypass_decode,
-                               self->budget);
+    int wp_rc =
+      wave_pool_init(&self->wave_pool,
+                     &self->batch_pool,
+                     &self->render_jobs,
+                     geom.want_gds ? self->store_gds : self->store_host,
+                     &self->stats,
+                     cfg->dtype,
+                     geom.host_buffer_waves,
+                     geom.max_chunks_per_wave,
+                     geom.max_substreams_per_chunk,
+                     geom.sizing.input_staging_per_wave,
+                     geom.sizing.dev_decompressed_per_wave,
+                     runtime_chunk_cap,
+                     geom.input,
+                     cfg->debug.bypass_decode,
+                     self->budget);
     numa_scope_exit(&saved_affinity);
     CHECK(Fail, wp_rc == 0);
   }
-  if (want_gds)
+  if (geom.want_gds)
     log_info("damacy: input transfer via cuFile / GDS");
 
   struct planner_config pcfg = {
@@ -396,8 +420,8 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     .page_alignment = self->page_alignment,
     .max_chunk_uncompressed_bytes = runtime_chunk_cap,
     .read_op_max_bytes = resolve_max_read_op_bytes(cfg),
-    .max_chunks_per_wave = resolved_max_chunks_per_wave,
-    .max_substreams_per_chunk = resolved_max_substreams_per_chunk,
+    .max_chunks_per_wave = geom.max_chunks_per_wave,
+    .max_substreams_per_chunk = geom.max_substreams_per_chunk,
   };
   CHECK(Fail, planner_create(&pcfg, &self->planner) == DAMACY_OK);
 
@@ -531,55 +555,33 @@ damacy_config_describe(const struct damacy_config* cfg)
            (unsigned long long)runtime_chunk_cap,
            (unsigned)cfg->samples_per_batch);
 
-  const uint8_t resolved_host_buffer_waves = resolve_host_buffer_waves(cfg);
-  const uint8_t want_gds = resolve_enable_gds(cfg);
-  const struct input_transfer_ops* input =
-    want_gds ? input_transfer_gds() : input_transfer_host_staging();
-  const struct input_transfer_resources min_input =
-    input_transfer_resources(input, resolved_host_buffer_waves, 0);
-  struct wave_pool_sizing sizing = { 0 };
+  struct resolved_wave_geometry geom = { 0 };
   enum damacy_status rs =
-    wave_pool_resolve_sizing(resolve_max_chunks_per_wave(cfg),
-                             resolve_max_substreams_per_chunk(cfg),
-                             min_input.device_staging_buffers,
-                             resolver_budget,
-                             runtime_chunk_cap,
-                             cfg->samples_per_batch,
-                             &sizing);
+    resolve_wave_geometry(cfg, resolver_budget, runtime_chunk_cap, &geom);
   if (rs != DAMACY_OK) {
-    log_info("damacy_config_describe: wave_pool_resolve_sizing failed (%s)",
+    log_info("damacy_config_describe: wave geometry resolve failed (%s)",
              damacy_status_str(rs));
-    return;
-  }
-  const struct input_transfer_resources input_resources =
-    input_transfer_resources(
-      input, resolved_host_buffer_waves, sizing.input_staging_per_wave);
-  struct gpu_budget_breakdown predicted = { 0 };
-  if (gpu_budget_predict(
-        cfg, &input_resources, sizing.dev_decompressed_per_wave, &predicted) !=
-      DAMACY_OK) {
-    log_info("damacy_config_describe: gpu_budget_predict failed");
     return;
   }
   log_info("damacy_config_describe: input_staging_per_wave=%llu "
            "dev_decompressed_per_wave=%llu",
-           (unsigned long long)sizing.input_staging_per_wave,
-           (unsigned long long)sizing.dev_decompressed_per_wave);
+           (unsigned long long)geom.sizing.input_staging_per_wave,
+           (unsigned long long)geom.sizing.dev_decompressed_per_wave);
   log_info("damacy_config_describe: dev_compressed=%llu dev_decompressed=%llu "
            "blosc1_meta=%llu fanout_soa=%llu "
            "nvcomp_temp=%llu batch_metadata=%llu",
-           (unsigned long long)predicted.dev_compressed,
-           (unsigned long long)predicted.dev_decompressed,
-           (unsigned long long)predicted.blosc1_meta,
-           (unsigned long long)predicted.fanout_soa,
-           (unsigned long long)predicted.nvcomp_temp,
-           (unsigned long long)predicted.batch_metadata);
+           (unsigned long long)geom.predicted.dev_compressed,
+           (unsigned long long)geom.predicted.dev_decompressed,
+           (unsigned long long)geom.predicted.blosc1_meta,
+           (unsigned long long)geom.predicted.fanout_soa,
+           (unsigned long long)geom.predicted.nvcomp_temp,
+           (unsigned long long)geom.predicted.batch_metadata);
   // predicted.total is the *initial* allocation (initial fanout / decoder
   // floors); sizing.worst_case_total_bytes is the post-grow worst case
   // the resolver pre-reserved against the cap. Their difference is the
   // grow-time headroom; the cap minus the worst case is unused slack.
-  const uint64_t initial_alloc = predicted.total;
-  const uint64_t worst_case = sizing.worst_case_total_bytes;
+  const uint64_t initial_alloc = geom.predicted.total;
+  const uint64_t worst_case = geom.sizing.worst_case_total_bytes;
   const uint64_t reserved_for_grow =
     worst_case > initial_alloc ? worst_case - initial_alloc : 0;
   const uint64_t slack = max_gpu > worst_case ? max_gpu - worst_case : 0;
