@@ -34,9 +34,11 @@ kick_input_into_free_slots(struct damacy* self, int* changed)
       break;
     damacy_nvtx_range_pushf("input/slot%d", t.input_slot_idx);
     scheduler_unlock(self->sched);
-    struct store_event ev = wave_input_submit(&self->wave_pool, &t);
+    struct store_event ev = { 0 };
+    enum damacy_status submit_status =
+      wave_input_submit(&self->wave_pool, &t, &ev);
     scheduler_lock(self->sched);
-    s = wave_input_commit(&self->wave_pool, &t, ev, changed);
+    s = wave_input_commit(&self->wave_pool, &t, submit_status, ev, changed);
     damacy_nvtx_range_pop();
     if (s != DAMACY_OK)
       return s;

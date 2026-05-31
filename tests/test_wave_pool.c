@@ -71,7 +71,7 @@ test_input_commit_rollback_once(void)
   const uint32_t n_chunks = 3;
   setup_post_reserve(&wp, &batch_pool, &jobs, &stats, &slot, n_chunks);
 
-  // n_reads > 0 + ev.seq == 0 → submit-failure rollback path.
+  // Submit failure rolls back the reservation.
   struct wave_input_reservation t = { .active = 1,
                                       .input_slot_idx = 0,
                                       .n_reads = 2,
@@ -82,7 +82,7 @@ test_input_commit_rollback_once(void)
   struct store_event ev = { .seq = 0 };
 
   int changed = 0;
-  EXPECT(wave_input_commit(&wp, &t, ev, &changed) == DAMACY_IO);
+  EXPECT(wave_input_commit(&wp, &t, DAMACY_IO, ev, &changed) == DAMACY_IO);
   EXPECT(changed == 1);
   EXPECT(t.committed == 1);
   EXPECT(stats.waves_emitted == 0);
@@ -94,7 +94,7 @@ test_input_commit_rollback_once(void)
   // Re-entry intentionally trips a log_error; quiet the sink across it.
   changed = 0;
   damacy_log_set_quiet(1);
-  EXPECT(wave_input_commit(&wp, &t, ev, &changed) == DAMACY_OK);
+  EXPECT(wave_input_commit(&wp, &t, DAMACY_OK, ev, &changed) == DAMACY_OK);
   damacy_log_set_quiet(0);
   EXPECT(changed == 0);
   EXPECT(stats.waves_emitted == 0);
@@ -121,7 +121,7 @@ test_input_commit_success_then_recommit(void)
   struct store_event ev = { .seq = 42 };
 
   int changed = 0;
-  EXPECT(wave_input_commit(&wp, &t, ev, &changed) == DAMACY_OK);
+  EXPECT(wave_input_commit(&wp, &t, DAMACY_OK, ev, &changed) == DAMACY_OK);
   EXPECT(changed == 1);
   EXPECT(t.committed == 1);
   EXPECT(wp.slots[0].state == SLOT_IO);
@@ -135,7 +135,7 @@ test_input_commit_success_then_recommit(void)
   struct store_event ev2 = { .seq = 0 };
   changed = 0;
   damacy_log_set_quiet(1);
-  EXPECT(wave_input_commit(&wp, &t, ev2, &changed) == DAMACY_OK);
+  EXPECT(wave_input_commit(&wp, &t, DAMACY_OK, ev2, &changed) == DAMACY_OK);
   damacy_log_set_quiet(0);
   EXPECT(changed == 0);
   EXPECT(wp.slots[0].state == SLOT_IO);
@@ -171,7 +171,7 @@ test_input_commit_rolls_back_groups(void)
   struct store_event ev = { .seq = 0 };
 
   int changed = 0;
-  EXPECT(wave_input_commit(&wp, &t, ev, &changed) == DAMACY_IO);
+  EXPECT(wave_input_commit(&wp, &t, DAMACY_IO, ev, &changed) == DAMACY_IO);
   EXPECT(changed == 1);
   EXPECT(job0(&jobs)->n_groups_dispatched == 7);
   return 0;
@@ -324,7 +324,7 @@ test_input_commit_noop_ticket(void)
   };
   struct store_event ev = { .seq = 0 };
   int changed = 0;
-  EXPECT(wave_input_commit(&wp, &t, ev, &changed) == DAMACY_OK);
+  EXPECT(wave_input_commit(&wp, &t, DAMACY_OK, ev, &changed) == DAMACY_OK);
   EXPECT(changed == 0);
   EXPECT(stats.waves_emitted == 0);
   EXPECT(stats.chunks_dispatched == 0);

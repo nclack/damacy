@@ -65,18 +65,23 @@ wave_input_reserve(struct wave_pool* wp,
   return DAMACY_OK;
 }
 
-struct store_event
-wave_input_submit(struct wave_pool* wp, const struct wave_input_reservation* t)
+enum damacy_status
+wave_input_submit(struct wave_pool* wp,
+                  const struct wave_input_reservation* t,
+                  struct store_event* out)
 {
+  *out = (struct store_event){ 0 };
   if (!t->active || t->n_reads == 0)
-    return (struct store_event){ .seq = 0 };
+    return DAMACY_OK;
   struct input_slot* slot = &wp->slots[t->input_slot_idx];
-  return wp->input->submit_reads(wp->store, slot->store_reads, t->n_reads);
+  *out = wp->input->submit_reads(wp->store, slot->store_reads, t->n_reads);
+  return out->seq != 0 ? DAMACY_OK : DAMACY_IO;
 }
 
 enum damacy_status
 wave_input_commit(struct wave_pool* wp,
                   struct wave_input_reservation* t,
+                  enum damacy_status submit_status,
                   struct store_event ev,
                   int* changed)
 {
@@ -88,9 +93,9 @@ wave_input_commit(struct wave_pool* wp,
   if (!t->active)
     return DAMACY_OK;
   struct input_slot* slot = &wp->slots[t->input_slot_idx];
-  if (t->n_reads > 0 && ev.seq == 0) {
+  if (submit_status != DAMACY_OK) {
     input_reservation_rollback(wp, slot, &t->desc, changed);
-    return DAMACY_IO;
+    return submit_status;
   }
   input_slot_commit_io(slot, ev);
   mark_changed(changed);
