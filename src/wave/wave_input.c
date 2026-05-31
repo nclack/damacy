@@ -1,4 +1,4 @@
-#include "wave_peel.h"
+#include "wave_input.h"
 
 #include "log/log.h"
 #include "wave_pool.h"
@@ -11,10 +11,10 @@ mark_changed(int* changed)
 }
 
 static void
-slot_rollback_peel(struct wave_pool* wp,
-                   struct input_slot* slot,
-                   const struct wave_desc* desc,
-                   int* changed)
+input_reservation_rollback(struct wave_pool* wp,
+                           struct input_slot* slot,
+                           const struct wave_desc* desc,
+                           int* changed)
 {
   render_job_rollback_wave(
     render_job_pool_get(wp->render_jobs, slot->render_job_idx), desc);
@@ -24,15 +24,15 @@ slot_rollback_peel(struct wave_pool* wp,
   mark_changed(changed);
 }
 
-struct wave_pool_peel_ticket
-wave_pool_peel_reserve(struct wave_pool* wp,
-                       uint16_t render_job_idx,
-                       enum damacy_status* err)
+struct wave_input_reservation
+wave_input_reserve(struct wave_pool* wp,
+                   uint16_t render_job_idx,
+                   enum damacy_status* err)
 {
   *err = DAMACY_OK;
-  struct wave_pool_peel_ticket t = { .input_slot_idx = -1,
-                                     .n_reads = 0,
-                                     .committed = 0 };
+  struct wave_input_reservation t = { .input_slot_idx = -1,
+                                      .n_reads = 0,
+                                      .committed = 0 };
   struct render_job* job = render_job_pool_get(wp->render_jobs, render_job_idx);
   if (!job) {
     *err = DAMACY_INVAL;
@@ -61,7 +61,7 @@ wave_pool_peel_reserve(struct wave_pool* wp,
     *err = s;
     return t;
   }
-  input_slot_begin_peel(slot, &desc);
+  input_slot_begin_reservation(slot, &desc);
   wp->stats->waves_emitted++;
   wp->stats->chunks_dispatched += desc.n_chunks;
 
@@ -72,8 +72,7 @@ wave_pool_peel_reserve(struct wave_pool* wp,
 }
 
 struct store_event
-wave_pool_peel_submit(struct wave_pool* wp,
-                      const struct wave_pool_peel_ticket* t)
+wave_input_submit(struct wave_pool* wp, const struct wave_input_reservation* t)
 {
   if (t->input_slot_idx < 0 || t->n_reads == 0)
     return (struct store_event){ .seq = 0 };
@@ -82,13 +81,13 @@ wave_pool_peel_submit(struct wave_pool* wp,
 }
 
 enum damacy_status
-wave_pool_peel_commit(struct wave_pool* wp,
-                      struct wave_pool_peel_ticket* t,
-                      struct store_event ev,
-                      int* changed)
+wave_input_commit(struct wave_pool* wp,
+                  struct wave_input_reservation* t,
+                  struct store_event ev,
+                  int* changed)
 {
   if (t->committed) {
-    log_error("wave: peel_commit called twice on slot %d", t->input_slot_idx);
+    log_error("wave: input_commit called twice on slot %d", t->input_slot_idx);
     return DAMACY_OK;
   }
   t->committed = 1;
@@ -96,7 +95,7 @@ wave_pool_peel_commit(struct wave_pool* wp,
     return DAMACY_OK;
   struct input_slot* slot = &wp->slots[t->input_slot_idx];
   if (t->n_reads > 0 && ev.seq == 0) {
-    slot_rollback_peel(wp, slot, &t->desc, changed);
+    input_reservation_rollback(wp, slot, &t->desc, changed);
     return DAMACY_IO;
   }
   input_slot_commit_io(slot, ev);

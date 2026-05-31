@@ -224,7 +224,7 @@ struct emit_ctx
 
 // Append a fill-mode chunk_plan + matching dummy read_op so the
 // batch-level read_ops / chunk_plans arrays stay 1:1 with the
-// chunk_plan stream that downstream peel walks in lockstep.
+// chunk_plan stream that downstream input dispatch walks in lockstep.
 static enum damacy_status
 emit_fill_chunk(const struct emit_ctx* ctx,
                 const uint64_t* chunk_coord,

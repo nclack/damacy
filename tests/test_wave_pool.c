@@ -1,6 +1,6 @@
 // Unit tests for the host-side parts of src/wave/wave_pool.c.
-// wave_pool_init needs CUDA (creates streams); peel_reserve and
-// peel_commit don't — they touch stats, render_job cursors, input_slot
+// wave_pool_init needs CUDA (creates streams); input_reserve and
+// input_commit don't — they touch stats, render_job cursors, input_slot
 // state, and chunk_plans / read_op_groups, all stack-constructible.
 
 #include "batch_pool/batch_pool.h"
@@ -12,7 +12,7 @@
 #include "render_job/render_job.h"
 #include "store/store.h"
 #include "wave/input_slot.h"
-#include "wave/wave_peel.h"
+#include "wave/wave_input.h"
 #include "wave/wave_pool.h"
 #include "zarr/zarr_metadata.h"
 
@@ -26,8 +26,8 @@ job0(struct render_job_pool* jobs)
   return render_job_pool_for_batch_slot(jobs, 0);
 }
 
-// Construct just enough wave_pool state for peel_commit to run. The slot
-// is wired as if peel_reserve had just been called: SLOT_PEELING, n_chunks
+// Construct just enough wave_pool state for input_commit to run. The slot
+// is wired as if input_reserve had just been called: SLOT_RESERVED, n_chunks
 // set, batch_pool_slot points at slot 0 of the batch pool. Counters are
 // pre-incremented to reflect a completed reserve.
 static void
@@ -49,8 +49,8 @@ setup_post_reserve(struct wave_pool* wp,
   wp->stats = stats;
   wp->slots[0] = *slot; // placeholder; we use the pointer below
 
-  // Wire the fields peel_commit actually reads.
-  wp->slots[0].state = SLOT_PEELING;
+  // Wire the fields input_commit actually reads.
+  wp->slots[0].state = SLOT_RESERVED;
   wp->slots[0].render_job_idx = 0;
   wp->slots[0].batch_pool_slot = 0;
   wp->slots[0].n_chunks = n_chunks;
@@ -61,7 +61,7 @@ setup_post_reserve(struct wave_pool* wp,
 }
 
 static int
-test_peel_commit_rollback_once(void)
+test_input_commit_rollback_once(void)
 {
   struct wave_pool wp;
   struct damacy_batch_pool batch_pool;
@@ -72,16 +72,16 @@ test_peel_commit_rollback_once(void)
   setup_post_reserve(&wp, &batch_pool, &jobs, &stats, &slot, n_chunks);
 
   // n_reads > 0 + ev.seq == 0 → submit-failure rollback path.
-  struct wave_pool_peel_ticket t = { .input_slot_idx = 0,
-                                     .n_reads = 2,
-                                     .desc = { .render_job_idx = 0,
-                                               .n_chunks = n_chunks,
-                                               .prev_n_groups_dispatched = 0 },
-                                     .committed = 0 };
+  struct wave_input_reservation t = { .input_slot_idx = 0,
+                                      .n_reads = 2,
+                                      .desc = { .render_job_idx = 0,
+                                                .n_chunks = n_chunks,
+                                                .prev_n_groups_dispatched = 0 },
+                                      .committed = 0 };
   struct store_event ev = { .seq = 0 };
 
   int changed = 0;
-  EXPECT(wave_pool_peel_commit(&wp, &t, ev, &changed) == DAMACY_IO);
+  EXPECT(wave_input_commit(&wp, &t, ev, &changed) == DAMACY_IO);
   EXPECT(changed == 1);
   EXPECT(t.committed == 1);
   EXPECT(stats.waves_emitted == 0);
@@ -93,7 +93,7 @@ test_peel_commit_rollback_once(void)
   // Re-entry intentionally trips a log_error; quiet the sink across it.
   changed = 0;
   damacy_log_set_quiet(1);
-  EXPECT(wave_pool_peel_commit(&wp, &t, ev, &changed) == DAMACY_OK);
+  EXPECT(wave_input_commit(&wp, &t, ev, &changed) == DAMACY_OK);
   damacy_log_set_quiet(0);
   EXPECT(changed == 0);
   EXPECT(stats.waves_emitted == 0);
@@ -103,7 +103,7 @@ test_peel_commit_rollback_once(void)
 }
 
 static int
-test_peel_commit_success_then_recommit(void)
+test_input_commit_success_then_recommit(void)
 {
   struct wave_pool wp;
   struct damacy_batch_pool batch_pool;
@@ -114,13 +114,13 @@ test_peel_commit_success_then_recommit(void)
   setup_post_reserve(&wp, &batch_pool, &jobs, &stats, &slot, n_chunks);
 
   // Successful submit: ev.seq != 0 → slot advances to SLOT_IO.
-  struct wave_pool_peel_ticket t = { .input_slot_idx = 0,
-                                     .n_reads = 3,
-                                     .committed = 0 };
+  struct wave_input_reservation t = { .input_slot_idx = 0,
+                                      .n_reads = 3,
+                                      .committed = 0 };
   struct store_event ev = { .seq = 42 };
 
   int changed = 0;
-  EXPECT(wave_pool_peel_commit(&wp, &t, ev, &changed) == DAMACY_OK);
+  EXPECT(wave_input_commit(&wp, &t, ev, &changed) == DAMACY_OK);
   EXPECT(changed == 1);
   EXPECT(t.committed == 1);
   EXPECT(wp.slots[0].state == SLOT_IO);
@@ -134,7 +134,7 @@ test_peel_commit_success_then_recommit(void)
   struct store_event ev2 = { .seq = 0 };
   changed = 0;
   damacy_log_set_quiet(1);
-  EXPECT(wave_pool_peel_commit(&wp, &t, ev2, &changed) == DAMACY_OK);
+  EXPECT(wave_input_commit(&wp, &t, ev2, &changed) == DAMACY_OK);
   damacy_log_set_quiet(0);
   EXPECT(changed == 0);
   EXPECT(wp.slots[0].state == SLOT_IO);
@@ -145,9 +145,9 @@ test_peel_commit_success_then_recommit(void)
 
 // Submit-failure rollback must restore n_groups_dispatched from the
 // snapshot the ticket captured at reserve time — without it the next
-// peel would skip past the groups this wave never actually issued.
+// input dispatch would skip past the groups this wave never actually issued.
 static int
-test_peel_commit_rolls_back_groups(void)
+test_input_commit_rolls_back_groups(void)
 {
   struct wave_pool wp;
   struct damacy_batch_pool batch_pool;
@@ -160,22 +160,22 @@ test_peel_commit_rolls_back_groups(void)
   // Simulate reserve having advanced from group 7 to group 9.
   job0(&jobs)->n_groups_dispatched = 9;
 
-  struct wave_pool_peel_ticket t = { .input_slot_idx = 0,
-                                     .n_reads = 1,
-                                     .desc = { .render_job_idx = 0,
-                                               .n_chunks = n_chunks,
-                                               .prev_n_groups_dispatched = 7 },
-                                     .committed = 0 };
+  struct wave_input_reservation t = { .input_slot_idx = 0,
+                                      .n_reads = 1,
+                                      .desc = { .render_job_idx = 0,
+                                                .n_chunks = n_chunks,
+                                                .prev_n_groups_dispatched = 7 },
+                                      .committed = 0 };
   struct store_event ev = { .seq = 0 };
 
   int changed = 0;
-  EXPECT(wave_pool_peel_commit(&wp, &t, ev, &changed) == DAMACY_IO);
+  EXPECT(wave_input_commit(&wp, &t, ev, &changed) == DAMACY_IO);
   EXPECT(changed == 1);
   EXPECT(job0(&jobs)->n_groups_dispatched == 7);
   return 0;
 }
 
-// Stack-constructible scaffold for peel_reserve. All planner-output
+// Stack-constructible scaffold for input_reserve. All planner-output
 // arrays are inline so a test can populate groups/chunks/read_ops and
 // fire reserve without touching CUDA or the heap.
 struct reserve_fixture
@@ -218,7 +218,7 @@ init_reserve_fixture(struct reserve_fixture* f,
 
 // dev_cap blocks group 1 after group 0 lands; group 1 must defer whole.
 static int
-test_peel_reserve_defers_oversize_group(void)
+test_input_reserve_defers_oversize_group(void)
 {
   struct reserve_fixture f;
   init_reserve_fixture(&f, 4096, 200);
@@ -241,7 +241,7 @@ test_peel_reserve_defers_oversize_group(void)
   job0(&f.jobs)->n_read_op_groups = 2;
 
   enum damacy_status err = DAMACY_OK;
-  struct wave_pool_peel_ticket t = wave_pool_peel_reserve(&f.wp, 0, &err);
+  struct wave_input_reservation t = wave_input_reserve(&f.wp, 0, &err);
 
   EXPECT(err == DAMACY_OK);
   EXPECT(t.input_slot_idx == 0);
@@ -250,13 +250,13 @@ test_peel_reserve_defers_oversize_group(void)
   EXPECT(job0(&f.jobs)->n_chunks_dispatched == 1);
   EXPECT(job0(&f.jobs)->n_groups_dispatched == 1);
   EXPECT(f.wp.slots[0].n_chunks == 1);
-  EXPECT(f.wp.slots[0].state == SLOT_PEELING);
+  EXPECT(f.wp.slots[0].state == SLOT_RESERVED);
   return 0;
 }
 
 // First group exceeds dev_cap on a fresh wave → DAMACY_BUDGET.
 static int
-test_peel_reserve_errors_when_first_group_too_big(void)
+test_input_reserve_errors_when_first_group_too_big(void)
 {
   struct reserve_fixture f;
   init_reserve_fixture(&f, 4096, 50);
@@ -273,7 +273,7 @@ test_peel_reserve_errors_when_first_group_too_big(void)
 
   enum damacy_status err = DAMACY_OK;
   damacy_log_set_quiet(1);
-  struct wave_pool_peel_ticket t = wave_pool_peel_reserve(&f.wp, 0, &err);
+  struct wave_input_reservation t = wave_input_reserve(&f.wp, 0, &err);
   damacy_log_set_quiet(0);
 
   EXPECT(err == DAMACY_BUDGET);
@@ -284,9 +284,9 @@ test_peel_reserve_errors_when_first_group_too_big(void)
 }
 
 static int
-test_peel_commit_noop_ticket(void)
+test_input_commit_noop_ticket(void)
 {
-  // input_slot_idx < 0 means peel_reserve found no work or no free input slot.
+  // input_slot_idx < 0 means input_reserve found no work or no free input slot.
   // commit must short-circuit before touching anything.
   struct wave_pool wp;
   struct damacy_batch_pool batch_pool;
@@ -300,12 +300,12 @@ test_peel_commit_noop_ticket(void)
   wp.render_jobs = &jobs;
   wp.stats = &stats;
 
-  struct wave_pool_peel_ticket t = { .input_slot_idx = -1,
-                                     .n_reads = 0,
-                                     .committed = 0 };
+  struct wave_input_reservation t = { .input_slot_idx = -1,
+                                      .n_reads = 0,
+                                      .committed = 0 };
   struct store_event ev = { .seq = 0 };
   int changed = 0;
-  EXPECT(wave_pool_peel_commit(&wp, &t, ev, &changed) == DAMACY_OK);
+  EXPECT(wave_input_commit(&wp, &t, ev, &changed) == DAMACY_OK);
   EXPECT(changed == 0);
   EXPECT(stats.waves_emitted == 0);
   EXPECT(stats.chunks_dispatched == 0);
@@ -351,12 +351,12 @@ test_chunk_substreams_unprobed_blosc(void)
 int
 main(void)
 {
-  RUN(test_peel_commit_rollback_once);
-  RUN(test_peel_commit_success_then_recommit);
-  RUN(test_peel_commit_rolls_back_groups);
-  RUN(test_peel_reserve_defers_oversize_group);
-  RUN(test_peel_reserve_errors_when_first_group_too_big);
-  RUN(test_peel_commit_noop_ticket);
+  RUN(test_input_commit_rollback_once);
+  RUN(test_input_commit_success_then_recommit);
+  RUN(test_input_commit_rolls_back_groups);
+  RUN(test_input_reserve_defers_oversize_group);
+  RUN(test_input_reserve_errors_when_first_group_too_big);
+  RUN(test_input_commit_noop_ticket);
   RUN(test_chunk_substreams_unprobed_blosc);
   printf("all wave_pool tests passed\n");
   return 0;

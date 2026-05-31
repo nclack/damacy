@@ -2,15 +2,14 @@
 
 #include "damacy_internal.h"
 #include "nvtx/nvtx.h"
-#include "wave/wave_peel.h"
+#include "wave/wave_input.h"
 
 #include <cuda.h>
 
-// Drains sealed render jobs into free input_slots, planning a fresh
-// batch when no render job has chunks left to peel. Stops when there
-// are no free slots, no render jobs with work, and no room to plan more.
+// Drains sealed render jobs into free input_slots, planning a fresh batch
+// when no render job has work ready.
 static enum damacy_status
-kick_peel_into_free_slots(struct damacy* self, int* changed)
+kick_input_into_free_slots(struct damacy* self, int* changed)
 {
   for (;;) {
     int target_job = find_render_job_with_work(&self->render_jobs);
@@ -27,18 +26,17 @@ kick_peel_into_free_slots(struct damacy* self, int* changed)
     }
 
     enum damacy_status err = DAMACY_OK;
-    struct wave_pool_peel_ticket t =
-      wave_pool_peel_reserve(&self->wave_pool, (uint16_t)target_job, &err);
+    struct wave_input_reservation t =
+      wave_input_reserve(&self->wave_pool, (uint16_t)target_job, &err);
     if (err != DAMACY_OK)
       return err;
     if (t.input_slot_idx < 0)
       break;
-    damacy_nvtx_range_pushf("peel/slot%d", t.input_slot_idx);
+    damacy_nvtx_range_pushf("input/slot%d", t.input_slot_idx);
     scheduler_unlock(self->sched);
-    struct store_event ev = wave_pool_peel_submit(&self->wave_pool, &t);
+    struct store_event ev = wave_input_submit(&self->wave_pool, &t);
     scheduler_lock(self->sched);
-    enum damacy_status s =
-      wave_pool_peel_commit(&self->wave_pool, &t, ev, changed);
+    enum damacy_status s = wave_input_commit(&self->wave_pool, &t, ev, changed);
     damacy_nvtx_range_pop();
     if (s != DAMACY_OK)
       return s;
@@ -51,7 +49,7 @@ kick_peel_into_free_slots(struct damacy* self, int* changed)
 // One scheduler tick, under scheduler_lock. Lazy ctx push on first call.
 // *changed contract (authoritative): every transition site
 // (wave_pool_advance, plan_ready_prefetch/plan_commit,
-// wave_pool_peel_commit) OR-sets it on a real state transition; the worker
+// wave_input_commit) OR-sets it on a real state transition; the worker
 // broadcasts iff non-zero.
 int
 damacy_scheduler_step(void* arg)
@@ -70,7 +68,7 @@ damacy_scheduler_step(void* arg)
   int changed = 0;
   enum damacy_status r = wave_pool_advance(&self->wave_pool, &changed);
   if (r == DAMACY_OK && self->failed_status == DAMACY_OK)
-    r = kick_peel_into_free_slots(self, &changed);
+    r = kick_input_into_free_slots(self, &changed);
   if (r != DAMACY_OK && self->failed_status == DAMACY_OK) {
     self->failed_status = r;
     return 1;

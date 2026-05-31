@@ -283,7 +283,7 @@ test_multi_wave_per_batch(void)
   // to pick the minimum per-wave geometry (one chunk per wave). With
   // max_chunk_uncompressed_bytes = 4 KiB and a budget just barely big
   // enough to fit total_min, dev_decompressed_per_wave lands near
-  // 4 KiB. peel_wave's per-chunk read_op is page-aligned (typically
+  // 4 KiB. input_dispatch_wave's per-chunk read_op is page-aligned (typically
   // 4 KiB), so the 16-chunk batch spills into ≥2 waves of the same
   // batch slot.
   struct damacy_config cfg = {

@@ -10,7 +10,7 @@ struct wave_desc;
 enum slot_state
 {
   SLOT_FREE = 0,
-  SLOT_PEELING,
+  SLOT_RESERVED,
   SLOT_IO,
   SLOT_READY,
   SLOT_BUSY,
@@ -48,7 +48,8 @@ void
 input_slot_destroy(struct input_slot* slot, int cuda_skip);
 
 void
-input_slot_begin_peel(struct input_slot* slot, const struct wave_desc* desc);
+input_slot_begin_reservation(struct input_slot* slot,
+                             const struct wave_desc* desc);
 
 void
 input_slot_commit_io(struct input_slot* slot, struct store_event ev);

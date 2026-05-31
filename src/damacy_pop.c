@@ -214,9 +214,9 @@ damacy_flush(struct damacy* self)
       goto Done;
   }
 
-  // any_slot_in_flight catches the SLOT_PEELING window: peel_reserve has
+  // any_slot_in_flight catches the SLOT_RESERVED window: input_reserve has
   // already advanced the render-job cursor (so no job may look dispatchable)
-  // but peel_submit hasn't run yet, no wave exists yet — without
+  // but input_submit hasn't run yet, no wave exists yet — without
   // this check, flush would return while the worker still has unposted
   // IO to submit. damacy_pop's AGAIN gate keeps the same invariant.
   struct platform_clock flush_clock = { 0 };

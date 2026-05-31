@@ -63,7 +63,8 @@ input_slot_destroy(struct input_slot* slot, int cuda_skip)
 }
 
 void
-input_slot_begin_peel(struct input_slot* slot, const struct wave_desc* desc)
+input_slot_begin_reservation(struct input_slot* slot,
+                             const struct wave_desc* desc)
 {
   platform_toc(&slot->io_clock);
   slot->is_fill_wave = desc->is_fill_wave;
@@ -73,7 +74,7 @@ input_slot_begin_peel(struct input_slot* slot, const struct wave_desc* desc)
   slot->n_chunks = desc->n_chunks;
   slot->used_bytes = desc->input_used_bytes;
   slot->io_bytes = desc->io_bytes;
-  slot->state = SLOT_PEELING;
+  slot->state = SLOT_RESERVED;
 }
 
 void
