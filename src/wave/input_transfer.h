@@ -19,9 +19,9 @@ struct input_transfer_resources
   uint8_t device_staging_buffers;
 };
 
-struct input_transfer_submit_state
+struct input_transfer_queue_state
 {
-  uint8_t stream_work_queued;
+  uint8_t queued_stream_work;
 };
 
 struct input_transfer_ops
@@ -35,9 +35,9 @@ struct input_transfer_ops
   struct store_event (*submit_reads)(struct store* store,
                                      struct store_read* reads,
                                      uint32_t n_reads);
-  enum damacy_status (*queue_ready)(CUstream stream,
+  enum damacy_status (*queue_input)(CUstream stream,
                                     struct damacy_wave* wave,
-                                    struct input_transfer_submit_state* state);
+                                    struct input_transfer_queue_state* state);
   enum damacy_status (*slot_reuse_ready)(const struct damacy_wave* wave,
                                          int* ready);
 };

@@ -389,25 +389,14 @@ prepare_decode_caps(struct wave_pool* wp, struct damacy_wave* wave)
                               need_substreams);
 }
 
-// GPU parse: upload inputs (parse_chunks, assemble_chunks,
-// per-codec indirection tables, host-emitted SOA prefixes), seed device
-// counters from the host-emitted counts (the kernels atomicAdd above),
-// clear the memcpyed bitset + parse_err + totals, launch the two parse
-// kernels, D2H counters, record input_parse_done. The kernels write into
-// d_memcpy_ops / zstd_fan / d_assemble_chunks in place; kick_compute
-// reads h_parse_counters after input_parse_done fires.
 static enum damacy_status
-gpu_parse(struct wave_pool* wp, struct damacy_wave* wave)
+queue_parse_metadata(struct wave_pool* wp, struct damacy_wave* wave)
 {
-  damacy_nvtx_range_push("gpu_parse");
   CU(CudaFail,
      cuMemcpyHtoDAsync(CUDPTR(wave->d_parse_chunks),
                        wave->h_parse_chunks,
                        (size_t)wave->n_chunks * sizeof(struct gpu_parse_chunk),
                        wp->stream_input));
-  // assemble_chunks: build_assemble_meta filled geometry; build_gpu_parse
-  // _chunks defaulted shuffle_* to NONE. Kernel A overrides for non-
-  // memcpyed BLOSC_ZSTD chunks.
   CU(CudaFail,
      cuMemcpyHtoDAsync(CUDPTR(wave->d_assemble_chunks),
                        wave->h_assemble_chunks,
@@ -426,9 +415,14 @@ gpu_parse(struct wave_pool* wp, struct damacy_wave* wave)
                          wave->h_block_chunk_map,
                          (size_t)wave->n_blosc_zstd_blocks * sizeof(uint32_t),
                          wp->stream_input));
+  return DAMACY_OK;
+CudaFail:
+  return DAMACY_CUDA;
+}
 
-  // Host-pre-filled SOA prefixes (FILL/NONE/ZSTD whole-chunk ops). The
-  // kernels' atomicAdd seeds skip past these slots.
+static enum damacy_status
+queue_host_decode_prefixes(struct wave_pool* wp, struct damacy_wave* wave)
+{
   if (wave->n_host_memcpy > 0)
     CU(CudaFail,
        cuMemcpyHtoDAsync(CUDPTR(wave->d_memcpy_ops),
@@ -441,9 +435,14 @@ gpu_parse(struct wave_pool* wp, struct damacy_wave* wave)
                                              &wave->h_zstd_fan,
                                              wave->n_host_zstd) != DAMACY_OK)
     goto CudaFail;
+  return DAMACY_OK;
+CudaFail:
+  return DAMACY_CUDA;
+}
 
-  // Seed counters with host-emitted counts so kernel atomicAdds claim
-  // slots after the prefix.
+static enum damacy_status
+queue_parse_state_init(struct wave_pool* wp, struct damacy_wave* wave)
+{
   CU(CudaFail,
      cuMemcpyHtoDAsync(CUDPTR(wave->d_n_zstd),
                        &wave->n_host_zstd,
@@ -470,6 +469,48 @@ gpu_parse(struct wave_pool* wp, struct damacy_wave* wave)
                      0,
                      sizeof(struct blosc1_totals),
                      wp->stream_input));
+  return DAMACY_OK;
+CudaFail:
+  return DAMACY_CUDA;
+}
+
+static enum damacy_status
+queue_parse_counter_readback(struct wave_pool* wp, struct damacy_wave* wave)
+{
+  CU(CudaFail,
+     cuMemcpyDtoHAsync(wave->h_parse_counters,
+                       CUDPTR(wave->d_n_zstd),
+                       sizeof(uint32_t),
+                       wp->stream_input));
+  CU(CudaFail,
+     cuMemcpyDtoHAsync(wave->h_parse_counters + 1,
+                       CUDPTR(wave->d_n_memcpy),
+                       sizeof(uint32_t),
+                       wp->stream_input));
+  CU(CudaFail,
+     cuMemcpyDtoHAsync(wave->h_parse_counters + 2,
+                       CUDPTR(wave->d_parse_err),
+                       sizeof(uint32_t),
+                       wp->stream_input));
+  CU(CudaFail, cuEventRecord(wave->ev.input_parse_done, wp->stream_input));
+  return DAMACY_OK;
+CudaFail:
+  return DAMACY_CUDA;
+}
+
+static enum damacy_status
+gpu_parse(struct wave_pool* wp, struct damacy_wave* wave)
+{
+  damacy_nvtx_range_push("gpu_parse");
+  enum damacy_status s = queue_parse_metadata(wp, wave);
+  if (s != DAMACY_OK)
+    goto Done;
+  s = queue_host_decode_prefixes(wp, wave);
+  if (s != DAMACY_OK)
+    goto Done;
+  s = queue_parse_state_init(wp, wave);
+  if (s != DAMACY_OK)
+    goto Done;
 
   struct render_job* job = wave_job(wp, wave);
   struct blosc1_parse_args pargs = {
@@ -490,35 +531,14 @@ gpu_parse(struct wave_pool* wp, struct damacy_wave* wave)
     .d_n_memcpy = wave->d_n_memcpy,
     .d_parse_err = wave->d_parse_err,
   };
-  if (blosc1_parse_launch(wp->stream_input, &pargs))
-    goto CudaFail;
-
-  // D2H the 12 bytes (n_zstd, n_memcpy, parse_err). h_parse_counters is
-  // pinned; the read in kick_compute sees this value because the
-  // wave_pool_advance polls input_parse_done (recorded after this D2H) before
-  // calling kick_compute.
-  CU(CudaFail,
-     cuMemcpyDtoHAsync(wave->h_parse_counters,
-                       CUDPTR(wave->d_n_zstd),
-                       sizeof(uint32_t),
-                       wp->stream_input));
-  CU(CudaFail,
-     cuMemcpyDtoHAsync(wave->h_parse_counters + 1,
-                       CUDPTR(wave->d_n_memcpy),
-                       sizeof(uint32_t),
-                       wp->stream_input));
-  CU(CudaFail,
-     cuMemcpyDtoHAsync(wave->h_parse_counters + 2,
-                       CUDPTR(wave->d_parse_err),
-                       sizeof(uint32_t),
-                       wp->stream_input));
-
-  CU(CudaFail, cuEventRecord(wave->ev.input_parse_done, wp->stream_input));
+  if (blosc1_parse_launch(wp->stream_input, &pargs)) {
+    s = DAMACY_CUDA;
+    goto Done;
+  }
+  s = queue_parse_counter_readback(wp, wave);
+Done:
   damacy_nvtx_range_pop(); // gpu_parse
-  return DAMACY_OK;
-CudaFail:
-  damacy_nvtx_range_pop(); // gpu_parse
-  return DAMACY_CUDA;
+  return s;
 }
 
 static void
@@ -528,7 +548,7 @@ wave_mark_input(struct damacy_wave* wave)
 }
 
 static enum damacy_status
-prepare_input_parse_inputs(struct wave_pool* wp, struct damacy_wave* wave)
+prepare_input_parse(struct wave_pool* wp, struct damacy_wave* wave)
 {
   if (!wave_chunks_eligible(wp, wave)) {
     // Probe gap (e.g. all-fill preceding waves never seeded the layout
@@ -548,13 +568,13 @@ prepare_input_parse_inputs(struct wave_pool* wp, struct damacy_wave* wave)
 }
 
 static enum damacy_status
-submit_input_and_parse(struct wave_pool* wp,
-                       struct damacy_wave* wave,
-                       struct input_transfer_submit_state* state)
+queue_input_and_parse(struct wave_pool* wp,
+                      struct damacy_wave* wave,
+                      struct input_transfer_queue_state* state)
 {
-  state->stream_work_queued = 0;
+  state->queued_stream_work = 0;
 
-  enum damacy_status s = wp->input->queue_ready(wp->stream_input, wave, state);
+  enum damacy_status s = wp->input->queue_input(wp->stream_input, wave, state);
   if (s != DAMACY_OK)
     return s;
 
@@ -562,13 +582,12 @@ submit_input_and_parse(struct wave_pool* wp,
 }
 
 static enum damacy_status
-drain_failed_input_submit(struct wave_pool* wp,
-                          const struct input_transfer_submit_state* state)
+drain_failed_input_work(struct wave_pool* wp,
+                        const struct input_transfer_queue_state* state)
 {
-  if (!state->stream_work_queued)
+  if (!state->queued_stream_work)
     return DAMACY_OK;
 
-  // Slot staging may still be referenced by queued stream work.
   CUresult r = cuStreamSynchronize(wp->stream_input);
   return r == CUDA_SUCCESS ? DAMACY_OK : DAMACY_CUDA;
 }
@@ -577,12 +596,12 @@ static enum damacy_status
 kick_input(struct wave_pool* wp, struct damacy_wave* wave)
 {
   damacy_nvtx_range_pushf("kick_input/w%td", wave_index_of(wp, wave));
-  struct input_transfer_submit_state submit = { 0 };
-  enum damacy_status s = prepare_input_parse_inputs(wp, wave);
+  struct input_transfer_queue_state queue = { 0 };
+  enum damacy_status s = prepare_input_parse(wp, wave);
   if (s != DAMACY_OK)
     goto Error;
 
-  s = submit_input_and_parse(wp, wave, &submit);
+  s = queue_input_and_parse(wp, wave, &queue);
   if (s != DAMACY_OK)
     goto Error;
 
@@ -593,7 +612,7 @@ kick_input(struct wave_pool* wp, struct damacy_wave* wave)
 Error:
   // Record IO metric on the failure path too so it doesn't bias rolling totals.
   record_io_metric(wp, wave);
-  enum damacy_status drain = drain_failed_input_submit(wp, &submit);
+  enum damacy_status drain = drain_failed_input_work(wp, &queue);
   if (drain != DAMACY_OK)
     s = drain;
   damacy_nvtx_range_pop(); // kick_input

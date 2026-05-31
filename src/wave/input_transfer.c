@@ -93,12 +93,12 @@ gds_submit_reads(struct store* store,
 }
 
 static enum damacy_status
-h2d_queue_ready(CUstream stream,
+h2d_queue_input(CUstream stream,
                 struct damacy_wave* wave,
-                struct input_transfer_submit_state* state)
+                struct input_transfer_queue_state* state)
 {
   CU(CudaFail, cuEventRecord(wave->ev.input_start, stream));
-  state->stream_work_queued = 1;
+  state->queued_stream_work = 1;
   damacy_nvtx_range_push("input_transfer");
   CU(BulkCudaFail,
      cuMemcpyHtoDAsync(CUDPTR(wave->dev_compressed),
@@ -115,12 +115,12 @@ CudaFail:
 }
 
 static enum damacy_status
-gds_queue_ready(CUstream stream,
+gds_queue_input(CUstream stream,
                 struct damacy_wave* wave,
-                struct input_transfer_submit_state* state)
+                struct input_transfer_queue_state* state)
 {
   CU(CudaFail, cuEventRecord(wave->ev.input_start, stream));
-  state->stream_work_queued = 1;
+  state->queued_stream_work = 1;
   damacy_nvtx_range_push("input_transfer");
   CU(BulkCudaFail, cuEventRecord(wave->ev.input_transfer_done, stream));
   damacy_nvtx_range_pop(); // input_transfer
@@ -169,7 +169,7 @@ static const struct input_transfer_ops k_h2d = {
   .read_base = h2d_read_base,
   .wave_input = h2d_wave_input,
   .submit_reads = h2d_submit_reads,
-  .queue_ready = h2d_queue_ready,
+  .queue_input = h2d_queue_input,
   .slot_reuse_ready = h2d_slot_reuse_ready,
 };
 
@@ -180,7 +180,7 @@ static const struct input_transfer_ops k_gds = {
   .read_base = gds_read_base,
   .wave_input = gds_wave_input,
   .submit_reads = gds_submit_reads,
-  .queue_ready = gds_queue_ready,
+  .queue_input = gds_queue_input,
   .slot_reuse_ready = gds_slot_reuse_ready,
 };
 
