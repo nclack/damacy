@@ -694,45 +694,67 @@ build_assemble_meta(const struct wave_pool* wp, struct damacy_wave* wave)
   wave->assemble_max_blocks_per_chunk = max_bpc;
 }
 
-// Nvcomp + status_reduce on stream_decode. status_reduce stays here
-// (shared d_statuses across waves; stream_decode FIFO orders it).
+static CUevent
+decode_anchor_reserve(struct wave_pool* wp,
+                      struct damacy_wave* wave,
+                      size_t* anchor_idx)
+{
+  size_t prev_idx = wp->decode_done_ring_idx;
+  *anchor_idx = (prev_idx + 1) % countof(wp->decode_done_ring);
+  wave->prev_decode_anchor = wp->decode_done_ring[prev_idx];
+  return wp->decode_done_ring[*anchor_idx];
+}
+
+static void
+decode_anchor_commit(struct wave_pool* wp, size_t anchor_idx)
+{
+  wp->decode_done_ring_idx = (uint8_t)anchor_idx;
+}
+
+static enum damacy_status
+queue_zstd_decode(struct wave_pool* wp,
+                  struct damacy_wave* wave,
+                  const struct blosc1_totals* tot)
+{
+  if (tot->n_zstd == 0)
+    return DAMACY_OK;
+
+  CUstream s = wp->stream_decode;
+  uint32_t* d_err = &wave->d_blosc1_totals->n_codec_errors;
+  if (decoder_zstd_batch_device(wp->zstd_decoder,
+                                s,
+                                wave->zstd_fan.d_comp_ptrs,
+                                wave->zstd_fan.d_comp_sizes,
+                                wave->zstd_fan.d_decomp_ptrs,
+                                wave->zstd_fan.d_decomp_buf_sizes,
+                                tot->n_zstd))
+    return DAMACY_DECODE;
+  if (decoder_status_reduce_launch(
+        s, decoder_zstd_d_statuses(wp->zstd_decoder), d_err, tot->n_zstd))
+    return DAMACY_DECODE;
+  return DAMACY_OK;
+}
+
 static enum damacy_status
 kick_decode(struct wave_pool* wp,
             struct damacy_wave* wave,
             const struct blosc1_totals* tot)
 {
   CUstream s = wp->stream_decode;
-  uint32_t* d_err = &wave->d_blosc1_totals->n_codec_errors;
   enum damacy_status rs;
   damacy_nvtx_range_pushf("kick_decode/w%td", wave_index_of(wp, wave));
-  // Borrow the most-recently-anchored slot for our gap measurement, then
-  // claim the next slot for our own anchor (recorded after decode_done).
-  // First kick's prev points at a never-recorded slot — cuEventElapsedTime
-  // returns NOT_READY and drain skips.
-  size_t prev_idx = wp->decode_done_ring_idx;
-  size_t this_idx = (prev_idx + 1) % countof(wp->decode_done_ring);
-  wave->prev_decode_anchor = wp->decode_done_ring[prev_idx];
+  size_t anchor_idx = 0;
+  CUevent anchor = decode_anchor_reserve(wp, wave, &anchor_idx);
+
   CU(CudaFail, cuEventRecord(wave->ev.decomp_start, s));
-  if (tot->n_zstd > 0) {
-    if (decoder_zstd_batch_device(wp->zstd_decoder,
-                                  s,
-                                  wave->zstd_fan.d_comp_ptrs,
-                                  wave->zstd_fan.d_comp_sizes,
-                                  wave->zstd_fan.d_decomp_ptrs,
-                                  wave->zstd_fan.d_decomp_buf_sizes,
-                                  tot->n_zstd))
-      goto DecodeFail;
-    if (decoder_status_reduce_launch(
-          s, decoder_zstd_d_statuses(wp->zstd_decoder), d_err, tot->n_zstd))
-      goto DecodeFail;
-  }
+  rs = queue_zstd_decode(wp, wave, tot);
+  if (rs != DAMACY_OK)
+    goto Done;
+
   CU(CudaFail, cuEventRecord(wave->ev.decode_done, s));
-  CU(CudaFail, cuEventRecord(wp->decode_done_ring[this_idx], s));
-  wp->decode_done_ring_idx = this_idx;
+  CU(CudaFail, cuEventRecord(anchor, s));
+  decode_anchor_commit(wp, anchor_idx);
   rs = DAMACY_OK;
-  goto Done;
-DecodeFail:
-  rs = DAMACY_DECODE;
   goto Done;
 CudaFail:
   rs = DAMACY_CUDA;
