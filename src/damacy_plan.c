@@ -45,7 +45,7 @@ batch_pool_allocate(struct damacy* self)
 // --- plan: accumulate [locked] → run sealed [unlocked] → commit [locked] ----
 // Ready samples are staged cheaply while the batch is still open. Only a
 // sealed full/flush batch enters BATCH_PLANNING; plan_run then does planner
-// CPU work + sample_plans H2D off scheduler_lock. Pop and flush treat
+// CPU work + sample_plans upload off scheduler_lock. Pop and flush treat
 // BATCH_PLANNING as "planner work is outstanding".
 
 static void

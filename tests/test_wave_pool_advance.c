@@ -138,7 +138,7 @@ test_freed_wave_does_not_bind_until_next_tick(void)
 }
 
 static int
-test_failed_h2d_submit_drains_before_unbind(void)
+test_failed_host_staging_submit_drains_before_unbind(void)
 {
   struct wave_pool wp;
   struct damacy_batch_pool batch_pool;
@@ -167,7 +167,7 @@ test_failed_h2d_submit_drains_before_unbind(void)
                         4096,
                         4096,
                         4096,
-                        input_transfer_h2d(),
+                        input_transfer_host_staging(),
                         0,
                         budget) == 0);
 
@@ -214,7 +214,7 @@ test_failed_h2d_submit_drains_before_unbind(void)
 }
 
 static int
-test_failed_bulk_h2d_submit_drains_before_unbind(void)
+test_failed_bulk_host_staging_submit_drains_before_unbind(void)
 {
   struct wave_pool wp;
   struct damacy_batch_pool batch_pool;
@@ -243,7 +243,7 @@ test_failed_bulk_h2d_submit_drains_before_unbind(void)
                         4096,
                         4096,
                         4096,
-                        input_transfer_h2d(),
+                        input_transfer_host_staging(),
                         0,
                         budget) == 0);
 
@@ -293,14 +293,14 @@ test_failed_bulk_h2d_submit_drains_before_unbind(void)
 }
 
 static int
-test_h2d_slot_releases_after_input_transfer_done(void)
+test_host_staging_slot_releases_after_input_transfer_done(void)
 {
   CUstream stream = NULL;
   EXPECT(cuStreamCreate(&stream, CU_STREAM_DEFAULT) == CUDA_SUCCESS);
 
   struct wave_pool wp;
   memset(&wp, 0, sizeof(wp));
-  wp.input = input_transfer_h2d();
+  wp.input = input_transfer_host_staging();
   wp.n_slots = 1;
   wp.waves[0].state = WAVE_INPUT;
   wp.waves[0].bound_slot = 0;
@@ -428,9 +428,9 @@ main(void)
     return 0;
   }
   RUN(test_freed_wave_does_not_bind_until_next_tick);
-  RUN(test_failed_h2d_submit_drains_before_unbind);
-  RUN(test_failed_bulk_h2d_submit_drains_before_unbind);
-  RUN(test_h2d_slot_releases_after_input_transfer_done);
+  RUN(test_failed_host_staging_submit_drains_before_unbind);
+  RUN(test_failed_bulk_host_staging_submit_drains_before_unbind);
+  RUN(test_host_staging_slot_releases_after_input_transfer_done);
   RUN(test_gds_slot_stays_bound_before_input_parse_done);
   RUN(test_gds_slot_releases_after_decomp_end);
   printf("all wave_pool_advance tests passed\n");

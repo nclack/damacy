@@ -8,7 +8,7 @@
 #include "wave/wave.h"
 
 static struct input_transfer_resources
-h2d_resources(uint8_t n_slots, uint64_t bytes_per_wave)
+host_staging_resources(uint8_t n_slots, uint64_t bytes_per_wave)
 {
   (void)n_slots;
   return (struct input_transfer_resources){
@@ -38,7 +38,7 @@ input_transfer_resources(const struct input_transfer_ops* ops,
 }
 
 static void
-h2d_bind_stream(struct store* store, CUstream stream)
+host_staging_bind_stream(struct store* store, CUstream stream)
 {
   (void)store;
   (void)stream;
@@ -51,7 +51,7 @@ gds_bind_stream(struct store* store, CUstream stream)
 }
 
 static void*
-h2d_read_base(struct input_slot* slot)
+host_staging_read_base(struct input_slot* slot)
 {
   return slot->buf;
 }
@@ -63,7 +63,7 @@ gds_read_base(struct input_slot* slot)
 }
 
 static void*
-h2d_wave_input(struct damacy_wave* wave, const struct input_slot* slot)
+host_staging_wave_input(struct damacy_wave* wave, const struct input_slot* slot)
 {
   (void)slot;
   return wave->dev_compressed_owned;
@@ -112,9 +112,9 @@ input_transfer_queue_marker(CUstream stream,
 }
 
 static enum damacy_status
-h2d_queue_input(CUstream stream,
-                struct damacy_wave* wave,
-                uint8_t* queued_stream_work)
+host_staging_queue_input(CUstream stream,
+                         struct damacy_wave* wave,
+                         uint8_t* queued_stream_work)
 {
   enum damacy_status s = input_transfer_begin(stream, wave, queued_stream_work);
   if (s != DAMACY_OK)
@@ -147,7 +147,7 @@ event_ready(CUevent ev, int* ready)
 }
 
 static enum damacy_status
-h2d_slot_reuse_ready(const struct damacy_wave* wave, int* ready)
+host_staging_slot_reuse_ready(const struct damacy_wave* wave, int* ready)
 {
   return event_ready(wave->ev.input_transfer_done, ready);
 }
@@ -162,15 +162,15 @@ gds_slot_reuse_ready(const struct damacy_wave* wave, int* ready)
   return event_ready(wave->ev.decomp_end, ready);
 }
 
-static const struct input_transfer_ops k_h2d = {
-  .name = "h2d",
-  .resources = h2d_resources,
-  .bind_stream = h2d_bind_stream,
-  .read_base = h2d_read_base,
-  .wave_input = h2d_wave_input,
+static const struct input_transfer_ops k_host_staging = {
+  .name = "host_staging",
+  .resources = host_staging_resources,
+  .bind_stream = host_staging_bind_stream,
+  .read_base = host_staging_read_base,
+  .wave_input = host_staging_wave_input,
   .submit_reads = store_read_submit,
-  .queue_input = h2d_queue_input,
-  .slot_reuse_ready = h2d_slot_reuse_ready,
+  .queue_input = host_staging_queue_input,
+  .slot_reuse_ready = host_staging_slot_reuse_ready,
 };
 
 static const struct input_transfer_ops k_gds = {
@@ -185,9 +185,9 @@ static const struct input_transfer_ops k_gds = {
 };
 
 const struct input_transfer_ops*
-input_transfer_h2d(void)
+input_transfer_host_staging(void)
 {
-  return &k_h2d;
+  return &k_host_staging;
 }
 
 const struct input_transfer_ops*

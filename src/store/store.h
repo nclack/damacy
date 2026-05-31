@@ -47,7 +47,7 @@ extern "C"
   // One positional read against the store. `key` is interpreted by the
   // backend (FS: relative path under root). `dst` must be writable for at
   // least `len` bytes; the caller owns the memory and is responsible for
-  // pinning it if it will later be used as a CUDA H2D source.
+  // pinning it if it will later be used as a CUDA host-to-device source.
   struct store_read
   {
     const char* key;
@@ -75,7 +75,8 @@ extern "C"
   // The store routes the read directly into GPU memory when supported
   // (NVIDIA GDS / cuFile); otherwise returns an event with seq == 0
   // indicating failure. Callers should query store_supports_gds first
-  // and fall back to store_read_submit + an H2D copy when unsupported.
+  // and fall back to store_read_submit + a host-to-device copy when
+  // unsupported.
   struct store_event store_read_submit_dev(struct store* s,
                                            const struct store_read* reads,
                                            size_t n);

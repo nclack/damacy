@@ -218,7 +218,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   const uint8_t resolved_host_buffer_waves = resolve_host_buffer_waves(cfg);
   const uint8_t want_gds = resolve_enable_gds(cfg);
   const struct input_transfer_ops* input =
-    want_gds ? input_transfer_gds() : input_transfer_h2d();
+    want_gds ? input_transfer_gds() : input_transfer_host_staging();
   const struct input_transfer_resources min_input =
     input_transfer_resources(input, resolved_host_buffer_waves, 0);
   struct wave_pool_sizing sizing = { 0 };
@@ -534,7 +534,7 @@ damacy_config_describe(const struct damacy_config* cfg)
   const uint8_t resolved_host_buffer_waves = resolve_host_buffer_waves(cfg);
   const uint8_t want_gds = resolve_enable_gds(cfg);
   const struct input_transfer_ops* input =
-    want_gds ? input_transfer_gds() : input_transfer_h2d();
+    want_gds ? input_transfer_gds() : input_transfer_host_staging();
   const struct input_transfer_resources min_input =
     input_transfer_resources(input, resolved_host_buffer_waves, 0);
   struct wave_pool_sizing sizing = { 0 };

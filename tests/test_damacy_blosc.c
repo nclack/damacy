@@ -346,7 +346,7 @@ test_multi_wave_per_batch(void)
 
 // Regression for the per-wave-fanout corruption bug: pre-fix, growing
 // wave A's fanout reallocated wave B's fanout in lockstep, corrupting
-// any in-flight H2D of B's SOA. Fixture: 65 inner chunks × 16 blocks
+// any in-flight upload of B's SOA. Fixture: 65 inner chunks × 16 blocks
 // each = 1040 substreams per wave > DAMACY_BLOSC_ZSTD_INITIAL_BATCH_CAP
 // (1024), forcing both the per-wave fanout SOA and the pool-shared
 // decoder scratch to grow on first dispatch. clevel=1 splits each

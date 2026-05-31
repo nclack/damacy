@@ -38,7 +38,7 @@ struct input_transfer_ops
 };
 
 const struct input_transfer_ops*
-input_transfer_h2d(void);
+input_transfer_host_staging(void);
 
 const struct input_transfer_ops*
 input_transfer_gds(void);

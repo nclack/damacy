@@ -45,7 +45,7 @@ fanout_alloc_pinned(struct nvcomp_fanout_host* h,
 void
 fanout_free_pinned(struct nvcomp_fanout_host* h, struct nvcomp_fanout* d);
 
-// H2D the 4 SOA arrays in lockstep onto `s`.
+// Copy the 4 SOA arrays in lockstep onto `s`.
 enum damacy_status
 fanout_upload(CUstream s,
               const struct nvcomp_fanout* d,
