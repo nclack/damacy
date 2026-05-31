@@ -10,6 +10,8 @@
 #include <cuda.h>
 #include <stdint.h>
 
+struct input_slot;
+
 enum wave_state
 {
   WAVE_FREE = 0,
@@ -29,9 +31,8 @@ struct damacy_wave
   uint64_t input_used_bytes;
   void* host_input; // borrowed from slot; NULL on GDS or when unbound
 
-  // Wave-owned device buffers (per-wave; not pooled).
-  // dev_compressed is active input; dev_compressed_owned is NULL when
-  // that input is borrowed from the bound slot.
+  // dev_compressed points at the active compressed input. It may be the
+  // wave-owned buffer or a bound input slot buffer.
   void* dev_compressed;
   void* dev_compressed_owned;
   void* dev_decompressed; // decode arena
@@ -109,3 +110,12 @@ wave_init(struct damacy_wave* wave,
 // context is no longer valid) but releases the non-pinned heap.
 void
 wave_destroy(struct damacy_wave* wave, int cuda_skip);
+
+void
+wave_bind_input_slot(struct damacy_wave* wave,
+                     int slot_idx,
+                     const struct input_slot* slot,
+                     void* dev_compressed);
+
+void
+wave_unbind_input_slot(struct damacy_wave* wave);

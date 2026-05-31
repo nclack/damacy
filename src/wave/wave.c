@@ -6,6 +6,7 @@
 #include "fanout.h"
 #include "util/cuda_check.h"
 #include "util/prelude.h"
+#include "wave/input_slot.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -146,4 +147,33 @@ wave_destroy(struct damacy_wave* wave, int cuda_skip)
         cuEventDestroy_v2(*events[i]);
   }
   memset(wave, 0, sizeof(*wave));
+}
+
+void
+wave_bind_input_slot(struct damacy_wave* wave,
+                     int slot_idx,
+                     const struct input_slot* slot,
+                     void* dev_compressed)
+{
+  wave->bound_slot = (int8_t)slot_idx;
+  wave->host_input = slot->buf;
+  wave->dev_compressed = dev_compressed;
+  wave->render_job_idx = slot->render_job_idx;
+  wave->batch_pool_slot = slot->batch_pool_slot;
+  wave->batch_chunk_offset = slot->batch_chunk_offset;
+  wave->n_chunks = slot->n_chunks;
+  wave->input_used_bytes = slot->used_bytes;
+  wave->io_bytes = slot->io_bytes;
+  wave->io_ms = slot->io_ms;
+  wave->decomp_in_bytes = 0;
+  wave->decomp_out_bytes = 0;
+  wave->assemble_out_bytes = 0;
+}
+
+void
+wave_unbind_input_slot(struct damacy_wave* wave)
+{
+  wave->bound_slot = -1;
+  wave->host_input = NULL;
+  wave->dev_compressed = wave->dev_compressed_owned;
 }

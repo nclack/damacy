@@ -893,12 +893,9 @@ slot_rollback_peel(struct wave_pool* wp,
                    const struct wave_desc* desc,
                    int* changed);
 static void
-wave_bind_slot_fields(struct wave_pool* wp,
-                      struct damacy_wave* wave,
-                      const struct input_slot* slot,
-                      int slot_idx);
-static void
 wave_unbind_slot(struct wave_pool* wp, struct damacy_wave* wave, int* changed);
+static void
+record_wave_input_bytes(struct damacy_wave* wave, const struct render_job* job);
 
 struct wave_pool_peel_ticket
 wave_pool_peel_reserve(struct wave_pool* wp,
@@ -993,13 +990,8 @@ bind_slot_to_wave(struct wave_pool* wp, struct damacy_wave* wave, int slot_idx)
     return DAMACY_INVAL;
   }
   metric_record(&wp->stats->bind_wait, input_slot_bind_wait_ms(slot), 0, 0);
-  wave_bind_slot_fields(wp, wave, slot, slot_idx);
-
-  for (uint32_t i = 0; i < wave->n_chunks; ++i) {
-    struct chunk_plan* c = &job->chunk_plans[wave->batch_chunk_offset + i];
-    wave->decomp_in_bytes += c->compressed_nbytes;
-    wave->decomp_out_bytes += c->decompressed_nbytes;
-  }
+  wave_bind_input_slot(wave, slot_idx, slot, wp->input->wave_input(wave, slot));
+  record_wave_input_bytes(wave, job);
 
   input_slot_mark_busy(slot);
   build_assemble_meta(wp, wave);
@@ -1033,35 +1025,23 @@ slot_rollback_peel(struct wave_pool* wp,
 }
 
 static void
-wave_bind_slot_fields(struct wave_pool* wp,
-                      struct damacy_wave* wave,
-                      const struct input_slot* slot,
-                      int slot_idx)
-{
-  wave->bound_slot = (int8_t)slot_idx;
-  wave->host_input = slot->buf;
-  wave->dev_compressed = wp->input->wave_input(wave, slot);
-  wave->render_job_idx = slot->render_job_idx;
-  wave->batch_pool_slot = slot->batch_pool_slot;
-  wave->batch_chunk_offset = slot->batch_chunk_offset;
-  wave->n_chunks = slot->n_chunks;
-  wave->input_used_bytes = slot->used_bytes;
-  wave->io_bytes = slot->io_bytes;
-  wave->io_ms = slot->io_ms;
-  wave->decomp_in_bytes = 0;
-  wave->decomp_out_bytes = 0;
-  wave->assemble_out_bytes = 0;
-}
-
-static void
 wave_unbind_slot(struct wave_pool* wp, struct damacy_wave* wave, int* changed)
 {
   if (wave->bound_slot >= 0)
     input_slot_release(&wp->slots[wave->bound_slot]);
-  wave->bound_slot = -1;
-  wave->host_input = NULL;
-  wave->dev_compressed = wave->dev_compressed_owned;
+  wave_unbind_input_slot(wave);
   mark_changed(changed);
+}
+
+static void
+record_wave_input_bytes(struct damacy_wave* wave, const struct render_job* job)
+{
+  for (uint32_t i = 0; i < wave->n_chunks; ++i) {
+    const struct chunk_plan* c =
+      &job->chunk_plans[wave->batch_chunk_offset + i];
+    wave->decomp_in_bytes += c->compressed_nbytes;
+    wave->decomp_out_bytes += c->decompressed_nbytes;
+  }
 }
 
 static enum damacy_status
