@@ -638,6 +638,37 @@ Error:
 }
 
 static void
+set_assemble_chunk_base(struct assemble_chunk* out,
+                        const struct chunk_plan* c,
+                        uint8_t spatial_rank,
+                        uint8_t force_fill)
+{
+  out->src_base_byte_off = (uint64_t)c->dev_decompressed_offset;
+  out->sample_idx_in_batch = c->sample_idx_in_batch;
+  out->is_fill = c->is_fill | force_fill;
+  memcpy(out->chunk_d, c->chunk_d, spatial_rank * sizeof(*c->chunk_d));
+}
+
+static uint64_t
+chunk_output_elements(const struct chunk_plan* c,
+                      const struct sample_plan* sp,
+                      uint8_t spatial_rank)
+{
+  uint64_t out = 1;
+  for (uint8_t d = 0; d < spatial_rank; ++d) {
+    int64_t chunk_shape = (int64_t)sp->dims[d].chunk_shape;
+    int64_t origin =
+      (int64_t)c->chunk_d[d] * chunk_shape - sp->dims[d].aabb_lo_relative;
+    int64_t lo = origin > 0 ? origin : 0;
+    int64_t hi = origin + chunk_shape < sp->dims[d].aabb_extent
+                   ? origin + chunk_shape
+                   : sp->dims[d].aabb_extent;
+    out *= (uint64_t)(hi > lo ? hi - lo : 0);
+  }
+  return out;
+}
+
+static void
 build_assemble_meta(const struct wave_pool* wp, struct damacy_wave* wave)
 {
   struct render_job* job = wave_job(wp, wave);
@@ -647,32 +678,16 @@ build_assemble_meta(const struct wave_pool* wp, struct damacy_wave* wave)
   wave->assemble_rank = spatial_rank;
   for (uint32_t i = 0; i < wave->n_chunks; ++i) {
     struct chunk_plan* c = &job->chunk_plans[wave->batch_chunk_offset + i];
-    struct assemble_chunk* a = &wave->h_assemble_chunks[i];
-    a->src_base_byte_off = (uint64_t)c->dev_decompressed_offset;
-    a->sample_idx_in_batch = c->sample_idx_in_batch;
-    a->is_fill = c->is_fill | wp->bypass_decode;
-    for (uint8_t d = 0; d < spatial_rank; ++d)
-      a->chunk_d[d] = c->chunk_d[d];
-
     const struct sample_plan* sp = &job->sample_plans[c->sample_idx_in_batch];
+    set_assemble_chunk_base(
+      &wave->h_assemble_chunks[i], c, spatial_rank, wp->bypass_decode);
+
     uint32_t bpc = assemble_blocks_per_chunk(spatial_rank, sp->dims);
     if (bpc > max_bpc)
       max_bpc = bpc;
 
-    // Effective in-AABB extent for this chunk along each axis.
-    uint64_t eff = 1;
-    for (uint8_t d = 0; d < spatial_rank; ++d) {
-      int64_t S = (int64_t)sp->dims[d].chunk_shape;
-      int64_t origin_in_sample =
-        (int64_t)c->chunk_d[d] * S - sp->dims[d].aabb_lo_relative;
-      int64_t lo = origin_in_sample > 0 ? origin_in_sample : 0;
-      int64_t hi = origin_in_sample + S < sp->dims[d].aabb_extent
-                     ? origin_in_sample + S
-                     : sp->dims[d].aabb_extent;
-      int64_t extent = hi > lo ? hi - lo : 0;
-      eff *= (uint64_t)extent;
-    }
-    wave->assemble_out_bytes += eff * (uint64_t)bpe;
+    wave->assemble_out_bytes +=
+      chunk_output_elements(c, sp, spatial_rank) * (uint64_t)bpe;
   }
   if (max_bpc == 0)
     max_bpc = 1;
@@ -726,20 +741,12 @@ Done:
   return rs;
 }
 
-// Post-decode + 4B D2H + assemble on stream_post, gated on
-// ev.decode_done. Lets wave N+1's decode on stream_decode overlap
-// wave N's assemble.
 static enum damacy_status
-kick_assemble(struct wave_pool* wp,
-              struct damacy_wave* wave,
-              const struct blosc1_totals* tot)
+queue_post_decode(struct wave_pool* wp,
+                  struct damacy_wave* wave,
+                  const struct blosc1_totals* tot)
 {
   CUstream s = wp->stream_post;
-  struct render_job* job = wave_job(wp, wave);
-  struct damacy_batch_slot* slot = &wp->pool->slots[wave->batch_pool_slot];
-  enum damacy_status rs;
-  damacy_nvtx_range_pushf("kick_assemble/w%td", wave_index_of(wp, wave));
-
   CU(CudaFail, cuStreamWaitEvent(s, wave->ev.decode_done, 0));
 
   if (tot->n_memcpy > 0 &&
@@ -752,6 +759,19 @@ kick_assemble(struct wave_pool* wp,
                        s));
   CU(CudaFail, cuEventRecord(wave->ev.decomp_end, s));
 
+  return DAMACY_OK;
+DecodeFail:
+  return DAMACY_DECODE;
+CudaFail:
+  return DAMACY_CUDA;
+}
+
+static enum damacy_status
+queue_assemble_output(struct wave_pool* wp, struct damacy_wave* wave)
+{
+  CUstream s = wp->stream_post;
+  struct render_job* job = wave_job(wp, wave);
+  struct damacy_batch_slot* batch = &wp->pool->slots[wave->batch_pool_slot];
   CU(CudaFail, cuEventRecord(wave->ev.asm_start, s));
   if (assemble_launch(s,
                       wave->assemble_rank,
@@ -761,17 +781,28 @@ kick_assemble(struct wave_pool* wp,
                       wave->n_chunks,
                       wave->assemble_max_blocks_per_chunk,
                       wave->dev_decompressed,
-                      slot->dev_ptr,
+                      batch->dev_ptr,
                       wp->dtype))
     goto CudaFail;
   CU(CudaFail, cuEventRecord(wave->ev.asm_end, s));
-  rs = DAMACY_OK;
-  goto Done;
-DecodeFail:
-  rs = DAMACY_DECODE;
-  goto Done;
+  return DAMACY_OK;
 CudaFail:
-  rs = DAMACY_CUDA;
+  return DAMACY_CUDA;
+}
+
+static enum damacy_status
+kick_assemble(struct wave_pool* wp,
+              struct damacy_wave* wave,
+              const struct blosc1_totals* tot)
+{
+  enum damacy_status rs;
+  damacy_nvtx_range_pushf("kick_assemble/w%td", wave_index_of(wp, wave));
+
+  rs = queue_post_decode(wp, wave, tot);
+  if (rs != DAMACY_OK)
+    goto Done;
+
+  rs = queue_assemble_output(wp, wave);
 Done:
   damacy_nvtx_range_pop();
   return rs;
