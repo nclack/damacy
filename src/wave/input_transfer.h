@@ -1,4 +1,4 @@
-// Host-staging and GDS compressed-input transfer operations.
+// Input transfer operations.
 #pragma once
 
 #include "damacy.h"

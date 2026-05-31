@@ -93,24 +93,46 @@ gds_submit_reads(struct store* store,
 }
 
 static enum damacy_status
-h2d_queue_input(CUstream stream,
-                struct damacy_wave* wave,
-                struct input_transfer_queue_state* state)
+input_transfer_begin(CUstream stream,
+                     struct damacy_wave* wave,
+                     struct input_transfer_queue_state* state)
 {
   CU(CudaFail, cuEventRecord(wave->ev.input_start, stream));
   state->queued_stream_work = 1;
   damacy_nvtx_range_push("input_transfer");
+  return DAMACY_OK;
+CudaFail:
+  return DAMACY_CUDA;
+}
+
+static enum damacy_status
+input_transfer_finish(CUstream stream, struct damacy_wave* wave)
+{
+  CU(CudaFail, cuEventRecord(wave->ev.input_transfer_done, stream));
+  damacy_nvtx_range_pop();
+  return DAMACY_OK;
+CudaFail:
+  damacy_nvtx_range_pop();
+  return DAMACY_CUDA;
+}
+
+static enum damacy_status
+h2d_queue_input(CUstream stream,
+                struct damacy_wave* wave,
+                struct input_transfer_queue_state* state)
+{
+  enum damacy_status s = input_transfer_begin(stream, wave, state);
+  if (s != DAMACY_OK)
+    return s;
+
   CU(BulkCudaFail,
      cuMemcpyHtoDAsync(CUDPTR(wave->dev_compressed),
                        wave->host_input,
                        wave->input_used_bytes,
                        stream));
-  CU(BulkCudaFail, cuEventRecord(wave->ev.input_transfer_done, stream));
-  damacy_nvtx_range_pop(); // input_transfer
-  return DAMACY_OK;
+  return input_transfer_finish(stream, wave);
 BulkCudaFail:
-  damacy_nvtx_range_pop(); // input_transfer
-CudaFail:
+  damacy_nvtx_range_pop();
   return DAMACY_CUDA;
 }
 
@@ -119,16 +141,10 @@ gds_queue_input(CUstream stream,
                 struct damacy_wave* wave,
                 struct input_transfer_queue_state* state)
 {
-  CU(CudaFail, cuEventRecord(wave->ev.input_start, stream));
-  state->queued_stream_work = 1;
-  damacy_nvtx_range_push("input_transfer");
-  CU(BulkCudaFail, cuEventRecord(wave->ev.input_transfer_done, stream));
-  damacy_nvtx_range_pop(); // input_transfer
-  return DAMACY_OK;
-BulkCudaFail:
-  damacy_nvtx_range_pop(); // input_transfer
-CudaFail:
-  return DAMACY_CUDA;
+  enum damacy_status s = input_transfer_begin(stream, wave, state);
+  if (s != DAMACY_OK)
+    return s;
+  return input_transfer_finish(stream, wave);
 }
 
 static enum damacy_status
