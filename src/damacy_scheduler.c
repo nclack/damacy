@@ -31,9 +31,9 @@ kick_peel_into_free_slots(struct damacy* self, int* changed)
       wave_pool_peel_reserve(&self->wave_pool, (uint16_t)target_job, &err);
     if (err != DAMACY_OK)
       return err;
-    if (t.slot_idx < 0)
+    if (t.input_slot_idx < 0)
       break;
-    damacy_nvtx_range_pushf("peel/slot%d", t.slot_idx);
+    damacy_nvtx_range_pushf("peel/slot%d", t.input_slot_idx);
     scheduler_unlock(self->sched);
     struct store_event ev = wave_pool_peel_submit(&self->wave_pool, &t);
     scheduler_lock(self->sched);

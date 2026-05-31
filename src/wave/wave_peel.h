@@ -10,10 +10,10 @@ struct wave_pool;
 
 struct wave_pool_peel_ticket
 {
-  int slot_idx;
+  int input_slot_idx;
   uint32_t n_reads;
   struct wave_desc desc;
-  uint8_t consumed;
+  uint8_t committed;
 };
 
 struct wave_pool_peel_ticket

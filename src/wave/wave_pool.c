@@ -1005,9 +1005,9 @@ wave_pool_peel_reserve(struct wave_pool* wp,
                        enum damacy_status* err)
 {
   *err = DAMACY_OK;
-  struct wave_pool_peel_ticket t = { .slot_idx = -1,
+  struct wave_pool_peel_ticket t = { .input_slot_idx = -1,
                                      .n_reads = 0,
-                                     .consumed = 0 };
+                                     .committed = 0 };
   struct render_job* job = render_job_pool_get(wp->render_jobs, render_job_idx);
   if (!job) {
     *err = DAMACY_INVAL;
@@ -1015,10 +1015,10 @@ wave_pool_peel_reserve(struct wave_pool* wp,
   }
   if (!render_job_has_work(job))
     return t;
-  int slot_idx = input_slot_find_free(wp->slots, wp->n_slots);
-  if (slot_idx < 0)
+  int input_slot_idx = input_slot_find_free(wp->slots, wp->n_slots);
+  if (input_slot_idx < 0)
     return t;
-  struct input_slot* slot = &wp->slots[slot_idx];
+  struct input_slot* slot = &wp->slots[input_slot_idx];
 
   const struct wave_pack_limits limits = {
     .input_cap = slot->cap,
@@ -1040,7 +1040,7 @@ wave_pool_peel_reserve(struct wave_pool* wp,
   wp->stats->waves_emitted++;
   wp->stats->chunks_dispatched += desc.n_chunks;
 
-  t.slot_idx = slot_idx;
+  t.input_slot_idx = input_slot_idx;
   t.n_reads = desc.n_reads;
   t.desc = desc;
   return t;
@@ -1050,9 +1050,9 @@ struct store_event
 wave_pool_peel_submit(struct wave_pool* wp,
                       const struct wave_pool_peel_ticket* t)
 {
-  if (t->slot_idx < 0 || t->n_reads == 0)
+  if (t->input_slot_idx < 0 || t->n_reads == 0)
     return (struct store_event){ .seq = 0 };
-  struct input_slot* slot = &wp->slots[t->slot_idx];
+  struct input_slot* slot = &wp->slots[t->input_slot_idx];
   return wp->input->submit_reads(wp->store, slot->store_reads, t->n_reads);
 }
 
@@ -1062,14 +1062,14 @@ wave_pool_peel_commit(struct wave_pool* wp,
                       struct store_event ev,
                       int* changed)
 {
-  if (t->consumed) {
-    log_error("wave: peel_commit called twice on slot %d", t->slot_idx);
+  if (t->committed) {
+    log_error("wave: peel_commit called twice on slot %d", t->input_slot_idx);
     return DAMACY_OK;
   }
-  t->consumed = 1;
-  if (t->slot_idx < 0)
+  t->committed = 1;
+  if (t->input_slot_idx < 0)
     return DAMACY_OK;
-  struct input_slot* slot = &wp->slots[t->slot_idx];
+  struct input_slot* slot = &wp->slots[t->input_slot_idx];
   if (t->n_reads > 0 && ev.seq == 0) {
     slot_rollback_peel(wp, slot, &t->desc, changed);
     return DAMACY_IO;
@@ -1080,11 +1080,13 @@ wave_pool_peel_commit(struct wave_pool* wp,
 }
 
 static enum damacy_status
-bind_slot_to_wave(struct wave_pool* wp, struct damacy_wave* wave, int slot_idx)
+bind_slot_to_wave(struct wave_pool* wp,
+                  struct damacy_wave* wave,
+                  int input_slot_idx)
 {
-  struct input_slot* slot = &wp->slots[slot_idx];
+  struct input_slot* slot = &wp->slots[input_slot_idx];
   damacy_nvtx_range_pushf(
-    "bind/w%td/slot%d", wave_index_of(wp, wave), slot_idx);
+    "bind/w%td/slot%d", wave_index_of(wp, wave), input_slot_idx);
   struct render_job* job =
     render_job_pool_get(wp->render_jobs, slot->render_job_idx);
   if (!job) {
@@ -1092,7 +1094,8 @@ bind_slot_to_wave(struct wave_pool* wp, struct damacy_wave* wave, int slot_idx)
     return DAMACY_INVAL;
   }
   metric_record(&wp->stats->bind_wait, input_slot_bind_wait_ms(slot), 0, 0);
-  wave_bind_input_slot(wave, slot_idx, slot, wp->input->wave_input(wave, slot));
+  wave_bind_input_slot(
+    wave, input_slot_idx, slot, wp->input->wave_input(wave, slot));
   record_wave_input_bytes(wave, job);
 
   input_slot_mark_busy(slot);

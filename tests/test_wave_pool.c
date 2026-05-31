@@ -72,18 +72,18 @@ test_peel_commit_rollback_once(void)
   setup_post_reserve(&wp, &batch_pool, &jobs, &stats, &slot, n_chunks);
 
   // n_reads > 0 + ev.seq == 0 → submit-failure rollback path.
-  struct wave_pool_peel_ticket t = { .slot_idx = 0,
+  struct wave_pool_peel_ticket t = { .input_slot_idx = 0,
                                      .n_reads = 2,
                                      .desc = { .render_job_idx = 0,
                                                .n_chunks = n_chunks,
                                                .prev_n_groups_dispatched = 0 },
-                                     .consumed = 0 };
+                                     .committed = 0 };
   struct store_event ev = { .seq = 0 };
 
   int changed = 0;
   EXPECT(wave_pool_peel_commit(&wp, &t, ev, &changed) == DAMACY_IO);
   EXPECT(changed == 1);
-  EXPECT(t.consumed == 1);
+  EXPECT(t.committed == 1);
   EXPECT(stats.waves_emitted == 0);
   EXPECT(stats.chunks_dispatched == 0);
   EXPECT(job0(&jobs)->n_chunks_dispatched == 0);
@@ -114,15 +114,15 @@ test_peel_commit_success_then_recommit(void)
   setup_post_reserve(&wp, &batch_pool, &jobs, &stats, &slot, n_chunks);
 
   // Successful submit: ev.seq != 0 → slot advances to SLOT_IO.
-  struct wave_pool_peel_ticket t = { .slot_idx = 0,
+  struct wave_pool_peel_ticket t = { .input_slot_idx = 0,
                                      .n_reads = 3,
-                                     .consumed = 0 };
+                                     .committed = 0 };
   struct store_event ev = { .seq = 42 };
 
   int changed = 0;
   EXPECT(wave_pool_peel_commit(&wp, &t, ev, &changed) == DAMACY_OK);
   EXPECT(changed == 1);
-  EXPECT(t.consumed == 1);
+  EXPECT(t.committed == 1);
   EXPECT(wp.slots[0].state == SLOT_IO);
   EXPECT(wp.slots[0].io_event.seq == 42);
   // Success path leaves counters as the reserve set them.
@@ -160,12 +160,12 @@ test_peel_commit_rolls_back_groups(void)
   // Simulate reserve having advanced from group 7 to group 9.
   job0(&jobs)->n_groups_dispatched = 9;
 
-  struct wave_pool_peel_ticket t = { .slot_idx = 0,
+  struct wave_pool_peel_ticket t = { .input_slot_idx = 0,
                                      .n_reads = 1,
                                      .desc = { .render_job_idx = 0,
                                                .n_chunks = n_chunks,
                                                .prev_n_groups_dispatched = 7 },
-                                     .consumed = 0 };
+                                     .committed = 0 };
   struct store_event ev = { .seq = 0 };
 
   int changed = 0;
@@ -244,7 +244,7 @@ test_peel_reserve_defers_oversize_group(void)
   struct wave_pool_peel_ticket t = wave_pool_peel_reserve(&f.wp, 0, &err);
 
   EXPECT(err == DAMACY_OK);
-  EXPECT(t.slot_idx == 0);
+  EXPECT(t.input_slot_idx == 0);
   EXPECT(t.n_reads == 1);
   EXPECT(t.desc.prev_n_groups_dispatched == 0);
   EXPECT(job0(&f.jobs)->n_chunks_dispatched == 1);
@@ -277,7 +277,7 @@ test_peel_reserve_errors_when_first_group_too_big(void)
   damacy_log_set_quiet(0);
 
   EXPECT(err == DAMACY_BUDGET);
-  EXPECT(t.slot_idx == -1);
+  EXPECT(t.input_slot_idx == -1);
   EXPECT(job0(&f.jobs)->n_chunks_dispatched == 0);
   EXPECT(job0(&f.jobs)->n_groups_dispatched == 0);
   return 0;
@@ -286,7 +286,7 @@ test_peel_reserve_errors_when_first_group_too_big(void)
 static int
 test_peel_commit_noop_ticket(void)
 {
-  // slot_idx < 0 means peel_reserve found no work or no free input slot.
+  // input_slot_idx < 0 means peel_reserve found no work or no free input slot.
   // commit must short-circuit before touching anything.
   struct wave_pool wp;
   struct damacy_batch_pool batch_pool;
@@ -300,9 +300,9 @@ test_peel_commit_noop_ticket(void)
   wp.render_jobs = &jobs;
   wp.stats = &stats;
 
-  struct wave_pool_peel_ticket t = { .slot_idx = -1,
+  struct wave_pool_peel_ticket t = { .input_slot_idx = -1,
                                      .n_reads = 0,
-                                     .consumed = 0 };
+                                     .committed = 0 };
   struct store_event ev = { .seq = 0 };
   int changed = 0;
   EXPECT(wave_pool_peel_commit(&wp, &t, ev, &changed) == DAMACY_OK);
