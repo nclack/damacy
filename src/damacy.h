@@ -100,7 +100,7 @@ extern "C"
     uint32_t max_chunk_uncompressed_bytes;
     // 0 → DAMACY_DEFAULT_READ_OP_MAX_BYTES.
     uint64_t max_read_op_bytes;
-    // Pinned-host slab pool depth, in waves. 0 →
+    // Input staging slot count, in waves. 0 →
     // DAMACY_DEFAULT_HOST_BUFFER_WAVES. Clamped to
     // [DAMACY_N_WAVES, DAMACY_MAX_HOST_BUFFER_WAVES].
     uint8_t host_buffer_waves;
@@ -294,9 +294,7 @@ extern "C"
     // Sums to the wave-boundary gap visible in nsys.
     struct damacy_metric decode_gap;
     struct damacy_metric assemble;
-    // Time an input_slot sat in SLOT_READY waiting for a WAVE_FREE
-    // wave to bind to. Non-zero average → more host_buffer_waves slots
-    // would let IO finish further ahead of decode without stalling.
+    // Time an input_slot sat in SLOT_READY waiting for a WAVE_FREE wave.
     struct damacy_metric bind_wait;
     struct damacy_metric pop_wait; // user thread blocked on the scheduler cv
     struct damacy_metric flush_wait;

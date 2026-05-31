@@ -363,9 +363,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   }
 
   s = DAMACY_OOM;
-  // Pin the calling thread to the GPU's NUMA node for the duration of
-  // wave_pool_init so first-touch of pinned-host slabs + per-wave
-  // scratch lands on the right node. Restored immediately after.
+  // Keep first-touch allocations on the GPU's NUMA node.
   {
     struct platform_cpu_mask saved_affinity;
     numa_scope_enter(&self->numa, &saved_affinity);

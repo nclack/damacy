@@ -41,11 +41,7 @@ _Static_assert(DAMACY_DEFAULT_READ_OP_MAX_BYTES <= UINT32_MAX,
 // one slot may be held by the caller while the other accumulates/renders.
 #define DAMACY_N_BATCH_SLOTS 2
 
-// Default depth of the pinned-host slab pool, in waves. = N_WAVES is
-// the minimum; bumping higher lets IO for upcoming waves prefill before
-// a wave struct frees, useful for slow / variable-latency IO backends.
-// On fast local NVMe the extra IO concurrency adds queueing overhead
-// that outweighs the prefill benefit, so the default stays at N_WAVES.
+// Default input staging slot count, in waves.
 #define DAMACY_DEFAULT_HOST_BUFFER_WAVES DAMACY_N_WAVES
 
 // Upper bound on cfg.host_buffer_waves.

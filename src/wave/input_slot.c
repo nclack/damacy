@@ -1,19 +1,19 @@
 #include "input_slot.h"
 
 #include "damacy_limits.h"
+#include "render_job/render_job.h"
 
 #include <cuda.h>
 #include <stdlib.h>
 #include <string.h>
 
 int
-slot_init(struct input_slot* slot,
-          uint32_t max_chunks_per_wave,
-          uint64_t host_cap,
-          uint64_t dev_cap)
+input_slot_init(struct input_slot* slot,
+                uint32_t max_chunks_per_wave,
+                uint64_t host_cap,
+                uint64_t dev_cap)
 {
   memset(slot, 0, sizeof(*slot));
-  // Logical cap is the same regardless of where the bytes land.
   slot->cap = host_cap > 0 ? host_cap : dev_cap;
   if (slot->cap == 0)
     return 1;
@@ -45,7 +45,7 @@ Error:
 }
 
 void
-slot_destroy(struct input_slot* slot, int cuda_skip)
+input_slot_destroy(struct input_slot* slot, int cuda_skip)
 {
   if (!slot)
     return;
@@ -63,7 +63,48 @@ slot_destroy(struct input_slot* slot, int cuda_skip)
 }
 
 void
-slot_release(struct input_slot* slot)
+input_slot_begin_peel(struct input_slot* slot, const struct wave_desc* desc)
+{
+  platform_toc(&slot->io_clock);
+  slot->is_fill_wave = desc->is_fill_wave;
+  slot->render_job_idx = desc->render_job_idx;
+  slot->batch_pool_slot = desc->batch_pool_slot;
+  slot->batch_chunk_offset = desc->batch_chunk_offset;
+  slot->n_chunks = desc->n_chunks;
+  slot->used_bytes = desc->input_used_bytes;
+  slot->io_bytes = desc->io_bytes;
+  slot->state = SLOT_PEELING;
+}
+
+void
+input_slot_commit_io(struct input_slot* slot, struct store_event ev)
+{
+  slot->io_event = ev;
+  slot->state = SLOT_IO;
+}
+
+void
+input_slot_mark_ready(struct input_slot* slot)
+{
+  slot->io_event = (struct store_event){ 0 };
+  slot->io_ms = platform_toc(&slot->io_clock) * 1000.0f;
+  slot->state = SLOT_READY;
+}
+
+void
+input_slot_mark_busy(struct input_slot* slot)
+{
+  slot->state = SLOT_BUSY;
+}
+
+float
+input_slot_bind_wait_ms(struct input_slot* slot)
+{
+  return platform_toc(&slot->io_clock) * 1000.0f;
+}
+
+void
+input_slot_release(struct input_slot* slot)
 {
   slot->state = SLOT_FREE;
   slot->used_bytes = 0;

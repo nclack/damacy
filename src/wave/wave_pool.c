@@ -105,10 +105,10 @@ wave_pool_init(struct wave_pool* wp,
   const struct input_transfer_resources input_resources =
     input_transfer_resources(input, host_buffer_waves, input_staging_per_wave);
   for (uint8_t s = 0; s < host_buffer_waves; ++s)
-    if (slot_init(&wp->slots[s],
-                  max_chunks_per_wave,
-                  input_resources.slot_host_bytes,
-                  input_resources.slot_device_bytes) != 0)
+    if (input_slot_init(&wp->slots[s],
+                        max_chunks_per_wave,
+                        input_resources.slot_host_bytes,
+                        input_resources.slot_device_bytes) != 0)
       goto Fail;
   for (int w = 0; w < DAMACY_N_WAVES; ++w) {
     if (wave_init(&wp->waves[w],
@@ -149,7 +149,7 @@ wave_pool_destroy(struct wave_pool* wp, int cuda_skip)
     // guard inside store_event_discard.
     if (slot->state == SLOT_IO && wp->store)
       store_event_discard(wp->store, slot->io_event);
-    slot_destroy(slot, cuda_skip);
+    input_slot_destroy(slot, cuda_skip);
   }
   decoder_zstd_destroy(wp->zstd_decoder, cuda_skip);
   wp->zstd_decoder = NULL;
@@ -888,20 +888,10 @@ finalize_wave(struct wave_pool* wp, struct damacy_wave* wave)
 static void
 mark_changed(int* changed);
 static void
-slot_begin_peeling(struct wave_pool* wp,
-                   struct input_slot* slot,
-                   const struct wave_desc* desc);
-static void
 slot_rollback_peel(struct wave_pool* wp,
                    struct input_slot* slot,
                    const struct wave_desc* desc,
                    int* changed);
-static void
-slot_commit_io(struct input_slot* slot, struct store_event ev, int* changed);
-static void
-slot_mark_ready(struct input_slot* slot, int* changed);
-static void
-slot_mark_busy(struct input_slot* slot);
 static void
 wave_bind_slot_fields(struct wave_pool* wp,
                       struct damacy_wave* wave,
@@ -909,10 +899,6 @@ wave_bind_slot_fields(struct wave_pool* wp,
                       int slot_idx);
 static void
 wave_unbind_slot(struct wave_pool* wp, struct damacy_wave* wave, int* changed);
-
-// --- peel: reserve [locked] → submit [unlocked] → commit [locked] -----------
-// submit does the async IO submit off the scheduler_lock. The slot
-// sits in SLOT_PEELING for the window so nothing else binds it.
 
 struct wave_pool_peel_ticket
 wave_pool_peel_reserve(struct wave_pool* wp,
@@ -951,7 +937,9 @@ wave_pool_peel_reserve(struct wave_pool* wp,
     *err = s;
     return t;
   }
-  slot_begin_peeling(wp, slot, &desc);
+  input_slot_begin_peel(slot, &desc);
+  wp->stats->waves_emitted++;
+  wp->stats->chunks_dispatched += desc.n_chunks;
 
   t.slot_idx = slot_idx;
   t.n_reads = desc.n_reads;
@@ -987,7 +975,8 @@ wave_pool_peel_commit(struct wave_pool* wp,
     slot_rollback_peel(wp, slot, &t->desc, changed);
     return DAMACY_IO;
   }
-  slot_commit_io(slot, ev, changed);
+  input_slot_commit_io(slot, ev);
+  mark_changed(changed);
   return DAMACY_OK;
 }
 
@@ -1003,8 +992,7 @@ bind_slot_to_wave(struct wave_pool* wp, struct damacy_wave* wave, int slot_idx)
     damacy_nvtx_range_pop();
     return DAMACY_INVAL;
   }
-  metric_record(
-    &wp->stats->bind_wait, platform_toc(&slot->io_clock) * 1000.0f, 0, 0);
+  metric_record(&wp->stats->bind_wait, input_slot_bind_wait_ms(slot), 0, 0);
   wave_bind_slot_fields(wp, wave, slot, slot_idx);
 
   for (uint32_t i = 0; i < wave->n_chunks; ++i) {
@@ -1013,7 +1001,7 @@ bind_slot_to_wave(struct wave_pool* wp, struct damacy_wave* wave, int slot_idx)
     wave->decomp_out_bytes += c->decompressed_nbytes;
   }
 
-  slot_mark_busy(slot);
+  input_slot_mark_busy(slot);
   build_assemble_meta(wp, wave);
   enum damacy_status s = kick_input(wp, wave);
   if (s != DAMACY_OK) {
@@ -1031,24 +1019,6 @@ mark_changed(int* changed)
 }
 
 static void
-slot_begin_peeling(struct wave_pool* wp,
-                   struct input_slot* slot,
-                   const struct wave_desc* desc)
-{
-  platform_toc(&slot->io_clock);
-  slot->is_fill_wave = desc->is_fill_wave;
-  slot->render_job_idx = desc->render_job_idx;
-  slot->batch_pool_slot = desc->batch_pool_slot;
-  slot->batch_chunk_offset = desc->batch_chunk_offset;
-  slot->n_chunks = desc->n_chunks;
-  slot->used_bytes = desc->input_used_bytes;
-  slot->io_bytes = desc->io_bytes;
-  slot->state = SLOT_PEELING;
-  wp->stats->waves_emitted++;
-  wp->stats->chunks_dispatched += desc->n_chunks;
-}
-
-static void
 slot_rollback_peel(struct wave_pool* wp,
                    struct input_slot* slot,
                    const struct wave_desc* desc,
@@ -1058,26 +1028,7 @@ slot_rollback_peel(struct wave_pool* wp,
     render_job_pool_get(wp->render_jobs, slot->render_job_idx), desc);
   wp->stats->waves_emitted--;
   wp->stats->chunks_dispatched -= slot->n_chunks;
-  slot_release(slot);
-  mark_changed(changed);
-}
-
-static void
-slot_commit_io(struct input_slot* slot, struct store_event ev, int* changed)
-{
-  slot->io_event = ev;
-  slot->state = SLOT_IO;
-  mark_changed(changed);
-}
-
-static void
-slot_mark_ready(struct input_slot* slot, int* changed)
-{
-  // store_event_query reclaimed the ref; clear so wave_pool_destroy doesn't
-  // redundantly discard a stale impl pointer.
-  slot->io_event = (struct store_event){ 0 };
-  slot->io_ms = platform_toc(&slot->io_clock) * 1000.0f;
-  slot->state = SLOT_READY;
+  input_slot_release(slot);
   mark_changed(changed);
 }
 
@@ -1106,17 +1057,11 @@ static void
 wave_unbind_slot(struct wave_pool* wp, struct damacy_wave* wave, int* changed)
 {
   if (wave->bound_slot >= 0)
-    slot_release(&wp->slots[wave->bound_slot]);
+    input_slot_release(&wp->slots[wave->bound_slot]);
   wave->bound_slot = -1;
   wave->host_input = NULL;
   wave->dev_compressed = wave->dev_compressed_owned;
   mark_changed(changed);
-}
-
-static void
-slot_mark_busy(struct input_slot* slot)
-{
-  slot->state = SLOT_BUSY;
 }
 
 static enum damacy_status
@@ -1131,7 +1076,8 @@ poll_io_slots(struct wave_pool* wp, int* changed)
     if (!ready)
       continue;
 
-    slot_mark_ready(slot, changed);
+    input_slot_mark_ready(slot);
+    mark_changed(changed);
   }
   return DAMACY_OK;
 }

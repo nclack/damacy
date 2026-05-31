@@ -285,7 +285,7 @@ test_peel_reserve_errors_when_first_group_too_big(void)
 static int
 test_peel_commit_noop_ticket(void)
 {
-  // slot_idx < 0 means peel_reserve found no work or no free slab.
+  // slot_idx < 0 means peel_reserve found no work or no free input slot.
   // commit must short-circuit before touching anything.
   struct wave_pool wp;
   struct damacy_batch_pool batch_pool;
