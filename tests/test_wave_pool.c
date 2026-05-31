@@ -12,6 +12,7 @@
 #include "render_job/render_job.h"
 #include "store/store.h"
 #include "wave/input_slot.h"
+#include "wave/wave_peel.h"
 #include "wave/wave_pool.h"
 #include "zarr/zarr_metadata.h"
 

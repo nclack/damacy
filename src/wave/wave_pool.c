@@ -16,6 +16,7 @@
 #include "util/cuda_check.h"
 #include "util/prelude.h"
 #include "wave_budget.h"
+#include "wave_peel.h"
 #include "zarr/zarr_metadata.h" // CODEC_*
 
 #include <stddef.h>

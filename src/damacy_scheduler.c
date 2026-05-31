@@ -2,6 +2,7 @@
 
 #include "damacy_internal.h"
 #include "nvtx/nvtx.h"
+#include "wave/wave_peel.h"
 
 #include <cuda.h>
 
