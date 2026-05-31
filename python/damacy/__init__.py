@@ -673,7 +673,7 @@ class Stats:
 
     plan: Metric
     io: Metric
-    h2d: Metric
+    input_transfer: Metric
     decode: Metric
     post_decode: Metric
     decode_gap: Metric
@@ -703,7 +703,7 @@ class Stats:
         return cls(
             plan=m(st["plan"]),
             io=m(st["io"]),
-            h2d=m(st["h2d"]),
+            input_transfer=m(st["input_transfer"]),
             decode=m(st["decode"]),
             post_decode=m(st["post_decode"]),
             decode_gap=m(st["decode_gap"]),

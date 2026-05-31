@@ -1020,7 +1020,7 @@ Pipeline_stats(PipelineObj* self, PyObject* Py_UNUSED(ignored))
   } metrics[] = {
     { "plan", &st.plan },
     { "io", &st.io },
-    { "h2d", &st.h2d },
+    { "input_transfer", &st.input_transfer },
     { "decode", &st.decode },
     { "post_decode", &st.post_decode },
     { "decode_gap", &st.decode_gap },

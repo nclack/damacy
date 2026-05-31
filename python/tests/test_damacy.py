@@ -540,6 +540,7 @@ def test_stats_returns_typed_dataclass(tiny_zarr):
         assert isinstance(s, Stats)
         assert s.gpu_bytes_committed > 0
         assert s.plan.name == "plan"
+        assert s.input_transfer.name == "input_transfer"
 
 
 def test_stats_gpu_bytes_grows_after_first_pop(tiny_zarr):
