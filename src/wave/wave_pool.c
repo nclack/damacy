@@ -32,7 +32,6 @@ decoder_scratch_grow(struct decoder_zstd* decoder,
                      struct gpu_budget* budget,
                      size_t need);
 
-// Wave-index helper for NVTX range labels.
 static inline ptrdiff_t
 wave_index_of(const struct wave_pool* wp, const struct damacy_wave* wave)
 {
@@ -76,7 +75,6 @@ wave_pool_init(struct wave_pool* wp,
   wp->max_substreams_per_wave = DAMACY_MAX_SUBSTREAMS_PER_WAVE(
     max_chunks_per_wave, max_substreams_per_chunk);
 
-  // NON_BLOCKING so we don't serialize against the legacy default stream.
   CU(Fail, cuStreamCreate(&wp->stream_input, CU_STREAM_NON_BLOCKING));
   CU(Fail, cuStreamCreate(&wp->stream_decode, CU_STREAM_NON_BLOCKING));
   CU(Fail, cuStreamCreate(&wp->stream_post, CU_STREAM_NON_BLOCKING));
@@ -134,9 +132,6 @@ wave_pool_destroy(struct wave_pool* wp, int cuda_skip)
                                 &wp->stream_decode,
                                 &wp->stream_input };
   if (!cuda_skip) {
-    // Sync streams (but don't destroy yet) so any pending GPU work
-    // touching wave + shared-decoder buffers has retired before we
-    // free those buffers.
     for (size_t i = 0; i < countof(streams); ++i)
       if (*streams[i])
         cuStreamSynchronize(*streams[i]);
@@ -145,8 +140,6 @@ wave_pool_destroy(struct wave_pool* wp, int cuda_skip)
     wave_destroy(&wp->waves[w], cuda_skip);
   for (uint8_t s = 0; s < wp->n_slots; ++s) {
     struct input_slot* slot = &wp->slots[s];
-    // is_fill_wave never attaches a backend ref; relies on impl=NULL
-    // guard inside store_event_discard.
     if (slot->state == SLOT_IO && wp->store)
       store_event_discard(wp->store, slot->io_event);
     input_slot_destroy(slot, cuda_skip);
@@ -165,7 +158,6 @@ wave_pool_destroy(struct wave_pool* wp, int cuda_skip)
         *streams[i] = NULL;
       }
   }
-  // Borrowed pointers — owner frees them.
   wp->pool = NULL;
   wp->render_jobs = NULL;
   wp->store = NULL;
@@ -891,9 +883,9 @@ validate_parse_totals(const struct blosc1_totals* tot)
 }
 
 static enum damacy_status
-submit_decode_and_assemble(struct wave_pool* wp,
-                           struct damacy_wave* wave,
-                           const struct blosc1_totals* tot)
+queue_decode_and_assemble(struct wave_pool* wp,
+                          struct damacy_wave* wave,
+                          const struct blosc1_totals* tot)
 {
   enum damacy_status st = kick_decode(wp, wave, tot);
   if (st != DAMACY_OK)
@@ -904,8 +896,6 @@ submit_decode_and_assemble(struct wave_pool* wp,
   return DAMACY_OK;
 }
 
-// Wait on input_parse_done, kick decode on stream_decode, kick post + assemble
-// on stream_post.
 static enum damacy_status
 kick_compute(struct wave_pool* wp, struct damacy_wave* wave)
 {
@@ -918,7 +908,7 @@ kick_compute(struct wave_pool* wp, struct damacy_wave* wave)
   if (st != DAMACY_OK)
     return st;
 
-  st = submit_decode_and_assemble(wp, wave, &tot);
+  st = queue_decode_and_assemble(wp, wave, &tot);
   if (st != DAMACY_OK)
     return st;
 
@@ -1224,9 +1214,6 @@ poll_input_wave(struct wave_pool* wp, struct damacy_wave* wave, int* changed)
   if (qe != CUDA_SUCCESS)
     return DAMACY_CUDA;
 
-  // Both kicks enqueue decode + status-reduce against the shared decoder
-  // scratch on stream_decode. Safety relies on stream FIFO: wave A fully
-  // retires those uses before wave B's decode launches.
   s = kick_compute(wp, wave);
   if (s != DAMACY_OK)
     return s;
