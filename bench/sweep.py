@@ -113,7 +113,7 @@ def main(
     for v, d in results:
         stages = {s["name"]: s for s in d["stages"]}
         io = stages["io"]
-        input_transfer = stages.get("input_transfer", stages.get("h2d"))
+        input_transfer = stages["input_transfer"]
         c = d["counters"]
         wall_ms = d["timings_ms"]["wall"]
         gb_in = io["input_bytes"] / 1e9

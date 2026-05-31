@@ -932,7 +932,7 @@ drain_wave_metrics(const struct wave_pool* wp, struct damacy_wave* wave)
   struct damacy_stats* st = wp->stats;
   record_io_metric(wp, wave);
 
-  record_elapsed_metric(stats_input_transfer(st),
+  record_elapsed_metric(&st->input_transfer,
                         wave->ev.input_start,
                         wave->ev.input_transfer_done,
                         wave->io_bytes,

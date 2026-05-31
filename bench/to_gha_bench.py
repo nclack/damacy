@@ -61,8 +61,6 @@ def main() -> int:
 
     def stage_avg(name: str) -> float | None:
         s = stages.get(name)
-        if s is None and name == "input_transfer":
-            s = stages.get("h2d")
         if s is None or s.get("count", 0) == 0:
             return None
         return s.get("ms_avg")

@@ -8,7 +8,6 @@
 // is the timing core only.
 #include "damacy.h"
 
-#include "damacy_stats.h"
 #include "util/json.h"
 #include "util/json_writer.h"
 #include "util/slice.h"
@@ -703,7 +702,7 @@ emit_results(const struct scenario* sc, const struct run_metrics* rm, FILE* out)
   jw_array_begin(&jw);
   emit_metric(&jw, &rm->stats.plan, "batch");
   emit_metric(&jw, &rm->stats.io, "wave");
-  emit_metric(&jw, stats_input_transfer_const(&rm->stats), "wave");
+  emit_metric(&jw, &rm->stats.input_transfer, "wave");
   emit_metric(&jw, &rm->stats.decode, "wave");
   emit_metric(&jw, &rm->stats.post_decode, "wave");
   emit_metric(&jw, &rm->stats.decode_gap, "wave");
@@ -765,11 +764,9 @@ emit_results(const struct scenario* sc, const struct run_metrics* rm, FILE* out)
   double wall_s = rm->wall_ms / 1e3;
   double throughput_mb_s =
     wall_s > 0.0 ? (sample_bytes_total / 1e6) / wall_s : 0.0;
-  const struct damacy_metric* input_transfer =
-    stats_input_transfer_const(&rm->stats);
   double sum_stage_ms =
     (double)rm->stats.plan.ms + (double)rm->stats.io.ms +
-    (double)input_transfer->ms + (double)rm->stats.decode.ms +
+    (double)rm->stats.input_transfer.ms + (double)rm->stats.decode.ms +
     (double)rm->stats.post_decode.ms + (double)rm->stats.assemble.ms;
   double stage_concurrency =
     rm->wall_ms > 0.0 ? sum_stage_ms / rm->wall_ms : 0.0;

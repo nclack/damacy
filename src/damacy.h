@@ -280,8 +280,7 @@ extern "C"
   {
     struct damacy_metric plan;
     struct damacy_metric io;
-    // ABI field name retained; metric.name is "input_transfer".
-    struct damacy_metric h2d;
+    struct damacy_metric input_transfer;
     // decode: stream_decode work only (nvcomp + status_reduce).
     // post_decode: stream_post work — post-decode kernels + 4B D2H +
     // cross-stream wait on decode_done. A large post_decode avg means

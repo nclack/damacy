@@ -31,7 +31,7 @@ stats_init(struct damacy_stats* s)
   memset(s, 0, sizeof(*s));
   metric_init(&s->plan, "plan");
   metric_init(&s->io, "io");
-  metric_init(&s->h2d, "input_transfer");
+  metric_init(&s->input_transfer, "input_transfer");
   metric_init(&s->decode, "decode");
   metric_init(&s->post_decode, "post_decode");
   metric_init(&s->decode_gap, "decode_gap");
@@ -39,16 +39,4 @@ stats_init(struct damacy_stats* s)
   metric_init(&s->bind_wait, "bind_wait");
   metric_init(&s->pop_wait, "pop_wait");
   metric_init(&s->flush_wait, "flush_wait");
-}
-
-struct damacy_metric*
-stats_input_transfer(struct damacy_stats* s)
-{
-  return &s->h2d;
-}
-
-const struct damacy_metric*
-stats_input_transfer_const(const struct damacy_stats* s)
-{
-  return &s->h2d;
 }
