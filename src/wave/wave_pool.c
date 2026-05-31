@@ -336,6 +336,18 @@ record_io_metric(const struct wave_pool* wp, const struct damacy_wave* wave)
   metric_record(&wp->stats->io, wave->io_ms, wave->io_bytes, wave->io_bytes);
 }
 
+static void
+record_elapsed_metric(struct damacy_metric* metric,
+                      CUevent start,
+                      CUevent end,
+                      uint64_t bytes_in,
+                      uint64_t bytes_out)
+{
+  float ms = 0.f;
+  if (cuEventElapsedTime(&ms, start, end) == CUDA_SUCCESS)
+    metric_record(metric, ms, bytes_in, bytes_out);
+}
+
 enum damacy_status
 chunk_substreams_upper_bound(const struct chunk_plan* c,
                              const struct sample_plan* sp,
@@ -914,62 +926,71 @@ kick_compute(struct wave_pool* wp, struct damacy_wave* wave)
   return DAMACY_OK;
 }
 
-// All wave events have fired; pull elapsed times into stats.
+static void
+record_decode_gap_metric(struct damacy_stats* st,
+                         const struct damacy_wave* wave)
+{
+  if (!wave->prev_decode_anchor)
+    return;
+  record_elapsed_metric(
+    &st->decode_gap, wave->prev_decode_anchor, wave->ev.decomp_start, 0, 0);
+}
+
 static void
 drain_wave_metrics(const struct wave_pool* wp, struct damacy_wave* wave)
 {
   struct damacy_stats* st = wp->stats;
   record_io_metric(wp, wave);
 
-  float ms = 0.f;
-  if (cuEventElapsedTime(&ms,
-                         wave->ev.input_start,
-                         wave->ev.input_transfer_done) == CUDA_SUCCESS)
-    metric_record(&st->h2d, ms, wave->io_bytes, wave->io_bytes);
-  if (cuEventElapsedTime(&ms, wave->ev.decomp_start, wave->ev.decode_done) ==
-      CUDA_SUCCESS)
-    metric_record(
-      &st->decode, ms, wave->decomp_in_bytes, wave->decomp_out_bytes);
-  if (cuEventElapsedTime(&ms, wave->ev.decode_done, wave->ev.decomp_end) ==
-      CUDA_SUCCESS)
-    metric_record(&st->post_decode, ms, 0, 0);
-  if (wave->prev_decode_anchor &&
-      cuEventElapsedTime(
-        &ms, wave->prev_decode_anchor, wave->ev.decomp_start) == CUDA_SUCCESS)
-    metric_record(&st->decode_gap, ms, 0, 0);
-  if (cuEventElapsedTime(&ms, wave->ev.asm_start, wave->ev.asm_end) ==
-      CUDA_SUCCESS)
-    metric_record(
-      &st->assemble, ms, wave->decomp_out_bytes, wave->assemble_out_bytes);
+  record_elapsed_metric(&st->h2d,
+                        wave->ev.input_start,
+                        wave->ev.input_transfer_done,
+                        wave->io_bytes,
+                        wave->io_bytes);
+  record_elapsed_metric(&st->decode,
+                        wave->ev.decomp_start,
+                        wave->ev.decode_done,
+                        wave->decomp_in_bytes,
+                        wave->decomp_out_bytes);
+  record_elapsed_metric(
+    &st->post_decode, wave->ev.decode_done, wave->ev.decomp_end, 0, 0);
+  record_decode_gap_metric(st, wave);
+  record_elapsed_metric(&st->assemble,
+                        wave->ev.asm_start,
+                        wave->ev.asm_end,
+                        wave->decomp_out_bytes,
+                        wave->assemble_out_bytes);
 }
 
-// Drain metrics, return what the caller needs to advance batch state:
-// which batch slot retired how many chunks, plus the wave's own error
-// status (nvcomp codec errors surface as DAMACY_DECODE). The wave is
-// reset to WAVE_FREE before return; the caller applies the batch-state
-// transition via batch_slot_consume_chunks.
-struct wave_outcome
+struct wave_retirement
 {
   enum damacy_status status;
+  uint16_t render_job_idx;
   uint16_t batch_pool_slot;
   uint32_t n_chunks_consumed;
 };
 
-static struct wave_outcome
+static enum damacy_status
+wave_decode_status(const struct damacy_wave* wave)
+{
+  if (wave->h_blosc1_totals->n_codec_errors == 0)
+    return DAMACY_OK;
+  log_error("nvcomp: %u substream(s) reported non-success status",
+            wave->h_blosc1_totals->n_codec_errors);
+  return DAMACY_DECODE;
+}
+
+static struct wave_retirement
 finalize_wave(struct wave_pool* wp, struct damacy_wave* wave)
 {
   damacy_nvtx_range_pushf("finalize_wave/w%td", wave_index_of(wp, wave));
   drain_wave_metrics(wp, wave);
-  struct wave_outcome out = {
-    .status = DAMACY_OK,
+  struct wave_retirement out = {
+    .status = wave_decode_status(wave),
+    .render_job_idx = wave->render_job_idx,
     .batch_pool_slot = wave->batch_pool_slot,
     .n_chunks_consumed = wave->n_chunks,
   };
-  if (wave->h_blosc1_totals->n_codec_errors > 0) {
-    log_error("nvcomp: %u substream(s) reported non-success status",
-              wave->h_blosc1_totals->n_codec_errors);
-    out.status = DAMACY_DECODE;
-  }
   wave_mark_free(wave);
   damacy_nvtx_range_pop();
   return out;
@@ -1216,12 +1237,11 @@ poll_input_wave(struct wave_pool* wp, struct damacy_wave* wave, int* changed)
 static enum damacy_status
 retire_posted_wave(struct wave_pool* wp, struct damacy_wave* wave, int* changed)
 {
-  struct wave_outcome o = finalize_wave(wp, wave);
+  struct wave_retirement o = finalize_wave(wp, wave);
   struct damacy_batch_slot* batch = &wp->pool->slots[o.batch_pool_slot];
   batch_slot_consume_chunks(batch, o.n_chunks_consumed);
   if (batch->state == BATCH_READY)
-    render_job_finish(
-      render_job_pool_get(wp->render_jobs, wave->render_job_idx));
+    render_job_finish(render_job_pool_get(wp->render_jobs, o.render_job_idx));
   mark_changed(changed);
   return o.status;
 }
