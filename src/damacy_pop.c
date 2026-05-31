@@ -10,6 +10,20 @@
 #include <cuda.h>
 #include <string.h>
 
+static void
+release_slot_now(struct damacy_batch_slot* slot, struct render_job* job)
+{
+  batch_slot_reset_for_reuse(slot);
+  render_job_reset(job);
+}
+
+static void
+release_slot_after_event(struct damacy_batch_slot* slot, struct render_job* job)
+{
+  release_slot_now(slot, job);
+  slot->deferred_release_pending = 1;
+}
+
 enum damacy_status
 damacy_pop(struct damacy* self, struct damacy_batch** out)
 {
@@ -88,8 +102,7 @@ damacy_release(struct damacy* self, struct damacy_batch* b)
     scheduler_unlock(self->sched);
     return;
   }
-  batch_slot_reset_for_reuse(&self->batch_pool.slots[s]);
-  render_job_reset(job);
+  release_slot_now(&self->batch_pool.slots[s], job);
   scheduler_unlock(self->sched);
 }
 
@@ -135,25 +148,16 @@ damacy_release_event(struct damacy* self, struct damacy_batch* b, void* event)
     goto Done;
   }
 
-  // Defer reuse on stream_post (where assemble writes the slot's
-  // dev_ptr). stream_post is FIFO, so any subsequent kick_assemble — for
-  // either slot — picks up this wait. The flag is read by plan_commit
-  // to host-sync stream_post before its sync cuMemsetD8 (which targets the
-  // legacy null stream and would otherwise race).
+  // Reuse waits on the caller's event.
   if (cuStreamWaitEvent(self->wave_pool.stream_post, (CUevent)event, 0) !=
       CUDA_SUCCESS) {
-    // Deferred wait couldn't be installed; fall back to immediate release
-    // so the slot doesn't leak (caller would block forever in pop).
-    batch_slot_reset_for_reuse(slot);
-    render_job_reset(job);
+    // Without the wait, release immediately and report the CUDA error.
+    release_slot_now(slot, job);
     r = DAMACY_CUDA;
     goto Done;
   }
-  slot->deferred_release_pending = 1;
 
-  batch_slot_reset_for_reuse(slot);
-  slot->deferred_release_pending = 1;
-  render_job_reset(job);
+  release_slot_after_event(slot, job);
   r = DAMACY_OK;
 
 Done:
