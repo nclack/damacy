@@ -72,6 +72,7 @@ if(NOT DAMACY_FUZZ)
         test_damacy
         PRIVATE CUDA::cudart_static cuda_test_util
     )
+    add_damacy_test(test_damacy_plan damacy)
     add_damacy_test(test_damacy_blosc damacy test_fixture)
     target_link_libraries(test_damacy_blosc PRIVATE cuda_test_util)
     add_damacy_test(test_damacy_caps damacy decoder test_fixture cuda_test_util)

@@ -67,6 +67,22 @@ free_slot_stage_samples(struct damacy_batch_slot* slot)
     free_stage_sample(&slot->stage_samples[i]);
 }
 
+static enum damacy_status
+fail_plan_commit_slot(struct damacy* self,
+                      struct damacy_batch_slot* slot,
+                      struct render_job* job,
+                      enum damacy_status status,
+                      int* changed)
+{
+  free_slot_stage_samples(slot);
+  batch_slot_reset_for_reuse(slot);
+  render_job_reset(job);
+  self->failed_status = status;
+  if (changed)
+    *changed = 1;
+  return status;
+}
+
 enum damacy_status
 plan_reserve(struct damacy* self,
              uint16_t slot_idx,
@@ -178,19 +194,10 @@ plan_commit(struct damacy* self,
     return DAMACY_INVAL;
   }
   struct damacy_batch_slot* slot = &self->batch_pool.slots[slot_idx];
-  if (run_status != DAMACY_OK) {
-    free_slot_stage_samples(slot);
-    batch_slot_reset_for_reuse(slot);
-    render_job_reset(job);
-    self->failed_status = run_status;
-    if (changed)
-      *changed = 1;
-    return run_status;
-  }
-  if (!slot->planning_close_batch) {
-    self->failed_status = DAMACY_INVAL;
-    return DAMACY_INVAL;
-  }
+  if (run_status != DAMACY_OK)
+    return fail_plan_commit_slot(self, slot, job, run_status, changed);
+  if (!slot->planning_close_batch)
+    return fail_plan_commit_slot(self, slot, job, DAMACY_INVAL, changed);
   slot->n_chunks = job->n_chunks;
   slot->chunks_remaining = (int32_t)slot->n_chunks;
 
@@ -216,12 +223,8 @@ plan_commit(struct damacy* self,
       slot->deferred_release_pending = 0;
     }
     if (cuMemsetD8(CUDPTR(slot->dev_ptr), 0, self->batch_pool.n_bytes) !=
-        CUDA_SUCCESS) {
-      batch_slot_reset_for_reuse(slot);
-      render_job_reset(job);
-      self->failed_status = DAMACY_CUDA;
-      return DAMACY_CUDA;
-    }
+        CUDA_SUCCESS)
+      return fail_plan_commit_slot(self, slot, job, DAMACY_CUDA, changed);
     slot->state = BATCH_READY;
     render_job_finish(job);
   }
