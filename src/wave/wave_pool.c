@@ -1104,6 +1104,23 @@ release_bound_slot_after_input_consumed(struct wave_pool* wp,
   return DAMACY_OK;
 }
 
+struct cuda_event_poll
+{
+  enum damacy_status status;
+  uint8_t ready;
+};
+
+static struct cuda_event_poll
+poll_cuda_event(CUevent event)
+{
+  CUresult qe = cuEventQuery(event);
+  if (qe == CUDA_SUCCESS)
+    return (struct cuda_event_poll){ .status = DAMACY_OK, .ready = 1 };
+  if (qe == CUDA_ERROR_NOT_READY)
+    return (struct cuda_event_poll){ .status = DAMACY_OK };
+  return (struct cuda_event_poll){ .status = DAMACY_CUDA };
+}
+
 static enum damacy_status
 poll_input_wave(struct wave_pool* wp, struct damacy_wave* wave, int* changed)
 {
@@ -1112,11 +1129,12 @@ poll_input_wave(struct wave_pool* wp, struct damacy_wave* wave, int* changed)
   if (s != DAMACY_OK)
     return s;
 
-  CUresult qe = cuEventQuery(wave->ev.input_parse_done);
-  if (qe == CUDA_ERROR_NOT_READY)
+  struct cuda_event_poll input_parse =
+    poll_cuda_event(wave->ev.input_parse_done);
+  if (input_parse.status != DAMACY_OK)
+    return input_parse.status;
+  if (!input_parse.ready)
     return DAMACY_OK;
-  if (qe != CUDA_SUCCESS)
-    return DAMACY_CUDA;
 
   s = kick_compute(wp, wave);
   if (s != DAMACY_OK)
@@ -1145,11 +1163,11 @@ poll_post_wave(struct wave_pool* wp, struct damacy_wave* wave, int* changed)
   if (s != DAMACY_OK)
     return s;
 
-  CUresult qe = cuEventQuery(wave->ev.asm_end);
-  if (qe == CUDA_ERROR_NOT_READY)
+  struct cuda_event_poll assemble = poll_cuda_event(wave->ev.asm_end);
+  if (assemble.status != DAMACY_OK)
+    return assemble.status;
+  if (!assemble.ready)
     return DAMACY_OK;
-  if (qe != CUDA_SUCCESS)
-    return DAMACY_CUDA;
   return retire_posted_wave(wp, wave, changed);
 }
 

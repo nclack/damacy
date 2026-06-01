@@ -165,21 +165,18 @@ fs_read_job_free(void* vctx)
   pool_free(fs->job_pool, j);
 }
 
-static struct store_event
+static struct store_submit_result
 fs_submit(struct store* s, const struct store_read* reads, size_t n)
 {
   struct store_fs* fs = (struct store_fs*)s;
-  struct store_event ev = { 0 };
+  struct store_submit_result result = { .status = DAMACY_IO };
   if (n == 0) {
     struct io_event ioev = io_queue_record(fs->q);
-    ev.seq = ioev.seq;
-    return ev;
+    result.status = DAMACY_OK;
+    result.event.seq = ioev.seq;
+    return result;
   }
 
-  // seq == 0 → partial-submit failure. Without it, a half-submitted
-  // batch would silently leave dst buffers unfilled. On failure we
-  // still drain in-flight jobs so they don't write into caller buffers
-  // after we return.
   for (size_t i = 0; i < n; ++i) {
     struct lru_entry* pin = NULL;
     platform_file* f = store_fs_acquire(fs, reads[i].key, &pin);
@@ -208,13 +205,15 @@ fs_submit(struct store* s, const struct store_read* reads, size_t n)
   }
   {
     struct io_event ioev = io_queue_record(fs->q);
-    ev.seq = ioev.seq;
+    result.status = DAMACY_OK;
+    result.event.seq = ioev.seq;
   }
-  return ev;
+  return result;
 
 Drain:
+  // Drain in-flight jobs so they don't write into caller buffers after return.
   io_event_wait(fs->q, io_queue_record(fs->q));
-  return ev; // ev.seq == 0 signals failure
+  return result;
 }
 
 static void

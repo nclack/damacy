@@ -16,24 +16,15 @@ Out:
   return;
 }
 
-static struct store_submit_result
-store_submit_result_from_event(struct store_event ev)
-{
-  return (struct store_submit_result){
-    .status = ev.seq != 0 ? DAMACY_OK : DAMACY_IO,
-    .event = ev,
-  };
-}
-
 struct store_submit_result
 store_read_submit(struct store* s, const struct store_read* reads, size_t n)
 {
   CHECK_SILENT(Empty, s);
   CHECK_SILENT(Empty, s->vt);
   CHECK_SILENT(Empty, s->vt->submit);
-  return store_submit_result_from_event(s->vt->submit(s, reads, n));
+  return s->vt->submit(s, reads, n);
 Empty:
-  return store_submit_result_from_event((struct store_event){ 0 });
+  return (struct store_submit_result){ .status = DAMACY_IO };
 }
 
 struct store_submit_result
@@ -42,9 +33,9 @@ store_read_submit_dev(struct store* s, const struct store_read* reads, size_t n)
   CHECK_SILENT(Empty, s);
   CHECK_SILENT(Empty, s->vt);
   CHECK_SILENT(Empty, s->vt->submit_dev);
-  return store_submit_result_from_event(s->vt->submit_dev(s, reads, n));
+  return s->vt->submit_dev(s, reads, n);
 Empty:
-  return store_submit_result_from_event((struct store_event){ 0 });
+  return (struct store_submit_result){ .status = DAMACY_IO };
 }
 
 int
