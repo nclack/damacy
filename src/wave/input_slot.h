@@ -28,6 +28,7 @@ struct input_slot
   uint16_t batch_pool_slot;
   uint32_t batch_chunk_offset;
   uint32_t n_chunks;
+  uint32_t prev_n_groups_dispatched;
 
   struct store_read* store_reads;
   struct store_event io_event;

@@ -16,6 +16,7 @@
 #include "util/cuda_check.h"
 #include "util/prelude.h"
 #include "wave_budget.h"
+#include "wave_input.h"
 #include "zarr/zarr_metadata.h" // CODEC_*
 
 #include <stddef.h>
@@ -1056,10 +1057,18 @@ poll_io_slots(struct wave_pool* wp, int* changed)
     struct input_slot* slot = &wp->slots[s];
     if (slot->state != SLOT_IO)
       continue;
-    int ready =
-      slot->is_fill_wave || store_event_query(wp->store, slot->io_event);
-    if (!ready)
+    struct store_event_poll poll =
+      slot->is_fill_wave
+        ? (struct store_event_poll){ .status = DAMACY_OK, .ready = 1 }
+        : store_event_query(wp->store, slot->io_event);
+    if (!poll.ready)
       continue;
+    if (poll.status != DAMACY_OK) {
+      enum damacy_status rollback = wave_input_rollback_slot(wp, slot, changed);
+      if (rollback != DAMACY_OK)
+        return rollback;
+      return poll.status;
+    }
 
     input_slot_mark_ready(slot);
     mark_changed(changed);

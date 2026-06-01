@@ -10,11 +10,25 @@ mark_changed(int* changed)
     *changed = 1;
 }
 
-static void
-input_reservation_rollback(struct wave_pool* wp,
-                           struct input_slot* slot,
-                           const struct wave_desc* desc,
-                           int* changed)
+static struct wave_desc
+input_slot_wave_desc(const struct input_slot* slot)
+{
+  return (struct wave_desc){ .render_job_idx = slot->render_job_idx,
+                             .batch_pool_slot = slot->batch_pool_slot,
+                             .batch_chunk_offset = slot->batch_chunk_offset,
+                             .n_chunks = slot->n_chunks,
+                             .prev_n_groups_dispatched =
+                               slot->prev_n_groups_dispatched,
+                             .input_used_bytes = slot->used_bytes,
+                             .io_bytes = slot->io_bytes,
+                             .is_fill_wave = slot->is_fill_wave };
+}
+
+static enum damacy_status
+wave_input_rollback_desc(struct wave_pool* wp,
+                         struct input_slot* slot,
+                         const struct wave_desc* desc,
+                         int* changed)
 {
   render_job_rollback_wave(
     render_job_pool_get(wp->render_jobs, slot->render_job_idx), desc);
@@ -22,6 +36,16 @@ input_reservation_rollback(struct wave_pool* wp,
   wp->stats->chunks_dispatched -= slot->n_chunks;
   input_slot_release(slot);
   mark_changed(changed);
+  return DAMACY_OK;
+}
+
+enum damacy_status
+wave_input_rollback_slot(struct wave_pool* wp,
+                         struct input_slot* slot,
+                         int* changed)
+{
+  struct wave_desc desc = input_slot_wave_desc(slot);
+  return wave_input_rollback_desc(wp, slot, &desc, changed);
 }
 
 enum damacy_status
@@ -89,7 +113,7 @@ wave_input_commit(struct wave_pool* wp,
     return DAMACY_OK;
   struct input_slot* slot = &wp->slots[t->input_slot_idx];
   if (submit.status != DAMACY_OK) {
-    input_reservation_rollback(wp, slot, &t->desc, changed);
+    wave_input_rollback_desc(wp, slot, &t->desc, changed);
     return submit.status;
   }
   input_slot_commit_io(slot, submit.event);

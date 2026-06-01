@@ -224,6 +224,46 @@ test_lock_free_release_under_contention(void)
   return 0;
 }
 
+static int
+test_async_read_error_reports_io(void)
+{
+  char root[] = "/tmp/damacy_store_fs_error_XXXXXX";
+  EXPECT(mkdtemp(root));
+  char bad_dir[256];
+  snprintf(bad_dir, sizeof bad_dir, "%s/bad_dir", root);
+  EXPECT(mkdir(bad_dir, 0700) == 0);
+
+  struct store_fs_config sc = {
+    .root = root,
+    .nthreads = 1,
+    .fd_cache_capacity = CAP,
+  };
+  struct store* store = store_fs_create(&sc);
+  EXPECT(store);
+
+  char dst[4] = { 0 };
+  struct store_read read = {
+    .key = "bad_dir",
+    .dst = dst,
+    .offset = 0,
+    .len = sizeof dst,
+  };
+  struct store_submit_result submit = store_read_submit(store, &read, 1);
+  EXPECT(submit.status == DAMACY_OK);
+
+  struct store_event_poll poll = { 0 };
+  for (int i = 0; i < 1000 && !poll.ready; ++i) {
+    poll = store_event_query(store, submit.event);
+    if (!poll.ready)
+      usleep(1000);
+  }
+  EXPECT(poll.ready);
+  EXPECT(poll.status == DAMACY_IO);
+
+  store_destroy(store);
+  return 0;
+}
+
 int
 main(void)
 {
@@ -231,5 +271,6 @@ main(void)
   RUN(test_hit_path);
   RUN(test_pin_saturation);
   RUN(test_lock_free_release_under_contention);
+  RUN(test_async_read_error_reports_io);
   return 0;
 }

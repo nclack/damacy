@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 
+struct input_slot;
 struct wave_pool;
 
 struct wave_input_reservation
@@ -30,3 +31,8 @@ wave_input_commit(struct wave_pool* wp,
                   struct wave_input_reservation* t,
                   struct store_submit_result submit,
                   int* changed);
+
+enum damacy_status
+wave_input_rollback_slot(struct wave_pool* wp,
+                         struct input_slot* slot,
+                         int* changed);

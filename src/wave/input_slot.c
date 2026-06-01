@@ -72,6 +72,7 @@ input_slot_begin_reservation(struct input_slot* slot,
   slot->batch_pool_slot = desc->batch_pool_slot;
   slot->batch_chunk_offset = desc->batch_chunk_offset;
   slot->n_chunks = desc->n_chunks;
+  slot->prev_n_groups_dispatched = desc->prev_n_groups_dispatched;
   slot->used_bytes = desc->input_used_bytes;
   slot->io_bytes = desc->io_bytes;
   slot->state = SLOT_RESERVED;
@@ -114,6 +115,7 @@ input_slot_release(struct input_slot* slot)
   slot->render_job_idx = 0;
   slot->batch_pool_slot = 0;
   slot->batch_chunk_offset = 0;
+  slot->prev_n_groups_dispatched = 0;
   slot->io_event = (struct store_event){ 0 };
   slot->is_fill_wave = 0;
 }

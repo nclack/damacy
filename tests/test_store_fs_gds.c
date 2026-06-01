@@ -178,12 +178,15 @@ test_event_query_reflects_completion(void)
   struct store_submit_result submit = store_read_submit_dev(s, &read, 1);
   EXPECT(submit.status == DAMACY_OK);
 
-  EXPECT(store_event_query(s, submit.event) == 0);
+  struct store_event_poll poll = store_event_query(s, submit.event);
+  EXPECT(!poll.ready);
 
   atomic_store_explicit((_Atomic uint32_t*)gate_host, 1u, memory_order_release);
   EXPECT(cuStreamSynchronize(stream) == CUDA_SUCCESS);
 
-  EXPECT(store_event_query(s, submit.event) == 1);
+  poll = store_event_query(s, submit.event);
+  EXPECT(poll.ready);
+  EXPECT(poll.status == DAMACY_OK);
 
   cuMemFreeHost(gate_host);
   cuMemFree(dbuf);

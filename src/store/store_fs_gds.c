@@ -406,15 +406,15 @@ fs_gds_try_claim(struct fs_gds_done* d)
 
 // Spin on the per-batch flag; cuStreamSynchronize would drain unrelated
 // concurrent submits on the same stream and kill IO/compute overlap.
-static void
+static enum damacy_status
 gds_event_wait(struct store* s, struct store_event ev)
 {
   (void)s;
   if (ev.seq != GDS_SENTINEL_SEQ)
-    return;
+    return DAMACY_OK;
   struct fs_gds_done* d = (struct fs_gds_done*)ev.impl;
   if (!d)
-    return;
+    return DAMACY_OK;
   // Bounded by cuFile read latency; yield to OS to avoid CPU burn under
   // saturation.
   for (unsigned i = 0; !atomic_load_explicit(&d->flag, memory_order_acquire);
@@ -424,21 +424,22 @@ gds_event_wait(struct store* s, struct store_event ev)
       platform_yield();
   }
   fs_gds_try_claim(d);
+  return DAMACY_OK;
 }
 
-static int
+static struct store_event_poll
 gds_event_query(struct store* s, struct store_event ev)
 {
   (void)s;
   if (ev.seq != GDS_SENTINEL_SEQ)
-    return 0;
+    return (struct store_event_poll){ .status = DAMACY_OK };
   struct fs_gds_done* d = (struct fs_gds_done*)ev.impl;
   if (!d)
-    return 1; // n==0 fast-path: nothing to wait on
+    return (struct store_event_poll){ .status = DAMACY_OK, .ready = 1 };
   if (!atomic_load_explicit(&d->flag, memory_order_acquire))
-    return 0;
+    return (struct store_event_poll){ .status = DAMACY_OK };
   fs_gds_try_claim(d);
-  return 1;
+  return (struct store_event_poll){ .status = DAMACY_OK, .ready = 1 };
 }
 
 static void

@@ -18,8 +18,9 @@ struct store_vtable
   struct store_submit_result (*submit_dev)(struct store* s,
                                            const struct store_read* reads,
                                            size_t n);
-  void (*event_wait)(struct store* s, struct store_event ev);
-  int (*event_query)(struct store* s, struct store_event ev);
+  enum damacy_status (*event_wait)(struct store* s, struct store_event ev);
+  struct store_event_poll (*event_query)(struct store* s,
+                                         struct store_event ev);
   void (*event_discard)(struct store* s, struct store_event ev);
   int (*map)(struct store* s, const char* key, struct store_view* out);
   void (*unmap)(struct store* s, struct store_view* view);

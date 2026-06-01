@@ -57,7 +57,7 @@ extern "C"
   };
 
   // Non-NULL `impl` owns a backend ref; drive to completion via
-  // event_wait or event_query (until non-zero), else event_discard.
+  // event_wait or event_query (until ready), else event_discard.
   struct store_event
   {
     uint64_t seq;
@@ -68,6 +68,12 @@ extern "C"
   {
     enum damacy_status status;
     struct store_event event;
+  };
+
+  struct store_event_poll
+  {
+    enum damacy_status status;
+    uint8_t ready;
   };
 
   // Submit a batch of reads. On success, result.event advances after every
@@ -92,12 +98,13 @@ extern "C"
   // Reclaims the backend ref in `ev`; do not call event_discard after.
   // Caller must ensure the store's stream remains live and is progressing;
   // a destroyed or permanently-stalled stream will deadlock the wait.
-  void store_event_wait(struct store* s, struct store_event ev);
+  enum damacy_status store_event_wait(struct store* s, struct store_event ev);
 
-  // Non-blocking variant of store_event_wait. Returns non-zero if every
-  // read up to ev.seq has completed. A non-zero return reclaims the
-  // backend ref in `ev`; do not call event_discard after.
-  int store_event_query(struct store* s, struct store_event ev);
+  // Non-blocking variant of store_event_wait. ready=1 means every read up
+  // to ev.seq has completed and status is final. ready=1 reclaims the backend
+  // ref in `ev`; do not call event_discard after.
+  struct store_event_poll store_event_query(struct store* s,
+                                            struct store_event ev);
 
   // Release `ev` without waiting on completion. Required if neither
   // event_wait nor event_query-to-completion is called on it. Safe on
