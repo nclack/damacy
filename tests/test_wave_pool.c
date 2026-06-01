@@ -72,19 +72,19 @@ test_input_commit_rollback_once(void)
   setup_post_reserve(&wp, &batch_pool, &jobs, &stats, &slot, n_chunks);
 
   // Submit failure rolls back the reservation.
-  struct wave_input_reservation t = { .active = 1,
+  struct wave_input_reservation t = { .has_slot = 1,
                                       .input_slot_idx = 0,
                                       .n_reads = 2,
                                       .desc = { .render_job_idx = 0,
                                                 .n_chunks = n_chunks,
                                                 .prev_n_groups_dispatched = 0 },
-                                      .committed = 0 };
+                                      .finalized = 0 };
   struct store_submit_result submit = { .status = DAMACY_IO };
 
   int changed = 0;
   EXPECT(wave_input_commit(&wp, &t, submit, &changed) == DAMACY_IO);
   EXPECT(changed == 1);
-  EXPECT(t.committed == 1);
+  EXPECT(t.finalized == 1);
   EXPECT(stats.waves_emitted == 0);
   EXPECT(stats.chunks_dispatched == 0);
   EXPECT(job0(&jobs)->n_chunks_dispatched == 0);
@@ -116,7 +116,7 @@ test_input_commit_success_then_recommit(void)
   setup_post_reserve(&wp, &batch_pool, &jobs, &stats, &slot, n_chunks);
 
   struct wave_input_reservation t = {
-    .active = 1, .input_slot_idx = 0, .n_reads = 3, .committed = 0
+    .has_slot = 1, .input_slot_idx = 0, .n_reads = 3, .finalized = 0
   };
   struct store_submit_result submit = { .status = DAMACY_OK,
                                         .event = { .seq = 42 } };
@@ -124,7 +124,7 @@ test_input_commit_success_then_recommit(void)
   int changed = 0;
   EXPECT(wave_input_commit(&wp, &t, submit, &changed) == DAMACY_OK);
   EXPECT(changed == 1);
-  EXPECT(t.committed == 1);
+  EXPECT(t.finalized == 1);
   EXPECT(wp.slots[0].state == SLOT_IO);
   EXPECT(wp.slots[0].io_event.seq == 42);
   // Success path leaves counters as the reserve set them.
@@ -159,13 +159,13 @@ test_input_commit_rolls_back_groups(void)
   // Simulate reserve having advanced from group 7 to group 9.
   job0(&jobs)->n_groups_dispatched = 9;
 
-  struct wave_input_reservation t = { .active = 1,
+  struct wave_input_reservation t = { .has_slot = 1,
                                       .input_slot_idx = 0,
                                       .n_reads = 1,
                                       .desc = { .render_job_idx = 0,
                                                 .n_chunks = n_chunks,
                                                 .prev_n_groups_dispatched = 7 },
-                                      .committed = 0 };
+                                      .finalized = 0 };
   struct store_submit_result submit = { .status = DAMACY_IO };
 
   int changed = 0;
@@ -244,7 +244,7 @@ test_input_reserve_defers_oversize_group(void)
   enum damacy_status status = wave_input_reserve(&f.wp, 0, &t);
 
   EXPECT(status == DAMACY_OK);
-  EXPECT(t.active == 1);
+  EXPECT(t.has_slot == 1);
   EXPECT(t.input_slot_idx == 0);
   EXPECT(t.n_reads == 1);
   EXPECT(t.desc.prev_n_groups_dispatched == 0);
@@ -278,33 +278,33 @@ test_input_reserve_errors_when_first_group_too_big(void)
   damacy_log_set_quiet(0);
 
   EXPECT(status == DAMACY_BUDGET);
-  EXPECT(t.active == 0);
+  EXPECT(t.has_slot == 0);
   EXPECT(job0(&f.jobs)->n_chunks_dispatched == 0);
   EXPECT(job0(&f.jobs)->n_groups_dispatched == 0);
   return 0;
 }
 
 static int
-test_input_reserve_inactive_when_not_ready(void)
+test_input_reserve_has_no_slot_when_not_ready(void)
 {
   struct reserve_fixture f;
   init_reserve_fixture(&f, 4096, 200);
 
   struct wave_input_reservation t = { 0 };
   EXPECT(wave_input_reserve(&f.wp, 0, &t) == DAMACY_OK);
-  EXPECT(t.active == 0);
+  EXPECT(t.has_slot == 0);
 
   job0(&f.jobs)->n_chunks = 1;
   f.wp.slots[0].state = SLOT_BUSY;
   EXPECT(wave_input_reserve(&f.wp, 0, &t) == DAMACY_OK);
-  EXPECT(t.active == 0);
+  EXPECT(t.has_slot == 0);
   return 0;
 }
 
 static int
-test_input_commit_inactive_reservation(void)
+test_input_commit_no_slot_reservation(void)
 {
-  // Inactive reservations must not touch state.
+  // No-slot reservations must not touch state.
   struct wave_pool wp;
   struct damacy_batch_pool batch_pool;
   struct render_job_pool jobs;
@@ -318,7 +318,7 @@ test_input_commit_inactive_reservation(void)
   wp.stats = &stats;
 
   struct wave_input_reservation t = {
-    .active = 0, .input_slot_idx = 0, .n_reads = 0, .committed = 0
+    .has_slot = 0, .input_slot_idx = 0, .n_reads = 0, .finalized = 0
   };
   struct store_submit_result submit = { .status = DAMACY_OK };
   int changed = 0;
@@ -373,8 +373,8 @@ main(void)
   RUN(test_input_commit_rolls_back_groups);
   RUN(test_input_reserve_defers_oversize_group);
   RUN(test_input_reserve_errors_when_first_group_too_big);
-  RUN(test_input_reserve_inactive_when_not_ready);
-  RUN(test_input_commit_inactive_reservation);
+  RUN(test_input_reserve_has_no_slot_when_not_ready);
+  RUN(test_input_commit_no_slot_reservation);
   RUN(test_chunk_substreams_unprobed_blosc);
   printf("all wave_pool tests passed\n");
   return 0;

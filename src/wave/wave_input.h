@@ -11,12 +11,18 @@ struct wave_pool;
 
 struct wave_input_reservation
 {
-  uint8_t active;
-  uint8_t committed;
+  uint8_t has_slot;
+  uint8_t finalized;
   int input_slot_idx;
   uint32_t n_reads;
   struct wave_desc desc;
 };
+
+int
+wave_input_reservation_has_slot(const struct wave_input_reservation* r);
+
+int
+wave_input_reservation_slot_index(const struct wave_input_reservation* r);
 
 enum damacy_status
 wave_input_reserve(struct wave_pool* wp,

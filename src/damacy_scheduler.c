@@ -30,9 +30,10 @@ kick_input_into_free_slots(struct damacy* self, int* changed)
       wave_input_reserve(&self->wave_pool, (uint16_t)target_job, &t);
     if (s != DAMACY_OK)
       return s;
-    if (!t.active)
+    if (!wave_input_reservation_has_slot(&t))
       break;
-    damacy_nvtx_range_pushf("input/slot%d", t.input_slot_idx);
+    damacy_nvtx_range_pushf("input/slot%d",
+                            wave_input_reservation_slot_index(&t));
     scheduler_unlock(self->sched);
     struct store_submit_result submit = wave_input_submit(&self->wave_pool, &t);
     scheduler_lock(self->sched);

@@ -48,6 +48,18 @@ wave_input_rollback_slot(struct wave_pool* wp,
   return wave_input_rollback_desc(wp, slot, &desc, changed);
 }
 
+int
+wave_input_reservation_has_slot(const struct wave_input_reservation* r)
+{
+  return r && r->has_slot;
+}
+
+int
+wave_input_reservation_slot_index(const struct wave_input_reservation* r)
+{
+  return r ? r->input_slot_idx : -1;
+}
+
 enum damacy_status
 wave_input_reserve(struct wave_pool* wp,
                    uint16_t render_job_idx,
@@ -82,7 +94,7 @@ wave_input_reserve(struct wave_pool* wp,
   wp->stats->waves_emitted++;
   wp->stats->chunks_dispatched += desc.n_chunks;
 
-  out->active = 1;
+  out->has_slot = 1;
   out->input_slot_idx = input_slot_idx;
   out->n_reads = desc.n_reads;
   out->desc = desc;
@@ -92,7 +104,7 @@ wave_input_reserve(struct wave_pool* wp,
 struct store_submit_result
 wave_input_submit(struct wave_pool* wp, const struct wave_input_reservation* t)
 {
-  if (!t->active || t->n_reads == 0)
+  if (!wave_input_reservation_has_slot(t) || t->n_reads == 0)
     return (struct store_submit_result){ .status = DAMACY_OK };
   struct input_slot* slot = &wp->slots[t->input_slot_idx];
   return wp->input->submit_reads(wp->store, slot->store_reads, t->n_reads);
@@ -104,12 +116,12 @@ wave_input_commit(struct wave_pool* wp,
                   struct store_submit_result submit,
                   int* changed)
 {
-  if (t->committed) {
+  if (t->finalized) {
     log_error("wave: input_commit called twice on slot %d", t->input_slot_idx);
     return DAMACY_OK;
   }
-  t->committed = 1;
-  if (!t->active)
+  t->finalized = 1;
+  if (!wave_input_reservation_has_slot(t))
     return DAMACY_OK;
   struct input_slot* slot = &wp->slots[t->input_slot_idx];
   if (submit.status != DAMACY_OK) {
