@@ -132,7 +132,8 @@ class Pipeline:
         max_chunk_uncompressed_bytes: int,
         max_gpu_memory_bytes: int,
         n_io_threads: int,
-        n_prefetch_io_threads: int,
+        n_prefetch_threads: int,
+        n_metadata_io_threads: int,
         n_array_meta_cache: int,
         n_shard_index_cache: int,
         n_chunk_layout_cache: int,
@@ -146,6 +147,11 @@ class Pipeline:
         numa_strategy: int = NUMA_AUTO,
         numa_node: int = -1,
         bypass_decode: bool = False,
+        metadata_latency_baseline_ns: int = 0,
+        metadata_latency_lognormal_mu_ln_ns: float = 0.0,
+        metadata_latency_lognormal_sigma_ln_ns: float = 0.0,
+        metadata_latency_cap_ns: int = 0,
+        metadata_latency_seed: int = 0,
     ) -> None: ...
     @property
     def device(self) -> int: ...

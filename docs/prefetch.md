@@ -124,3 +124,45 @@ slot reuse is on the critical path of throughput. The default
 sync is fine for synchronous reads but stalls a prefetched loop on
 every iteration. Deferred release replaces the host sync with a
 stream-side wait that costs nothing on the host.
+
+## Future: async metadata I/O
+
+The metadata prefetcher has a separate concern from batch-slot
+release: hiding latency while resolving zarr metadata, shard indexes,
+and chunk layouts. The current implementation resolves cache misses by
+running a blocking fetch function on a prefetch worker. Those fetchers
+call the metadata store synchronously for operations such as
+`store_map`, `store_stat`, and `store_read_many`, so the number of
+prefetch workers is still the effective bound on concurrent metadata
+waits.
+
+The intended direction is an async metadata-store boundary rather than
+only swapping the file backend. The prefetch cache should be able to
+start a metadata fetch, keep the entry pending, and mark it ready/error
+from completion state:
+
+```text
+prefetcher requests metadata key
+  -> prefetch cache creates async fetch state
+    -> metadata store submits stat/read/open work
+      -> completion pump advances cache entry
+        -> prefetcher observes ready/error on the next advance
+```
+
+On Linux, `io_uring` is the natural backend for that narrow async file
+API. The value is not cross-platform event-loop abstraction; it is
+moving small metadata waits out of prefetch worker threads. A useful
+implementation should keep the API narrow:
+
+- submit/read small metadata files into owned buffers instead of
+  blocking in `store_map`;
+- submit/stat shard files asynchronously where the backend supports it;
+- submit shard-footer and chunk-layout probes without waiting inside
+  the fetcher;
+- complete parsing/finalization separately from kernel I/O completion.
+
+Until that boundary changes, increasing backend I/O concurrency alone
+does not hide synchronous `map`/`stat` waits. The split tuning knobs
+(`n_prefetch_threads` and `n_metadata_io_threads`) make that visible:
+prefetch-thread count controls dependency-resolution concurrency, while
+metadata-I/O thread count controls backend store concurrency.

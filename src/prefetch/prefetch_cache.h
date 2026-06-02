@@ -1,6 +1,7 @@
 // See dev/metadata_prefetch.md.
 #pragma once
 
+#include "damacy.h"
 #include "prefetch/prefetch_handle.h"
 #include "util/lru.h"
 
@@ -74,8 +75,23 @@ extern "C"
 
   void prefetch_cache_destroy(struct prefetch_cache* c);
 
-  // PREFETCH_HANDLE_NONE on saturation (every entry has
-  // max_owner_id >= watermark) or invalid args. gate may be NULL.
+  struct prefetch_request_result
+  {
+    struct prefetch_handle handle;
+    enum damacy_status status;
+  };
+
+  // Returns DAMACY_OK + a valid handle on success. Saturation (every entry has
+  // max_owner_id >= watermark) returns DAMACY_BUDGET; host allocation failures
+  // return DAMACY_OOM. gate may be NULL.
+  struct prefetch_request_result prefetch_cache_request_result(
+    struct prefetch_cache* c,
+    uint64_t key_hash,
+    const void* key,
+    uint64_t owner_id,
+    struct prefetch_gate* gate);
+
+  // Compatibility wrapper: returns PREFETCH_HANDLE_NONE on any non-OK status.
   struct prefetch_handle prefetch_cache_request(struct prefetch_cache* c,
                                                 uint64_t key_hash,
                                                 const void* key,

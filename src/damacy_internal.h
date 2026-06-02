@@ -58,6 +58,7 @@ struct damacy
 
   struct store* store_host;
   struct store* store_meta;
+  struct store* store_meta_latency;
   struct store* store_gds;
   struct planner* planner;
 

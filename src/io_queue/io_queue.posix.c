@@ -2,6 +2,7 @@
 
 #include "damacy_limits.h"
 #include "numa/numa.h"
+#include "platform/platform.h"
 #include "util/prelude.h"
 
 #include <pthread.h>
@@ -25,10 +26,10 @@ struct io_worker_arg
 
 struct io_queue
 {
-  pthread_t workers[DAMACY_MAX_IO_THREADS];
-  struct io_worker_arg worker_args[DAMACY_MAX_IO_THREADS];
+  pthread_t* workers;
+  struct io_worker_arg* worker_args;
   // Per-worker currently-processing seq; UINT64_MAX = idle.
-  uint64_t worker_seq[DAMACY_MAX_IO_THREADS];
+  uint64_t* worker_seq;
   int nworkers;
 
   pthread_mutex_t mutex;
@@ -113,6 +114,9 @@ io_queue_free_partial(struct io_queue* q)
 {
   if (!q)
     return;
+  free(q->workers);
+  free(q->worker_args);
+  free(q->worker_seq);
   free(q->ring);
   pthread_mutex_destroy(&q->mutex);
   pthread_cond_destroy(&q->cond_not_empty);
@@ -126,7 +130,7 @@ io_queue_create(int nthreads, const struct numa_resolved* affinity)
   struct io_queue* q = NULL;
 
   CHECK_SILENT(Fail, nthreads >= 1);
-  CHECK_SILENT(Fail, (uint32_t)nthreads <= DAMACY_MAX_IO_THREADS);
+  CHECK_SILENT(Fail, nthreads <= platform_default_thread_count());
   q = (struct io_queue*)calloc(1, sizeof(*q));
   CHECK_SILENT(Fail, q);
 
@@ -139,6 +143,13 @@ io_queue_create(int nthreads, const struct numa_resolved* affinity)
   q->ring_cap = DAMACY_IO_QUEUE_INITIAL_CAP;
   q->ring = (struct io_job*)calloc(q->ring_cap, sizeof(struct io_job));
   CHECK_SILENT(Fail, q->ring);
+  q->workers = (pthread_t*)calloc((size_t)nthreads, sizeof(*q->workers));
+  CHECK_SILENT(Fail, q->workers);
+  q->worker_args =
+    (struct io_worker_arg*)calloc((size_t)nthreads, sizeof(*q->worker_args));
+  CHECK_SILENT(Fail, q->worker_args);
+  q->worker_seq = (uint64_t*)calloc((size_t)nthreads, sizeof(*q->worker_seq));
+  CHECK_SILENT(Fail, q->worker_seq);
 
   // Copy unconditionally; numa_apply_thread_affinity no-ops when
   // node < 0, which is also what calloc gave us by default.
@@ -148,7 +159,8 @@ io_queue_create(int nthreads, const struct numa_resolved* affinity)
     q->affinity.node = -1;
 
   q->nworkers = nthreads;
-  memset(q->worker_seq, 0xff, sizeof(q->worker_seq));
+  for (int i = 0; i < nthreads; ++i)
+    q->worker_seq[i] = UINT64_MAX;
   for (int i = 0; i < nthreads; ++i) {
     q->worker_args[i] = (struct io_worker_arg){ .q = q, .wid = i };
     if (pthread_create(
@@ -185,6 +197,9 @@ io_queue_destroy(struct io_queue* q)
     for (int i = 0; i < q->nworkers; ++i)
       pthread_join(q->workers[i], NULL);
 
+  free(q->workers);
+  free(q->worker_args);
+  free(q->worker_seq);
   free(q->ring);
   pthread_mutex_destroy(&q->mutex);
   pthread_cond_destroy(&q->cond_not_empty);

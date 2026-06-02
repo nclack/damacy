@@ -221,7 +221,7 @@ slot_mark_ready(struct prefetcher* p, struct prefetcher_slot* s)
   p->ready++;
 }
 
-static struct prefetch_handle
+static struct prefetch_request_result
 request_chunk_layout(struct prefetcher* p, struct prefetcher_slot* s)
 {
   struct chunk_layout_key key = {
@@ -231,11 +231,11 @@ request_chunk_layout(struct prefetcher* p, struct prefetcher_slot* s)
     .shard_coords = s->shard_coords,
     .h_shards = s->h_shards,
   };
-  return prefetch_cache_request(p->chunk_layout_cache,
-                                chunk_layout_key_hash(&key),
-                                &key,
-                                s->sample_seq,
-                                s->gate);
+  return prefetch_cache_request_result(p->chunk_layout_cache,
+                                       chunk_layout_key_hash(&key),
+                                       &key,
+                                       s->sample_seq,
+                                       s->gate);
 }
 
 static void
@@ -261,9 +261,10 @@ advance_from_meta(struct prefetcher* p, struct prefetcher_slot* s)
 
   if (n == 0) {
     s->n_shards = 0;
-    s->h_layout = request_chunk_layout(p, s);
-    if (!prefetch_handle_valid(s->h_layout)) {
-      err = DAMACY_OOM;
+    struct prefetch_request_result layout_req = request_chunk_layout(p, s);
+    s->h_layout = layout_req.handle;
+    if (layout_req.status != DAMACY_OK) {
+      err = layout_req.status;
       goto Bad;
     }
     slot_set_state(s, &state_pending_layout);
@@ -289,18 +290,20 @@ advance_from_meta(struct prefetcher* p, struct prefetcher_slot* s)
     memcpy(&s->shard_coords[(size_t)i * meta->rank],
            probe.shard_coord,
            (size_t)meta->rank * sizeof(uint64_t));
-    s->h_shards[i] = prefetch_cache_request(p->shard_index_cache,
-                                            shard_index_key_hash(&probe),
-                                            &probe,
-                                            s->sample_seq,
-                                            s->gate);
-    if (!prefetch_handle_valid(s->h_shards[i])) {
+    struct prefetch_request_result req =
+      prefetch_cache_request_result(p->shard_index_cache,
+                                    shard_index_key_hash(&probe),
+                                    &probe,
+                                    s->sample_seq,
+                                    s->gate);
+    s->h_shards[i] = req.handle;
+    if (req.status != DAMACY_OK) {
       // The K successful requests already registered the gate as a waiter
       // (for PENDING/new slots). Their cache workers will dec_pending when
       // they resolve. owner_try_free_locked gates the entry on
       // gate_pending == 0, so recycling waits naturally.
       s->n_shards = i;
-      err = DAMACY_OOM;
+      err = req.status;
       goto Bad;
     }
     i++;
@@ -330,9 +333,10 @@ advance_from_shard(struct prefetcher* p, struct prefetcher_slot* s)
     }
   }
 
-  s->h_layout = request_chunk_layout(p, s);
-  if (!prefetch_handle_valid(s->h_layout)) {
-    err = DAMACY_OOM;
+  struct prefetch_request_result layout_req = request_chunk_layout(p, s);
+  s->h_layout = layout_req.handle;
+  if (layout_req.status != DAMACY_OK) {
+    err = layout_req.status;
     goto Bad;
   }
   slot_set_state(s, &state_pending_layout);
@@ -414,18 +418,19 @@ admit_locked(struct prefetcher* p,
   if (!owner) {
     // gate=NULL: no owner entry allocated. The ERROR slot still preserves
     // sample_seq ordering for the ready-prefix consumer.
-    emit_error_slot_locked(p, slot, popped, NULL, DAMACY_OOM);
+    emit_error_slot_locked(p, slot, popped, NULL, DAMACY_BUDGET);
     return;
   }
   struct prefetch_gate* gate = &owner->gate;
-  struct prefetch_handle h = prefetch_cache_request(p->array_meta_cache,
-                                                    hash_fnv1a_str(popped->uri),
-                                                    popped->uri,
-                                                    popped->sample_seq,
-                                                    gate);
-  if (!prefetch_handle_valid(h)) {
+  struct prefetch_request_result req =
+    prefetch_cache_request_result(p->array_meta_cache,
+                                  hash_fnv1a_str(popped->uri),
+                                  popped->uri,
+                                  popped->sample_seq,
+                                  gate);
+  if (req.status != DAMACY_OK) {
     // ERROR slot retains the owner ref; pop releases it like a normal slot.
-    emit_error_slot_locked(p, slot, popped, gate, DAMACY_OOM);
+    emit_error_slot_locked(p, slot, popped, gate, req.status);
     return;
   }
   *slot = (struct prefetcher_slot){
@@ -433,7 +438,7 @@ admit_locked(struct prefetcher* p,
     .aabb = popped->aabb,
     .sample_seq = popped->sample_seq,
     .gate = gate,
-    .h_meta = h,
+    .h_meta = req.handle,
   };
   slot_set_state(slot, &state_pending_meta);
   p->submitted++;

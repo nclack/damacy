@@ -36,6 +36,7 @@ from __future__ import annotations
 import contextlib
 import itertools
 import logging
+import math
 import os
 import threading
 import warnings
@@ -61,6 +62,7 @@ __all__ = [
     "Dtype",
     "DtypeMismatch",
     "InvalidArgument",
+    "LatencyModel",
     "Metric",
     "NativeCudaError",
     "NotFound",
@@ -173,6 +175,35 @@ def _gds_to_native(v: bool | None) -> int:
     if v is None:
         return _native.GDS_AUTO
     return _native.GDS_ON if v else _native.GDS_OFF
+
+
+@dataclass(frozen=True, slots=True)
+class LatencyModel:
+    """Synthetic metadata latency model for benchmarking prefetch behavior.
+
+    ``lognormal_mu_ln_ns`` and ``lognormal_sigma_ln_ns`` parameterize the
+    natural-log distribution of tail latency measured in nanoseconds.
+    """
+
+    baseline_ns: int = 0
+    lognormal_mu_ln_ns: float = 0.0
+    lognormal_sigma_ln_ns: float = 0.0
+    cap_ns: int = 0
+    seed: int = 0
+
+    def __post_init__(self) -> None:
+        if self.baseline_ns < 0:
+            raise ValueError("baseline_ns must be >= 0")
+        if not math.isfinite(self.lognormal_mu_ln_ns):
+            raise ValueError("lognormal_mu_ln_ns must be finite")
+        if not math.isfinite(self.lognormal_sigma_ln_ns):
+            raise ValueError("lognormal_sigma_ln_ns must be finite")
+        if self.lognormal_sigma_ln_ns < 0:
+            raise ValueError("lognormal_sigma_ln_ns must be >= 0")
+        if self.cap_ns < 0:
+            raise ValueError("cap_ns must be >= 0")
+        if self.seed < 0:
+            raise ValueError("seed must be >= 0")
 
 
 class Status(IntEnum):
@@ -452,8 +483,9 @@ class Config:
         lookahead_samples: User-side push-queue depth in samples. Defaults
             to two full output batches.
         n_io_threads: Bulk data IO worker threads (>= 1).
-        n_prefetch_io_threads: Metadata/prefetch IO worker threads. 0
-            selects the native default.
+        n_prefetch_threads: Metadata dependency-resolution worker threads
+            (>= 1).
+        n_metadata_io_threads: Metadata store backend worker threads (>= 1).
         n_array_meta_cache: LRU cap for zarr-metadata entries.
         n_shard_index_cache: LRU cap for shard-index entries.
         n_chunk_layout_cache: LRU cap for per-array blosc1 chunk-layout entries.
@@ -492,6 +524,8 @@ class Config:
             in that mode; must be ``-1`` (default) otherwise — the
             constructor rejects a node hint paired with a non-PIN_TO
             strategy rather than silently dropping it.
+        metadata_latency: Synthetic metadata-store latency model used
+            for benchmarking prefetch behavior. ``None`` disables it.
     """
 
     samples_per_batch: int
@@ -504,7 +538,8 @@ class Config:
     max_chunks_per_wave: int
     max_substreams_per_chunk: int
     n_io_threads: int
-    n_prefetch_io_threads: int
+    n_prefetch_threads: int
+    n_metadata_io_threads: int
     n_array_meta_cache: int
     n_shard_index_cache: int
     n_chunk_layout_cache: int
@@ -514,6 +549,7 @@ class Config:
     enable_gds: bool | None
     numa_strategy: NumaStrategy
     numa_node: int
+    metadata_latency: LatencyModel
 
     def __init__(
         self,
@@ -529,7 +565,8 @@ class Config:
         max_chunks_per_wave: int = 0,
         max_substreams_per_chunk: int = 0,
         n_io_threads: int = 4,
-        n_prefetch_io_threads: int = 16,
+        n_prefetch_threads: int = 16,
+        n_metadata_io_threads: int = 8,
         n_array_meta_cache: int = 64,
         n_shard_index_cache: int = 256,
         n_chunk_layout_cache: int = 64,
@@ -538,6 +575,7 @@ class Config:
         enable_gds: bool | None = None,
         numa_strategy: NumaStrategy | str | int = NumaStrategy.AUTO,
         numa_node: int = -1,
+        metadata_latency: LatencyModel | None = None,
     ) -> None:
         # Custom __init__ rather than __post_init__ so the constructor
         # signature accepts the polymorphic dtype input while reads of
@@ -549,16 +587,21 @@ class Config:
             )
         if lookahead_samples is None:
             lookahead_samples = 2 * samples_per_batch
-        if lookahead_samples < 2 * samples_per_batch:
+        if lookahead_samples < samples_per_batch:
             raise ValueError(
-                "lookahead_samples must cover at least two full batches "
+                "lookahead_samples must cover at least one full batch "
                 f"(got {lookahead_samples}, samples_per_batch={samples_per_batch})"
             )
         if n_io_threads < 1:
             raise ValueError(f"n_io_threads must be >= 1 (got {n_io_threads})")
-        if n_prefetch_io_threads < 0:
+        if n_prefetch_threads < 1:
             raise ValueError(
-                f"n_prefetch_io_threads must be >= 0 (got {n_prefetch_io_threads})"
+                f"n_prefetch_threads must be >= 1 (got {n_prefetch_threads})"
+            )
+        if n_metadata_io_threads < 1:
+            raise ValueError(
+                "n_metadata_io_threads must be >= 1 "
+                f"(got {n_metadata_io_threads})"
             )
         if max_chunk_uncompressed_bytes < 0:
             raise ValueError("max_chunk_uncompressed_bytes must be >= 0")
@@ -594,6 +637,10 @@ class Config:
             raise ValueError(
                 f"numa_node must be -1 when numa_strategy={ns.name} (got {numa_node})"
             )
+        if metadata_latency is not None and not isinstance(
+            metadata_latency, LatencyModel
+        ):
+            raise TypeError("metadata_latency must be a LatencyModel or None")
         shape_t = tuple(int(x) for x in sample_shape)
         if not shape_t:
             raise ValueError("sample_shape must be non-empty")
@@ -610,7 +657,8 @@ class Config:
         set_(self, "max_chunks_per_wave", max_chunks_per_wave)
         set_(self, "max_substreams_per_chunk", max_substreams_per_chunk)
         set_(self, "n_io_threads", n_io_threads)
-        set_(self, "n_prefetch_io_threads", n_prefetch_io_threads)
+        set_(self, "n_prefetch_threads", n_prefetch_threads)
+        set_(self, "n_metadata_io_threads", n_metadata_io_threads)
         set_(self, "n_array_meta_cache", n_array_meta_cache)
         set_(self, "n_shard_index_cache", n_shard_index_cache)
         set_(self, "n_chunk_layout_cache", n_chunk_layout_cache)
@@ -620,6 +668,7 @@ class Config:
         set_(self, "enable_gds", None if enable_gds is None else bool(enable_gds))
         set_(self, "numa_strategy", ns)
         set_(self, "numa_node", int(numa_node))
+        set_(self, "metadata_latency", metadata_latency or LatencyModel())
 
 
 @dataclass(frozen=True, slots=True)
@@ -687,6 +736,15 @@ class Stats:
     shard_index_misses: int
     chunk_layout_hits: int
     chunk_layout_misses: int
+    metadata_latency_ops: int
+    metadata_latency_map_ops: int
+    metadata_latency_stat_ops: int
+    metadata_latency_submit_ops: int
+    metadata_latency_submit_dev_ops: int
+    metadata_latency_active: int
+    metadata_latency_max_active: int
+    metadata_latency_total_sleep_ns: int
+    metadata_latency_max_sleep_ns: int
     batches_emitted: int
     batches_truncated: int
     waves_emitted: int
@@ -717,6 +775,15 @@ class Stats:
             shard_index_misses=st["shard_index_misses"],
             chunk_layout_hits=st["chunk_layout_hits"],
             chunk_layout_misses=st["chunk_layout_misses"],
+            metadata_latency_ops=st["metadata_latency_ops"],
+            metadata_latency_map_ops=st["metadata_latency_map_ops"],
+            metadata_latency_stat_ops=st["metadata_latency_stat_ops"],
+            metadata_latency_submit_ops=st["metadata_latency_submit_ops"],
+            metadata_latency_submit_dev_ops=st["metadata_latency_submit_dev_ops"],
+            metadata_latency_active=st["metadata_latency_active"],
+            metadata_latency_max_active=st["metadata_latency_max_active"],
+            metadata_latency_total_sleep_ns=st["metadata_latency_total_sleep_ns"],
+            metadata_latency_max_sleep_ns=st["metadata_latency_max_sleep_ns"],
             batches_emitted=st["batches_emitted"],
             batches_truncated=st["batches_truncated"],
             waves_emitted=st["waves_emitted"],
@@ -1031,7 +1098,8 @@ class Pipeline:
                 max_chunks_per_wave=config.max_chunks_per_wave,
                 max_substreams_per_chunk=config.max_substreams_per_chunk,
                 n_io_threads=config.n_io_threads,
-                n_prefetch_io_threads=config.n_prefetch_io_threads,
+                n_prefetch_threads=config.n_prefetch_threads,
+                n_metadata_io_threads=config.n_metadata_io_threads,
                 n_array_meta_cache=config.n_array_meta_cache,
                 n_shard_index_cache=config.n_shard_index_cache,
                 n_chunk_layout_cache=config.n_chunk_layout_cache,
@@ -1040,6 +1108,15 @@ class Pipeline:
                 enable_gds=_gds_to_native(config.enable_gds),
                 numa_strategy=int(config.numa_strategy),
                 numa_node=config.numa_node,
+                metadata_latency_baseline_ns=config.metadata_latency.baseline_ns,
+                metadata_latency_lognormal_mu_ln_ns=(
+                    config.metadata_latency.lognormal_mu_ln_ns
+                ),
+                metadata_latency_lognormal_sigma_ln_ns=(
+                    config.metadata_latency.lognormal_sigma_ln_ns
+                ),
+                metadata_latency_cap_ns=config.metadata_latency.cap_ns,
+                metadata_latency_seed=config.metadata_latency.seed,
             )
         except _native.DamacyError as exc:
             _reraise_typed(exc)
@@ -1314,9 +1391,9 @@ class Pipeline:
         wave-init to first pop (lazy batch-output sizing) and stays
         flat afterward.
 
-        Use :meth:`stats_reset` to zero the cumulative timing
-        counters. ``gpu_bytes_committed`` is not reset — it reflects
-        the live commitment, not a delta.
+        Use :meth:`stats_reset` to zero the cumulative timing and
+        metadata-latency counters. ``gpu_bytes_committed`` is not reset
+        — it reflects the live commitment, not a delta.
 
         Raises:
             ShutdownError: If the pipeline has been closed.
@@ -1327,7 +1404,8 @@ class Pipeline:
     def stats_reset(self) -> None:
         """Zero the cumulative timing counters and per-stage rolling
         totals. Cache hit/miss counters and ``gpu_bytes_committed`` are
-        left alone — they reflect live state, not deltas.
+        left alone — they reflect live state, not deltas. Metadata
+        latency counters are reset with the timing counters.
 
         Raises:
             ShutdownError: If the pipeline has been closed.

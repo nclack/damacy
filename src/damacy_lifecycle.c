@@ -6,6 +6,7 @@
 #include "log/log.h"
 #include "platform/platform.h"
 #include "store/store_fs_gds.h"
+#include "store/store_latency.h"
 #include "util/cuda_check.h"
 #include "util/prelude.h"
 #include "wave/wave_budget.h"
@@ -87,6 +88,8 @@ destroy_inner(struct damacy* self, int cuda_skip)
 
   planner_destroy(self->planner);
   self->planner = NULL;
+  store_destroy(self->store_meta_latency);
+  self->store_meta_latency = NULL;
   store_destroy(self->store_gds);
   self->store_gds = NULL;
   store_destroy(self->store_meta);
@@ -325,11 +328,23 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   {
     struct store_fs_config sc = {
       .root = "",
-      .nthreads = (int)resolve_n_prefetch_io_threads(cfg),
+      .nthreads = (int)resolve_n_metadata_io_threads(cfg),
       .affinity = &self->numa,
     };
     self->store_meta = store_fs_create(&sc);
     CHECK(Fail, self->store_meta);
+  }
+  struct store* metadata_store = self->store_meta;
+  if (cfg->debug.metadata_latency.baseline_ns ||
+      cfg->debug.metadata_latency.lognormal_mu_ln_ns != 0.0 ||
+      cfg->debug.metadata_latency.lognormal_sigma_ln_ns != 0.0) {
+    self->store_meta_latency =
+      store_latency_create(self->store_meta, &cfg->debug.metadata_latency);
+    if (!self->store_meta_latency) {
+      s = DAMACY_OOM;
+      goto Fail;
+    }
+    metadata_store = self->store_meta_latency;
   }
   if (geom.want_gds) {
     struct store_fs_gds_config sc = {
@@ -344,10 +359,10 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   }
 
   self->prefetch_io_q =
-    io_queue_create((int)resolve_n_prefetch_io_threads(cfg), &self->numa);
+    io_queue_create((int)resolve_n_prefetch_threads(cfg), &self->numa);
   CHECK(Fail, self->prefetch_io_q);
   self->io_exec.post = damacy_io_exec_post;
-  array_meta_fetcher_init(&self->array_meta_fetcher, self->store_meta);
+  array_meta_fetcher_init(&self->array_meta_fetcher, metadata_store);
   {
     struct prefetch_cache_config amc_cfg = {
       .capacity = cfg->tuning.n_array_meta_cache,
@@ -360,7 +375,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     CHECK(Fail, self->array_meta_cache);
   }
   shard_index_fetcher_init(
-    &self->shard_index_fetcher, self->store_meta, self->array_meta_cache);
+    &self->shard_index_fetcher, metadata_store, self->array_meta_cache);
   {
     struct prefetch_cache_config sic_cfg = {
       .capacity = cfg->tuning.n_shard_index_cache,
@@ -373,7 +388,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     CHECK(Fail, self->shard_index_cache);
   }
   chunk_layout_fetcher_init(&self->chunk_layout_fetcher,
-                            self->store_meta,
+                            metadata_store,
                             self->array_meta_cache,
                             self->shard_index_cache,
                             geom.max_substreams_per_chunk);

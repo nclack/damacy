@@ -163,6 +163,24 @@ def _counters_table(r: Results) -> Table:
             "chunk_layout hits/misses",
             f"{c.chunk_layout_hits:,} / {c.chunk_layout_misses:,}",
         ),
+        (
+            "metadata latency ops",
+            f"{c.metadata_latency_ops:,} "
+            f"[dim](map/stat/submit/dev "
+            f"{c.metadata_latency_map_ops:,}/{c.metadata_latency_stat_ops:,}/"
+            f"{c.metadata_latency_submit_ops:,}/"
+            f"{c.metadata_latency_submit_dev_ops:,})[/dim]",
+        ),
+        (
+            "metadata latency concurrency",
+            f"max={c.metadata_latency_max_active:,} "
+            f"active={c.metadata_latency_active:,}",
+        ),
+        (
+            "metadata latency sleep",
+            f"total={c.metadata_latency_total_sleep_ns / 1e9:,.2f}s "
+            f"max={c.metadata_latency_max_sleep_ns / 1e9:,.2f}s",
+        ),
         ("gpu_bytes_committed", f"{c.gpu_bytes_committed / 1e6:,.1f} MB"),
     ]
     for k, v in rows:
@@ -229,6 +247,19 @@ def _summary_table(r: Results) -> Table:
 
 def _scenario_panel(r: Results) -> Panel:
     sc = r.scenario
+    lat = sc.metadata_latency
+    latency_line = ""
+    if (
+        lat.baseline_ns
+        or lat.lognormal_mu_ln_ns != 0.0
+        or lat.lognormal_sigma_ln_ns != 0.0
+    ):
+        latency_line = (
+            f"\n[dim]metadata latency[/dim] baseline_ns={lat.baseline_ns} "
+            f"lognormal_mu_ln_ns={lat.lognormal_mu_ln_ns:g} "
+            f"lognormal_sigma_ln_ns={lat.lognormal_sigma_ln_ns:g} "
+            f"cap_ns={lat.cap_ns} seed={lat.seed}"
+        )
     body = (
         f"[bold]{sc.name}[/bold]\n"
         f"[dim]dataset[/dim]  n_zarrs={sc.dataset.n_zarrs} "
@@ -242,8 +273,10 @@ def _scenario_panel(r: Results) -> Panel:
         f"[dim]pipeline[/dim] dst_dtype={sc.pipeline.dtype} "
         f"lookahead={sc.pipeline.lookahead_samples} "
         f"io_threads={sc.pipeline.n_io_threads} "
-        f"prefetch_io_threads={sc.pipeline.n_prefetch_io_threads} "
+        f"prefetch_threads={sc.pipeline.n_prefetch_threads} "
+        f"metadata_io_threads={sc.pipeline.n_metadata_io_threads} "
         f"max_gpu_mb={sc.pipeline.max_gpu_memory_mb or 'default'}"
+        f"{latency_line}"
     )
     return Panel(body, title="scenario", border_style="cyan")
 

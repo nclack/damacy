@@ -400,9 +400,18 @@ def test_config_validates_eagerly():
         Config(
             samples_per_batch=1,
             sample_shape=ss,
-            lookahead_samples=1,
+            lookahead_samples=0,
             max_gpu_memory_bytes=gpu,
         )
+    assert (
+        Config(
+            samples_per_batch=2,
+            sample_shape=ss,
+            lookahead_samples=2,
+            max_gpu_memory_bytes=gpu,
+        ).lookahead_samples
+        == 2
+    )
     with pytest.raises(ValueError, match="n_io_threads"):
         Config(
             samples_per_batch=1,
@@ -410,11 +419,25 @@ def test_config_validates_eagerly():
             n_io_threads=0,
             max_gpu_memory_bytes=gpu,
         )
-    with pytest.raises(ValueError, match="n_prefetch_io_threads"):
+    with pytest.raises(ValueError, match="n_prefetch_threads"):
         Config(
             samples_per_batch=1,
             sample_shape=ss,
-            n_prefetch_io_threads=-1,
+            n_prefetch_threads=-1,
+            max_gpu_memory_bytes=gpu,
+        )
+    with pytest.raises(ValueError, match="n_prefetch_threads"):
+        Config(
+            samples_per_batch=1,
+            sample_shape=ss,
+            n_prefetch_threads=0,
+            max_gpu_memory_bytes=gpu,
+        )
+    with pytest.raises(ValueError, match="n_metadata_io_threads"):
+        Config(
+            samples_per_batch=1,
+            sample_shape=ss,
+            n_metadata_io_threads=0,
             max_gpu_memory_bytes=gpu,
         )
     with pytest.raises(ValueError, match="max_chunk_uncompressed_bytes"):
@@ -472,6 +495,23 @@ def test_config_enable_gds_tri_state():
     assert dataclasses.replace(cfg, enable_gds=False).enable_gds is False
 
 
+def test_config_metadata_latency_model():
+    model = damacy.LatencyModel(
+        baseline_ns=200_000,
+        lognormal_mu_ln_ns=14.5,
+        lognormal_sigma_ln_ns=1.5,
+        cap_ns=500_000_000,
+        seed=7,
+    )
+    cfg = dataclasses.replace(_base_config(), metadata_latency=model)
+    assert cfg.metadata_latency is model
+
+    with pytest.raises(ValueError, match="lognormal_sigma_ln_ns"):
+        damacy.LatencyModel(lognormal_sigma_ln_ns=-1.0)
+    with pytest.raises(TypeError, match="metadata_latency"):
+        dataclasses.replace(_base_config(), metadata_latency=object())
+
+
 def test_pipeline_accepts_new_config_kwargs(tiny_zarr):
     _ = tiny_zarr
     cfg = dataclasses.replace(
@@ -499,7 +539,8 @@ def test_native_pipeline_rejects_out_of_range_enums(tiny_zarr):
             samples_per_batch=1,
             lookahead_samples=2,
             n_io_threads=1,
-            n_prefetch_io_threads=1,
+            n_prefetch_threads=1,
+            n_metadata_io_threads=1,
             n_array_meta_cache=4,
             n_shard_index_cache=4,
             n_chunk_layout_cache=4,

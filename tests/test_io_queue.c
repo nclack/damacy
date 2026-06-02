@@ -3,6 +3,7 @@
 #include "damacy_limits.h"
 #include "expect.h"
 #include "io_queue/io_queue.h"
+#include "platform/platform.h"
 
 #include <pthread.h>
 #include <sched.h>
@@ -90,7 +91,7 @@ test_invalid_args(void)
   EXPECT(io_queue_post(NULL, inc_run, NULL, NULL) != 0);
   EXPECT(io_queue_create(0, NULL) == NULL);
   EXPECT(io_queue_create(-1, NULL) == NULL);
-  EXPECT(io_queue_create((int)DAMACY_MAX_IO_THREADS + 1, NULL) == NULL);
+  EXPECT(io_queue_create(platform_default_thread_count() + 1, NULL) == NULL);
 
   struct io_queue* q = io_queue_create(1, NULL);
   EXPECT(q);

@@ -23,11 +23,12 @@ target_link_libraries(test_fixture PUBLIC log crc32c zarr)
 # OK/FAIL lines and exit nonzero on failure; ctest captures the exit
 # code. add_damacy_test lives in cmake/Helpers.cmake.
 add_damacy_test(test_json json log)
-add_damacy_test(test_damacy_config damacy_config log)
+add_damacy_test(test_damacy_config damacy_config log platform)
 add_damacy_test(test_lru lru hash)
 add_damacy_test(test_pool pool log platform Threads::Threads)
-add_damacy_test(test_io_queue io_queue log)
+add_damacy_test(test_io_queue io_queue log platform)
 add_damacy_test(test_store_fs store lru hash log)
+add_damacy_test(test_store_latency store test_fixture)
 target_link_libraries(test_store_fs PRIVATE Threads::Threads)
 add_damacy_test(
     test_planner

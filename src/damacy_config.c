@@ -4,6 +4,7 @@
 #include "platform/platform.h"
 #include "util/prelude.h"
 
+#include <math.h>
 #include <string.h>
 
 uint32_t
@@ -43,15 +44,17 @@ cast_path_supported(enum damacy_dtype dst, enum dtype src)
 enum damacy_status
 validate_config(const struct damacy_config* cfg)
 {
+  uint32_t max_threads = (uint32_t)platform_default_thread_count();
   CHECK_SILENT(Invalid, cfg);
   CHECK_SILENT(Invalid, cfg->samples_per_batch > 0);
   CHECK_SILENT(Invalid, cfg->tuning.max_gpu_memory_bytes > 0);
   CHECK_SILENT(Invalid, cfg->lookahead_samples >= cfg->samples_per_batch);
   CHECK_SILENT(Invalid, cfg->tuning.n_io_threads > 0);
-  CHECK_SILENT(Invalid, cfg->tuning.n_io_threads <= DAMACY_MAX_IO_THREADS);
-  CHECK_SILENT(Invalid,
-               cfg->tuning.n_prefetch_io_threads == 0 ||
-                 cfg->tuning.n_prefetch_io_threads <= DAMACY_MAX_IO_THREADS);
+  CHECK_SILENT(Invalid, cfg->tuning.n_io_threads <= max_threads);
+  CHECK_SILENT(Invalid, cfg->tuning.n_prefetch_threads > 0);
+  CHECK_SILENT(Invalid, cfg->tuning.n_prefetch_threads <= max_threads);
+  CHECK_SILENT(Invalid, cfg->tuning.n_metadata_io_threads > 0);
+  CHECK_SILENT(Invalid, cfg->tuning.n_metadata_io_threads <= max_threads);
   CHECK_SILENT(
     Invalid,
     cfg->tuning.host_buffer_waves == 0 ||
@@ -77,9 +80,42 @@ validate_config(const struct damacy_config* cfg)
                cfg->tuning.enable_gds == DAMACY_GDS_AUTO ||
                  cfg->tuning.enable_gds == DAMACY_GDS_ON ||
                  cfg->tuning.enable_gds == DAMACY_GDS_OFF);
+  CHECK_SILENT(Invalid,
+               isfinite(cfg->debug.metadata_latency.lognormal_mu_ln_ns));
+  CHECK_SILENT(Invalid,
+               isfinite(cfg->debug.metadata_latency.lognormal_sigma_ln_ns));
+  CHECK_SILENT(Invalid,
+               cfg->debug.metadata_latency.lognormal_sigma_ln_ns >= 0.0);
   return DAMACY_OK;
 Invalid:
   return DAMACY_INVAL;
+}
+
+static uint32_t
+clamp_default_threads(uint32_t requested)
+{
+  uint32_t max_threads = (uint32_t)platform_default_thread_count();
+  if (requested > max_threads)
+    return max_threads;
+  return requested;
+}
+
+struct damacy_tuning
+damacy_tuning_defaults(void)
+{
+  return (struct damacy_tuning){
+    .max_chunk_uncompressed_bytes = DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES,
+    .max_read_op_bytes = DAMACY_DEFAULT_READ_OP_MAX_BYTES,
+    .host_buffer_waves = DAMACY_DEFAULT_HOST_BUFFER_WAVES,
+    .max_chunks_per_wave = DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE,
+    .max_substreams_per_chunk = DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK,
+    .n_io_threads = clamp_default_threads(DAMACY_DEFAULT_IO_THREADS),
+    .n_prefetch_threads = clamp_default_threads(DAMACY_DEFAULT_PREFETCH_THREADS),
+    .n_metadata_io_threads =
+      clamp_default_threads(DAMACY_DEFAULT_METADATA_IO_THREADS),
+    .numa_strategy = DAMACY_NUMA_AUTO,
+    .enable_gds = DAMACY_GDS_AUTO,
+  };
 }
 
 uint64_t
@@ -136,12 +172,15 @@ resolve_max_substreams_per_chunk(const struct damacy_config* cfg)
 }
 
 uint32_t
-resolve_n_prefetch_io_threads(const struct damacy_config* cfg)
+resolve_n_prefetch_threads(const struct damacy_config* cfg)
 {
-  uint32_t v = cfg->tuning.n_prefetch_io_threads;
-  if (v == 0)
-    v = DAMACY_DEFAULT_PREFETCH_IO_THREADS;
-  return v;
+  return cfg->tuning.n_prefetch_threads;
+}
+
+uint32_t
+resolve_n_metadata_io_threads(const struct damacy_config* cfg)
+{
+  return cfg->tuning.n_metadata_io_threads;
 }
 
 uint8_t

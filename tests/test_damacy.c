@@ -57,6 +57,8 @@ mk_cfg(const char* root, uint32_t samples_per_batch, int64_t sy, int64_t sx)
     .device = -1,
     .tuning = {
       .n_io_threads = 1,
+      .n_prefetch_threads = 1,
+      .n_metadata_io_threads = 1,
       .n_array_meta_cache = 4,
       .n_shard_index_cache = 4,
       .n_chunk_layout_cache = 4,
@@ -561,6 +563,7 @@ test_lookahead_backpressure(void)
   // samples_per_batch=1, lookahead_samples=2 → lookahead cap of 2 samples.
   struct damacy_config cfg = mk_cfg(root, 1, 4, 8);
   cfg.lookahead_samples = 2;
+  cfg.debug.metadata_latency.baseline_ns = 50ull * 1000ull * 1000ull;
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
