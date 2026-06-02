@@ -59,6 +59,8 @@ mk_cfg(const char* root, uint32_t samples_per_batch, int64_t sy, int64_t sx)
     .device = -1,
     .tuning = {
       .n_io_threads = 1,
+      .n_prefetch_threads = 1,
+      .n_metadata_io_threads = 1,
       .n_array_meta_cache = 4,
       .n_shard_index_cache = 4,
       .n_chunk_layout_cache = 4,
@@ -295,6 +297,8 @@ test_multi_wave_per_batch(void)
     .device = -1,
     .tuning = {
       .n_io_threads = 1,
+      .n_prefetch_threads = 1,
+      .n_metadata_io_threads = 1,
       .n_array_meta_cache = 4,
       .n_shard_index_cache = 4,
       .n_chunk_layout_cache = 4,
@@ -373,6 +377,8 @@ test_wave_grows_substream_cap(void)
     .device = -1,
     .tuning = {
       .n_io_threads = 1,
+      .n_prefetch_threads = 1,
+      .n_metadata_io_threads = 1,
       .n_array_meta_cache = 4,
       .n_shard_index_cache = 4,
       .n_chunk_layout_cache = 4,
@@ -450,6 +456,8 @@ test_grow_inside_tight_budget(void)
     .device = -1,
     .tuning = {
       .n_io_threads = 1,
+      .n_prefetch_threads = 1,
+      .n_metadata_io_threads = 1,
       .n_array_meta_cache = 4,
       .n_shard_index_cache = 4,
       .n_chunk_layout_cache = 4,
@@ -509,6 +517,8 @@ test_layout_probe_avoids_decoder_grow(void)
     .device = -1,
     .tuning = {
       .n_io_threads = 1,
+      .n_prefetch_threads = 1,
+      .n_metadata_io_threads = 1,
       .n_array_meta_cache = 4,
       .n_shard_index_cache = 4,
       .n_chunk_layout_cache = 4,

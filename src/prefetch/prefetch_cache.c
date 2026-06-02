@@ -319,12 +319,12 @@ make_handle(uint32_t active_idx, uint32_t generation)
                                    .generation = generation };
 }
 
-struct prefetch_handle
-prefetch_cache_request(struct prefetch_cache* self,
-                       uint64_t key_hash,
-                       const void* key,
-                       uint64_t owner_id,
-                       struct prefetch_gate* gate)
+struct prefetch_request_result
+prefetch_cache_request_result(struct prefetch_cache* self,
+                              uint64_t key_hash,
+                              const void* key,
+                              uint64_t owner_id,
+                              struct prefetch_gate* gate)
 {
   CHECK(Bad, self);
   CHECK(Bad, key);
@@ -344,7 +344,7 @@ prefetch_cache_request(struct prefetch_cache* self,
       if (slot_register_waiter(s, gate)) {
         prefetch_gate_dec_pending(gate);
         platform_mutex_unlock(self->lock);
-        return PREFETCH_HANDLE_NONE;
+        return (struct prefetch_request_result){ .status = DAMACY_OOM };
       }
     } else if (s->state == PREFETCH_STATE_ERROR) {
       prefetch_gate_set_error(gate);
@@ -352,19 +352,19 @@ prefetch_cache_request(struct prefetch_cache* self,
 
     struct prefetch_handle h = make_handle(s->active_idx, s->generation);
     platform_mutex_unlock(self->lock);
-    return h;
+    return (struct prefetch_request_result){ .handle = h, .status = DAMACY_OK };
   }
 
   void* key_copy = self->ops->key_clone(self->ops, key);
   if (!key_copy) {
     platform_mutex_unlock(self->lock);
-    return PREFETCH_HANDLE_NONE;
+    return (struct prefetch_request_result){ .status = DAMACY_OOM };
   }
   struct prefetch_slot* s = (struct prefetch_slot*)malloc(sizeof(*s));
   if (!s) {
     self->ops->key_destroy(self->ops, key_copy);
     platform_mutex_unlock(self->lock);
-    return PREFETCH_HANDLE_NONE;
+    return (struct prefetch_request_result){ .status = DAMACY_OOM };
   }
   *s = (struct prefetch_slot){
     .key_hash = key_hash,
@@ -381,7 +381,7 @@ prefetch_cache_request(struct prefetch_cache* self,
   if (!ent) {
     // lru_put has already called lru_slot_destroy on s.
     platform_mutex_unlock(self->lock);
-    return PREFETCH_HANDLE_NONE;
+    return (struct prefetch_request_result){ .status = DAMACY_BUDGET };
   }
   s->lru_ent = ent;
   lru_entry_acquire_locked(ent);
@@ -407,7 +407,7 @@ prefetch_cache_request(struct prefetch_cache* self,
     slot_release_waiters(s, 1);
     struct prefetch_handle h = make_handle(s->active_idx, s->generation);
     platform_mutex_unlock(self->lock);
-    return h;
+    return (struct prefetch_request_result){ .handle = h, .status = DAMACY_OK };
   }
   *ctx = (struct fetch_ctx){
     .cache = self,
@@ -434,10 +434,25 @@ prefetch_cache_request(struct prefetch_cache* self,
     free(ctx);
   }
 
-  return make_handle(handle_active_idx, handle_gen);
+  return (struct prefetch_request_result){
+    .handle = make_handle(handle_active_idx, handle_gen),
+    .status = DAMACY_OK,
+  };
 
 Bad:
-  return PREFETCH_HANDLE_NONE;
+  return (struct prefetch_request_result){ .status = DAMACY_INVAL };
+}
+
+struct prefetch_handle
+prefetch_cache_request(struct prefetch_cache* self,
+                       uint64_t key_hash,
+                       const void* key,
+                       uint64_t owner_id,
+                       struct prefetch_gate* gate)
+{
+  struct prefetch_request_result r =
+    prefetch_cache_request_result(self, key_hash, key, owner_id, gate);
+  return r.status == DAMACY_OK ? r.handle : PREFETCH_HANDLE_NONE;
 }
 
 // --- fetch worker --------------------------------------------------------

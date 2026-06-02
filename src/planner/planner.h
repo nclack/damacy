@@ -177,7 +177,7 @@ extern "C"
 
   // Output buffers for planner_plan. Caller owns the storage; planner
   // populates *_n on success. If any buffer fills before the plan
-  // completes, planner_plan returns DAMACY_OOM.
+  // completes, planner_plan returns DAMACY_BUDGET.
   //
   // `paths` interns each emitted read_op's shard_path. planner_plan
   // resets it at entry; caller need not.

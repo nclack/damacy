@@ -60,14 +60,12 @@ _Static_assert(DAMACY_DEFAULT_READ_OP_MAX_BYTES <= UINT32_MAX,
 // metadata buffer.
 #define DAMACY_MAX_CHUNKS_PER_BATCH 16384u
 
-// Sizes io_queue's per-worker arrays (see io_queue.posix.c). Generous:
-// consumer NVMe saturates well below 32 in-flight reads. Bump if a real
-// workload demonstrates need.
-#define DAMACY_MAX_IO_THREADS 32u
-
-// Metadata prefetch is dominated by small, latency-bound reads. Keep its
-// default materially higher than the bulk IO default used by most examples.
-#define DAMACY_DEFAULT_PREFETCH_IO_THREADS 16u
+// Default thread counts used by damacy_tuning_defaults(). damacy_create
+// requires explicit positive thread counts and bounds them by the host's
+// online CPU count.
+#define DAMACY_DEFAULT_IO_THREADS 8u
+#define DAMACY_DEFAULT_PREFETCH_THREADS 16u
+#define DAMACY_DEFAULT_METADATA_IO_THREADS 8u
 
 // Matches DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE. Must be a power of two —
 // io_queue indexes via bitmask.

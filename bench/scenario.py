@@ -79,7 +79,8 @@ class Pipeline(BaseModel):
     dtype: DstDType = "f32"
     lookahead_samples: int = Field(gt=0)
     n_io_threads: int = Field(gt=0)
-    n_prefetch_io_threads: int = Field(default=16, ge=0)
+    n_prefetch_threads: int = Field(default=16, gt=0)
+    n_metadata_io_threads: int = Field(default=8, gt=0)
     max_gpu_memory_mb: int = 0  # 0 → library default
     max_chunk_uncompressed_mb: int = 0  # 0 → library default
     max_read_op_kb: int = 0  # cap on coalesced read_op size; 0 → library default
@@ -96,12 +97,21 @@ class Consumer(BaseModel):
     hold_ms: float = 0.0
 
 
+class LatencyModel(BaseModel):
+    baseline_ns: int = Field(default=0, ge=0)
+    lognormal_mu_ln_ns: float = 0.0
+    lognormal_sigma_ln_ns: float = Field(default=0.0, ge=0.0)
+    cap_ns: int = Field(default=0, ge=0)
+    seed: int = Field(default=0, ge=0)
+
+
 class Scenario(BaseModel):
     name: str = "scenario"
     dataset: Dataset
     sampling: Sampling
     pipeline: Pipeline
     consumer: Consumer = Field(default_factory=Consumer)
+    metadata_latency: LatencyModel = Field(default_factory=LatencyModel)
 
 
 # --- results -----------------------------------------------------------------
@@ -144,6 +154,15 @@ class Counters(BaseModel):
     shard_index_misses: int
     chunk_layout_hits: int
     chunk_layout_misses: int
+    metadata_latency_ops: int = 0
+    metadata_latency_map_ops: int = 0
+    metadata_latency_stat_ops: int = 0
+    metadata_latency_submit_ops: int = 0
+    metadata_latency_submit_dev_ops: int = 0
+    metadata_latency_active: int = 0
+    metadata_latency_max_active: int = 0
+    metadata_latency_total_sleep_ns: int = 0
+    metadata_latency_max_sleep_ns: int = 0
     gpu_bytes_committed: int = 0
 
 

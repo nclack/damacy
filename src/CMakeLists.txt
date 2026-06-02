@@ -69,9 +69,8 @@ add_platform_sources(io_queue io_queue/io_queue)
 # project-local monotonic clock). Shared by API and wave orchestration.
 add_src_lib(damacy_stats SOURCES damacy_stats.h damacy_stats.c)
 
-# Internal config helpers: dtype mapping, validate_config, and the
-# "0 means use the ceiling" knob resolvers. Shared by lifecycle,
-# gpu_budget/, and wave/.
+# Internal config helpers: dtype mapping, validate_config, explicit tuning
+# defaults, and sizing resolvers. Shared by lifecycle, gpu_budget/, and wave/.
 add_src_lib(damacy_config SOURCES damacy_config.h damacy_config.c
     LINKS dtype log platform
 )
@@ -172,8 +171,11 @@ add_cuda_lib(wave_pool
 # Read-side store. store_fs.c is the host impl; store_fs_gds.c is an
 # independent cuFile-backed store. DAMACY_ENABLE_GDS=OFF links the stub
 # (store_fs_gds_create returns NULL); runtime GDS opt-in then fails INVAL.
-add_src_lib(store SOURCES store/store.h store/store_internal.h store/store.c store/store_fs.h store/store_fs.c
-    LINKS io_queue platform_io strbuf log lru pool hash
+add_src_lib(store
+    SOURCES store/store.h store/store_internal.h store/store.c
+            store/store_fs.h store/store_fs.c
+            store/store_latency.h store/store_latency.c
+    LINKS io_queue platform_io strbuf log lru pool hash m
 )
 if(NOT DAMACY_FUZZ AND DAMACY_ENABLE_GDS)
     target_sources(store PRIVATE store/store_fs_gds.h store/store_fs_gds.c)

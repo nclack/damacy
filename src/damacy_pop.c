@@ -5,6 +5,7 @@
 #include "log/log.h"
 #include "nvtx/nvtx.h"
 #include "platform/platform.h"
+#include "store/store_latency.h"
 #include "util/prelude.h"
 
 #include <cuda.h>
@@ -298,6 +299,19 @@ damacy_stats_get(const struct damacy* self, struct damacy_stats* out)
     out->chunk_layout.hits = cs.counters.hits;
     out->chunk_layout.misses = cs.counters.misses;
   }
+  if (m->store_meta_latency) {
+    struct store_latency_stats ls;
+    store_latency_stats_get(m->store_meta_latency, &ls);
+    out->metadata_latency.ops = ls.ops;
+    out->metadata_latency.map_ops = ls.map_ops;
+    out->metadata_latency.stat_ops = ls.stat_ops;
+    out->metadata_latency.submit_ops = ls.submit_ops;
+    out->metadata_latency.submit_dev_ops = ls.submit_dev_ops;
+    out->metadata_latency.active = ls.active;
+    out->metadata_latency.max_active = ls.max_active;
+    out->metadata_latency.total_sleep_ns = ls.total_sleep_ns;
+    out->metadata_latency.max_sleep_ns = ls.max_sleep_ns;
+  }
 }
 
 void
@@ -306,4 +320,5 @@ damacy_stats_reset(struct damacy* self)
   if (!self)
     return;
   stats_init(&self->stats);
+  store_latency_stats_reset(self->store_meta_latency);
 }

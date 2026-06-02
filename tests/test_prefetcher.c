@@ -525,7 +525,7 @@ test_admit_fail_releases_batch_entry(void)
   EXPECT(prefetcher_pop_ready(fx.p, &r) == 1);
   EXPECT(r.result == PREFETCHER_RESULT_ERROR);
   EXPECT(r.sample_seq == 8);
-  EXPECT(r.err_code == DAMACY_OOM);
+  EXPECT(r.err_code == DAMACY_BUDGET);
   prefetcher_ready_free(&r);
 
   EXPECT(prefetcher_sample_gate(fx.p, 8) == NULL);
@@ -703,7 +703,7 @@ test_owner_capacity_saturation_surfaces_error(void)
   EXPECT(prefetcher_pop_ready(fx.p, &r) == 1);
   EXPECT(r.result == PREFETCHER_RESULT_ERROR);
   EXPECT(r.sample_seq == 8);
-  EXPECT(r.err_code == DAMACY_OOM);
+  EXPECT(r.err_code == DAMACY_BUDGET);
   prefetcher_ready_free(&r);
 
   EXPECT(prefetcher_sample_gate(fx.p, 8) == NULL);

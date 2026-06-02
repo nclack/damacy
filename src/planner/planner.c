@@ -232,7 +232,7 @@ emit_fill_chunk(const struct emit_ctx* ctx,
 {
   if (out->n_read_ops >= out->read_ops_cap ||
       out->n_chunk_plans >= out->chunk_plans_cap)
-    return DAMACY_OOM;
+    return DAMACY_BUDGET;
   const struct zarr_metadata* meta = ctx->meta;
 
   uint32_t read_op_idx = out->n_read_ops;
@@ -316,7 +316,7 @@ emit_chunk(const struct emit_ctx* ctx,
 
   if (out->n_read_ops >= out->read_ops_cap ||
       out->n_chunk_plans >= out->chunk_plans_cap)
-    return DAMACY_OOM;
+    return DAMACY_BUDGET;
 
   uint32_t read_op_idx = out->n_read_ops;
   struct read_op* r = &out->read_ops[read_op_idx];
@@ -438,7 +438,7 @@ planner_plan_segment(struct planner* self,
     }
 
     if (sample_idx_in_batch >= out->sample_plans_cap) {
-      status = DAMACY_OOM;
+      status = DAMACY_BUDGET;
       goto Cleanup;
     }
     struct sample_plan* sp = &out->sample_plans[sample_idx_in_batch];
@@ -634,7 +634,7 @@ planner_plan_segment(struct planner* self,
     if (status != DAMACY_OK)
       goto Cleanup;
     if (out->n_read_ops + 1u > 3u * self->scratch_u32_cap) {
-      status = DAMACY_OOM;
+      status = DAMACY_BUDGET;
       goto Cleanup;
     }
     status =

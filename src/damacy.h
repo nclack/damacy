@@ -110,11 +110,17 @@ extern "C"
     // DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK.
     uint32_t max_substreams_per_chunk;
 
-    // Bulk chunk-read worker threads. Wave IO uses this queue.
+    // Bulk chunk-read worker threads. Wave IO uses this queue. Required:
+    // must be > 0 and no larger than the host's online CPU count.
     uint32_t n_io_threads;
-    // Metadata/prefetch worker threads. 0 ->
-    // DAMACY_DEFAULT_PREFETCH_IO_THREADS.
-    uint32_t n_prefetch_io_threads;
+    // Metadata dependency-resolution workers. These run prefetch cache fetch
+    // jobs for array metadata, shard indexes, and chunk layouts. Required:
+    // must be > 0 and no larger than the host's online CPU count.
+    uint32_t n_prefetch_threads;
+    // Metadata store backend workers. These service metadata store reads that
+    // fetchers submit while resolving cache misses. Required: must be > 0 and
+    // no larger than the host's online CPU count.
+    uint32_t n_metadata_io_threads;
 
     uint32_t n_array_meta_cache;
     uint32_t n_shard_index_cache;
@@ -127,11 +133,28 @@ extern "C"
   };
 
   // Measurement/profiling switches.
+  struct damacy_latency_model
+  {
+    // Adds a fixed floor to every modeled operation.
+    uint64_t baseline_ns;
+    // Natural-log normal tail in nanoseconds:
+    // tail_ns = exp(lognormal_mu_ln_ns + lognormal_sigma_ln_ns * N(0, 1)).
+    double lognormal_mu_ln_ns;
+    double lognormal_sigma_ln_ns;
+    // 0 disables capping.
+    uint64_t cap_ns;
+    // 0 selects a deterministic default seed.
+    uint64_t seed;
+  };
+
   struct damacy_debug_flags
   {
     // Skip decode. Pipeline runs normally but instead of decompressing
     // chunks, an array's fill value is used to fill the batch.
     uint8_t bypass_decode;
+    // Debug-only latency injection for metadata store operations. All-zero
+    // disables the wrapper.
+    struct damacy_latency_model metadata_latency;
   };
 
   // Configuration of the damacy pipeline
@@ -159,6 +182,11 @@ extern "C"
 
   struct damacy;
   struct damacy_batch;
+
+  // Fill performance/resource knobs with explicit library defaults. Callers
+  // still own required geometry fields such as sample_shape, samples_per_batch,
+  // lookahead_samples, dtype, and max_gpu_memory_bytes.
+  struct damacy_tuning damacy_tuning_defaults(void);
 
   // Create a damacy instance.
   enum damacy_status damacy_create(const struct damacy_config* cfg,
@@ -302,6 +330,18 @@ extern "C"
       uint64_t hits;
       uint64_t misses;
     } array_meta, shard_index, chunk_layout;
+    struct
+    {
+      uint64_t ops;
+      uint64_t map_ops;
+      uint64_t stat_ops;
+      uint64_t submit_ops;
+      uint64_t submit_dev_ops;
+      uint64_t active;
+      uint64_t max_active;
+      uint64_t total_sleep_ns;
+      uint64_t max_sleep_ns;
+    } metadata_latency;
     uint64_t batches_emitted;
     uint64_t batches_truncated;
     uint64_t waves_emitted;
