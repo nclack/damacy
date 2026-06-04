@@ -107,6 +107,7 @@
             gh
             man-pages
             man-pages-posix
+            liburing
           ]);
 
           CUDA_PATH = "${cudaPkgs.cudatoolkit}";

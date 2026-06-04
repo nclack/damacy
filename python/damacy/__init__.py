@@ -483,7 +483,7 @@ class Config:
         lookahead_samples: User-side push-queue depth in samples. Defaults
             to two full output batches.
         n_io_threads: Bulk data IO worker threads (>= 1).
-        metadata_io_concurrency: Async metadata stat/read concurrency (>= 1).
+        metadata_io_concurrency: Async metadata request concurrency (>= 1).
         n_array_meta_cache: LRU cap for zarr-metadata entries.
         n_shard_index_cache: LRU cap for shard-index entries.
         n_chunk_layout_cache: LRU cap for per-array blosc1 chunk-layout entries.

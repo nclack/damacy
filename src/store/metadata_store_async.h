@@ -24,11 +24,41 @@ extern "C"
                                          uint64_t size);
 
   struct metadata_store_async* metadata_store_async_create(
-    struct store* store,
     int concurrency,
-    const struct numa_resolved* affinity);
+    const struct numa_resolved* affinity,
+    const struct damacy_latency_model* latency);
 
   void metadata_store_async_destroy(struct metadata_store_async* s);
+
+  struct metadata_store_async_latency_stats
+  {
+    uint64_t ops;
+    uint64_t map_ops;
+    uint64_t stat_ops;
+    uint64_t submit_ops;
+    uint64_t submit_dev_ops;
+    uint64_t active;
+    uint64_t max_active;
+    uint64_t total_sleep_ns;
+    uint64_t max_sleep_ns;
+  };
+
+  struct metadata_store_async_backend_stats
+  {
+    uint64_t read_jobs;
+    uint64_t read_active;
+    uint64_t read_max_active;
+  };
+
+  void metadata_store_async_latency_stats_get(
+    struct metadata_store_async* s,
+    struct metadata_store_async_latency_stats* out);
+  void metadata_store_async_latency_stats_reset(struct metadata_store_async* s);
+
+  void metadata_store_async_backend_stats_get(
+    struct metadata_store_async* s,
+    struct metadata_store_async_backend_stats* out);
+  void metadata_store_async_backend_stats_reset(struct metadata_store_async* s);
 
   int metadata_store_async_read_file(struct metadata_store_async* s,
                                      const char* key,

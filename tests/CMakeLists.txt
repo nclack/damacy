@@ -29,7 +29,9 @@ add_damacy_test(test_pool pool log platform Threads::Threads)
 add_damacy_test(test_io_queue io_queue log platform)
 add_damacy_test(test_store_fs store lru hash log)
 add_damacy_test(test_store_latency store test_fixture)
+add_damacy_test(test_metadata_store_async metadata_store_async test_fixture)
 target_link_libraries(test_store_fs PRIVATE Threads::Threads)
+target_link_libraries(test_metadata_store_async PRIVATE Threads::Threads)
 add_damacy_test(
     test_planner
     planner

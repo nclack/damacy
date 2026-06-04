@@ -6,7 +6,6 @@
 #include "log/log.h"
 #include "platform/platform.h"
 #include "store/store_fs_gds.h"
-#include "store/store_latency.h"
 #include "util/cuda_check.h"
 #include "util/prelude.h"
 #include "wave/wave_budget.h"
@@ -78,12 +77,8 @@ destroy_inner(struct damacy* self, int cuda_skip)
 
   planner_destroy(self->planner);
   self->planner = NULL;
-  store_destroy(self->store_meta_latency);
-  self->store_meta_latency = NULL;
   store_destroy(self->store_gds);
   self->store_gds = NULL;
-  store_destroy(self->store_meta);
-  self->store_meta = NULL;
   store_destroy(self->store_host);
   self->store_host = NULL;
   gpu_budget_destroy(self->budget);
@@ -315,29 +310,10 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     self->store_host = store_fs_create(&sc);
     CHECK(Fail, self->store_host);
   }
-  {
-    struct store_fs_config sc = {
-      .root = "",
-      .nthreads = (int)resolve_metadata_io_concurrency(cfg),
-      .affinity = &self->numa,
-    };
-    self->store_meta = store_fs_create(&sc);
-    CHECK(Fail, self->store_meta);
-  }
-  struct store* metadata_store = self->store_meta;
-  if (cfg->debug.metadata_latency.baseline_ns ||
-      cfg->debug.metadata_latency.lognormal_mu_ln_ns != 0.0 ||
-      cfg->debug.metadata_latency.lognormal_sigma_ln_ns != 0.0) {
-    self->store_meta_latency =
-      store_latency_create(self->store_meta, &cfg->debug.metadata_latency);
-    if (!self->store_meta_latency) {
-      s = DAMACY_OOM;
-      goto Fail;
-    }
-    metadata_store = self->store_meta_latency;
-  }
-  self->store_meta_async = metadata_store_async_create(
-    metadata_store, (int)resolve_metadata_io_concurrency(cfg), &self->numa);
+  self->store_meta_async =
+    metadata_store_async_create((int)resolve_metadata_io_concurrency(cfg),
+                                &self->numa,
+                                &cfg->debug.metadata_latency);
   CHECK(Fail, self->store_meta_async);
   if (geom.want_gds) {
     struct store_fs_gds_config sc = {

@@ -5,8 +5,6 @@
 #include "log/log.h"
 #include "nvtx/nvtx.h"
 #include "platform/platform.h"
-#include "store/store_fs.h"
-#include "store/store_latency.h"
 #include "util/prelude.h"
 
 #include <cuda.h>
@@ -300,9 +298,9 @@ damacy_stats_get(const struct damacy* self, struct damacy_stats* out)
     out->chunk_layout.hits = cs.counters.hits;
     out->chunk_layout.misses = cs.counters.misses;
   }
-  if (m->store_meta_latency) {
-    struct store_latency_stats ls;
-    store_latency_stats_get(m->store_meta_latency, &ls);
+  if (m->store_meta_async) {
+    struct metadata_store_async_latency_stats ls;
+    metadata_store_async_latency_stats_get(m->store_meta_async, &ls);
     out->metadata_latency.ops = ls.ops;
     out->metadata_latency.map_ops = ls.map_ops;
     out->metadata_latency.stat_ops = ls.stat_ops;
@@ -312,10 +310,8 @@ damacy_stats_get(const struct damacy* self, struct damacy_stats* out)
     out->metadata_latency.max_active = ls.max_active;
     out->metadata_latency.total_sleep_ns = ls.total_sleep_ns;
     out->metadata_latency.max_sleep_ns = ls.max_sleep_ns;
-  }
-  if (m->store_meta) {
-    struct store_fs_io_stats fs;
-    store_fs_io_stats_get((struct store_fs*)m->store_meta, &fs);
+    struct metadata_store_async_backend_stats fs;
+    metadata_store_async_backend_stats_get(m->store_meta_async, &fs);
     out->metadata_backend.read_jobs = fs.read_jobs;
     out->metadata_backend.read_active = fs.read_active;
     out->metadata_backend.read_max_active = fs.read_max_active;
@@ -328,6 +324,6 @@ damacy_stats_reset(struct damacy* self)
   if (!self)
     return;
   stats_init(&self->stats);
-  store_latency_stats_reset(self->store_meta_latency);
-  store_fs_io_stats_reset((struct store_fs*)self->store_meta);
+  metadata_store_async_latency_stats_reset(self->store_meta_async);
+  metadata_store_async_backend_stats_reset(self->store_meta_async);
 }

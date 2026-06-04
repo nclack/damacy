@@ -148,10 +148,8 @@ prefetcher requests metadata key
         -> prefetcher observes ready/error on the next advance
 ```
 
-The first backend is thread-backed over the existing store interface. On
-Linux, `io_uring` is the natural backend replacement for this narrow async
-metadata-store API: submit/read small metadata files into owned buffers,
-submit shard stat/footer/header work without blocking the prefetcher, and
-complete cache entries from I/O completion state. `metadata_io_concurrency`
-sets the metadata I/O concurrency budget: worker count in the current backend,
-or queue depth/max in-flight operations for a native async backend.
+The metadata store is an `io_uring` driver on Linux. It submits small
+metadata stat/open/read/close work without blocking the prefetcher and
+completes cache entries from I/O completion state. `metadata_io_concurrency`
+sets the metadata request-concurrency budget; the ring allocates enough
+entries internally for multi-step requests and driver wakeups.

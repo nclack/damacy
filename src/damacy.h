@@ -113,11 +113,10 @@ extern "C"
     // Bulk chunk-read worker threads. Wave IO uses this queue. Required:
     // must be > 0 and no larger than the host's online CPU count.
     uint32_t n_io_threads;
-    // Metadata stat/read concurrency for array metadata, shard indexes, and
-    // chunk-layout probes. The current thread-backed backend interprets this
-    // as a worker count; an async kernel backend may interpret it as queue
-    // depth or max in-flight metadata operations. Required: must be > 0 and no
-    // larger than the host's online CPU count for the current backend.
+    // Metadata request concurrency for array metadata, shard indexes, and
+    // chunk-layout probes. The Linux metadata path uses this as an io_uring
+    // request-depth budget, not as a host thread count. Required: must be > 0
+    // and no larger than DAMACY_MAX_METADATA_IO_CONCURRENCY.
     uint32_t metadata_io_concurrency;
 
     uint32_t n_array_meta_cache;
@@ -151,7 +150,7 @@ extern "C"
     // chunks, an array's fill value is used to fill the batch.
     uint8_t bypass_decode;
     // Debug-only latency injection for metadata store operations. All-zero
-    // disables the wrapper.
+    // disables injection.
     struct damacy_latency_model metadata_latency;
   };
 

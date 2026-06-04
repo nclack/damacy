@@ -187,8 +187,15 @@ endif()
 
 add_src_lib(metadata_store_async
     SOURCES store/metadata_store_async.h store/metadata_store_async.c
-    LINKS store io_queue
+    LINKS store log platform PkgConfig::LIBURING
 )
+if(TARGET numa)
+    target_link_libraries(metadata_store_async PUBLIC numa)
+    target_compile_definitions(
+        metadata_store_async
+        PRIVATE DAMACY_METADATA_ASYNC_NUMA=1
+    )
+endif()
 target_link_libraries(array_meta PUBLIC metadata_store_async)
 target_link_libraries(shard_index PUBLIC metadata_store_async)
 target_link_libraries(chunk_layout PUBLIC metadata_store_async)

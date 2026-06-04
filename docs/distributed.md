@@ -64,7 +64,7 @@ def main() -> None:
         max_gpu_memory_bytes=1 << 30,   # per-rank GPU budget
         dtype="bf16",
         n_io_threads=4,                 # bulk chunk reads, per-rank
-        metadata_io_concurrency=8,      # async metadata stat/read concurrency
+        metadata_io_concurrency=8,      # async metadata request concurrency
         device=local_rank,
     )
 
@@ -120,13 +120,13 @@ Most `Config` knobs apply per rank. Aggregate cost on a node is
 | `max_gpu_memory_bytes` | GPU budget: wave buffers, decoder scratch, batch-output pool |
 | `host_buffer_waves` | pinned-host slab pool, in waves |
 | `n_io_threads` | bulk chunk-read worker threads |
-| `metadata_io_concurrency` | async metadata stat/read concurrency |
+| `metadata_io_concurrency` | async metadata request concurrency |
 | `n_array_meta_cache`, `n_shard_index_cache`, `n_chunk_layout_cache` | LRU caps for parsed metadata |
 
 Tune `n_io_threads` to your storage tier's bulk read behavior, and keep
 `metadata_io_concurrency` high enough to cover small, latency-bound metadata
-dependency work. The current backend uses it as a worker-pool size; a native
-async backend can use it as queue depth. When stacking multiple ranks on one
+dependency work. The Linux metadata path uses it as an io_uring request-depth
+budget, not as a host thread count. When stacking multiple ranks on one
 GPU (uncommon, but valid), divide `max_gpu_memory_bytes` so the per-GPU total
 fits within the device.
 

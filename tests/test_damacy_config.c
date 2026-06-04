@@ -80,15 +80,13 @@ test_tuning_defaults_thread_counts(void)
 {
   struct damacy_tuning tuning = damacy_tuning_defaults();
   uint32_t max_threads = (uint32_t)platform_default_thread_count();
-  uint32_t expected_metadata = DAMACY_DEFAULT_METADATA_IO_CONCURRENCY;
-  if (expected_metadata > max_threads)
-    expected_metadata = max_threads;
   uint32_t expected_io = DAMACY_DEFAULT_IO_THREADS;
   if (expected_io > max_threads)
     expected_io = max_threads;
 
   EXPECT(tuning.n_io_threads == expected_io);
-  EXPECT(tuning.metadata_io_concurrency == expected_metadata);
+  EXPECT(tuning.metadata_io_concurrency ==
+         DAMACY_DEFAULT_METADATA_IO_CONCURRENCY);
   return 0;
 }
 
@@ -146,6 +144,8 @@ test_validate_io_threads_bound_by_machine(void)
     },
   };
   cfg.tuning.metadata_io_concurrency = too_many;
+  EXPECT(validate_config(&cfg) == DAMACY_OK);
+  cfg.tuning.metadata_io_concurrency = DAMACY_MAX_METADATA_IO_CONCURRENCY + 1u;
   EXPECT(validate_config(&cfg) == DAMACY_INVAL);
   cfg.tuning.metadata_io_concurrency = 1;
   cfg.tuning.n_io_threads = too_many;
