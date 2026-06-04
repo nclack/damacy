@@ -225,6 +225,50 @@ test_lock_free_release_under_contention(void)
 }
 
 static int
+test_read_job_stats(void)
+{
+  char root[] = "/tmp/damacy_store_fs_read_stats_XXXXXX";
+  EXPECT(mkdtemp(root));
+  EXPECT(setup_files(root, 1) == 0);
+
+  struct store_fs_config sc = {
+    .root = root,
+    .nthreads = 1,
+    .fd_cache_capacity = CAP,
+  };
+  struct store* store = store_fs_create(&sc);
+  EXPECT(store);
+  struct store_fs* fs = (struct store_fs*)store;
+
+  for (int i = 0; i < 3; ++i) {
+    char dst = 0;
+    struct store_read read = {
+      .key = "k0",
+      .dst = &dst,
+      .offset = 0,
+      .len = sizeof dst,
+    };
+    EXPECT(store_read_many(store, &read, 1) == 0);
+    EXPECT(dst == 'a');
+  }
+
+  struct store_fs_io_stats stats;
+  store_fs_io_stats_get(fs, &stats);
+  EXPECT(stats.read_jobs == 3);
+  EXPECT(stats.read_active == 0);
+  EXPECT(stats.read_max_active >= 1);
+
+  store_fs_io_stats_reset(fs);
+  store_fs_io_stats_get(fs, &stats);
+  EXPECT(stats.read_jobs == 0);
+  EXPECT(stats.read_active == 0);
+  EXPECT(stats.read_max_active == 0);
+
+  store_destroy(store);
+  return 0;
+}
+
+static int
 test_async_read_error_reports_io(void)
 {
   char root[] = "/tmp/damacy_store_fs_error_XXXXXX";
@@ -271,6 +315,7 @@ main(void)
   RUN(test_hit_path);
   RUN(test_pin_saturation);
   RUN(test_lock_free_release_under_contention);
+  RUN(test_read_job_stats);
   RUN(test_async_read_error_reports_io);
   return 0;
 }

@@ -5,6 +5,7 @@
 #include "log/log.h"
 #include "nvtx/nvtx.h"
 #include "platform/platform.h"
+#include "store/store_fs.h"
 #include "store/store_latency.h"
 #include "util/prelude.h"
 
@@ -312,6 +313,13 @@ damacy_stats_get(const struct damacy* self, struct damacy_stats* out)
     out->metadata_latency.total_sleep_ns = ls.total_sleep_ns;
     out->metadata_latency.max_sleep_ns = ls.max_sleep_ns;
   }
+  if (m->store_meta) {
+    struct store_fs_io_stats fs;
+    store_fs_io_stats_get((struct store_fs*)m->store_meta, &fs);
+    out->metadata_backend.read_jobs = fs.read_jobs;
+    out->metadata_backend.read_active = fs.read_active;
+    out->metadata_backend.read_max_active = fs.read_max_active;
+  }
 }
 
 void
@@ -321,4 +329,5 @@ damacy_stats_reset(struct damacy* self)
     return;
   stats_init(&self->stats);
   store_latency_stats_reset(self->store_meta_latency);
+  store_fs_io_stats_reset((struct store_fs*)self->store_meta);
 }

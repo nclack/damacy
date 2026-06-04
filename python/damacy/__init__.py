@@ -735,6 +735,9 @@ class Stats:
     metadata_latency_max_active: int
     metadata_latency_total_sleep_ns: int
     metadata_latency_max_sleep_ns: int
+    metadata_backend_read_jobs: int
+    metadata_backend_read_active: int
+    metadata_backend_read_max_active: int
     batches_emitted: int
     batches_truncated: int
     waves_emitted: int
@@ -774,6 +777,9 @@ class Stats:
             metadata_latency_max_active=st["metadata_latency_max_active"],
             metadata_latency_total_sleep_ns=st["metadata_latency_total_sleep_ns"],
             metadata_latency_max_sleep_ns=st["metadata_latency_max_sleep_ns"],
+            metadata_backend_read_jobs=st["metadata_backend_read_jobs"],
+            metadata_backend_read_active=st["metadata_backend_read_active"],
+            metadata_backend_read_max_active=st["metadata_backend_read_max_active"],
             batches_emitted=st["batches_emitted"],
             batches_truncated=st["batches_truncated"],
             waves_emitted=st["waves_emitted"],

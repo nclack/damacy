@@ -177,6 +177,16 @@ store_fs_release(struct store_fs* fs, struct lru_entry* pin)
   lru_entry_release(pin);
 }
 
+static void
+atomic_max_u64(_Atomic uint64_t* dst, uint64_t val)
+{
+  uint64_t cur = atomic_load_explicit(dst, memory_order_relaxed);
+  while (cur < val &&
+         !atomic_compare_exchange_weak_explicit(
+           dst, &cur, val, memory_order_relaxed, memory_order_relaxed)) {
+  }
+}
+
 void
 store_fs_stats_get(struct store_fs* fs, struct lru_stats* out)
 {
@@ -185,6 +195,34 @@ store_fs_stats_get(struct store_fs* fs, struct lru_stats* out)
   platform_mutex_lock(fs->cache_lock);
   lru_stats_get(fs ? fs->fd_cache : NULL, out);
   platform_mutex_unlock(fs->cache_lock);
+}
+
+void
+store_fs_io_stats_get(struct store_fs* fs, struct store_fs_io_stats* out)
+{
+  if (!out)
+    return;
+  if (!fs) {
+    *out = (struct store_fs_io_stats){ 0 };
+    return;
+  }
+  *out = (struct store_fs_io_stats){
+    .read_jobs = atomic_load_explicit(&fs->read_jobs, memory_order_relaxed),
+    .read_active = atomic_load_explicit(&fs->read_active, memory_order_relaxed),
+    .read_max_active =
+      atomic_load_explicit(&fs->read_max_active, memory_order_relaxed),
+  };
+}
+
+void
+store_fs_io_stats_reset(struct store_fs* fs)
+{
+  if (!fs)
+    return;
+  uint64_t active =
+    atomic_load_explicit(&fs->read_active, memory_order_relaxed);
+  atomic_store_explicit(&fs->read_jobs, 0, memory_order_relaxed);
+  atomic_store_explicit(&fs->read_max_active, active, memory_order_relaxed);
 }
 
 struct fs_read_job
@@ -204,7 +242,12 @@ fs_read_job_fn(void* vctx)
   struct fs_read_job* j = (struct fs_read_job*)vctx;
   platform_file* f =
     (platform_file*)((struct fs_cache_entry*)lru_entry_value(j->pin))->file;
+  atomic_fetch_add_explicit(&j->fs->read_jobs, 1, memory_order_relaxed);
+  uint64_t active =
+    atomic_fetch_add_explicit(&j->fs->read_active, 1, memory_order_acq_rel) + 1;
+  atomic_max_u64(&j->fs->read_max_active, active);
   int64_t n = platform_file_pread(f, j->dst, j->len, j->offset);
+  atomic_fetch_sub_explicit(&j->fs->read_active, 1, memory_order_acq_rel);
   if (n < 0) {
     log_warn("store_fs: read failed for key=%s off=%llu len=%zu got=%lld",
              j->key ? j->key : "(null)",

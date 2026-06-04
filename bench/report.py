@@ -181,6 +181,12 @@ def _counters_table(r: Results) -> Table:
             f"total={c.metadata_latency_total_sleep_ns / 1e9:,.2f}s "
             f"max={c.metadata_latency_max_sleep_ns / 1e9:,.2f}s",
         ),
+        (
+            "metadata backend reads",
+            f"jobs={c.metadata_backend_read_jobs:,} "
+            f"max_active={c.metadata_backend_read_max_active:,} "
+            f"active={c.metadata_backend_read_active:,}",
+        ),
         ("gpu_bytes_committed", f"{c.gpu_bytes_committed / 1e6:,.1f} MB"),
     ]
     for k, v in rows:

@@ -162,6 +162,9 @@ class Counters(BaseModel):
     metadata_latency_max_active: int = 0
     metadata_latency_total_sleep_ns: int = 0
     metadata_latency_max_sleep_ns: int = 0
+    metadata_backend_read_jobs: int = 0
+    metadata_backend_read_active: int = 0
+    metadata_backend_read_max_active: int = 0
     gpu_bytes_committed: int = 0
 
 

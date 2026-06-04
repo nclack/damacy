@@ -805,6 +805,12 @@ emit_results(const struct scenario* sc, const struct run_metrics* rm, FILE* out)
   jw_uint(&jw, rm->stats.metadata_latency.total_sleep_ns);
   jw_key(&jw, "metadata_latency_max_sleep_ns");
   jw_uint(&jw, rm->stats.metadata_latency.max_sleep_ns);
+  jw_key(&jw, "metadata_backend_read_jobs");
+  jw_uint(&jw, rm->stats.metadata_backend.read_jobs);
+  jw_key(&jw, "metadata_backend_read_active");
+  jw_uint(&jw, rm->stats.metadata_backend.read_active);
+  jw_key(&jw, "metadata_backend_read_max_active");
+  jw_uint(&jw, rm->stats.metadata_backend.read_max_active);
   jw_key(&jw, "gpu_bytes_committed");
   jw_uint(&jw, rm->stats.gpu_bytes_committed);
   jw_object_end(&jw);

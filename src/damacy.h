@@ -340,6 +340,12 @@ extern "C"
       uint64_t total_sleep_ns;
       uint64_t max_sleep_ns;
     } metadata_latency;
+    struct
+    {
+      uint64_t read_jobs;
+      uint64_t read_active;
+      uint64_t read_max_active;
+    } metadata_backend;
     uint64_t batches_emitted;
     uint64_t batches_truncated;
     uint64_t waves_emitted;

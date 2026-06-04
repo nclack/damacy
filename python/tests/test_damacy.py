@@ -574,6 +574,9 @@ def test_stats_returns_typed_dataclass(tiny_zarr):
         assert s.gpu_bytes_committed > 0
         assert s.plan.name == "plan"
         assert s.input_transfer.name == "input_transfer"
+        assert s.metadata_backend_read_jobs >= 0
+        assert s.metadata_backend_read_active >= 0
+        assert s.metadata_backend_read_max_active >= 0
 
 
 def test_stats_gpu_bytes_grows_after_first_pop(tiny_zarr):
@@ -597,6 +600,8 @@ def test_stats_io_planner_counters_advance(tiny_zarr):
         assert s.chunks_planned > 0
         assert s.chunks_to_load > 0
         assert s.reads_issued > 0
+        assert s.metadata_backend_read_jobs > 0
+        assert s.metadata_backend_read_max_active > 0
         assert s.chunks_to_load <= s.chunks_planned
 
 

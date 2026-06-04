@@ -108,13 +108,19 @@ def main(
     t.add_column("io GB/s", justify="right")
     t.add_column("input GB/s", justify="right")
     t.add_column("reads", justify="right")
+    t.add_column("ttfb s", justify="right")
     t.add_column("wall s", justify="right")
     t.add_column("throughput GB/s", justify="right")
+    t.add_column("lat max active", justify="right")
+    t.add_column("lat sleep s", justify="right")
+    t.add_column("meta read jobs", justify="right")
+    t.add_column("meta read max", justify="right")
     for v, d in results:
         stages = {s["name"]: s for s in d["stages"]}
         io = stages["io"]
         input_transfer = stages["input_transfer"]
         c = d["counters"]
+        tm = d["timings_ms"]
         wall_ms = d["timings_ms"]["wall"]
         gb_in = io["input_bytes"] / 1e9
         io_gb_s = (gb_in * 1000.0) / io["ms_total"] if io["ms_total"] > 0 else 0.0
@@ -131,8 +137,13 @@ def main(
             f"{io_gb_s:.2f}",
             f"{input_gb_s:.2f}",
             f"{c['reads_issued']:,}",
+            f"{tm['time_to_first_batch'] / 1000.0:.2f}",
             f"{wall_ms / 1000.0:.2f}",
             f"{d['derived']['throughput_mb_s'] / 1e3:.2f}",
+            f"{c.get('metadata_latency_max_active', 0):,}",
+            f"{c.get('metadata_latency_total_sleep_ns', 0) / 1e9:.2f}",
+            f"{c.get('metadata_backend_read_jobs', 0):,}",
+            f"{c.get('metadata_backend_read_max_active', 0):,}",
         )
     Console().print(t)
 
