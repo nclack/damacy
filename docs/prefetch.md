@@ -125,21 +125,20 @@ sync is fine for synchronous reads but stalls a prefetched loop on
 every iteration. Deferred release replaces the host sync with a
 stream-side wait that costs nothing on the host.
 
-## Future: async metadata I/O
+## Async Metadata I/O
 
-The metadata prefetcher has a separate concern from batch-slot
-release: hiding latency while resolving zarr metadata, shard indexes,
-and chunk layouts. The current implementation resolves cache misses by
-running a blocking fetch function on a prefetch worker. Those fetchers
-call the metadata store synchronously for operations such as
-`store_map`, `store_stat`, and `store_read_many`, so the number of
-prefetch workers is still the effective bound on concurrent metadata
-waits.
+The metadata prefetcher has a separate concern from batch-slot release:
+hiding latency while resolving zarr metadata, shard indexes, and chunk
+layouts. `prefetch_cache` has an async completion boundary: a cache miss
+creates a pending slot, hands an opaque completion token to an async
+fetcher, and later completes READY or ERROR without the prefetcher knowing
+how the work ran.
 
-The intended direction is an async metadata-store boundary rather than
-only swapping the file backend. The prefetch cache should be able to
-start a metadata fetch, keep the entry pending, and mark it ready/error
-from completion state:
+The production metadata fetchers use a narrow async metadata-store
+boundary. Array metadata submits an owned whole-file read for `zarr.json`;
+shard indexes submit async stat plus an optional footer read; chunk layout
+submits the 16-byte blosc header probe. The prefetcher observes only cache
+state and gates:
 
 ```text
 prefetcher requests metadata key
@@ -149,20 +148,10 @@ prefetcher requests metadata key
         -> prefetcher observes ready/error on the next advance
 ```
 
-On Linux, `io_uring` is the natural backend for that narrow async file
-API. The value is not cross-platform event-loop abstraction; it is
-moving small metadata waits out of prefetch worker threads. A useful
-implementation should keep the API narrow:
-
-- submit/read small metadata files into owned buffers instead of
-  blocking in `store_map`;
-- submit/stat shard files asynchronously where the backend supports it;
-- submit shard-footer and chunk-layout probes without waiting inside
-  the fetcher;
-- complete parsing/finalization separately from kernel I/O completion.
-
-Until that boundary changes, increasing backend I/O concurrency alone
-does not hide synchronous `map`/`stat` waits. The split tuning knobs
-(`n_prefetch_threads` and `n_metadata_io_threads`) make that visible:
-prefetch-thread count controls dependency-resolution concurrency, while
-metadata-I/O thread count controls backend store concurrency.
+The first backend is thread-backed over the existing store interface. On
+Linux, `io_uring` is the natural backend replacement for this narrow async
+metadata-store API: submit/read small metadata files into owned buffers,
+submit shard stat/footer/header work without blocking the prefetcher, and
+complete cache entries from I/O completion state. `metadata_io_concurrency`
+sets the metadata I/O concurrency budget: worker count in the current backend,
+or queue depth/max in-flight operations for a native async backend.

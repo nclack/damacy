@@ -12,6 +12,7 @@ extern "C"
 #endif
 
   struct store;
+  struct metadata_store_async;
 
   struct shard_index_key
   {
@@ -34,9 +35,20 @@ extern "C"
     struct prefetch_cache* array_meta_cache;
   };
 
+  struct shard_index_async_fetcher
+  {
+    struct prefetch_async_fetcher base;
+    struct metadata_store_async* store;
+    struct prefetch_cache* array_meta_cache;
+  };
+
   void shard_index_fetcher_init(struct shard_index_fetcher* f,
                                 struct store* store,
                                 struct prefetch_cache* array_meta_cache);
+
+  void shard_index_async_fetcher_init(struct shard_index_async_fetcher* f,
+                                      struct metadata_store_async* store,
+                                      struct prefetch_cache* array_meta_cache);
 
   extern const struct prefetch_ops shard_index_ops;
 

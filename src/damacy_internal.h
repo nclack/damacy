@@ -3,7 +3,6 @@
 #include "batch_pool/batch_pool.h"
 #include "damacy.h"
 #include "gpu_budget/gpu_budget.h"
-#include "io_queue/io_queue.h"
 #include "lookahead/lookahead.h"
 #include "numa/numa.h"
 #include "planner/planner.h"
@@ -14,6 +13,7 @@
 #include "prefetch/shard_index.h"
 #include "render_job/render_job.h"
 #include "scheduler/scheduler.h"
+#include "store/metadata_store_async.h"
 #include "store/store.h"
 #include "wave/wave_pool.h"
 
@@ -59,16 +59,15 @@ struct damacy
   struct store* store_host;
   struct store* store_meta;
   struct store* store_meta_latency;
+  struct metadata_store_async* store_meta_async;
   struct store* store_gds;
   struct planner* planner;
 
-  // Dedicated io_queue isolates metadata reads from the store's bulk
-  // chunk I/O so they can't head-of-line block decode.
-  struct io_queue* prefetch_io_q;
-  struct prefetch_executor io_exec;
-  struct array_meta_fetcher array_meta_fetcher;
-  struct shard_index_fetcher shard_index_fetcher;
-  struct chunk_layout_fetcher chunk_layout_fetcher;
+  // Async metadata cache fetchers use a separate store boundary so cache
+  // misses do not occupy the prefetcher worker while waiting on small I/O.
+  struct array_meta_async_fetcher array_meta_async_fetcher;
+  struct shard_index_async_fetcher shard_index_async_fetcher;
+  struct chunk_layout_async_fetcher chunk_layout_async_fetcher;
   struct prefetch_cache* array_meta_cache;
   struct prefetch_cache* shard_index_cache;
   struct prefetch_cache* chunk_layout_cache;

@@ -13,16 +13,6 @@
 
 #include <stdlib.h>
 
-static int
-damacy_io_exec_post(struct prefetch_executor* e,
-                    void (*fn)(void*),
-                    void* ctx,
-                    void (*ctx_free)(void*))
-{
-  struct damacy* d = container_of(e, struct damacy, io_exec);
-  return io_queue_post(d->prefetch_io_q, fn, ctx, ctx_free);
-}
-
 // --- ctx guard ------------------------------------------------------------
 
 enum damacy_status
@@ -69,8 +59,8 @@ destroy_inner(struct damacy* self, int cuda_skip)
   // on completion, so caches must outlive io_queue's pending tasks.
   prefetcher_destroy(self->prefetcher);
   self->prefetcher = NULL;
-  io_queue_destroy(self->prefetch_io_q);
-  self->prefetch_io_q = NULL;
+  metadata_store_async_destroy(self->store_meta_async);
+  self->store_meta_async = NULL;
   prefetch_cache_destroy(self->chunk_layout_cache);
   self->chunk_layout_cache = NULL;
   prefetch_cache_destroy(self->shard_index_cache);
@@ -328,7 +318,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   {
     struct store_fs_config sc = {
       .root = "",
-      .nthreads = (int)resolve_n_metadata_io_threads(cfg),
+      .nthreads = (int)resolve_metadata_io_concurrency(cfg),
       .affinity = &self->numa,
     };
     self->store_meta = store_fs_create(&sc);
@@ -346,6 +336,9 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     }
     metadata_store = self->store_meta_latency;
   }
+  self->store_meta_async = metadata_store_async_create(
+    metadata_store, (int)resolve_metadata_io_concurrency(cfg), &self->numa);
+  CHECK(Fail, self->store_meta_async);
   if (geom.want_gds) {
     struct store_fs_gds_config sc = {
       .root = "",
@@ -358,47 +351,42 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     }
   }
 
-  self->prefetch_io_q =
-    io_queue_create((int)resolve_n_prefetch_threads(cfg), &self->numa);
-  CHECK(Fail, self->prefetch_io_q);
-  self->io_exec.post = damacy_io_exec_post;
-  array_meta_fetcher_init(&self->array_meta_fetcher, metadata_store);
+  array_meta_async_fetcher_init(&self->array_meta_async_fetcher,
+                                self->store_meta_async);
   {
     struct prefetch_cache_config amc_cfg = {
       .capacity = cfg->tuning.n_array_meta_cache,
       .max_probe = 16,
       .ops = &array_meta_ops,
-      .fetcher = &self->array_meta_fetcher.base,
-      .executor = &self->io_exec,
+      .async_fetcher = &self->array_meta_async_fetcher.base,
     };
     self->array_meta_cache = prefetch_cache_create(&amc_cfg);
     CHECK(Fail, self->array_meta_cache);
   }
-  shard_index_fetcher_init(
-    &self->shard_index_fetcher, metadata_store, self->array_meta_cache);
+  shard_index_async_fetcher_init(&self->shard_index_async_fetcher,
+                                 self->store_meta_async,
+                                 self->array_meta_cache);
   {
     struct prefetch_cache_config sic_cfg = {
       .capacity = cfg->tuning.n_shard_index_cache,
       .max_probe = 16,
       .ops = &shard_index_ops,
-      .fetcher = &self->shard_index_fetcher.base,
-      .executor = &self->io_exec,
+      .async_fetcher = &self->shard_index_async_fetcher.base,
     };
     self->shard_index_cache = prefetch_cache_create(&sic_cfg);
     CHECK(Fail, self->shard_index_cache);
   }
-  chunk_layout_fetcher_init(&self->chunk_layout_fetcher,
-                            metadata_store,
-                            self->array_meta_cache,
-                            self->shard_index_cache,
-                            geom.max_substreams_per_chunk);
+  chunk_layout_async_fetcher_init(&self->chunk_layout_async_fetcher,
+                                  self->store_meta_async,
+                                  self->array_meta_cache,
+                                  self->shard_index_cache,
+                                  geom.max_substreams_per_chunk);
   {
     struct prefetch_cache_config clc_cfg = {
       .capacity = cfg->tuning.n_chunk_layout_cache,
       .max_probe = 16,
       .ops = &chunk_layout_ops,
-      .fetcher = &self->chunk_layout_fetcher.base,
-      .executor = &self->io_exec,
+      .async_fetcher = &self->chunk_layout_async_fetcher.base,
     };
     self->chunk_layout_cache = prefetch_cache_create(&clc_cfg);
     CHECK(Fail, self->chunk_layout_cache);

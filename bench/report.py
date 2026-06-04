@@ -273,8 +273,7 @@ def _scenario_panel(r: Results) -> Panel:
         f"[dim]pipeline[/dim] dst_dtype={sc.pipeline.dtype} "
         f"lookahead={sc.pipeline.lookahead_samples} "
         f"io_threads={sc.pipeline.n_io_threads} "
-        f"prefetch_threads={sc.pipeline.n_prefetch_threads} "
-        f"metadata_io_threads={sc.pipeline.n_metadata_io_threads} "
+        f"metadata_io_concurrency={sc.pipeline.metadata_io_concurrency} "
         f"max_gpu_mb={sc.pipeline.max_gpu_memory_mb or 'default'}"
         f"{latency_line}"
     )

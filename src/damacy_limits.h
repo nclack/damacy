@@ -60,12 +60,11 @@ _Static_assert(DAMACY_DEFAULT_READ_OP_MAX_BYTES <= UINT32_MAX,
 // metadata buffer.
 #define DAMACY_MAX_CHUNKS_PER_BATCH 16384u
 
-// Default thread counts used by damacy_tuning_defaults(). damacy_create
-// requires explicit positive thread counts and bounds them by the host's
-// online CPU count.
+// Default worker/concurrency counts used by damacy_tuning_defaults().
+// damacy_create requires explicit positive values and bounds them by the
+// current backend's host concurrency limit.
 #define DAMACY_DEFAULT_IO_THREADS 8u
-#define DAMACY_DEFAULT_PREFETCH_THREADS 16u
-#define DAMACY_DEFAULT_METADATA_IO_THREADS 8u
+#define DAMACY_DEFAULT_METADATA_IO_CONCURRENCY 8u
 
 // Matches DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE. Must be a power of two —
 // io_queue indexes via bitmask.

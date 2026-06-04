@@ -59,6 +59,7 @@ struct prefetch_cache
 
   const struct prefetch_ops* ops;
   struct prefetch_fetcher* fetcher;
+  struct prefetch_async_fetcher* async_fetcher;
   struct prefetch_executor* executor;
 };
 
@@ -71,6 +72,19 @@ struct fetch_ctx
 
 static void
 prefetch_fetch_worker(void* ctx_);
+
+static struct prefetch_slot*
+resolve_handle(const struct prefetch_cache* c, struct prefetch_handle h);
+
+static struct prefetch_completion
+make_completion(struct prefetch_slot* s)
+{
+  return (struct prefetch_completion){
+    .cache = s->cache,
+    .slot = s->active_idx + 1,
+    .generation = s->generation,
+  };
+}
 
 // --- gate ----------------------------------------------------------------
 
@@ -233,6 +247,54 @@ End:
   return;
 }
 
+static void
+slot_complete_locked(struct prefetch_cache* c,
+                     struct prefetch_slot* s,
+                     void* value,
+                     int err_code)
+{
+  if (err_code == 0) {
+    s->state = PREFETCH_STATE_READY;
+    s->value = value;
+    c->pending_count--;
+    slot_release_waiters(s, 0);
+    return;
+  }
+
+  if (value)
+    c->ops->value_destroy(c->ops, value);
+  s->state = PREFETCH_STATE_ERROR;
+  s->err = err_code;
+  c->pending_count--;
+  c->errored_count++;
+  slot_release_waiters(s, 1);
+}
+
+void
+prefetch_cache_complete(struct prefetch_completion completion,
+                        void* value,
+                        int err_code)
+{
+  struct prefetch_cache* c = completion.cache;
+  if (!c)
+    return;
+
+  platform_mutex_lock(c->lock);
+  struct prefetch_slot* s = resolve_handle(
+    c,
+    (struct prefetch_handle){ .slot = completion.slot,
+                              .generation = completion.generation });
+  if (!s || s->state != PREFETCH_STATE_PENDING) {
+    if (value)
+      c->ops->value_destroy(c->ops, value);
+    platform_mutex_unlock(c->lock);
+    return;
+  }
+
+  slot_complete_locked(c, s, value, err_code);
+  platform_mutex_unlock(c->lock);
+}
+
 // --- create / destroy ----------------------------------------------------
 
 struct prefetch_cache*
@@ -246,10 +308,14 @@ prefetch_cache_create(const struct prefetch_cache_config* cfg)
   CHECK(Error, cfg->ops->key_eq);
   CHECK(Error, cfg->ops->key_clone);
   CHECK(Error, cfg->ops->key_destroy);
-  CHECK(Error, cfg->fetcher);
-  CHECK(Error, cfg->fetcher->fetch);
-  CHECK(Error, cfg->executor);
-  CHECK(Error, cfg->executor->post);
+  CHECK(Error, cfg->fetcher || cfg->async_fetcher);
+  if (cfg->fetcher) {
+    CHECK(Error, cfg->fetcher->fetch);
+    CHECK(Error, cfg->executor);
+    CHECK(Error, cfg->executor->post);
+  }
+  if (cfg->async_fetcher)
+    CHECK(Error, cfg->async_fetcher->start);
 
   self = (struct prefetch_cache*)malloc(sizeof(*self));
   CHECK(Error, self);
@@ -257,6 +323,7 @@ prefetch_cache_create(const struct prefetch_cache_config* cfg)
     .capacity = cfg->capacity,
     .ops = cfg->ops,
     .fetcher = cfg->fetcher,
+    .async_fetcher = cfg->async_fetcher,
     .executor = cfg->executor,
   };
 
@@ -396,18 +463,28 @@ prefetch_cache_request_result(struct prefetch_cache* self,
   gate_inc_pending(gate);
   (void)slot_register_waiter(s, gate);
 
+  uint32_t handle_active_idx = s->active_idx;
+  uint32_t handle_gen = s->generation;
+  struct prefetch_completion completion = make_completion(s);
+
+  platform_mutex_unlock(self->lock);
+
+  if (self->async_fetcher) {
+    if (self->async_fetcher->start(self->async_fetcher, s->key, completion))
+      prefetch_cache_complete(completion, NULL, DAMACY_AGAIN);
+    return (struct prefetch_request_result){
+      .handle = make_handle(handle_active_idx, handle_gen),
+      .status = DAMACY_OK,
+    };
+  }
+
   struct fetch_ctx* ctx = (struct fetch_ctx*)malloc(sizeof(*ctx));
   if (!ctx) {
-    // Mark errored so consumers don't hang on a pending slot with no
-    // fetch in flight.
-    s->state = PREFETCH_STATE_ERROR;
-    s->err = DAMACY_OOM;
-    self->pending_count--;
-    self->errored_count++;
-    slot_release_waiters(s, 1);
-    struct prefetch_handle h = make_handle(s->active_idx, s->generation);
-    platform_mutex_unlock(self->lock);
-    return (struct prefetch_request_result){ .handle = h, .status = DAMACY_OK };
+    prefetch_cache_complete(completion, NULL, DAMACY_OOM);
+    return (struct prefetch_request_result){
+      .handle = make_handle(handle_active_idx, handle_gen),
+      .status = DAMACY_OK,
+    };
   }
   *ctx = (struct fetch_ctx){
     .cache = self,
@@ -415,20 +492,11 @@ prefetch_cache_request_result(struct prefetch_cache* self,
     .generation = s->generation,
   };
 
-  uint32_t handle_active_idx = s->active_idx;
-  uint32_t handle_gen = s->generation;
-
-  platform_mutex_unlock(self->lock);
-
   if (self->executor->post(self->executor, prefetch_fetch_worker, ctx, free)) {
     platform_mutex_lock(self->lock);
     if (s->generation == ctx->generation &&
         s->state == PREFETCH_STATE_PENDING) {
-      s->state = PREFETCH_STATE_ERROR;
-      s->err = DAMACY_AGAIN;
-      self->pending_count--;
-      self->errored_count++;
-      slot_release_waiters(s, 1);
+      slot_complete_locked(self, s, NULL, DAMACY_AGAIN);
     }
     platform_mutex_unlock(self->lock);
     free(ctx);
@@ -463,35 +531,16 @@ prefetch_fetch_worker(void* ctx_)
   struct fetch_ctx* ctx = (struct fetch_ctx*)ctx_;
   struct prefetch_cache* c = ctx->cache;
   struct prefetch_slot* s = ctx->slot;
+  struct prefetch_completion completion = {
+    .cache = c,
+    .slot = s->active_idx + 1,
+    .generation = ctx->generation,
+  };
 
   void* value = NULL;
   int err = 0;
   int rc = c->fetcher->fetch(c->fetcher, s->key, &value, &err);
-
-  platform_mutex_lock(c->lock);
-
-  if (s->generation != ctx->generation) {
-    // Slot was evicted; the fetch result is orphaned.
-    if (rc == 0 && value)
-      c->ops->value_destroy(c->ops, value);
-    platform_mutex_unlock(c->lock);
-    return;
-  }
-
-  if (rc == 0) {
-    s->state = PREFETCH_STATE_READY;
-    s->value = value;
-    c->pending_count--;
-    slot_release_waiters(s, 0);
-  } else {
-    s->state = PREFETCH_STATE_ERROR;
-    s->err = err;
-    c->pending_count--;
-    c->errored_count++;
-    slot_release_waiters(s, 1);
-  }
-
-  platform_mutex_unlock(c->lock);
+  prefetch_cache_complete(completion, value, rc == 0 ? 0 : err);
 }
 
 // --- handle deref --------------------------------------------------------

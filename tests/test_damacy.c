@@ -57,8 +57,7 @@ mk_cfg(const char* root, uint32_t samples_per_batch, int64_t sy, int64_t sx)
     .device = -1,
     .tuning = {
       .n_io_threads = 1,
-      .n_prefetch_threads = 1,
-      .n_metadata_io_threads = 1,
+      .metadata_io_concurrency = 1,
       .n_array_meta_cache = 4,
       .n_shard_index_cache = 4,
       .n_chunk_layout_cache = 4,

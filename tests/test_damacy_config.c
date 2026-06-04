@@ -80,10 +80,7 @@ test_tuning_defaults_thread_counts(void)
 {
   struct damacy_tuning tuning = damacy_tuning_defaults();
   uint32_t max_threads = (uint32_t)platform_default_thread_count();
-  uint32_t expected_prefetch = DAMACY_DEFAULT_PREFETCH_THREADS;
-  if (expected_prefetch > max_threads)
-    expected_prefetch = max_threads;
-  uint32_t expected_metadata = DAMACY_DEFAULT_METADATA_IO_THREADS;
+  uint32_t expected_metadata = DAMACY_DEFAULT_METADATA_IO_CONCURRENCY;
   if (expected_metadata > max_threads)
     expected_metadata = max_threads;
   uint32_t expected_io = DAMACY_DEFAULT_IO_THREADS;
@@ -91,24 +88,21 @@ test_tuning_defaults_thread_counts(void)
     expected_io = max_threads;
 
   EXPECT(tuning.n_io_threads == expected_io);
-  EXPECT(tuning.n_prefetch_threads == expected_prefetch);
-  EXPECT(tuning.n_metadata_io_threads == expected_metadata);
+  EXPECT(tuning.metadata_io_concurrency == expected_metadata);
   return 0;
 }
 
 static int
-test_resolve_prefetch_threads_explicit(void)
+test_resolve_metadata_io_concurrency_explicit(void)
 {
   struct damacy_config cfg = { 0 };
-  cfg.tuning.n_prefetch_threads = 7;
-  EXPECT(resolve_n_prefetch_threads(&cfg) == 7);
-  cfg.tuning.n_metadata_io_threads = 11;
-  EXPECT(resolve_n_metadata_io_threads(&cfg) == 11);
+  cfg.tuning.metadata_io_concurrency = 11;
+  EXPECT(resolve_metadata_io_concurrency(&cfg) == 11);
   return 0;
 }
 
 static int
-test_validate_split_metadata_threads_reject_zero(void)
+test_validate_metadata_io_concurrency_reject_zero(void)
 {
   struct damacy_config cfg = {
     .dtype = DAMACY_F32,
@@ -120,16 +114,13 @@ test_validate_split_metadata_threads_reject_zero(void)
     .tuning = {
       .max_gpu_memory_bytes = 1ull << 20,
       .n_io_threads = 1,
-      .n_prefetch_threads = 0,
-      .n_metadata_io_threads = 1,
+      .metadata_io_concurrency = 1,
       .n_array_meta_cache = 1,
       .n_shard_index_cache = 1,
       .n_chunk_layout_cache = 1,
     },
   };
-  EXPECT(validate_config(&cfg) == DAMACY_INVAL);
-  cfg.tuning.n_prefetch_threads = 1;
-  cfg.tuning.n_metadata_io_threads = 0;
+  cfg.tuning.metadata_io_concurrency = 0;
   EXPECT(validate_config(&cfg) == DAMACY_INVAL);
   return 0;
 }
@@ -148,18 +139,15 @@ test_validate_io_threads_bound_by_machine(void)
     .tuning = {
       .max_gpu_memory_bytes = 1ull << 20,
       .n_io_threads = 1,
-      .n_prefetch_threads = too_many,
-      .n_metadata_io_threads = 1,
+      .metadata_io_concurrency = 1,
       .n_array_meta_cache = 1,
       .n_shard_index_cache = 1,
       .n_chunk_layout_cache = 1,
     },
   };
+  cfg.tuning.metadata_io_concurrency = too_many;
   EXPECT(validate_config(&cfg) == DAMACY_INVAL);
-  cfg.tuning.n_prefetch_threads = 1;
-  cfg.tuning.n_metadata_io_threads = too_many;
-  EXPECT(validate_config(&cfg) == DAMACY_INVAL);
-  cfg.tuning.n_metadata_io_threads = 1;
+  cfg.tuning.metadata_io_concurrency = 1;
   cfg.tuning.n_io_threads = too_many;
   EXPECT(validate_config(&cfg) == DAMACY_INVAL);
   return 0;
@@ -173,8 +161,8 @@ main(void)
   RUN(test_resolve_enable_gds_off_overrides_env);
   RUN(test_resolve_enable_gds_zero_init_is_auto);
   RUN(test_tuning_defaults_thread_counts);
-  RUN(test_resolve_prefetch_threads_explicit);
-  RUN(test_validate_split_metadata_threads_reject_zero);
+  RUN(test_resolve_metadata_io_concurrency_explicit);
+  RUN(test_validate_metadata_io_concurrency_reject_zero);
   RUN(test_validate_io_threads_bound_by_machine);
   log_info("all tests passed");
   return 0;

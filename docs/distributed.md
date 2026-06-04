@@ -64,8 +64,7 @@ def main() -> None:
         max_gpu_memory_bytes=1 << 30,   # per-rank GPU budget
         dtype="bf16",
         n_io_threads=4,                 # bulk chunk reads, per-rank
-        n_prefetch_threads=16,          # metadata dependency workers, per-rank
-        n_metadata_io_threads=8,        # metadata store workers, per-rank
+        metadata_io_concurrency=8,      # async metadata stat/read concurrency
         device=local_rank,
     )
 
@@ -121,16 +120,15 @@ Most `Config` knobs apply per rank. Aggregate cost on a node is
 | `max_gpu_memory_bytes` | GPU budget: wave buffers, decoder scratch, batch-output pool |
 | `host_buffer_waves` | pinned-host slab pool, in waves |
 | `n_io_threads` | bulk chunk-read worker threads |
-| `n_prefetch_threads` | metadata dependency-resolution worker threads |
-| `n_metadata_io_threads` | metadata store backend worker threads |
+| `metadata_io_concurrency` | async metadata stat/read concurrency |
 | `n_array_meta_cache`, `n_shard_index_cache`, `n_chunk_layout_cache` | LRU caps for parsed metadata |
 
 Tune `n_io_threads` to your storage tier's bulk read behavior, and keep
-`n_prefetch_threads` high enough to cover small, latency-bound metadata
-dependency work. `n_metadata_io_threads` controls the metadata store's
-backend worker pool. When stacking multiple ranks on one GPU (uncommon,
-but valid), divide `max_gpu_memory_bytes` so the per-GPU total fits
-within the device.
+`metadata_io_concurrency` high enough to cover small, latency-bound metadata
+dependency work. The current backend uses it as a worker-pool size; a native
+async backend can use it as queue depth. When stacking multiple ranks on one
+GPU (uncommon, but valid), divide `max_gpu_memory_bytes` so the per-GPU total
+fits within the device.
 
 ## NUMA placement
 

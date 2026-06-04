@@ -113,14 +113,12 @@ extern "C"
     // Bulk chunk-read worker threads. Wave IO uses this queue. Required:
     // must be > 0 and no larger than the host's online CPU count.
     uint32_t n_io_threads;
-    // Metadata dependency-resolution workers. These run prefetch cache fetch
-    // jobs for array metadata, shard indexes, and chunk layouts. Required:
-    // must be > 0 and no larger than the host's online CPU count.
-    uint32_t n_prefetch_threads;
-    // Metadata store backend workers. These service metadata store reads that
-    // fetchers submit while resolving cache misses. Required: must be > 0 and
-    // no larger than the host's online CPU count.
-    uint32_t n_metadata_io_threads;
+    // Metadata stat/read concurrency for array metadata, shard indexes, and
+    // chunk-layout probes. The current thread-backed backend interprets this
+    // as a worker count; an async kernel backend may interpret it as queue
+    // depth or max in-flight metadata operations. Required: must be > 0 and no
+    // larger than the host's online CPU count for the current backend.
+    uint32_t metadata_io_concurrency;
 
     uint32_t n_array_meta_cache;
     uint32_t n_shard_index_cache;

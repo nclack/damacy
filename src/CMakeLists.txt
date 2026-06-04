@@ -185,6 +185,14 @@ else()
     target_sources(store PRIVATE store/store_fs_gds.h store/store_fs_gds_stub.c)
 endif()
 
+add_src_lib(metadata_store_async
+    SOURCES store/metadata_store_async.h store/metadata_store_async.c
+    LINKS store io_queue
+)
+target_link_libraries(array_meta PUBLIC metadata_store_async)
+target_link_libraries(shard_index PUBLIC metadata_store_async)
+target_link_libraries(chunk_layout PUBLIC metadata_store_async)
+
 # Zarr v3 metadata + shard-index parsers (cache-layer building blocks).
 add_src_lib(zarr SOURCES zarr/zarr_metadata.h zarr/zarr_metadata.c
     zarr/zarr_shard_index.h zarr/zarr_shard_index.c
@@ -244,7 +252,8 @@ add_cuda_lib(damacy
     LINKS platform planner zarr store
           decoder assemble dtype log lookahead gpu_budget
           batch_pool render_job wave_pool wave_budget damacy_stats damacy_config
-          damacy_nvtx strbuf scheduler io_queue
-          prefetch_cache prefetcher array_meta shard_index chunk_layout
+          damacy_nvtx strbuf scheduler io_queue metadata_store_async
+          prefetch_cache prefetcher
+          array_meta shard_index chunk_layout
           CUDA::cuda_driver
 )

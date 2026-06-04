@@ -112,8 +112,7 @@ struct scenario
   // pipeline
   uint32_t lookahead_samples;
   uint32_t n_io_threads;
-  uint32_t n_prefetch_threads;
-  uint32_t n_metadata_io_threads;
+  uint32_t metadata_io_concurrency;
   uint64_t max_gpu_memory_bytes;         // 0 → library default
   uint32_t max_chunk_uncompressed_bytes; // 0 → library default
   uint64_t max_read_op_bytes;            // 0 → library default
@@ -384,13 +383,9 @@ parse_scenario(struct cslice src, struct scenario* sc)
     static const struct json_query p_io[] = {
       { QUERY_KEY, .key = "pipeline" }, { QUERY_KEY, .key = "n_io_threads" }
     };
-    static const struct json_query p_prefetch[] = {
-      { QUERY_KEY, .key = "pipeline" },
-      { QUERY_KEY, .key = "n_prefetch_threads" }
-    };
     static const struct json_query p_meta_io[] = {
       { QUERY_KEY, .key = "pipeline" },
-      { QUERY_KEY, .key = "n_metadata_io_threads" }
+      { QUERY_KEY, .key = "metadata_io_concurrency" }
     };
     static const struct json_query p_g[] = { { QUERY_KEY, .key = "pipeline" },
                                              { QUERY_KEY,
@@ -416,10 +411,8 @@ parse_scenario(struct cslice src, struct scenario* sc)
     if (read_uint(src, p_io, countof(p_io), &v))
       return 1;
     sc->n_io_threads = (uint32_t)v;
-    read_uint_opt(src, p_prefetch, countof(p_prefetch), &v, 16);
-    sc->n_prefetch_threads = (uint32_t)v;
     read_uint_opt(src, p_meta_io, countof(p_meta_io), &v, 8);
-    sc->n_metadata_io_threads = (uint32_t)v;
+    sc->metadata_io_concurrency = (uint32_t)v;
     read_uint_opt(src, p_g, countof(p_g), &v, 0);
     sc->max_gpu_memory_bytes = v << 20;
     read_uint_opt(src, p_c, countof(p_c), &v, 0);
@@ -927,8 +920,7 @@ main(int argc, char** argv)
       .max_read_op_bytes = sc.max_read_op_bytes,
       .max_gpu_memory_bytes = sc.max_gpu_memory_bytes,
       .host_buffer_waves = sc.host_buffer_waves,
-      .n_prefetch_threads = sc.n_prefetch_threads,
-      .n_metadata_io_threads = sc.n_metadata_io_threads,
+      .metadata_io_concurrency = sc.metadata_io_concurrency,
     },
     .debug = { .bypass_decode = sc.bypass_decode,
                .metadata_latency = sc.metadata_latency },

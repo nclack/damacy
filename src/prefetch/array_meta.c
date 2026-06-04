@@ -2,6 +2,7 @@
 
 #include "damacy.h"
 #include "log/log.h"
+#include "store/metadata_store_async.h"
 #include "store/store.h"
 #include "util/prelude.h"
 #include "util/strbuf.h"
@@ -91,6 +92,73 @@ array_meta_fetch(struct prefetch_fetcher* self_,
   return 0;
 }
 
+struct array_meta_async_ctx
+{
+  struct prefetch_completion completion;
+};
+
+static void
+array_meta_read_done(void* user,
+                     enum damacy_status status,
+                     void* data,
+                     size_t len)
+{
+  struct array_meta_async_ctx* ctx = (struct array_meta_async_ctx*)user;
+  void* value = NULL;
+  int err = status;
+  if (status != DAMACY_OK)
+    goto Done;
+
+  struct zarr_metadata* meta = (struct zarr_metadata*)malloc(sizeof(*meta));
+  if (!meta) {
+    err = DAMACY_OOM;
+    goto Done;
+  }
+  if (zarr_metadata_parse((const char*)data, len, meta)) {
+    free(meta);
+    err = DAMACY_DECODE;
+    goto Done;
+  }
+
+  value = meta;
+  err = 0;
+
+Done:
+  free(data);
+  prefetch_cache_complete(ctx->completion, value, err);
+  free(ctx);
+}
+
+static int
+array_meta_async_start(struct prefetch_async_fetcher* self_,
+                       const void* key,
+                       struct prefetch_completion completion)
+{
+  struct array_meta_async_fetcher* self =
+    container_of(self_, struct array_meta_async_fetcher, base);
+  const char* uri = (const char*)key;
+  struct strbuf path = { 0 };
+  if (strbuf_join_path(&path, uri, "zarr.json")) {
+    strbuf_free(&path);
+    return 1;
+  }
+  struct array_meta_async_ctx* ctx =
+    (struct array_meta_async_ctx*)malloc(sizeof(*ctx));
+  if (!ctx) {
+    strbuf_free(&path);
+    return 1;
+  }
+  *ctx = (struct array_meta_async_ctx){ .completion = completion };
+  int rc = metadata_store_async_read_file(
+    self->store, strbuf_cstr(&path), array_meta_read_done, ctx);
+  strbuf_free(&path);
+  if (rc) {
+    free(ctx);
+    return 1;
+  }
+  return 0;
+}
+
 void
 array_meta_fetcher_init(struct array_meta_fetcher* f, struct store* store)
 {
@@ -98,6 +166,20 @@ array_meta_fetcher_init(struct array_meta_fetcher* f, struct store* store)
   CHECK(End, store);
   *f = (struct array_meta_fetcher){
     .base = { .fetch = array_meta_fetch },
+    .store = store,
+  };
+End:
+  return;
+}
+
+void
+array_meta_async_fetcher_init(struct array_meta_async_fetcher* f,
+                              struct metadata_store_async* store)
+{
+  CHECK(End, f);
+  CHECK(End, store);
+  *f = (struct array_meta_async_fetcher){
+    .base = { .start = array_meta_async_start },
     .store = store,
   };
 End:

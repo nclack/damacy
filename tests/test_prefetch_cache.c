@@ -130,6 +130,27 @@ delayed_drain(struct delayed_executor* self)
   }
 }
 
+struct manual_async_fetcher
+{
+  struct prefetch_async_fetcher base;
+  struct prefetch_completion completion;
+  const char* key;
+  int started;
+};
+
+static int
+manual_async_start(struct prefetch_async_fetcher* self_,
+                   const void* key,
+                   struct prefetch_completion completion)
+{
+  struct manual_async_fetcher* self =
+    container_of(self_, struct manual_async_fetcher, base);
+  self->completion = completion;
+  self->key = (const char*)key;
+  self->started++;
+  return 0;
+}
+
 static struct prefetch_cache_config
 make_config(void)
 {
@@ -595,6 +616,71 @@ test_stats_track_size_and_pending(void)
   return 0;
 }
 
+static int
+test_async_fetcher_completion_marks_ready(void)
+{
+  struct manual_async_fetcher async = {
+    .base = { .start = manual_async_start },
+  };
+  struct prefetch_cache_config cfg = make_config();
+  cfg.fetcher = NULL;
+  cfg.executor = NULL;
+  cfg.async_fetcher = &async.base;
+  struct prefetch_cache* c = prefetch_cache_create(&cfg);
+  EXPECT(c);
+
+  struct prefetch_gate gate;
+  prefetch_gate_init(&gate);
+  struct prefetch_handle h =
+    prefetch_cache_request(c, khash("k"), "k", 0, &gate);
+  EXPECT(prefetch_handle_valid(h));
+  EXPECT(async.started == 1);
+  EXPECT(strcmp(async.key, "k") == 0);
+  EXPECT(prefetch_gate_pending(&gate) == 1);
+  EXPECT(prefetch_cache_query(c, h, NULL, NULL) == PREFETCH_STATE_PENDING);
+
+  prefetch_cache_complete(async.completion, strdup("value"), 0);
+  const void* value = NULL;
+  EXPECT(prefetch_cache_query(c, h, &value, NULL) == PREFETCH_STATE_READY);
+  EXPECT(value);
+  EXPECT(strcmp((const char*)value, "value") == 0);
+  EXPECT(prefetch_gate_is_ready(&gate));
+  EXPECT(!prefetch_gate_has_error(&gate));
+
+  prefetch_cache_destroy(c);
+  return 0;
+}
+
+static int
+test_async_fetcher_completion_marks_error(void)
+{
+  struct manual_async_fetcher async = {
+    .base = { .start = manual_async_start },
+  };
+  struct prefetch_cache_config cfg = make_config();
+  cfg.fetcher = NULL;
+  cfg.executor = NULL;
+  cfg.async_fetcher = &async.base;
+  struct prefetch_cache* c = prefetch_cache_create(&cfg);
+  EXPECT(c);
+
+  struct prefetch_gate gate;
+  prefetch_gate_init(&gate);
+  struct prefetch_handle h =
+    prefetch_cache_request(c, khash("k"), "k", 0, &gate);
+  EXPECT(prefetch_cache_query(c, h, NULL, NULL) == PREFETCH_STATE_PENDING);
+
+  prefetch_cache_complete(async.completion, NULL, DAMACY_IO);
+  int err = 0;
+  EXPECT(prefetch_cache_query(c, h, NULL, &err) == PREFETCH_STATE_ERROR);
+  EXPECT(err == DAMACY_IO);
+  EXPECT(prefetch_gate_is_ready(&gate));
+  EXPECT(prefetch_gate_has_error(&gate));
+
+  prefetch_cache_destroy(c);
+  return 0;
+}
+
 int
 main(void)
 {
@@ -618,6 +704,8 @@ main(void)
   RUN(test_max_batch_id_widens_under_hit);
   RUN(test_handle_survives_sibling_eviction);
   RUN(test_stats_track_size_and_pending);
+  RUN(test_async_fetcher_completion_marks_ready);
+  RUN(test_async_fetcher_completion_marks_error);
   log_info("all tests passed");
   return 0;
 }

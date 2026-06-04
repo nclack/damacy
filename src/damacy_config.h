@@ -39,15 +39,10 @@ resolve_max_chunks_per_wave(const struct damacy_config* cfg);
 uint32_t
 resolve_max_substreams_per_chunk(const struct damacy_config* cfg);
 
-// Returns cfg->tuning.n_prefetch_threads after validate_config has checked
+// Returns cfg->tuning.metadata_io_concurrency after validate_config has checked
 // that it is positive and within the host concurrency bound.
 uint32_t
-resolve_n_prefetch_threads(const struct damacy_config* cfg);
-
-// Returns cfg->tuning.n_metadata_io_threads after validate_config has checked
-// that it is positive and within the host concurrency bound.
-uint32_t
-resolve_n_metadata_io_threads(const struct damacy_config* cfg);
+resolve_metadata_io_concurrency(const struct damacy_config* cfg);
 
 // Explicit config (ON/OFF) wins; AUTO defers to DAMACY_GDS_ENABLE=1.
 // damacy_create rejects with DAMACY_INVAL when this resolves to 1 but

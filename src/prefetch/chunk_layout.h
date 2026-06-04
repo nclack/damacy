@@ -12,6 +12,7 @@ extern "C"
 #endif
 
   struct store;
+  struct metadata_store_async;
 
   struct chunk_layout_key
   {
@@ -32,11 +33,26 @@ extern "C"
     uint32_t max_substreams_per_chunk;
   };
 
+  struct chunk_layout_async_fetcher
+  {
+    struct prefetch_async_fetcher base;
+    struct metadata_store_async* store;
+    struct prefetch_cache* array_meta_cache;
+    struct prefetch_cache* shard_index_cache;
+    uint32_t max_substreams_per_chunk;
+  };
+
   void chunk_layout_fetcher_init(struct chunk_layout_fetcher* f,
                                  struct store* store,
                                  struct prefetch_cache* array_meta_cache,
                                  struct prefetch_cache* shard_index_cache,
                                  uint32_t max_substreams_per_chunk);
+
+  void chunk_layout_async_fetcher_init(struct chunk_layout_async_fetcher* f,
+                                       struct metadata_store_async* store,
+                                       struct prefetch_cache* array_meta_cache,
+                                       struct prefetch_cache* shard_index_cache,
+                                       uint32_t max_substreams_per_chunk);
 
   extern const struct prefetch_ops chunk_layout_ops;
 

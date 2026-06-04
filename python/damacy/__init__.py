@@ -483,9 +483,7 @@ class Config:
         lookahead_samples: User-side push-queue depth in samples. Defaults
             to two full output batches.
         n_io_threads: Bulk data IO worker threads (>= 1).
-        n_prefetch_threads: Metadata dependency-resolution worker threads
-            (>= 1).
-        n_metadata_io_threads: Metadata store backend worker threads (>= 1).
+        metadata_io_concurrency: Async metadata stat/read concurrency (>= 1).
         n_array_meta_cache: LRU cap for zarr-metadata entries.
         n_shard_index_cache: LRU cap for shard-index entries.
         n_chunk_layout_cache: LRU cap for per-array blosc1 chunk-layout entries.
@@ -538,8 +536,7 @@ class Config:
     max_chunks_per_wave: int
     max_substreams_per_chunk: int
     n_io_threads: int
-    n_prefetch_threads: int
-    n_metadata_io_threads: int
+    metadata_io_concurrency: int
     n_array_meta_cache: int
     n_shard_index_cache: int
     n_chunk_layout_cache: int
@@ -565,8 +562,7 @@ class Config:
         max_chunks_per_wave: int = 0,
         max_substreams_per_chunk: int = 0,
         n_io_threads: int = 4,
-        n_prefetch_threads: int = 16,
-        n_metadata_io_threads: int = 8,
+        metadata_io_concurrency: int = 8,
         n_array_meta_cache: int = 64,
         n_shard_index_cache: int = 256,
         n_chunk_layout_cache: int = 64,
@@ -594,14 +590,9 @@ class Config:
             )
         if n_io_threads < 1:
             raise ValueError(f"n_io_threads must be >= 1 (got {n_io_threads})")
-        if n_prefetch_threads < 1:
+        if metadata_io_concurrency < 1:
             raise ValueError(
-                f"n_prefetch_threads must be >= 1 (got {n_prefetch_threads})"
-            )
-        if n_metadata_io_threads < 1:
-            raise ValueError(
-                "n_metadata_io_threads must be >= 1 "
-                f"(got {n_metadata_io_threads})"
+                f"metadata_io_concurrency must be >= 1 (got {metadata_io_concurrency})"
             )
         if max_chunk_uncompressed_bytes < 0:
             raise ValueError("max_chunk_uncompressed_bytes must be >= 0")
@@ -657,8 +648,7 @@ class Config:
         set_(self, "max_chunks_per_wave", max_chunks_per_wave)
         set_(self, "max_substreams_per_chunk", max_substreams_per_chunk)
         set_(self, "n_io_threads", n_io_threads)
-        set_(self, "n_prefetch_threads", n_prefetch_threads)
-        set_(self, "n_metadata_io_threads", n_metadata_io_threads)
+        set_(self, "metadata_io_concurrency", metadata_io_concurrency)
         set_(self, "n_array_meta_cache", n_array_meta_cache)
         set_(self, "n_shard_index_cache", n_shard_index_cache)
         set_(self, "n_chunk_layout_cache", n_chunk_layout_cache)
@@ -1098,8 +1088,7 @@ class Pipeline:
                 max_chunks_per_wave=config.max_chunks_per_wave,
                 max_substreams_per_chunk=config.max_substreams_per_chunk,
                 n_io_threads=config.n_io_threads,
-                n_prefetch_threads=config.n_prefetch_threads,
-                n_metadata_io_threads=config.n_metadata_io_threads,
+                metadata_io_concurrency=config.metadata_io_concurrency,
                 n_array_meta_cache=config.n_array_meta_cache,
                 n_shard_index_cache=config.n_shard_index_cache,
                 n_chunk_layout_cache=config.n_chunk_layout_cache,

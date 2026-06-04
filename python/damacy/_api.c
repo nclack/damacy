@@ -703,8 +703,7 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                          "max_chunk_uncompressed_bytes",
                          "max_gpu_memory_bytes",
                          "n_io_threads",
-                         "n_prefetch_threads",
-                         "n_metadata_io_threads",
+                         "metadata_io_concurrency",
                          "n_array_meta_cache",
                          "n_shard_index_cache",
                          "n_chunk_layout_cache",
@@ -730,8 +729,7 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   unsigned int max_chunk_uncompressed = 0;
   unsigned long long max_gpu_bytes = 0;
   unsigned int n_io = 4;
-  unsigned int n_prefetch = 16;
-  unsigned int n_metadata_io = 8;
+  unsigned int metadata_io_concurrency = 8;
   unsigned int n_array_meta = 64;
   unsigned int n_shard_index = 256;
   unsigned int n_chunk_layout = 64;
@@ -752,7 +750,7 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   unsigned long long metadata_latency_seed = 0;
   if (!PyArg_ParseTupleAndKeywords(args,
                                    kw,
-                                   "IIOIKIIIIIIO|IIIKiiiipKddKK",
+                                   "IIOIKIIIIIO|IIIKiiiipKddKK",
                                    kws,
                                    &samples_per_batch,
                                    &lookahead,
@@ -760,8 +758,7 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                                    &max_chunk_uncompressed,
                                    &max_gpu_bytes,
                                    &n_io,
-                                   &n_prefetch,
-                                   &n_metadata_io,
+                                   &metadata_io_concurrency,
                                    &n_array_meta,
                                    &n_shard_index,
                                    &n_chunk_layout,
@@ -819,8 +816,7 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
       .max_chunks_per_wave = (uint32_t)max_chunks_per_wave,
       .max_substreams_per_chunk = (uint32_t)max_substreams_per_chunk,
       .n_io_threads = n_io,
-      .n_prefetch_threads = n_prefetch,
-      .n_metadata_io_threads = n_metadata_io,
+      .metadata_io_concurrency = metadata_io_concurrency,
       .n_array_meta_cache = n_array_meta,
       .n_shard_index_cache = n_shard_index,
       .n_chunk_layout_cache = n_chunk_layout,
@@ -1086,8 +1082,7 @@ Pipeline_stats(PipelineObj* self, PyObject* Py_UNUSED(ignored))
     { "metadata_latency_submit_dev_ops", st.metadata_latency.submit_dev_ops },
     { "metadata_latency_active", st.metadata_latency.active },
     { "metadata_latency_max_active", st.metadata_latency.max_active },
-    { "metadata_latency_total_sleep_ns",
-      st.metadata_latency.total_sleep_ns },
+    { "metadata_latency_total_sleep_ns", st.metadata_latency.total_sleep_ns },
     { "metadata_latency_max_sleep_ns", st.metadata_latency.max_sleep_ns },
     { "batches_emitted", st.batches_emitted },
     { "batches_truncated", st.batches_truncated },

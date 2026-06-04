@@ -51,10 +51,8 @@ validate_config(const struct damacy_config* cfg)
   CHECK_SILENT(Invalid, cfg->lookahead_samples >= cfg->samples_per_batch);
   CHECK_SILENT(Invalid, cfg->tuning.n_io_threads > 0);
   CHECK_SILENT(Invalid, cfg->tuning.n_io_threads <= max_threads);
-  CHECK_SILENT(Invalid, cfg->tuning.n_prefetch_threads > 0);
-  CHECK_SILENT(Invalid, cfg->tuning.n_prefetch_threads <= max_threads);
-  CHECK_SILENT(Invalid, cfg->tuning.n_metadata_io_threads > 0);
-  CHECK_SILENT(Invalid, cfg->tuning.n_metadata_io_threads <= max_threads);
+  CHECK_SILENT(Invalid, cfg->tuning.metadata_io_concurrency > 0);
+  CHECK_SILENT(Invalid, cfg->tuning.metadata_io_concurrency <= max_threads);
   CHECK_SILENT(
     Invalid,
     cfg->tuning.host_buffer_waves == 0 ||
@@ -110,9 +108,8 @@ damacy_tuning_defaults(void)
     .max_chunks_per_wave = DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE,
     .max_substreams_per_chunk = DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK,
     .n_io_threads = clamp_default_threads(DAMACY_DEFAULT_IO_THREADS),
-    .n_prefetch_threads = clamp_default_threads(DAMACY_DEFAULT_PREFETCH_THREADS),
-    .n_metadata_io_threads =
-      clamp_default_threads(DAMACY_DEFAULT_METADATA_IO_THREADS),
+    .metadata_io_concurrency =
+      clamp_default_threads(DAMACY_DEFAULT_METADATA_IO_CONCURRENCY),
     .numa_strategy = DAMACY_NUMA_AUTO,
     .enable_gds = DAMACY_GDS_AUTO,
   };
@@ -172,15 +169,9 @@ resolve_max_substreams_per_chunk(const struct damacy_config* cfg)
 }
 
 uint32_t
-resolve_n_prefetch_threads(const struct damacy_config* cfg)
+resolve_metadata_io_concurrency(const struct damacy_config* cfg)
 {
-  return cfg->tuning.n_prefetch_threads;
-}
-
-uint32_t
-resolve_n_metadata_io_threads(const struct damacy_config* cfg)
-{
-  return cfg->tuning.n_metadata_io_threads;
+  return cfg->tuning.metadata_io_concurrency;
 }
 
 uint8_t

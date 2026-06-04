@@ -419,25 +419,18 @@ def test_config_validates_eagerly():
             n_io_threads=0,
             max_gpu_memory_bytes=gpu,
         )
-    with pytest.raises(ValueError, match="n_prefetch_threads"):
-        Config(
-            samples_per_batch=1,
-            sample_shape=ss,
-            n_prefetch_threads=-1,
-            max_gpu_memory_bytes=gpu,
-        )
-    with pytest.raises(ValueError, match="n_prefetch_threads"):
+    with pytest.raises(TypeError, match="n_prefetch_threads"):
         Config(
             samples_per_batch=1,
             sample_shape=ss,
             n_prefetch_threads=0,
             max_gpu_memory_bytes=gpu,
         )
-    with pytest.raises(ValueError, match="n_metadata_io_threads"):
+    with pytest.raises(ValueError, match="metadata_io_concurrency"):
         Config(
             samples_per_batch=1,
             sample_shape=ss,
-            n_metadata_io_threads=0,
+            metadata_io_concurrency=0,
             max_gpu_memory_bytes=gpu,
         )
     with pytest.raises(ValueError, match="max_chunk_uncompressed_bytes"):
@@ -539,8 +532,7 @@ def test_native_pipeline_rejects_out_of_range_enums(tiny_zarr):
             samples_per_batch=1,
             lookahead_samples=2,
             n_io_threads=1,
-            n_prefetch_threads=1,
-            n_metadata_io_threads=1,
+            metadata_io_concurrency=1,
             n_array_meta_cache=4,
             n_shard_index_cache=4,
             n_chunk_layout_cache=4,
