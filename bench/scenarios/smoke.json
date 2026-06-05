@@ -25,7 +25,7 @@
     "dtype": "f32",
     "lookahead_samples": 16,
     "n_io_threads": 4,
-    "metadata_io_concurrency": 8,
+    "metadata_io_concurrency": 32,
     "max_gpu_memory_mb": 512,
     "max_chunk_uncompressed_mb": 1,
     "n_array_meta_cache": 16,

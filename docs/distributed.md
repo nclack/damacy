@@ -64,7 +64,7 @@ def main() -> None:
         max_gpu_memory_bytes=1 << 30,   # per-rank GPU budget
         dtype="bf16",
         n_io_threads=4,                 # bulk chunk reads, per-rank
-        metadata_io_concurrency=8,      # async metadata request concurrency
+        metadata_io_concurrency=32,     # async metadata request concurrency
         device=local_rank,
     )
 

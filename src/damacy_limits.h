@@ -65,7 +65,7 @@ _Static_assert(DAMACY_DEFAULT_READ_OP_MAX_BYTES <= UINT32_MAX,
 // the host thread count; metadata_io_concurrency is an async request-depth knob
 // and is bounded only by this defensive cap.
 #define DAMACY_DEFAULT_IO_THREADS 8u
-#define DAMACY_DEFAULT_METADATA_IO_CONCURRENCY 8u
+#define DAMACY_DEFAULT_METADATA_IO_CONCURRENCY 32u
 #define DAMACY_MAX_METADATA_IO_CONCURRENCY 4096u
 
 // Matches DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE. Must be a power of two —

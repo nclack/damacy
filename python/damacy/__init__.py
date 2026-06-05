@@ -562,7 +562,7 @@ class Config:
         max_chunks_per_wave: int = 0,
         max_substreams_per_chunk: int = 0,
         n_io_threads: int = 4,
-        metadata_io_concurrency: int = 8,
+        metadata_io_concurrency: int = 32,
         n_array_meta_cache: int = 64,
         n_shard_index_cache: int = 256,
         n_chunk_layout_cache: int = 64,

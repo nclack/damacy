@@ -79,7 +79,7 @@ class Pipeline(BaseModel):
     dtype: DstDType = "f32"
     lookahead_samples: int = Field(gt=0)
     n_io_threads: int = Field(gt=0)
-    metadata_io_concurrency: int = Field(default=8, gt=0)
+    metadata_io_concurrency: int = Field(default=32, gt=0)
     max_gpu_memory_mb: int = 0  # 0 → library default
     max_chunk_uncompressed_mb: int = 0  # 0 → library default
     max_read_op_kb: int = 0  # cap on coalesced read_op size; 0 → library default

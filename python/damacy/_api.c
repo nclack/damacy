@@ -729,7 +729,7 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   unsigned int max_chunk_uncompressed = 0;
   unsigned long long max_gpu_bytes = 0;
   unsigned int n_io = 4;
-  unsigned int metadata_io_concurrency = 8;
+  unsigned int metadata_io_concurrency = 32;
   unsigned int n_array_meta = 64;
   unsigned int n_shard_index = 256;
   unsigned int n_chunk_layout = 64;
