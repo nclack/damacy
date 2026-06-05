@@ -67,8 +67,6 @@ struct metadata_job
   int fd;
   int open_done;
   int stat_done;
-  int read_done;
-  int close_done;
   int closing;
   int open_res;
   int stat_res;
@@ -211,11 +209,11 @@ sleep_for_sample(struct metadata_store_async* s, enum latency_op_kind kind)
       break;
   }
   uint64_t active =
-    atomic_fetch_add_explicit(&s->latency_active, 1, memory_order_acq_rel) + 1;
+    atomic_fetch_add_explicit(&s->latency_active, 1, memory_order_relaxed) + 1;
   atomic_max_u64(&s->latency_max_active, active);
   if (ns)
     platform_sleep_ns((int64_t)ns);
-  atomic_fetch_sub_explicit(&s->latency_active, 1, memory_order_acq_rel);
+  atomic_fetch_sub_explicit(&s->latency_active, 1, memory_order_relaxed);
 }
 
 static void
@@ -223,14 +221,14 @@ read_active_begin(struct metadata_store_async* s)
 {
   atomic_fetch_add_explicit(&s->read_jobs, 1, memory_order_relaxed);
   uint64_t active =
-    atomic_fetch_add_explicit(&s->read_active, 1, memory_order_acq_rel) + 1;
+    atomic_fetch_add_explicit(&s->read_active, 1, memory_order_relaxed) + 1;
   atomic_max_u64(&s->read_max_active, active);
 }
 
 static void
 read_active_end(struct metadata_store_async* s)
 {
-  atomic_fetch_sub_explicit(&s->read_active, 1, memory_order_acq_rel);
+  atomic_fetch_sub_explicit(&s->read_active, 1, memory_order_relaxed);
 }
 
 static int
@@ -405,6 +403,46 @@ submit_close(struct metadata_store_async* s, struct metadata_job* job)
   return 0;
 }
 
+// Completion runs on the close CQE; when no SQE is free the close can't be
+// queued, so synthesize close_res=0 and complete inline.
+static void
+finish_job(struct metadata_store_async* s, struct metadata_job* job)
+{
+  if (submit_close(s, job)) {
+    job->close_res = 0;
+    complete_job(s, job);
+  }
+}
+
+// `allocate` means we own the buffer here (REQ_READ_FILE sizes it from statx;
+// REQ_READ allocated up front), so only then is it freed on failure.
+static void
+begin_read_when_open(struct metadata_store_async* s,
+                     struct metadata_job* job,
+                     int allocate)
+{
+  if (!job->len) {
+    finish_job(s, job);
+    return;
+  }
+  if (allocate) {
+    job->data = malloc(job->len);
+    if (!job->data) {
+      job->status = DAMACY_OOM;
+      finish_job(s, job);
+      return;
+    }
+  }
+  if (submit_read(s, job)) {
+    if (allocate) {
+      free(job->data);
+      job->data = NULL;
+    }
+    job->status = DAMACY_OOM;
+    finish_job(s, job);
+  }
+}
+
 static void
 fail_request_before_submit(struct metadata_store_async* s,
                            struct metadata_job* job,
@@ -457,37 +495,32 @@ start_job(struct metadata_store_async* s, struct metadata_job* job)
     fail_request_before_submit(s, job, DAMACY_OOM);
 }
 
-static int
-drain_pending_locked(struct metadata_store_async* s,
-                     struct metadata_job** head,
-                     struct metadata_job** tail)
+static struct metadata_job*
+drain_pending_locked(struct metadata_store_async* s)
 {
-  *head = NULL;
-  *tail = NULL;
+  struct metadata_job* head = NULL;
+  struct metadata_job* tail = NULL;
   while (s->pending_head && s->active < s->concurrency) {
     struct metadata_job* job = s->pending_head;
     s->pending_head = job->next;
     if (!s->pending_head)
       s->pending_tail = NULL;
     job->next = NULL;
-    if (*tail)
-      (*tail)->next = job;
+    if (tail)
+      tail->next = job;
     else
-      *head = job;
-    *tail = job;
+      head = job;
+    tail = job;
     s->active++;
   }
-  return *head != NULL;
+  return head;
 }
 
 static int
 start_pending_jobs(struct metadata_store_async* s)
 {
-  struct metadata_job* head = NULL;
-  struct metadata_job* tail = NULL;
-  (void)tail;
   pthread_mutex_lock(&s->lock);
-  int have_jobs = drain_pending_locked(s, &head, &tail);
+  struct metadata_job* head = drain_pending_locked(s);
   pthread_mutex_unlock(&s->lock);
 
   for (struct metadata_job* job = head; job;) {
@@ -496,13 +529,13 @@ start_pending_jobs(struct metadata_store_async* s)
     start_job(s, job);
     job = next;
   }
-  if (have_jobs) {
+  if (head) {
     int rc = io_uring_submit(&s->ring);
     if (rc < 0)
       log_warn("metadata_store_async: io_uring_submit failed: %s",
                strerror(-rc));
   }
-  return have_jobs;
+  return head != NULL;
 }
 
 static void
@@ -517,14 +550,10 @@ handle_statx_complete(struct metadata_store_async* s, struct metadata_job* job)
   if (job->stat_res < 0) {
     job->status = damacy_status_from_errno(-job->stat_res);
     if (job->open_done) {
-      if (job->fd >= 0) {
-        if (submit_close(s, job)) {
-          job->close_res = 0;
-          complete_job(s, job);
-        }
-      } else {
+      if (job->fd >= 0)
+        finish_job(s, job);
+      else
         complete_job(s, job);
-      }
     }
     return;
   }
@@ -534,31 +563,8 @@ handle_statx_complete(struct metadata_store_async* s, struct metadata_job* job)
     complete_job(s, job);
     return;
   }
-  if (job->open_done && job->fd >= 0) {
-    if (job->len) {
-      job->data = malloc(job->len);
-      if (!job->data) {
-        job->status = DAMACY_OOM;
-        if (submit_close(s, job)) {
-          job->close_res = 0;
-          complete_job(s, job);
-        }
-        return;
-      }
-      if (submit_read(s, job)) {
-        free(job->data);
-        job->data = NULL;
-        job->status = DAMACY_OOM;
-        if (submit_close(s, job)) {
-          job->close_res = 0;
-          complete_job(s, job);
-        }
-      }
-    } else if (submit_close(s, job)) {
-      job->close_res = 0;
-      complete_job(s, job);
-    }
-  }
+  if (job->open_done && job->fd >= 0)
+    begin_read_when_open(s, job, 1);
 }
 
 static void
@@ -573,60 +579,23 @@ handle_open_complete(struct metadata_store_async* s, struct metadata_job* job)
   }
   job->fd = job->open_res;
   if (job->kind == REQ_READ) {
-    if (job->len) {
-      if (submit_read(s, job)) {
-        job->status = DAMACY_OOM;
-        if (submit_close(s, job)) {
-          job->close_res = 0;
-          complete_job(s, job);
-        }
-      }
-    } else if (submit_close(s, job)) {
-      job->close_res = 0;
-      complete_job(s, job);
-    }
+    begin_read_when_open(s, job, 0);
     return;
   }
 
   if (!job->stat_done)
     return;
   if (job->status != DAMACY_OK) {
-    if (submit_close(s, job)) {
-      job->close_res = 0;
-      complete_job(s, job);
-    }
+    finish_job(s, job);
     return;
   }
-  if (job->len) {
-    job->data = malloc(job->len);
-    if (!job->data) {
-      job->status = DAMACY_OOM;
-      if (submit_close(s, job)) {
-        job->close_res = 0;
-        complete_job(s, job);
-      }
-      return;
-    }
-    if (submit_read(s, job)) {
-      free(job->data);
-      job->data = NULL;
-      job->status = DAMACY_OOM;
-      if (submit_close(s, job)) {
-        job->close_res = 0;
-        complete_job(s, job);
-      }
-    }
-  } else if (submit_close(s, job)) {
-    job->close_res = 0;
-    complete_job(s, job);
-  }
+  begin_read_when_open(s, job, 1);
 }
 
 static void
 handle_read_complete(struct metadata_store_async* s, struct metadata_job* job)
 {
   read_active_end(s);
-  job->read_done = 1;
   if (job->read_res < 0) {
     free(job->data);
     job->data = NULL;
@@ -638,16 +607,12 @@ handle_read_complete(struct metadata_store_async* s, struct metadata_job* job)
     job->len = 0;
     job->status = DAMACY_IO;
   }
-  if (submit_close(s, job)) {
-    job->close_res = 0;
-    complete_job(s, job);
-  }
+  finish_job(s, job);
 }
 
 static void
 handle_close_complete(struct metadata_store_async* s, struct metadata_job* job)
 {
-  job->close_done = 1;
   job->fd = -1;
   complete_job(s, job);
 }

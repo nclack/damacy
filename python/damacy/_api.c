@@ -795,7 +795,9 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   if (!isfinite(metadata_latency_lognormal_mu_ln_ns) ||
       !isfinite(metadata_latency_lognormal_sigma_ln_ns) ||
       metadata_latency_lognormal_sigma_ln_ns < 0.0) {
-    PyErr_SetString(PyExc_ValueError, "invalid metadata latency model");
+    PyErr_SetString(PyExc_ValueError,
+                    "metadata latency lognormal mu/sigma must be finite and "
+                    "sigma must be >= 0");
     return -1;
   }
 

@@ -164,7 +164,6 @@ struct fixture
   struct path_intern paths;
   struct prefetch_handle h_meta;
   struct prefetch_handle* shard_arrays[32];
-  uint64_t* shard_coord_arrays[32];
   uint32_t n_shard_arrays;
 };
 
@@ -268,10 +267,8 @@ fixture_destroy(struct fixture* f)
   prefetch_cache_destroy(f->array_meta_cache);
   store_destroy(f->store);
   path_intern_free(&f->paths);
-  for (uint32_t i = 0; i < f->n_shard_arrays; ++i) {
+  for (uint32_t i = 0; i < f->n_shard_arrays; ++i)
     free(f->shard_arrays[i]);
-    free(f->shard_coord_arrays[i]);
-  }
   fixture_rm_tree(f->root);
 }
 
@@ -304,18 +301,11 @@ mk_sample(struct fixture* f,
   struct prefetch_handle* arr =
     (struct prefetch_handle*)calloc((size_t)n, sizeof(struct prefetch_handle));
   EXPECT(arr);
-  uint64_t* coords =
-    (uint64_t*)calloc((size_t)n * meta->rank, sizeof(uint64_t));
-  EXPECT(coords);
   struct shard_index_key probe = { .uri = "foo", .rank = meta->rank };
   uint32_t i = 0;
-  while (sample_shard_iterator_next(&it, probe.shard_coord)) {
-    memcpy(&coords[(size_t)i * meta->rank],
-           probe.shard_coord,
-           (size_t)meta->rank * sizeof(uint64_t));
+  while (sample_shard_iterator_next(&it, probe.shard_coord))
     arr[i++] = prefetch_cache_request(
       f->shard_index_cache, shard_index_key_hash(&probe), &probe, 0, NULL);
-  }
   s.h_shards = arr;
   s.n_shards = (uint32_t)n;
   struct chunk_layout_key layout_key = {
@@ -336,7 +326,6 @@ mk_sample(struct fixture* f,
   EXPECT(f->n_shard_arrays <
          sizeof f->shard_arrays / sizeof f->shard_arrays[0]);
   f->shard_arrays[f->n_shard_arrays++] = arr;
-  f->shard_coord_arrays[f->n_shard_arrays - 1] = coords;
   *out = s;
   return 0;
 }
@@ -719,7 +708,6 @@ test_missing_shard_becomes_fill(void)
   struct read_op reads[8] = { 0 };
   struct chunk_plan chunks[8] = { 0 };
   struct sample_plan samples[4] = { 0 };
-  struct path_intern paths = { 0 };
   struct planner_output out = {
     .read_ops = reads,
     .read_ops_cap = 8,
@@ -729,7 +717,7 @@ test_missing_shard_becomes_fill(void)
     .sample_plans_cap = 4,
     .read_op_groups = (struct read_op_group[8]){ { 0 } },
     .read_op_groups_cap = 8,
-    .paths = &paths,
+    .paths = &f.paths,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_chunk_plans == 4);
@@ -738,7 +726,6 @@ test_missing_shard_becomes_fill(void)
     EXPECT(chunks[i].codec_id == CODEC_FILL);
   }
 
-  path_intern_free(&paths);
   fixture_destroy(&f);
   return 0;
 }

@@ -778,7 +778,7 @@ queue_post_decode(struct wave_pool* wp,
 
   if (tot->n_memcpy > 0 &&
       decoder_memcpy_launch(s, wave->d_memcpy_ops, tot->n_memcpy))
-    goto DecodeFail;
+    return DAMACY_DECODE;
   CU(CudaFail,
      cuMemcpyDtoHAsync(&wave->h_blosc1_totals->n_codec_errors,
                        CUDPTR(&wave->d_blosc1_totals->n_codec_errors),
@@ -787,8 +787,6 @@ queue_post_decode(struct wave_pool* wp,
   CU(CudaFail, cuEventRecord(wave->ev.decomp_end, s));
 
   return DAMACY_OK;
-DecodeFail:
-  return DAMACY_DECODE;
 CudaFail:
   return DAMACY_CUDA;
 }
