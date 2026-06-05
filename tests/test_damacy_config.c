@@ -87,6 +87,9 @@ test_tuning_defaults_thread_counts(void)
   EXPECT(tuning.n_io_threads == expected_io);
   EXPECT(tuning.metadata_io_concurrency ==
          DAMACY_DEFAULT_METADATA_IO_CONCURRENCY);
+  EXPECT(tuning.n_array_meta_cache == DAMACY_DEFAULT_ARRAY_META_CACHE);
+  EXPECT(tuning.n_shard_index_cache == DAMACY_DEFAULT_SHARD_INDEX_CACHE);
+  EXPECT(tuning.n_chunk_layout_cache == DAMACY_DEFAULT_CHUNK_LAYOUT_CACHE);
   return 0;
 }
 
@@ -96,6 +99,23 @@ test_resolve_metadata_io_concurrency_explicit(void)
   struct damacy_config cfg = { 0 };
   cfg.tuning.metadata_io_concurrency = 11;
   EXPECT(resolve_metadata_io_concurrency(&cfg) == 11);
+  return 0;
+}
+
+static int
+test_validate_accepts_tuning_defaults(void)
+{
+  struct damacy_config cfg = {
+    .dtype = DAMACY_F32,
+    .sample_shape = { 1 },
+    .sample_rank = 1,
+    .samples_per_batch = 1,
+    .lookahead_samples = 1,
+    .device = -1,
+  };
+  cfg.tuning = damacy_tuning_defaults();
+  cfg.tuning.max_gpu_memory_bytes = 1ull << 20;
+  EXPECT(validate_config(&cfg) == DAMACY_OK);
   return 0;
 }
 
@@ -162,6 +182,7 @@ main(void)
   RUN(test_resolve_enable_gds_zero_init_is_auto);
   RUN(test_tuning_defaults_thread_counts);
   RUN(test_resolve_metadata_io_concurrency_explicit);
+  RUN(test_validate_accepts_tuning_defaults);
   RUN(test_validate_metadata_io_concurrency_reject_zero);
   RUN(test_validate_io_threads_bound_by_machine);
   log_info("all tests passed");

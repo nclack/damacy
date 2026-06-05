@@ -62,6 +62,11 @@ lookahead_pop_blocking_timeout(struct damacy_lookahead* la,
 int
 lookahead_try_pop(struct damacy_lookahead* la, struct damacy_sample_slot* out);
 
+// Waits until non-empty, stopped, or timeout_ms elapses. timeout_ms < 0 waits
+// indefinitely. Returns 1 when non-empty, 0 otherwise.
+int
+lookahead_wait_nonempty_timeout(struct damacy_lookahead* la, int timeout_ms);
+
 // Existing samples still pop; empty + stopped returns 0.
 void
 lookahead_signal_stop(struct damacy_lookahead* la);

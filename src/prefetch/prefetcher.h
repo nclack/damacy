@@ -36,8 +36,9 @@ extern "C"
   };
 
   struct prefetcher* prefetcher_create(const struct prefetcher_config* cfg);
-  // Caller must flush the cache executor before destroy; otherwise fetch
-  // workers may still touch slots the caches are about to free.
+  // Teardown order: stop the prefetcher, drain the async metadata store, then
+  // destroy the prefetcher and caches. Metadata callbacks may complete gates
+  // owned by the prefetcher, so the prefetcher memory must outlive that drain.
   void prefetcher_destroy(struct prefetcher* p);
 
   int prefetcher_start(struct prefetcher* p);

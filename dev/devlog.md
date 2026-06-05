@@ -1,5 +1,12 @@
 # dev log
 
+## 2026-06-01
+
+Cleanup of prefetcher seems like it's converging.
+
+- [x] io_uring for prefetcher
+- [ ] api: dependency injection - stores, prefetcher
+
 ## 2026-05-18
 
 Investigating some of the threading primitives that showed up in a perf scan.

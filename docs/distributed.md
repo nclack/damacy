@@ -63,7 +63,7 @@ def main() -> None:
         sample_shape=(64, 256, 256),
         max_gpu_memory_bytes=1 << 30,   # per-rank GPU budget
         dtype="bf16",
-        n_io_threads=4,                 # bulk chunk reads, per-rank
+        n_io_threads=4,                 # bulk chunk reads, per-rank; None uses host max
         metadata_io_concurrency=32,     # async metadata request concurrency
         device=local_rank,
     )
@@ -123,15 +123,16 @@ Most `Config` knobs apply per rank. Aggregate cost on a node is
 | `metadata_io_concurrency` | async metadata request concurrency |
 | `n_array_meta_cache`, `n_shard_index_cache`, `n_chunk_layout_cache` | LRU caps for parsed metadata |
 
-Tune `n_io_threads` to your storage tier's bulk read behavior, and keep
-`metadata_io_concurrency` high enough to cover small, latency-bound metadata
-dependency work. The Linux metadata path uses it as an io_uring request-depth
-budget, not as a host thread count. The default is 32. Larger values can help
-high-latency metadata filesystems, but each in-flight metadata read can hold an
-open file descriptor, so very deep settings should be checked against
-`ulimit -n` and multiplied by ranks per node. When stacking multiple ranks on
-one GPU (uncommon, but valid), divide `max_gpu_memory_bytes` so the per-GPU
-total fits within the device.
+Tune `n_io_threads` to your storage tier's bulk read behavior. In Python,
+`n_io_threads=None` uses `damacy.max_concurrency()`, the same host cap used by
+the C config validator. Keep `metadata_io_concurrency` high enough to cover
+small, latency-bound metadata dependency work. The Linux metadata path uses it
+as an io_uring request-depth budget, not as a host thread count. The default is
+32. Larger values can help high-latency metadata filesystems, but each
+in-flight metadata read can hold an open file descriptor, so very deep settings
+should be checked against `ulimit -n` and multiplied by ranks per node. When
+stacking multiple ranks on one GPU (uncommon, but valid), divide
+`max_gpu_memory_bytes` so the per-GPU total fits within the device.
 
 ## NUMA placement
 

@@ -53,13 +53,14 @@ destroy_inner(struct damacy* self, int cuda_skip)
   scheduler_destroy(self->sched);
   self->sched = NULL;
 
-  // Order: stop producers (prefetcher) → drain consumers (io_queue) →
-  // free resources (caches). prefetch_fetch_worker locks cache mutexes
-  // on completion, so caches must outlive io_queue's pending tasks.
-  prefetcher_destroy(self->prefetcher);
-  self->prefetcher = NULL;
+  // Stop the prefetcher thread first so no new metadata requests are admitted.
+  // Its gates/owners must stay alive until async metadata callbacks have
+  // drained because completions can release waiters through those gates.
+  prefetcher_stop(self->prefetcher);
   metadata_store_async_destroy(self->store_meta_async);
   self->store_meta_async = NULL;
+  prefetcher_destroy(self->prefetcher);
+  self->prefetcher = NULL;
   prefetch_cache_destroy(self->chunk_layout_cache);
   self->chunk_layout_cache = NULL;
   prefetch_cache_destroy(self->shard_index_cache);

@@ -20,6 +20,7 @@ pytestmark = pytest.mark.usefixtures("cuda_ctx")
 def test_module_constants():
     assert _native.LOG_TRACE == 0
     assert _native.LOG_FATAL == 5
+    assert _native.max_concurrency() >= 1
 
 
 def test_status_constants_present():

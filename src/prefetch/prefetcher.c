@@ -384,7 +384,7 @@ scan_slots_locked(struct prefetcher* p,
     struct prefetcher_slot* s = &p->slots[i];
     if (!*out_free && slot_free(s))
       *out_free = s;
-    else if (slot_active(s))
+    if (slot_active(s))
       *out_has_in_flight = 1;
   }
 }
@@ -463,24 +463,25 @@ worker_fn(void* arg)
 
     struct damacy_sample_slot popped = { 0 };
     int popped_ok = 0;
-    // Timed wait when in-flight work needs periodic state advance; pure block
-    // when admission is the only thing keeping us busy.
-    if (slot && !has_in_flight)
-      popped_ok = lookahead_pop_blocking(p->lookahead, &popped);
-    else if (slot)
-      popped_ok = lookahead_pop_blocking_timeout(p->lookahead, &popped, 1);
-    else
+    if (slot) {
+      atomic_fetch_add_explicit(&p->in_transit, 1, memory_order_acq_rel);
+      popped_ok = lookahead_try_pop(p->lookahead, &popped);
+    } else {
       // TODO(perf): replace polling with a condvar signaled from
       // pop_terminal_slot_locked when a slot frees up.
       platform_sleep_ns(1000000);
+    }
 
     if (popped_ok) {
-      atomic_fetch_add_explicit(&p->in_transit, 1, memory_order_acq_rel);
       platform_mutex_lock(p->lock);
       // scan_slots_locked only signals popped_ok when a FREE slot exists.
       admit_locked(p, slot, &popped);
       atomic_fetch_sub_explicit(&p->in_transit, 1, memory_order_acq_rel);
       platform_mutex_unlock(p->lock);
+    } else if (slot) {
+      atomic_fetch_sub_explicit(&p->in_transit, 1, memory_order_acq_rel);
+      (void)lookahead_wait_nonempty_timeout(p->lookahead,
+                                            has_in_flight ? 1 : -1);
     }
   }
 }

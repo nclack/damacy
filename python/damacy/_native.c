@@ -19,6 +19,7 @@
 #include "damacy_limits.h"
 #include "damacy_log.h"
 #include "log/log.h"
+#include "platform/platform.h"
 
 #include "_api.h"
 #include "_log_sink.h"
@@ -134,6 +135,14 @@ py_cuda_device_count(PyObject* self, PyObject* args)
   return PyLong_FromLong((long)count);
 }
 
+static PyObject*
+py_max_concurrency(PyObject* self, PyObject* args)
+{
+  (void)self;
+  (void)args;
+  return PyLong_FromLong((long)platform_default_thread_count());
+}
+
 // cuda_init_primary(device=0) — make device's primary CUcontext current
 // on the calling thread. damacy_create requires a current CUcontext;
 // PyTorch sets one up implicitly, but bare-Python callers (and pytest)
@@ -202,6 +211,10 @@ static PyMethodDef methods[] = {
     METH_NOARGS,
     "cuda_device_count(): report cuDeviceGetCount(). Returns 0 when the "
     "driver cannot be initialized; never raises." },
+  { "max_concurrency",
+    py_max_concurrency,
+    METH_NOARGS,
+    "max_concurrency(): host concurrency cap used for default thread counts." },
   { NULL, NULL, 0, NULL },
 };
 

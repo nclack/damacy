@@ -111,6 +111,9 @@ damacy_tuning_defaults(void)
     .max_substreams_per_chunk = DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK,
     .n_io_threads = clamp_default_threads(DAMACY_DEFAULT_IO_THREADS),
     .metadata_io_concurrency = DAMACY_DEFAULT_METADATA_IO_CONCURRENCY,
+    .n_array_meta_cache = DAMACY_DEFAULT_ARRAY_META_CACHE,
+    .n_shard_index_cache = DAMACY_DEFAULT_SHARD_INDEX_CACHE,
+    .n_chunk_layout_cache = DAMACY_DEFAULT_CHUNK_LAYOUT_CACHE,
     .numa_strategy = DAMACY_NUMA_AUTO,
     .enable_gds = DAMACY_GDS_AUTO,
   };

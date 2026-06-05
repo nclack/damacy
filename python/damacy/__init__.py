@@ -77,11 +77,17 @@ __all__ = [
     "Status",
     "StorageError",
     "TryAgain",
+    "max_concurrency",
     "set_log_level",
     "set_log_quiet",
 ]
 
 __version__: str = _native.__version__
+
+
+def max_concurrency() -> int:
+    """Host concurrency cap used by default thread-count settings."""
+    return int(_native.max_concurrency())
 
 
 # ---- enums --------------------------------------------------------------
@@ -482,7 +488,8 @@ class Config:
         dtype: Destination dtype for assembled batches.
         lookahead_samples: User-side push-queue depth in samples. Defaults
             to two full output batches.
-        n_io_threads: Bulk data IO worker threads (>= 1).
+        n_io_threads: Bulk data IO worker threads (>= 1). ``None`` selects
+            :func:`max_concurrency`.
         metadata_io_concurrency: Async metadata request concurrency (>= 1).
         n_array_meta_cache: LRU cap for zarr-metadata entries.
         n_shard_index_cache: LRU cap for shard-index entries.
@@ -561,7 +568,7 @@ class Config:
         host_buffer_waves: int = 0,
         max_chunks_per_wave: int = 0,
         max_substreams_per_chunk: int = 0,
-        n_io_threads: int = 4,
+        n_io_threads: int | None = None,
         metadata_io_concurrency: int = 32,
         n_array_meta_cache: int = 64,
         n_shard_index_cache: int = 256,
@@ -588,6 +595,8 @@ class Config:
                 "lookahead_samples must cover at least one full batch "
                 f"(got {lookahead_samples}, samples_per_batch={samples_per_batch})"
             )
+        if n_io_threads is None:
+            n_io_threads = max_concurrency()
         if n_io_threads < 1:
             raise ValueError(f"n_io_threads must be >= 1 (got {n_io_threads})")
         if metadata_io_concurrency < 1:

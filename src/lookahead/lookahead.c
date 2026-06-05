@@ -178,6 +178,24 @@ Bad:
   return 0;
 }
 
+int
+lookahead_wait_nonempty_timeout(struct damacy_lookahead* la, int timeout_ms)
+{
+  CHECK(Bad, la);
+  platform_mutex_lock(la->lock);
+  if (timeout_ms < 0) {
+    while (la->size == 0 && !la->stop_signaled)
+      platform_cond_wait(la->cond, la->lock);
+  } else if (la->size == 0 && !la->stop_signaled) {
+    platform_cond_timedwait_ms(la->cond, la->lock, timeout_ms);
+  }
+  int nonempty = la->size > 0;
+  platform_mutex_unlock(la->lock);
+  return nonempty;
+Bad:
+  return 0;
+}
+
 void
 lookahead_signal_stop(struct damacy_lookahead* la)
 {
