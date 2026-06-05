@@ -58,7 +58,9 @@ jobs:
           BENCH_RUNNER: ${{ runner.name }}
         run: |
           mkdir -p "$BENCH_DATA"
-          docker run --name "$CONTAINER" --device=nvidia.com/gpu=all \
+          docker run --name "$CONTAINER" \
+            --device=nvidia.com/gpu=all \
+            --security-opt seccomp=unconfined \
             -e BENCH_RUNNER \
             -v "$BENCH_DATA":/workspace/damacy/bench/data \
             "$IMAGE" \

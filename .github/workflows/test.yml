@@ -67,7 +67,9 @@ jobs:
           # codecov wants the PR head. Fall back to GITHUB_SHA on push.
           COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          docker run --name "$CONTAINER" --device=nvidia.com/gpu=all \
+          docker run --name "$CONTAINER" \
+            --device=nvidia.com/gpu=all \
+            --security-opt seccomp=unconfined \
             -e CODECOV_TOKEN \
             -e COMMIT_SHA \
             -e GITHUB_ACTIONS \

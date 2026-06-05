@@ -45,7 +45,9 @@ jobs:
       - name: Run TSan-labeled tests
         timeout-minutes: 5
         run: |
-          docker run --rm --name "$CONTAINER" --device=nvidia.com/gpu=all \
+          docker run --rm --name "$CONTAINER" \
+            --device=nvidia.com/gpu=all \
+            --security-opt seccomp=unconfined \
             -e TSAN_OPTIONS="suppressions=/workspace/damacy/tests/tsan-suppressions.txt halt_on_error=1 second_deadlock_stack=1" \
             "$IMAGE" \
             ctest --test-dir build -L tsan --output-on-failure

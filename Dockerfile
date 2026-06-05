@@ -3,7 +3,8 @@
 # Build:
 #   docker build -t damacy:dev .
 # Run (cluster, with GPU passthrough):
-#   docker run --rm --gpus all damacy:dev ctest --test-dir build --output-on-failure
+#   docker run --rm --gpus all --security-opt seccomp=unconfined \
+#     damacy:dev ctest --test-dir build --output-on-failure
 #   docker run --rm --gpus all damacy:dev \
 #     python -c "import damacy; print(damacy.__version__)"
 # On hosts using the CDI runtime instead of --gpus, substitute
@@ -19,6 +20,8 @@
 #    >=3.11). uv manages the venv at /opt/venv and drives the editable install.
 #  * nvcomp is the standalone NVIDIA distribution (not the pip wheel) extracted
 #    to /opt/nvcomp; CMake locates it via -DNvcomp_ROOT.
+#  * The default Docker seccomp profile can block io_uring setup. Use
+#    --security-opt seccomp=unconfined when running damacy in this image.
 
 ARG CUDA_IMAGE=nvidia/cuda:13.2.1-devel-ubuntu24.04
 FROM ${CUDA_IMAGE}
