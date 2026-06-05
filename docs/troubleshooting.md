@@ -14,6 +14,20 @@ the calling thread yet. Two fixes:
 - Or prime a context implicitly before constructing the pipeline:
   `torch.empty(1, device="cuda")` is enough.
 
+## `InvalidArgument` at `Pipeline(cfg)` from metadata I/O setup
+
+The Linux metadata path uses io_uring for zarr metadata, shard-index, and
+chunk-layout reads. At construction damacy requires kernel support for
+`IORING_OP_STATX`, `IORING_OP_OPENAT2`, `IORING_OP_READ`, and
+`IORING_OP_CLOSE`. If ring creation or the operation probe fails,
+`Pipeline(cfg)` raises `InvalidArgument` rather than falling back to a legacy
+thread pool. Check the native log for the exact io_uring failure.
+
+On supported kernels, an unusually high `metadata_io_concurrency` can also
+stress process file-descriptor limits because each in-flight metadata read can
+hold an open fd. The default is 32; for much deeper settings, check
+`ulimit -n` and remember to multiply by ranks per node.
+
 ## `BudgetExceeded` at `Pipeline(cfg)`
 
 `max_gpu_memory_bytes` is too small for the requested batch

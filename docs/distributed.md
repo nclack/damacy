@@ -126,9 +126,12 @@ Most `Config` knobs apply per rank. Aggregate cost on a node is
 Tune `n_io_threads` to your storage tier's bulk read behavior, and keep
 `metadata_io_concurrency` high enough to cover small, latency-bound metadata
 dependency work. The Linux metadata path uses it as an io_uring request-depth
-budget, not as a host thread count. When stacking multiple ranks on one
-GPU (uncommon, but valid), divide `max_gpu_memory_bytes` so the per-GPU total
-fits within the device.
+budget, not as a host thread count. The default is 32. Larger values can help
+high-latency metadata filesystems, but each in-flight metadata read can hold an
+open file descriptor, so very deep settings should be checked against
+`ulimit -n` and multiplied by ranks per node. When stacking multiple ranks on
+one GPU (uncommon, but valid), divide `max_gpu_memory_bytes` so the per-GPU
+total fits within the device.
 
 ## NUMA placement
 

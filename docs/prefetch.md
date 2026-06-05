@@ -152,4 +152,13 @@ The metadata store is an `io_uring` driver on Linux. It submits small
 metadata stat/open/read/close work without blocking the prefetcher and
 completes cache entries from I/O completion state. `metadata_io_concurrency`
 sets the metadata request-concurrency budget; the ring allocates enough
-entries internally for multi-step requests and driver wakeups.
+entries internally for multi-step requests and driver wakeups. At startup the
+driver requires kernel support for `IORING_OP_STATX`, `IORING_OP_OPENAT2`,
+`IORING_OP_READ`, and `IORING_OP_CLOSE`; there is no thread-pool fallback in
+the current build.
+
+The default metadata concurrency is 32. Treat much deeper values as storage
+tuning: they are useful when metadata operations have real latency, but each
+active read can hold an open file descriptor and allocate its destination
+buffer. On multi-rank jobs, multiply the setting by ranks per node before
+comparing it with `ulimit -n`.

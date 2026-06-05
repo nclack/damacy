@@ -20,7 +20,7 @@ import damacy
 import torch
 
 cfg = damacy.Config(
-    samples_per_batch=8,
+    samples_per_batch=2,
     sample_shape=(64, 256, 256),
     max_gpu_memory_bytes=1 << 30,
     dtype="bf16",
@@ -97,4 +97,3 @@ Continuous benchmark history (auto-published from
      mkdocs treats unresolved relative links as warnings under --strict. -->
 - [Throughput](https://nclack.github.io/damacy/throughput/) — bigger is better
 - [Timings](https://nclack.github.io/damacy/timings/) — smaller is better
-
