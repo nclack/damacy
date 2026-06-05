@@ -31,10 +31,11 @@ ARG NVCOMP_URL=https://developer.download.nvidia.com/compute/nvcomp/redist/nvcom
 
 # ----- system toolchain via apt ----------------------------------------------
 # Just enough to drive cmake + ninja + python; gcc/g++/nvcc come from the
-# cuda devel base image. libnuma + libcufile are dlopen'd at runtime
-# (src/numa/numa.c, src/store/store_fs_gds.c); -dev packages aren't
-# needed to build. libmount1 + libudev1 are transitive dlopens from
-# libcufile at driver init even in compat mode.
+# cuda devel base image. liburing-dev supplies the io_uring headers and
+# pkg-config metadata for the Linux metadata store. libnuma + libcufile
+# are dlopen'd at runtime (src/numa/numa.c, src/store/store_fs_gds.c);
+# -dev packages aren't needed to build. libmount1 + libudev1 are
+# transitive dlopens from libcufile at driver init even in compat mode.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -44,6 +45,7 @@ RUN apt-get update \
         ninja-build \
         python3 \
         python3-dev \
+        liburing-dev \
         libnuma1 \
         libmount1 \
         libudev1 \
