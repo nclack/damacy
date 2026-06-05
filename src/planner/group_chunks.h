@@ -2,7 +2,7 @@
 //   filter (emit) → sort → fuse-with-cap → group-by-read.
 //
 // Stable counting-sort of chunk_plans by read_op_idx so all chunks
-// sharing a post-coalesce read_op are contiguous globally. The peel
+// sharing a post-coalesce read_op are contiguous globally. The input dispatch
 // in wave_pool relies on this to keep a read_op's chunks from
 // straddling wave boundaries (which would otherwise cause cross-wave
 // re-fires of the same IO).

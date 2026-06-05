@@ -10,6 +10,7 @@
 #include "util/prelude.h"
 #include "util/strbuf.h"
 
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -20,6 +21,57 @@ struct fs_cache_entry
   char* key;
   platform_file* file;
 };
+
+struct fs_submit_state
+{
+  atomic_uint refs;
+  atomic_int status;
+};
+
+static struct fs_submit_state*
+fs_submit_state_new(void)
+{
+  struct fs_submit_state* st = (struct fs_submit_state*)calloc(1, sizeof(*st));
+  if (!st)
+    return NULL;
+  atomic_init(&st->refs, 1);
+  atomic_init(&st->status, DAMACY_OK);
+  return st;
+}
+
+static void
+fs_submit_state_ref(struct fs_submit_state* st)
+{
+  atomic_fetch_add_explicit(&st->refs, 1, memory_order_relaxed);
+}
+
+static void
+fs_submit_state_drop(struct fs_submit_state* st)
+{
+  if (!st)
+    return;
+  if (atomic_fetch_sub_explicit(&st->refs, 1, memory_order_acq_rel) == 1)
+    free(st);
+}
+
+static void
+fs_submit_state_fail(struct fs_submit_state* st)
+{
+  if (st)
+    atomic_store_explicit(&st->status, DAMACY_IO, memory_order_release);
+}
+
+static enum damacy_status
+fs_submit_state_finish(struct store_event ev)
+{
+  struct fs_submit_state* st = (struct fs_submit_state*)ev.impl;
+  if (!st)
+    return DAMACY_OK;
+  enum damacy_status status =
+    (enum damacy_status)atomic_load_explicit(&st->status, memory_order_acquire);
+  fs_submit_state_drop(st);
+  return status;
+}
 
 static int
 fs_cache_eq(const void* value, const void* probe_key, void* user)
@@ -125,6 +177,16 @@ store_fs_release(struct store_fs* fs, struct lru_entry* pin)
   lru_entry_release(pin);
 }
 
+static void
+atomic_max_u64(_Atomic uint64_t* dst, uint64_t val)
+{
+  uint64_t cur = atomic_load_explicit(dst, memory_order_relaxed);
+  while (cur < val &&
+         !atomic_compare_exchange_weak_explicit(
+           dst, &cur, val, memory_order_relaxed, memory_order_relaxed)) {
+  }
+}
+
 void
 store_fs_stats_get(struct store_fs* fs, struct lru_stats* out)
 {
@@ -135,9 +197,38 @@ store_fs_stats_get(struct store_fs* fs, struct lru_stats* out)
   platform_mutex_unlock(fs->cache_lock);
 }
 
+void
+store_fs_io_stats_get(struct store_fs* fs, struct store_fs_io_stats* out)
+{
+  if (!out)
+    return;
+  if (!fs) {
+    *out = (struct store_fs_io_stats){ 0 };
+    return;
+  }
+  *out = (struct store_fs_io_stats){
+    .read_jobs = atomic_load_explicit(&fs->read_jobs, memory_order_relaxed),
+    .read_active = atomic_load_explicit(&fs->read_active, memory_order_relaxed),
+    .read_max_active =
+      atomic_load_explicit(&fs->read_max_active, memory_order_relaxed),
+  };
+}
+
+void
+store_fs_io_stats_reset(struct store_fs* fs)
+{
+  if (!fs)
+    return;
+  uint64_t active =
+    atomic_load_explicit(&fs->read_active, memory_order_relaxed);
+  atomic_store_explicit(&fs->read_jobs, 0, memory_order_relaxed);
+  atomic_store_explicit(&fs->read_max_active, active, memory_order_relaxed);
+}
+
 struct fs_read_job
 {
   struct store_fs* fs;
+  struct fs_submit_state* state;
   const char* key; // borrowed: planner-interned, outlives the IO
   struct lru_entry* pin;
   void* dst;
@@ -151,7 +242,20 @@ fs_read_job_fn(void* vctx)
   struct fs_read_job* j = (struct fs_read_job*)vctx;
   platform_file* f =
     (platform_file*)((struct fs_cache_entry*)lru_entry_value(j->pin))->file;
-  (void)platform_file_pread(f, j->dst, j->len, j->offset);
+  atomic_fetch_add_explicit(&j->fs->read_jobs, 1, memory_order_relaxed);
+  uint64_t active =
+    atomic_fetch_add_explicit(&j->fs->read_active, 1, memory_order_acq_rel) + 1;
+  atomic_max_u64(&j->fs->read_max_active, active);
+  int64_t n = platform_file_pread(f, j->dst, j->len, j->offset);
+  atomic_fetch_sub_explicit(&j->fs->read_active, 1, memory_order_acq_rel);
+  if (n < 0) {
+    log_warn("store_fs: read failed for key=%s off=%llu len=%zu got=%lld",
+             j->key ? j->key : "(null)",
+             (unsigned long long)j->offset,
+             j->len,
+             (long long)n);
+    fs_submit_state_fail(j->state);
+  }
 }
 
 static void
@@ -162,24 +266,26 @@ fs_read_job_free(void* vctx)
     return;
   struct store_fs* fs = j->fs;
   store_fs_release(fs, j->pin);
+  fs_submit_state_drop(j->state);
   pool_free(fs->job_pool, j);
 }
 
-static struct store_event
+static struct store_submit_result
 fs_submit(struct store* s, const struct store_read* reads, size_t n)
 {
   struct store_fs* fs = (struct store_fs*)s;
-  struct store_event ev = { 0 };
+  struct store_submit_result result = { .status = DAMACY_IO };
+  struct fs_submit_state* state = NULL;
   if (n == 0) {
     struct io_event ioev = io_queue_record(fs->q);
-    ev.seq = ioev.seq;
-    return ev;
+    result.status = DAMACY_OK;
+    result.event.seq = ioev.seq;
+    return result;
   }
+  state = fs_submit_state_new();
+  if (!state)
+    return result;
 
-  // seq == 0 → partial-submit failure. Without it, a half-submitted
-  // batch would silently leave dst buffers unfilled. On failure we
-  // still drain in-flight jobs so they don't write into caller buffers
-  // after we return.
   for (size_t i = 0; i < n; ++i) {
     struct lru_entry* pin = NULL;
     platform_file* f = store_fs_acquire(fs, reads[i].key, &pin);
@@ -197,10 +303,12 @@ fs_submit(struct store* s, const struct store_read* reads, size_t n)
     }
     j->fs = fs;
     j->key = reads[i].key;
+    j->state = state;
     j->pin = pin;
     j->dst = reads[i].dst;
     j->offset = reads[i].offset;
     j->len = reads[i].len;
+    fs_submit_state_ref(state);
     if (io_queue_post(fs->q, fs_read_job_fn, j, fs_read_job_free)) {
       fs_read_job_free(j);
       goto Drain;
@@ -208,45 +316,62 @@ fs_submit(struct store* s, const struct store_read* reads, size_t n)
   }
   {
     struct io_event ioev = io_queue_record(fs->q);
-    ev.seq = ioev.seq;
+    result.status = DAMACY_OK;
+    result.event.seq = ioev.seq;
+    result.event.impl = state;
   }
-  return ev;
+  return result;
 
 Drain:
+  // Drain in-flight jobs so they don't write into caller buffers after return.
   io_event_wait(fs->q, io_queue_record(fs->q));
-  return ev; // ev.seq == 0 signals failure
+  fs_submit_state_drop(state);
+  return result;
 }
 
-static void
+static enum damacy_status
 fs_event_wait(struct store* s, struct store_event ev)
 {
   struct store_fs* fs = (struct store_fs*)s;
   io_event_wait(fs->q, (struct io_event){ .seq = ev.seq });
+  return fs_submit_state_finish(ev);
 }
 
-static int
+static struct store_event_poll
 fs_event_query(struct store* s, struct store_event ev)
 {
   struct store_fs* fs = (struct store_fs*)s;
-  return io_event_query(fs->q, (struct io_event){ .seq = ev.seq });
+  if (!io_event_query(fs->q, (struct io_event){ .seq = ev.seq }))
+    return (struct store_event_poll){ .status = DAMACY_OK };
+  return (struct store_event_poll){ .status = fs_submit_state_finish(ev),
+                                    .ready = 1 };
 }
 
-// Host store never attaches a backend ref; no-op.
 static void
 fs_event_discard(struct store* s, struct store_event ev)
 {
   (void)s;
-  (void)ev;
+  fs_submit_state_drop((struct fs_submit_state*)ev.impl);
 }
 
-static int
+static enum store_stat_result
 fs_stat(struct store* s, const char* key, uint64_t* out)
 {
   struct store_fs* fs = (struct store_fs*)s;
   struct strbuf path = { 0 };
-  int rc = 1;
+  enum store_stat_result rc = STORE_STAT_ERROR;
   CHECK_SILENT(Out, strbuf_join_path(&path, fs->root, key) == 0);
-  rc = platform_path_size(strbuf_cstr(&path), out);
+  switch (platform_path_size(strbuf_cstr(&path), out)) {
+    case PLATFORM_STAT_OK:
+      rc = STORE_STAT_OK;
+      break;
+    case PLATFORM_STAT_NOT_FOUND:
+      rc = STORE_STAT_NOT_FOUND;
+      break;
+    case PLATFORM_STAT_ERROR:
+      rc = STORE_STAT_ERROR;
+      break;
+  }
 Out:
   strbuf_free(&path);
   return rc;

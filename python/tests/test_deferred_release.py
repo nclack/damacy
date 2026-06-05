@@ -45,12 +45,13 @@ def one_zarr(tmp_path: Path, write_zarr_script: Path) -> str:
 
 def _mk_cfg() -> Config:
     return Config(
-        batch_size=1,
+        samples_per_batch=1,
         dtype="f32",
-        lookahead_batches=2,
+        lookahead_samples=2,
         n_io_threads=1,
-        n_zarrs_meta_cache=4,
-        n_shards_meta_cache=4,
+        n_array_meta_cache=4,
+        n_shard_index_cache=4,
+        n_chunk_layout_cache=4,
         sample_shape=(8, 16),
         max_gpu_memory_bytes=1 << 30,
     )

@@ -124,3 +124,41 @@ slot reuse is on the critical path of throughput. The default
 sync is fine for synchronous reads but stalls a prefetched loop on
 every iteration. Deferred release replaces the host sync with a
 stream-side wait that costs nothing on the host.
+
+## Async Metadata I/O
+
+The metadata prefetcher has a separate concern from batch-slot release:
+hiding latency while resolving zarr metadata, shard indexes, and chunk
+layouts. `prefetch_cache` has an async completion boundary: a cache miss
+creates a pending slot, hands an opaque completion token to an async
+fetcher, and later completes READY or ERROR without the prefetcher knowing
+how the work ran.
+
+The production metadata fetchers use a narrow async metadata-store
+boundary. Array metadata submits an owned whole-file read for `zarr.json`;
+shard indexes submit async stat plus an optional footer read; chunk layout
+submits the 16-byte blosc header probe. The prefetcher observes only cache
+state and gates:
+
+```text
+prefetcher requests metadata key
+  -> prefetch cache creates async fetch state
+    -> metadata store submits stat/read/open work
+      -> completion pump advances cache entry
+        -> prefetcher observes ready/error on the next advance
+```
+
+The metadata store is an `io_uring` driver on Linux. It submits small
+metadata stat/open/read/close work without blocking the prefetcher and
+completes cache entries from I/O completion state. `metadata_io_concurrency`
+sets the metadata request-concurrency budget; the ring allocates enough
+entries internally for multi-step requests and driver wakeups. At startup the
+driver requires kernel support for `IORING_OP_STATX`, `IORING_OP_OPENAT2`,
+`IORING_OP_READ`, and `IORING_OP_CLOSE`; there is no thread-pool fallback in
+the current build.
+
+The default metadata concurrency is 32. Treat much deeper values as storage
+tuning: they are useful when metadata operations have real latency, but each
+active read can hold an open file descriptor and allocate its destination
+buffer. On multi-rank jobs, multiply the setting by ranks per node before
+comparing it with `ulimit -n`.

@@ -20,6 +20,7 @@ pytestmark = pytest.mark.usefixtures("cuda_ctx")
 def test_module_constants():
     assert _native.LOG_TRACE == 0
     assert _native.LOG_FATAL == 5
+    assert _native.max_concurrency() >= 1
 
 
 def test_status_constants_present():
@@ -59,11 +60,13 @@ def test_native_damacy_error_carries_status_and_what():
     # Cheapest INVAL trigger: max_gpu_memory_bytes=0.
     with pytest.raises(_native.DamacyError) as excinfo:
         _native.Pipeline(
-            batch_size=1,
-            lookahead_batches=2,
+            samples_per_batch=1,
+            lookahead_samples=2,
             n_io_threads=1,
-            n_zarrs_meta_cache=4,
-            n_shards_meta_cache=4,
+            metadata_io_concurrency=1,
+            n_array_meta_cache=4,
+            n_shard_index_cache=4,
+            n_chunk_layout_cache=4,
             dtype="f32",
             max_chunk_uncompressed_bytes=512 << 10,
             max_gpu_memory_bytes=0,

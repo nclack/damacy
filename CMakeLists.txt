@@ -16,10 +16,14 @@ include(Helpers)
 include(Fuzz) # declares DAMACY_FUZZ and applies fuzz-mode flags
 
 find_package(Threads REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(LIBURING REQUIRED IMPORTED_TARGET liburing)
 
 if(NOT DAMACY_FUZZ)
     if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-        set(CMAKE_CUDA_ARCHITECTURES "75-real;80-real;86-real;89-real;90-real;90-virtual")
+        set(CMAKE_CUDA_ARCHITECTURES
+            "75-real;80-real;86-real;89-real;90-real;90-virtual"
+        )
     endif()
     enable_language(CUDA)
     find_package(CUDAToolkit REQUIRED)

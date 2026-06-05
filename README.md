@@ -22,7 +22,8 @@ import damacy
 import torch
 
 cfg = damacy.Config(
-    batch_size=8,
+    samples_per_batch=8,
+    sample_shape=(64, 256, 256),
     # Resource caps are fixed at construction; nothing grows after.
     max_gpu_memory_bytes=1 << 30,  # primary GPU budget
     dtype="bf16",                  # source dtype is cast on assemble
@@ -50,7 +51,7 @@ samples = [random_crop() for _ in range(64)]
 
 with damacy.Pipeline(cfg) as p:
     p.push(samples)                                # producer side
-    for batch in p.batches(len(samples) // cfg.batch_size):
+    for batch in p.batches(len(samples) // cfg.samples_per_batch):
         with batch as t:                           # consumer side
             x = torch.from_dlpack(t)               # zero-copy + stream-fenced
             ...                                    # train step
@@ -111,14 +112,23 @@ If you have data that uses one of the unsupported codecs and you'd like it added
 
 ## Runtime dependencies
 
-Damacy links only the essentials. Optional features dlopen their backends lazily, so a damacy binary loads on any host with a working CUDA driver — the feature simply turns off when its library isn't present.
+Damacy links the core CUDA and Linux async-I/O pieces directly. Optional
+features dlopen their backends lazily, so a damacy binary loads on any host
+with the required core libraries; optional features simply turn off when their
+library is not present.
 
 | Library | Required at runtime | What you lose if missing | How damacy finds it |
 |---|---|---|---|
 | `libcuda.so.1` | always | nothing — damacy cannot run without it | NVIDIA driver install (`/run/opengl-driver/lib`, `/usr/lib/x86_64-linux-gnu`, …) |
-| `libnuma.so.1` | optional | NUMA pinning of pinned-host slabs + io_queue / scheduler threads (single-socket hosts: no effect) | `dlopen` via dynamic loader (`LD_LIBRARY_PATH`, `ld.so.cache`) |
+| `liburing.so` | always on Linux builds | nothing — async metadata stat/open/read/close uses io_uring | normal dynamic loader (`LD_LIBRARY_PATH`, `ld.so.cache`, rpath, …) |
+| `libnuma.so.1` | optional | NUMA pinning of pinned-host slabs, bulk I/O workers, scheduler thread, and metadata io_uring driver thread (single-socket hosts: no effect) | `dlopen` via dynamic loader (`LD_LIBRARY_PATH`, `ld.so.cache`) |
 | `libcufile.so.0` | optional | `damacy_config.enable_gds = DAMACY_GDS_ON` — direct read of compressed chunks into device memory via NVIDIA GPUDirect Storage | `dlopen` via dynamic loader; ships with the CUDA toolkit and with nvidia-fs. Requires a build with `-DDAMACY_ENABLE_GDS=ON` (default OFF) |
 | `libmount.so.1`, `libudev.so.1` | required *if and only if* using GDS | cuFile dlopen's these at driver init even in compat mode | dynamic loader |
+
+Metadata reads require a Linux kernel with the io_uring operations damacy uses:
+`STATX`, `OPENAT2`, `READ`, and `CLOSE`. If the kernel does not advertise
+those operations, `damacy_create` fails instead of falling back to a thread
+pool.
 
 GDS notes:
 

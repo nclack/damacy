@@ -1,0 +1,197 @@
+#include "input_transfer.h"
+
+#include "damacy_limits.h"
+#include "nvtx/nvtx.h"
+#include "store/store_fs_gds.h"
+#include "util/cuda_check.h"
+#include "wave/input_slot.h"
+#include "wave/wave.h"
+
+static struct input_transfer_resources
+host_staging_resources(uint8_t n_slots, uint64_t bytes_per_wave)
+{
+  (void)n_slots;
+  return (struct input_transfer_resources){
+    .slot_host_bytes = bytes_per_wave,
+    .wave_device_bytes = bytes_per_wave,
+    .device_staging_bytes = (uint64_t)DAMACY_N_WAVES * bytes_per_wave,
+    .device_staging_buffers = DAMACY_N_WAVES,
+  };
+}
+
+static struct input_transfer_resources
+gds_resources(uint8_t n_slots, uint64_t bytes_per_wave)
+{
+  return (struct input_transfer_resources){
+    .slot_device_bytes = bytes_per_wave,
+    .device_staging_bytes = (uint64_t)n_slots * bytes_per_wave,
+    .device_staging_buffers = n_slots,
+  };
+}
+
+struct input_transfer_resources
+input_transfer_resources(const struct input_transfer_ops* ops,
+                         uint8_t n_slots,
+                         uint64_t bytes_per_wave)
+{
+  return ops->resources(n_slots, bytes_per_wave);
+}
+
+static void
+host_staging_bind_stream(struct store* store, CUstream stream)
+{
+  (void)store;
+  (void)stream;
+}
+
+static void
+gds_bind_stream(struct store* store, CUstream stream)
+{
+  store_fs_gds_set_stream(store, stream);
+}
+
+static void*
+host_staging_read_base(struct input_slot* slot)
+{
+  return slot->buf;
+}
+
+static void*
+gds_read_base(struct input_slot* slot)
+{
+  return slot->dev_buf;
+}
+
+static void*
+host_staging_wave_input(struct damacy_wave* wave, const struct input_slot* slot)
+{
+  (void)slot;
+  return wave->dev_compressed_owned;
+}
+
+static void*
+gds_wave_input(struct damacy_wave* wave, const struct input_slot* slot)
+{
+  (void)wave;
+  return slot->dev_buf;
+}
+
+static enum damacy_status
+input_transfer_begin(CUstream stream,
+                     struct damacy_wave* wave,
+                     uint8_t* queued_stream_work)
+{
+  CU(CudaFail, cuEventRecord(wave->ev.input_start, stream));
+  *queued_stream_work = 1;
+  damacy_nvtx_range_push("input_transfer");
+  return DAMACY_OK;
+CudaFail:
+  return DAMACY_CUDA;
+}
+
+static enum damacy_status
+input_transfer_finish(CUstream stream, struct damacy_wave* wave)
+{
+  CU(CudaFail, cuEventRecord(wave->ev.input_transfer_done, stream));
+  damacy_nvtx_range_pop();
+  return DAMACY_OK;
+CudaFail:
+  damacy_nvtx_range_pop();
+  return DAMACY_CUDA;
+}
+
+static enum damacy_status
+input_transfer_queue_marker(CUstream stream,
+                            struct damacy_wave* wave,
+                            uint8_t* queued_stream_work)
+{
+  enum damacy_status s = input_transfer_begin(stream, wave, queued_stream_work);
+  if (s != DAMACY_OK)
+    return s;
+  return input_transfer_finish(stream, wave);
+}
+
+static enum damacy_status
+host_staging_queue_input(CUstream stream,
+                         struct damacy_wave* wave,
+                         uint8_t* queued_stream_work)
+{
+  enum damacy_status s = input_transfer_begin(stream, wave, queued_stream_work);
+  if (s != DAMACY_OK)
+    return s;
+
+  CU(BulkCudaFail,
+     cuMemcpyHtoDAsync(CUDPTR(wave->dev_compressed),
+                       wave->host_input,
+                       wave->input_used_bytes,
+                       stream));
+  return input_transfer_finish(stream, wave);
+BulkCudaFail:
+  damacy_nvtx_range_pop();
+  return DAMACY_CUDA;
+}
+
+static enum damacy_status
+event_ready(CUevent ev, int* ready)
+{
+  CUresult q = cuEventQuery(ev);
+  if (q == CUDA_SUCCESS) {
+    *ready = 1;
+    return DAMACY_OK;
+  }
+  if (q == CUDA_ERROR_NOT_READY) {
+    *ready = 0;
+    return DAMACY_OK;
+  }
+  return DAMACY_CUDA;
+}
+
+static enum damacy_status
+host_staging_slot_reuse_ready(const struct damacy_wave* wave, int* ready)
+{
+  return event_ready(wave->ev.input_transfer_done, ready);
+}
+
+static enum damacy_status
+gds_slot_reuse_ready(const struct damacy_wave* wave, int* ready)
+{
+  if (wave->state != WAVE_POST) {
+    *ready = 0;
+    return DAMACY_OK;
+  }
+  return event_ready(wave->ev.decomp_end, ready);
+}
+
+static const struct input_transfer_ops k_host_staging = {
+  .name = "host_staging",
+  .resources = host_staging_resources,
+  .bind_stream = host_staging_bind_stream,
+  .read_base = host_staging_read_base,
+  .wave_input = host_staging_wave_input,
+  .submit_reads = store_read_submit,
+  .queue_input = host_staging_queue_input,
+  .slot_reuse_ready = host_staging_slot_reuse_ready,
+};
+
+static const struct input_transfer_ops k_gds = {
+  .name = "gds",
+  .resources = gds_resources,
+  .bind_stream = gds_bind_stream,
+  .read_base = gds_read_base,
+  .wave_input = gds_wave_input,
+  .submit_reads = store_read_submit_dev,
+  .queue_input = input_transfer_queue_marker,
+  .slot_reuse_ready = gds_slot_reuse_ready,
+};
+
+const struct input_transfer_ops*
+input_transfer_host_staging(void)
+{
+  return &k_host_staging;
+}
+
+const struct input_transfer_ops*
+input_transfer_gds(void)
+{
+  return &k_gds;
+}

@@ -16,7 +16,7 @@ Out:
   return;
 }
 
-struct store_event
+struct store_submit_result
 store_read_submit(struct store* s, const struct store_read* reads, size_t n)
 {
   CHECK_SILENT(Empty, s);
@@ -24,10 +24,10 @@ store_read_submit(struct store* s, const struct store_read* reads, size_t n)
   CHECK_SILENT(Empty, s->vt->submit);
   return s->vt->submit(s, reads, n);
 Empty:
-  return (struct store_event){ 0 };
+  return (struct store_submit_result){ .status = DAMACY_IO };
 }
 
-struct store_event
+struct store_submit_result
 store_read_submit_dev(struct store* s, const struct store_read* reads, size_t n)
 {
   CHECK_SILENT(Empty, s);
@@ -35,7 +35,7 @@ store_read_submit_dev(struct store* s, const struct store_read* reads, size_t n)
   CHECK_SILENT(Empty, s->vt->submit_dev);
   return s->vt->submit_dev(s, reads, n);
 Empty:
-  return (struct store_event){ 0 };
+  return (struct store_submit_result){ .status = DAMACY_IO };
 }
 
 int
@@ -46,26 +46,26 @@ store_supports_gds(struct store* s)
   return s->vt->submit_dev != NULL;
 }
 
-void
+enum damacy_status
 store_event_wait(struct store* s, struct store_event ev)
 {
-  CHECK_SILENT(Out, s);
-  CHECK_SILENT(Out, s->vt);
-  CHECK_SILENT(Out, s->vt->event_wait);
-  s->vt->event_wait(s, ev);
-Out:
-  return;
+  CHECK_SILENT(Fail, s);
+  CHECK_SILENT(Fail, s->vt);
+  CHECK_SILENT(Fail, s->vt->event_wait);
+  return s->vt->event_wait(s, ev);
+Fail:
+  return DAMACY_IO;
 }
 
-int
+struct store_event_poll
 store_event_query(struct store* s, struct store_event ev)
 {
-  CHECK_SILENT(NotReady, s);
-  CHECK_SILENT(NotReady, s->vt);
-  CHECK_SILENT(NotReady, s->vt->event_query);
+  CHECK_SILENT(Fail, s);
+  CHECK_SILENT(Fail, s->vt);
+  CHECK_SILENT(Fail, s->vt->event_query);
   return s->vt->event_query(s, ev);
-NotReady:
-  return 0;
+Fail:
+  return (struct store_event_poll){ .status = DAMACY_IO, .ready = 1 };
 }
 
 void
@@ -86,15 +86,14 @@ store_read_many(struct store* s, const struct store_read* reads, size_t n)
   CHECK_SILENT(Fail, reads);
   if (n == 0)
     return 0;
-  struct store_event ev = store_read_submit(s, reads, n);
-  CHECK_SILENT(Fail, ev.seq != 0);
-  store_event_wait(s, ev);
-  return 0;
+  struct store_submit_result result = store_read_submit(s, reads, n);
+  CHECK_SILENT(Fail, result.status == DAMACY_OK);
+  return store_event_wait(s, result.event) == DAMACY_OK ? 0 : 1;
 Fail:
   return 1;
 }
 
-int
+enum store_stat_result
 store_stat(struct store* s, const char* key, uint64_t* out)
 {
   CHECK_SILENT(Fail, s);
@@ -104,7 +103,7 @@ store_stat(struct store* s, const char* key, uint64_t* out)
   CHECK_SILENT(Fail, out);
   return s->vt->stat(s, key, out);
 Fail:
-  return 1;
+  return STORE_STAT_ERROR;
 }
 
 int

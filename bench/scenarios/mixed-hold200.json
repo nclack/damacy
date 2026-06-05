@@ -17,16 +17,18 @@
     "sample_shape": [128, 128, 128],
     "n_batches": 50,
     "n_warmup_batches": 5,
-    "batch_size": 128,
+    "samples_per_batch": 128,
     "seed": 1234
   },
   "pipeline": {
     "dtype": "f32",
-    "lookahead_batches": 4,
+    "lookahead_samples": 512,
     "n_io_threads": 8,
+    "metadata_io_concurrency": 32,
     "max_gpu_memory_mb": 6144,
-    "n_zarrs_meta_cache": 4096,
-    "n_shards_meta_cache": 16384
+    "n_array_meta_cache": 4096,
+    "n_shard_index_cache": 16384,
+    "n_chunk_layout_cache": 4096
   },
   "consumer": {
     "hold_ms": 200

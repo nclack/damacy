@@ -80,7 +80,7 @@ def main() -> int:
     # separately.
     tracked_stages = (
         "io",
-        "h2d",
+        "input_transfer",
         "decompress",
         "assemble",
         "decompress.parse",

@@ -22,7 +22,7 @@ test_create_destroy(void)
 // decoder_zstd_grow must (a) advance cur_max_batch on success and
 // (b) preserve usability — pointers to internal scratch (statuses) are
 // non-null and a subsequent decode-size check (n <= max_batch) holds.
-// Regression target: kick_h2d's grow path relies on cur_max_batch
+// Regression target: kick_input's grow path relies on cur_max_batch
 // monotonically increasing post-grow and the scratch remaining live.
 static int
 test_grow(void)

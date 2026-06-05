@@ -17,16 +17,13 @@ read_u32_le(const uint8_t* p)
 }
 
 int
-zarr_chunk_layout_probe(struct store* s,
-                        const char* shard_path,
-                        uint64_t first_chunk_off,
-                        uint32_t first_chunk_cbytes,
-                        uint8_t codec_id,
-                        uint32_t max_substreams_per_chunk,
-                        struct chunk_layout* out)
+zarr_chunk_layout_parse_header(const void* header,
+                               uint32_t first_chunk_cbytes,
+                               uint8_t codec_id,
+                               uint32_t max_substreams_per_chunk,
+                               struct chunk_layout* out)
 {
-  CHECK_SILENT(Fail, s);
-  CHECK_SILENT(Fail, shard_path);
+  CHECK_SILENT(Fail, header);
   CHECK_SILENT(Fail, out);
 
   // Only blosc-formatted codecs carry a per-chunk header.
@@ -35,17 +32,7 @@ zarr_chunk_layout_probe(struct store* s,
   if (first_chunk_cbytes < BLOSC1_HEADER_BYTES)
     return 1;
 
-  uint8_t header[BLOSC1_HEADER_BYTES];
-  struct store_read read = {
-    .key = shard_path,
-    .dst = header,
-    .offset = first_chunk_off,
-    .len = sizeof(header),
-  };
-  if (store_read_many(s, &read, 1))
-    return 1;
-
-  const uint8_t* p = header;
+  const uint8_t* p = (const uint8_t*)header;
   const uint8_t flags = p[2];
   uint8_t typesize = p[3];
   uint32_t nbytes = read_u32_le(p + 4);
@@ -74,6 +61,42 @@ zarr_chunk_layout_probe(struct store* s,
     .nblocks = nblocks,
   };
   return 0;
+
+Fail:
+  return 1;
+}
+
+int
+zarr_chunk_layout_probe(struct store* s,
+                        const char* shard_path,
+                        uint64_t first_chunk_off,
+                        uint32_t first_chunk_cbytes,
+                        uint8_t codec_id,
+                        uint32_t max_substreams_per_chunk,
+                        struct chunk_layout* out)
+{
+  CHECK_SILENT(Fail, s);
+  CHECK_SILENT(Fail, shard_path);
+  CHECK_SILENT(Fail, out);
+
+  // Only blosc-formatted codecs carry a per-chunk header.
+  if (codec_id != (uint8_t)CODEC_BLOSC_ZSTD)
+    return 1;
+  if (first_chunk_cbytes < BLOSC1_HEADER_BYTES)
+    return 1;
+
+  uint8_t header[BLOSC1_HEADER_BYTES];
+  struct store_read read = {
+    .key = shard_path,
+    .dst = header,
+    .offset = first_chunk_off,
+    .len = sizeof(header),
+  };
+  if (store_read_many(s, &read, 1))
+    return 1;
+
+  return zarr_chunk_layout_parse_header(
+    header, first_chunk_cbytes, codec_id, max_substreams_per_chunk, out);
 
 Fail:
   return 1;

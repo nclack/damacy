@@ -71,8 +71,8 @@ test_submit_fail_releases_pins(void)
       .len = 1 },
     { .key = "k2", .dst = (void*)(dbuf + 48), .offset = 0, .len = 1 },
   };
-  struct store_event ev = store_read_submit_dev(s, reads, 4);
-  EXPECT(ev.seq == 0);
+  struct store_submit_result submit = store_read_submit_dev(s, reads, 4);
+  EXPECT(submit.status == DAMACY_IO);
 
   struct lru_stats stats;
   store_fs_gds_stats_get(s, &stats);
@@ -81,10 +81,10 @@ test_submit_fail_releases_pins(void)
   struct store_read good[] = {
     { .key = "k0", .dst = (void*)dbuf, .offset = 0, .len = 1 },
   };
-  struct store_event ev2 = store_read_submit_dev(s, good, 1);
-  EXPECT(ev2.seq != 0);
+  struct store_submit_result submit2 = store_read_submit_dev(s, good, 1);
+  EXPECT(submit2.status == DAMACY_OK);
   EXPECT(cuStreamSynchronize(stream) == CUDA_SUCCESS);
-  store_event_discard(s, ev2);
+  store_event_discard(s, submit2.event);
 
   cuMemFree(dbuf);
   store_destroy(s);
@@ -175,15 +175,18 @@ test_event_query_reflects_completion(void)
     .offset = 0,
     .len = PAYLOAD,
   };
-  struct store_event ev = store_read_submit_dev(s, &read, 1);
-  EXPECT(ev.seq != 0);
+  struct store_submit_result submit = store_read_submit_dev(s, &read, 1);
+  EXPECT(submit.status == DAMACY_OK);
 
-  EXPECT(store_event_query(s, ev) == 0);
+  struct store_event_poll poll = store_event_query(s, submit.event);
+  EXPECT(!poll.ready);
 
   atomic_store_explicit((_Atomic uint32_t*)gate_host, 1u, memory_order_release);
   EXPECT(cuStreamSynchronize(stream) == CUDA_SUCCESS);
 
-  EXPECT(store_event_query(s, ev) == 1);
+  poll = store_event_query(s, submit.event);
+  EXPECT(poll.ready);
+  EXPECT(poll.status == DAMACY_OK);
 
   cuMemFreeHost(gate_host);
   cuMemFree(dbuf);

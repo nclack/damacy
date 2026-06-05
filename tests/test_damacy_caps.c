@@ -25,6 +25,9 @@
 //                                   — pool fits but resolver budget too
 //                                     small for one chunk; DAMACY_BUDGET
 //                                     (wave_pool_resolve_sizing branch)
+//   test_metadata_cache_saturation_budget
+//                                   — metadata cache admission saturation
+//                                     returns DAMACY_BUDGET, not OOM
 //   test_sample_shape_mismatch_rejected
 //                                   — push a sample whose aabb extent !=
 //                                     cfg.sample_shape; expect INVAL
@@ -52,19 +55,21 @@ mkdtemp_root(char* root, size_t cap)
 }
 
 static struct damacy_config
-mk_cfg(const char* root, uint32_t batch_size, int64_t sy, int64_t sx)
+mk_cfg(const char* root, uint32_t samples_per_batch, int64_t sy, int64_t sx)
 {
   (void)root;
   struct damacy_config c = {
-    .batch_size = batch_size,
-    .lookahead_batches = 2,
+    .samples_per_batch = samples_per_batch,
+    .lookahead_samples = 2 * samples_per_batch,
     .dtype = DAMACY_F32,
     .sample_rank = 2,
     .device = -1,
     .tuning = {
       .n_io_threads = 1,
-      .n_zarrs_meta_cache = 4,
-      .n_shards_meta_cache = 4,
+      .metadata_io_concurrency = 1,
+      .n_array_meta_cache = 4,
+      .n_shard_index_cache = 4,
+      .n_chunk_layout_cache = 4,
       .max_gpu_memory_bytes = 1ull << 30,
     },
   };
@@ -213,7 +218,7 @@ test_config_describe(void)
 }
 
 // Issue #59 regime: a non-trivial batch-output pool (sample volume ×
-// batch_size × dtype_bpe × 2) at the default cap. The resolver carves
+// samples_per_batch × dtype_bpe × 2) at the default cap. The resolver carves
 // out pool_reserve from max_gpu_memory_bytes before sizing the wave-
 // resident buffers, so create + push + pop succeed and the committed
 // counter stays at or below the cap after the pop. Pre-fix, the lazy
@@ -234,20 +239,22 @@ test_pool_reserve_fits_default_budget(void)
   EXPECT(fixture_write_zarr_codec(
            p, shape, inner, shard, 4, "uint16", 0, "blosc-zstd") == 0);
 
-  // batch_size=20, sample=(16,1,256,256) f32 → 80 MB per slot, 160 MB
+  // samples_per_batch=20, sample=(16,1,256,256) f32 → 80 MB per slot, 160 MB
   // double-buffered. 1 GiB cap leaves ~860 MB for the resolver,
   // comfortably fits the wave-resident geometry.
   struct damacy_config cfg = {
-    .batch_size = 20,
-    .lookahead_batches = 2,
+    .samples_per_batch = 20,
+    .lookahead_samples = 40,
     .dtype = DAMACY_F32,
     .sample_shape = { 16, 1, 256, 256 },
     .sample_rank = 4,
     .device = -1,
     .tuning = {
       .n_io_threads = 1,
-      .n_zarrs_meta_cache = 4,
-      .n_shards_meta_cache = 4,
+      .metadata_io_concurrency = 1,
+      .n_array_meta_cache = 4,
+      .n_shard_index_cache = 4,
+      .n_chunk_layout_cache = 4,
       .max_gpu_memory_bytes = 1ull << 30,
     },
   };
@@ -290,16 +297,18 @@ test_pool_exceeds_budget_rejected_at_create(void)
   char root[64];
   EXPECT(mkdtemp_root(root, sizeof root) == 0);
   struct damacy_config cfg = {
-    .batch_size = 20,
-    .lookahead_batches = 2,
+    .samples_per_batch = 20,
+    .lookahead_samples = 40,
     .dtype = DAMACY_F32,
     .sample_shape = { 16, 1, 256, 256 },
     .sample_rank = 4,
     .device = -1,
     .tuning = {
       .n_io_threads = 1,
-      .n_zarrs_meta_cache = 4,
-      .n_shards_meta_cache = 4,
+      .metadata_io_concurrency = 1,
+      .n_array_meta_cache = 4,
+      .n_shard_index_cache = 4,
+      .n_chunk_layout_cache = 4,
       .max_gpu_memory_bytes = 32ull << 20,
     },
   };
@@ -393,6 +402,45 @@ test_resolver_minimum_one_chunk(void)
   return 0;
 }
 
+static int
+test_metadata_cache_saturation_budget(void)
+{
+  char root[64];
+  EXPECT(mkdtemp_root(root, sizeof root) == 0);
+  char pa[256];
+  char pb[256];
+  snprintf(pa, sizeof pa, "%s/a", root);
+  snprintf(pb, sizeof pb, "%s/b", root);
+  int64_t shape[2] = { 8, 16 }, inner[2] = { 4, 8 }, shard[2] = { 8, 16 };
+  EXPECT(fixture_write_zarr_codec(
+           pa, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
+  EXPECT(fixture_write_zarr_codec(
+           pb, shape, inner, shard, 2, "uint16", 100, "blosc-zstd") == 0);
+
+  struct damacy_config cfg = mk_cfg(root, 2, 8, 16);
+  cfg.tuning.n_array_meta_cache = 1;
+  cfg.tuning.n_shard_index_cache = 4;
+  cfg.tuning.n_chunk_layout_cache = 4;
+  cfg.debug.metadata_latency.baseline_ns = 50ull * 1000ull * 1000ull;
+  cfg.debug.metadata_latency.seed = 17;
+
+  struct damacy* d = NULL;
+  EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
+
+  struct damacy_sample samples[2] = {
+    mk_sample(pa, 0, 8, 0, 16),
+    mk_sample(pb, 0, 8, 0, 16),
+  };
+  struct damacy_sample_slice slice = { .beg = samples, .end = samples + 2 };
+  EXPECT(damacy_push(d, slice).status == DAMACY_OK);
+  struct damacy_batch* b = NULL;
+  EXPECT(damacy_pop(d, &b) == DAMACY_BUDGET);
+
+  damacy_destroy(d);
+  fixture_rm_tree(root);
+  return 0;
+}
+
 int
 main(void)
 {
@@ -405,6 +453,7 @@ main(void)
   RUN(test_pool_reserve_fits_default_budget);
   RUN(test_pool_exceeds_budget_rejected_at_create);
   RUN(test_resolver_cannot_fit_one_chunk);
+  RUN(test_metadata_cache_saturation_budget);
   RUN(test_sample_shape_mismatch_rejected);
   RUN(test_resolver_minimum_one_chunk);
   log_info("all tests passed");

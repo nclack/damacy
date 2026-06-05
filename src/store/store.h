@@ -5,13 +5,13 @@
 //
 // Two access patterns:
 //   - store_read_submit / store_event_wait: positional reads for
-//     compressed chunk bytes. Runs on the store's io_queue with
-//     configurable concurrency. Each submitted read currently maps 1:1
-//     to a `pread` on a cached FD; planner-side coalescing of adjacent
-//     reads is on the roadmap (plan.md step 7).
+//     compressed chunk bytes. Submit returns status plus an event and
+//     runs on the store's io_queue with configurable concurrency.
 //   - store_map / store_unmap: whole-resource read-only view, intended
 //     for metadata (zarr.json) where a parser wants a contiguous buffer.
 #pragma once
+
+#include "damacy.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -47,7 +47,7 @@ extern "C"
   // One positional read against the store. `key` is interpreted by the
   // backend (FS: relative path under root). `dst` must be writable for at
   // least `len` bytes; the caller owns the memory and is responsible for
-  // pinning it if it will later be used as a CUDA H2D source.
+  // pinning it if it will later be used as a CUDA host-to-device source.
   struct store_read
   {
     const char* key;
@@ -57,28 +57,38 @@ extern "C"
   };
 
   // Non-NULL `impl` owns a backend ref; drive to completion via
-  // event_wait or event_query (until non-zero), else event_discard.
+  // event_wait or event_query (until ready), else event_discard.
   struct store_event
   {
     uint64_t seq;
     void* impl;
   };
 
-  // Submit a batch of reads. Returns an event whose .seq advances after
-  // *every* read in the batch has completed (regardless of the order
-  // workers happened to finish them). Reads run on the store's io_queue.
-  struct store_event store_read_submit(struct store* s,
-                                       const struct store_read* reads,
-                                       size_t n);
+  struct store_submit_result
+  {
+    enum damacy_status status;
+    struct store_event event;
+  };
+
+  struct store_event_poll
+  {
+    enum damacy_status status;
+    uint8_t ready;
+  };
+
+  // Submit a batch of reads. On success, result.event advances after every
+  // read in the batch has completed. Reads run on the store's io_queue.
+  struct store_submit_result store_read_submit(struct store* s,
+                                               const struct store_read* reads,
+                                               size_t n);
 
   // Like store_read_submit but each `reads[i].dst` is a device pointer.
   // The store routes the read directly into GPU memory when supported
-  // (NVIDIA GDS / cuFile); otherwise returns an event with seq == 0
-  // indicating failure. Callers should query store_supports_gds first
-  // and fall back to store_read_submit + an H2D copy when unsupported.
-  struct store_event store_read_submit_dev(struct store* s,
-                                           const struct store_read* reads,
-                                           size_t n);
+  // (NVIDIA GDS / cuFile).
+  struct store_submit_result store_read_submit_dev(
+    struct store* s,
+    const struct store_read* reads,
+    size_t n);
 
   // 1 if the store can satisfy store_read_submit_dev (cuFile driver
   // initialized for fs stores); 0 otherwise.
@@ -88,12 +98,13 @@ extern "C"
   // Reclaims the backend ref in `ev`; do not call event_discard after.
   // Caller must ensure the store's stream remains live and is progressing;
   // a destroyed or permanently-stalled stream will deadlock the wait.
-  void store_event_wait(struct store* s, struct store_event ev);
+  enum damacy_status store_event_wait(struct store* s, struct store_event ev);
 
-  // Non-blocking variant of store_event_wait. Returns non-zero if every
-  // read up to ev.seq has completed. A non-zero return reclaims the
-  // backend ref in `ev`; do not call event_discard after.
-  int store_event_query(struct store* s, struct store_event ev);
+  // Non-blocking variant of store_event_wait. ready=1 means every read up
+  // to ev.seq has completed and status is final. ready=1 reclaims the backend
+  // ref in `ev`; do not call event_discard after.
+  struct store_event_poll store_event_query(struct store* s,
+                                            struct store_event ev);
 
   // Release `ev` without waiting on completion. Required if neither
   // event_wait nor event_query-to-completion is called on it. Safe on
@@ -105,10 +116,18 @@ extern "C"
                       const struct store_read* reads,
                       size_t n);
 
-  // Recover the size in bytes of the resource named by `key`. Returns 0 on
-  // success and writes *out. Used by the shard-index cache to find a
-  // shard footer.
-  int store_stat(struct store* s, const char* key, uint64_t* out);
+  // NOT_FOUND is reserved for absent resources; other failures are ERROR
+  // so callers don't alias them to "absent."
+  enum store_stat_result
+  {
+    STORE_STAT_OK = 0,
+    STORE_STAT_NOT_FOUND,
+    STORE_STAT_ERROR,
+  };
+
+  enum store_stat_result store_stat(struct store* s,
+                                    const char* key,
+                                    uint64_t* out);
 
   // Read-only view of a whole resource. `data`/`len` are public; the
   // remaining fields are backend-private — treat them as opaque.

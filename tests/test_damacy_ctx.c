@@ -36,15 +36,17 @@ mk_cfg(const char* root, int64_t sy, int64_t sx)
 {
   (void)root;
   struct damacy_config c = {
-    .batch_size = 1,
-    .lookahead_batches = 2,
+    .samples_per_batch = 1,
+    .lookahead_samples = 2,
     .dtype = DAMACY_F32,
     .sample_rank = 2,
     .device = -1,
     .tuning = {
       .n_io_threads = 1,
-      .n_zarrs_meta_cache = 4,
-      .n_shards_meta_cache = 4,
+      .metadata_io_concurrency = 1,
+      .n_array_meta_cache = 4,
+      .n_shard_index_cache = 4,
+      .n_chunk_layout_cache = 4,
       .max_gpu_memory_bytes = 1ull << 30,
     },
   };
@@ -199,7 +201,7 @@ test_explicit_device_does_not_leak_ctx_between_calls(void)
 
   struct damacy_config cfg = mk_cfg(root, 4, 8);
   cfg.device = 0;
-  cfg.batch_size = 1;
+  cfg.samples_per_batch = 1;
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 

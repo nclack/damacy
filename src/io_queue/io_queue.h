@@ -20,8 +20,8 @@ extern "C"
     uint64_t seq;
   };
 
-  // nthreads in [1, DAMACY_MAX_IO_THREADS]. `affinity` is the resolved
-  // NUMA placement plan from numa_init; pass NULL (or a struct with
+  // nthreads in [1, platform_default_thread_count()]. `affinity` is the
+  // resolved NUMA placement plan from numa_init; pass NULL (or a struct with
   // node<0) to skip affinity. Returns NULL on failure.
   struct io_queue* io_queue_create(int nthreads,
                                    const struct numa_resolved* affinity);

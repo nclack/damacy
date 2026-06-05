@@ -82,8 +82,8 @@ extern "C"
                       enum damacy_dtype dst_dtype);
 
   // Compute blocks-per-chunk for a sample given its dims and the kernel's
-  // block-tile shape. Host-side helper used by damacy.c when packing the
-  // wave's metadata. Returns 0 for unsupported ranks.
+  // block-tile shape. Host-side helper used by wave orchestration when
+  // packing the wave's metadata. Returns 0 for unsupported ranks.
   uint32_t assemble_blocks_per_chunk(uint8_t rank,
                                      const struct sample_dim* dims);
 

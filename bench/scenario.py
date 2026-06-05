@@ -70,22 +70,24 @@ class Sampling(BaseModel):
     sample_shape: list[int]
     n_batches: int = Field(gt=0)
     n_warmup_batches: int = 0
-    batch_size: int = Field(gt=0)
+    samples_per_batch: int = Field(gt=0)
     seed: int = 1234
 
 
 class Pipeline(BaseModel):
     # Destination dtype on the assembled batch. Sources cast to this.
     dtype: DstDType = "f32"
-    lookahead_batches: int = Field(gt=0)
+    lookahead_samples: int = Field(gt=0)
     n_io_threads: int = Field(gt=0)
+    metadata_io_concurrency: int = Field(default=32, gt=0)
     max_gpu_memory_mb: int = 0  # 0 → library default
     max_chunk_uncompressed_mb: int = 0  # 0 → library default
     max_read_op_kb: int = 0  # cap on coalesced read_op size; 0 → library default
-    n_zarrs_meta_cache: int = 4096
-    n_shards_meta_cache: int = 16384
+    n_array_meta_cache: int = 4096
+    n_shard_index_cache: int = 16384
+    n_chunk_layout_cache: int = 4096
     # Bench bypass: skip decode by flipping chunks to fill at parse +
-    # assemble time. IO and H2D still run; assemble broadcasts the
+    # assemble time. IO and input transfer still run; assemble broadcasts the
     # array's fill_value. Useful for isolating decode cost.
     bypass_decode: bool = False
 
@@ -94,12 +96,21 @@ class Consumer(BaseModel):
     hold_ms: float = 0.0
 
 
+class LatencyModel(BaseModel):
+    baseline_ns: int = Field(default=0, ge=0)
+    lognormal_mu_ln_ns: float = 0.0
+    lognormal_sigma_ln_ns: float = Field(default=0.0, ge=0.0)
+    cap_ns: int = Field(default=0, ge=0)
+    seed: int = Field(default=0, ge=0)
+
+
 class Scenario(BaseModel):
     name: str = "scenario"
     dataset: Dataset
     sampling: Sampling
     pipeline: Pipeline
     consumer: Consumer = Field(default_factory=Consumer)
+    metadata_latency: LatencyModel = Field(default_factory=LatencyModel)
 
 
 # --- results -----------------------------------------------------------------
@@ -136,10 +147,24 @@ class Counters(BaseModel):
     reads_issued: int = 0
     distinct_zarrs: int
     distinct_shards: int
-    zarr_meta_hits: int
-    zarr_meta_misses: int
-    shard_idx_hits: int
-    shard_idx_misses: int
+    array_meta_hits: int
+    array_meta_misses: int
+    shard_index_hits: int
+    shard_index_misses: int
+    chunk_layout_hits: int
+    chunk_layout_misses: int
+    metadata_latency_ops: int = 0
+    metadata_latency_map_ops: int = 0
+    metadata_latency_stat_ops: int = 0
+    metadata_latency_submit_ops: int = 0
+    metadata_latency_submit_dev_ops: int = 0
+    metadata_latency_active: int = 0
+    metadata_latency_max_active: int = 0
+    metadata_latency_total_sleep_ns: int = 0
+    metadata_latency_max_sleep_ns: int = 0
+    metadata_backend_read_jobs: int = 0
+    metadata_backend_read_active: int = 0
+    metadata_backend_read_max_active: int = 0
     gpu_bytes_committed: int = 0
 
 

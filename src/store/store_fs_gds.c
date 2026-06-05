@@ -290,28 +290,28 @@ fs_gds_free_params_cb(void* userdata)
   free(ctx);
 }
 
-static struct store_event
+static struct store_submit_result
 gds_submit_dev(struct store* s, const struct store_read* reads, size_t n)
 {
   struct store_fs_gds* g = (struct store_fs_gds*)s;
-  // seq == 0 is the failure sentinel consumed by wave_pool (DAMACY_IO).
-  struct store_event ev = { 0 };
+  struct store_submit_result result = { .status = DAMACY_IO };
 
   CUstream stream = (CUstream)g->gds_stream;
   if (!stream) {
     log_error("store_fs_gds: submit_dev called before stream was set");
-    return ev;
+    return result;
   }
 
   if (n == 0) {
-    ev.seq = GDS_SENTINEL_SEQ;
-    return ev;
+    result.status = DAMACY_OK;
+    result.event.seq = GDS_SENTINEL_SEQ;
+    return result;
   }
 
   struct fs_gds_async_ctx* ctx =
     (struct fs_gds_async_ctx*)calloc(1, sizeof(*ctx));
   if (!ctx)
-    return ev;
+    return result;
   ctx->g = g;
   ctx->n = n;
   // calloc: SubmitFail's drain loop relies on params[i].pin == NULL for
@@ -319,13 +319,13 @@ gds_submit_dev(struct store* s, const struct store_read* reads, size_t n)
   ctx->params = (struct fs_gds_async_params*)calloc(n, sizeof(*ctx->params));
   if (!ctx->params) {
     free(ctx);
-    return ev;
+    return result;
   }
   ctx->done = (struct fs_gds_done*)calloc(1, sizeof(*ctx->done));
   if (!ctx->done) {
     free(ctx->params);
     free(ctx);
-    return ev;
+    return result;
   }
   atomic_init(&ctx->done->rc, 2);
   atomic_init(&ctx->done->flag, 0);
@@ -371,9 +371,10 @@ gds_submit_dev(struct store* s, const struct store_read* reads, size_t n)
     goto SubmitFail;
   }
 
-  ev.seq = GDS_SENTINEL_SEQ;
-  ev.impl = ctx->done;
-  return ev;
+  result.status = DAMACY_OK;
+  result.event.seq = GDS_SENTINEL_SEQ;
+  result.event.impl = ctx->done;
+  return result;
 
 SubmitFail:
   // Drain so cuFile is done dereferencing params before we free them.
@@ -389,7 +390,7 @@ SubmitFail:
   fs_gds_done_drop(ctx->done);
   fs_gds_done_drop(ctx->done);
   free(ctx);
-  return ev;
+  return result;
 }
 
 static void
@@ -405,15 +406,15 @@ fs_gds_try_claim(struct fs_gds_done* d)
 
 // Spin on the per-batch flag; cuStreamSynchronize would drain unrelated
 // concurrent submits on the same stream and kill IO/compute overlap.
-static void
+static enum damacy_status
 gds_event_wait(struct store* s, struct store_event ev)
 {
   (void)s;
   if (ev.seq != GDS_SENTINEL_SEQ)
-    return;
+    return DAMACY_OK;
   struct fs_gds_done* d = (struct fs_gds_done*)ev.impl;
   if (!d)
-    return;
+    return DAMACY_OK;
   // Bounded by cuFile read latency; yield to OS to avoid CPU burn under
   // saturation.
   for (unsigned i = 0; !atomic_load_explicit(&d->flag, memory_order_acquire);
@@ -423,21 +424,22 @@ gds_event_wait(struct store* s, struct store_event ev)
       platform_yield();
   }
   fs_gds_try_claim(d);
+  return DAMACY_OK;
 }
 
-static int
+static struct store_event_poll
 gds_event_query(struct store* s, struct store_event ev)
 {
   (void)s;
   if (ev.seq != GDS_SENTINEL_SEQ)
-    return 0;
+    return (struct store_event_poll){ .status = DAMACY_OK };
   struct fs_gds_done* d = (struct fs_gds_done*)ev.impl;
   if (!d)
-    return 1; // n==0 fast-path: nothing to wait on
+    return (struct store_event_poll){ .status = DAMACY_OK, .ready = 1 };
   if (!atomic_load_explicit(&d->flag, memory_order_acquire))
-    return 0;
+    return (struct store_event_poll){ .status = DAMACY_OK };
   fs_gds_try_claim(d);
-  return 1;
+  return (struct store_event_poll){ .status = DAMACY_OK, .ready = 1 };
 }
 
 static void

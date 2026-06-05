@@ -48,19 +48,21 @@ expected_f32_from_u16_2d(int64_t y, int64_t x, int64_t cols, int64_t off)
 }
 
 static struct damacy_config
-mk_cfg(const char* root, uint32_t batch_size, int64_t sy, int64_t sx)
+mk_cfg(const char* root, uint32_t samples_per_batch, int64_t sy, int64_t sx)
 {
   (void)root;
   struct damacy_config c = {
-    .batch_size = batch_size,
-    .lookahead_batches = 2,
+    .samples_per_batch = samples_per_batch,
+    .lookahead_samples = 2 * samples_per_batch,
     .dtype = DAMACY_F32,
     .sample_rank = 2,
     .device = -1,
     .tuning = {
       .n_io_threads = 1,
-      .n_zarrs_meta_cache = 4,
-      .n_shards_meta_cache = 4,
+      .metadata_io_concurrency = 1,
+      .n_array_meta_cache = 4,
+      .n_shard_index_cache = 4,
+      .n_chunk_layout_cache = 4,
       .max_gpu_memory_bytes = 1ull << 30,
     },
   };
@@ -190,7 +192,7 @@ test_partial_crossing_chunks_blosc(void)
 }
 
 // Four zarrs (none, zstd, blosc-zstd × 2), one sample each in a
-// batch_size=4 batch. All three supported codecs route through the
+// samples_per_batch=4 batch. All three supported codecs route through the
 // unified blosc1 GPU pipeline; the wave dispatches to memcpy + nvcomp_zstd.
 static int
 test_three_codecs_mixed_batch(void)
@@ -282,20 +284,22 @@ test_multi_wave_per_batch(void)
   // to pick the minimum per-wave geometry (one chunk per wave). With
   // max_chunk_uncompressed_bytes = 4 KiB and a budget just barely big
   // enough to fit total_min, dev_decompressed_per_wave lands near
-  // 4 KiB. peel_wave's per-chunk read_op is page-aligned (typically
+  // 4 KiB. input_dispatch_wave's per-chunk read_op is page-aligned (typically
   // 4 KiB), so the 16-chunk batch spills into ≥2 waves of the same
   // batch slot.
   struct damacy_config cfg = {
-    .batch_size = 4,
-    .lookahead_batches = 2,
+    .samples_per_batch = 4,
+    .lookahead_samples = 8,
     .dtype = DAMACY_F32,
     .sample_shape = { 16, 32 },
     .sample_rank = 2,
     .device = -1,
     .tuning = {
       .n_io_threads = 1,
-      .n_zarrs_meta_cache = 4,
-      .n_shards_meta_cache = 4,
+      .metadata_io_concurrency = 1,
+      .n_array_meta_cache = 4,
+      .n_shard_index_cache = 4,
+      .n_chunk_layout_cache = 4,
       .max_chunk_uncompressed_bytes = 4ull << 10,
       // Resolver minimum so the 16-chunk batch spills into ≥2 waves.
       .max_gpu_memory_bytes = 116ull << 20,
@@ -344,12 +348,12 @@ test_multi_wave_per_batch(void)
 
 // Regression for the per-wave-fanout corruption bug: pre-fix, growing
 // wave A's fanout reallocated wave B's fanout in lockstep, corrupting
-// any in-flight H2D of B's SOA. Fixture: 65 inner chunks × 16 blocks
+// any in-flight upload of B's SOA. Fixture: 65 inner chunks × 16 blocks
 // each = 1040 substreams per wave > DAMACY_BLOSC_ZSTD_INITIAL_BATCH_CAP
 // (1024), forcing both the per-wave fanout SOA and the pool-shared
 // decoder scratch to grow on first dispatch. clevel=1 splits each
 // 512 KB inner chunk into 16 blocks. Two batches keep both waves in
-// flight simultaneously (lookahead_batches=2, batch_size=1).
+// flight simultaneously (lookahead_samples=2, samples_per_batch=1).
 static int
 test_wave_grows_substream_cap(void)
 {
@@ -363,16 +367,18 @@ test_wave_grows_substream_cap(void)
            p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd-l1") == 0);
 
   struct damacy_config cfg = {
-    .batch_size = 1,
-    .lookahead_batches = 2,
+    .samples_per_batch = 1,
+    .lookahead_samples = 2,
     .dtype = DAMACY_F32,
     .sample_shape = { H, W },
     .sample_rank = 2,
     .device = -1,
     .tuning = {
       .n_io_threads = 1,
-      .n_zarrs_meta_cache = 4,
-      .n_shards_meta_cache = 4,
+      .metadata_io_concurrency = 1,
+      .n_array_meta_cache = 4,
+      .n_shard_index_cache = 4,
+      .n_chunk_layout_cache = 4,
       .max_chunk_uncompressed_bytes = 1ull << 20,
       .max_gpu_memory_bytes = 1ull << 30,
     },
@@ -439,16 +445,18 @@ test_grow_inside_tight_budget(void)
            p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
 
   struct damacy_config cfg = {
-    .batch_size = 1,
-    .lookahead_batches = 2,
+    .samples_per_batch = 1,
+    .lookahead_samples = 2,
     .dtype = DAMACY_F32,
     .sample_shape = { 256, 32 },
     .sample_rank = 2,
     .device = -1,
     .tuning = {
       .n_io_threads = 1,
-      .n_zarrs_meta_cache = 4,
-      .n_shards_meta_cache = 4,
+      .metadata_io_concurrency = 1,
+      .n_array_meta_cache = 4,
+      .n_shard_index_cache = 4,
+      .n_chunk_layout_cache = 4,
       .max_chunk_uncompressed_bytes = 4ull << 10,
       .max_gpu_memory_bytes = 120ull << 20,
     },
@@ -497,16 +505,18 @@ test_layout_probe_avoids_decoder_grow(void)
            p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
 
   struct damacy_config cfg = {
-    .batch_size = 1,
-    .lookahead_batches = 2,
+    .samples_per_batch = 1,
+    .lookahead_samples = 2,
     .dtype = DAMACY_F32,
     .sample_shape = { 256, 32 },
     .sample_rank = 2,
     .device = -1,
     .tuning = {
       .n_io_threads = 1,
-      .n_zarrs_meta_cache = 4,
-      .n_shards_meta_cache = 4,
+      .metadata_io_concurrency = 1,
+      .n_array_meta_cache = 4,
+      .n_shard_index_cache = 4,
+      .n_chunk_layout_cache = 4,
       .max_chunk_uncompressed_bytes = 4ull << 10,
       .max_gpu_memory_bytes = 120ull << 20,
     },

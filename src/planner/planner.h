@@ -2,14 +2,14 @@
 // transform records ready for the wave scheduler / IO pool / decompress
 // / assemble pipeline.
 //
-// Build-order step 3: page-aligned reads from day 1, one read_op per
-// chunk (no coalescing, no waves). chunk_plan wave-scheduler fields
-// (host_buf_offset, dev_decompressed_offset) are filled in by the
-// scheduler; the planner zeroes them.
+// chunk_plan wave-scheduler fields (host_buf_offset,
+// dev_decompressed_offset) are filled in by the scheduler; the planner
+// zeroes them.
 #pragma once
 
-#include "damacy.h"                 // damacy_status, damacy_sample, damacy_aabb
-#include "damacy_limits.h"          // DAMACY_MAX_RANK
+#include "damacy.h"        // damacy_status, damacy_sample, damacy_aabb
+#include "damacy_limits.h" // DAMACY_MAX_RANK
+#include "prefetch/prefetch_handle.h"
 #include "zarr/zarr_chunk_layout.h" // struct chunk_layout
 #include "zarr/zarr_metadata.h"     // DAMACY_MAX_DTYPE_BYTES
 
@@ -21,12 +21,11 @@ extern "C"
 {
 #endif
 
-  struct zarr_meta_cache;
-  struct zarr_shard_cache;
+  struct prefetch_cache;
   struct path_intern;
 
   // Page-aligned IO operation. Multiple chunk_plans may share one
-  // read_op once coalescing lands; pre-step-7 it's 1:1 with chunk_plans.
+  // read_op after coalescing.
   // shard_path is interned by the planner; equal paths share a pointer,
   // and the pointer is valid for the planner's lifetime — long enough
   // for the wave scheduler's plan queue to outlive any batch. Fills set
@@ -125,15 +124,37 @@ extern "C"
   int read_op_group_iterator_next(struct read_op_group_iterator* it,
                                   struct read_op_group* out);
 
+  struct planner_sample
+  {
+    const char* uri;
+    struct damacy_aabb aabb;
+    struct prefetch_handle h_meta;
+    struct prefetch_handle* h_shards;
+    uint32_t n_shards;
+    struct prefetch_handle h_layout;
+  };
+
+  struct planner_placement
+  {
+    uint16_t batch_pool_slot;
+    uint64_t batch_id;
+    uint32_t sample_idx_begin_in_batch;
+    uint32_t n_samples;
+  };
+
   struct planner_config
   {
-    struct zarr_meta_cache* meta_cache;
-    struct zarr_shard_cache* shard_cache;
+    struct prefetch_cache* array_meta_cache;
+    struct prefetch_cache* chunk_layout_cache;
+    struct prefetch_cache* shard_index_cache;
+    // Source dtype lacking a cast path to this fails planner_plan with
+    // DAMACY_DTYPE.
+    enum damacy_dtype dst_dtype;
     // Page alignment used for read_op.file_offset / nbytes. Typically
     // platform_page_alignment(), captured once at create.
     uint64_t page_alignment;
     // Runtime ceiling on per-chunk uncompressed bytes. Chunks exceeding
-    // this fail planner_plan with DAMACY_INVAL — earlier than the parse
+    // this fail planner_plan with DAMACY_BUDGET — earlier than the parse
     // kernel's nblocks check, and surfaces sample.uri to the caller.
     // 0 means "no extra cap beyond DAMACY_MAX_CHUNK_BYTES".
     uint64_t max_chunk_uncompressed_bytes;
@@ -156,7 +177,7 @@ extern "C"
 
   // Output buffers for planner_plan. Caller owns the storage; planner
   // populates *_n on success. If any buffer fills before the plan
-  // completes, planner_plan returns DAMACY_OOM.
+  // completes, planner_plan returns DAMACY_BUDGET.
   //
   // `paths` interns each emitted read_op's shard_path. planner_plan
   // resets it at entry; caller need not.
@@ -199,12 +220,20 @@ extern "C"
   // a pointer across all emitted read_ops, and the storage lives until
   // planner_destroy.
   enum damacy_status planner_plan(struct planner* p,
-                                  const struct damacy_sample* samples,
+                                  const struct planner_sample* samples,
                                   uint32_t n_samples,
                                   uint16_t batch_pool_slot,
                                   const int64_t* dst_strides, // [rank+1]
                                   uint8_t dst_full_rank,      // rank+1
                                   struct planner_output* out);
+
+  enum damacy_status planner_plan_segment(
+    struct planner* p,
+    const struct planner_sample* samples,
+    const struct planner_placement* placement,
+    const int64_t* dst_strides, // [rank+1]
+    uint8_t dst_full_rank,      // rank+1
+    struct planner_output* out);
 
 #ifdef __cplusplus
 }

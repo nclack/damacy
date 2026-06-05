@@ -10,7 +10,7 @@ Typical use::
     import damacy, torch
 
     cfg = damacy.Config(
-        batch_size=8,
+        samples_per_batch=8,
         max_gpu_memory_bytes=1 << 30,
         dtype="bf16",
     )
@@ -21,20 +21,22 @@ Typical use::
 
     with damacy.Pipeline(cfg) as p:
         p.push(samples)
-        for batch in p.batches(len(samples) // cfg.batch_size):
+        for batch in p.batches(len(samples) // cfg.samples_per_batch):
             with batch as t:
                 x = torch.from_dlpack(t)
                 ...  # train step
 
 Variants reuse a base via :func:`dataclasses.replace`::
 
-    big = dataclasses.replace(cfg, batch_size=64)
+    big = dataclasses.replace(cfg, samples_per_batch=64, lookahead_samples=128)
 """
 
 from __future__ import annotations
 
+import contextlib
 import itertools
 import logging
+import math
 import os
 import threading
 import warnings
@@ -60,6 +62,7 @@ __all__ = [
     "Dtype",
     "DtypeMismatch",
     "InvalidArgument",
+    "LatencyModel",
     "Metric",
     "NativeCudaError",
     "NotFound",
@@ -74,11 +77,17 @@ __all__ = [
     "Status",
     "StorageError",
     "TryAgain",
+    "max_concurrency",
     "set_log_level",
     "set_log_quiet",
 ]
 
 __version__: str = _native.__version__
+
+
+def max_concurrency() -> int:
+    """Host concurrency cap used by default thread-count settings."""
+    return int(_native.max_concurrency())
 
 
 # ---- enums --------------------------------------------------------------
@@ -172,6 +181,35 @@ def _gds_to_native(v: bool | None) -> int:
     if v is None:
         return _native.GDS_AUTO
     return _native.GDS_ON if v else _native.GDS_OFF
+
+
+@dataclass(frozen=True, slots=True)
+class LatencyModel:
+    """Synthetic metadata latency model for benchmarking prefetch behavior.
+
+    ``lognormal_mu_ln_ns`` and ``lognormal_sigma_ln_ns`` parameterize the
+    natural-log distribution of tail latency measured in nanoseconds.
+    """
+
+    baseline_ns: int = 0
+    lognormal_mu_ln_ns: float = 0.0
+    lognormal_sigma_ln_ns: float = 0.0
+    cap_ns: int = 0
+    seed: int = 0
+
+    def __post_init__(self) -> None:
+        if self.baseline_ns < 0:
+            raise ValueError("baseline_ns must be >= 0")
+        if not math.isfinite(self.lognormal_mu_ln_ns):
+            raise ValueError("lognormal_mu_ln_ns must be finite")
+        if not math.isfinite(self.lognormal_sigma_ln_ns):
+            raise ValueError("lognormal_sigma_ln_ns must be finite")
+        if self.lognormal_sigma_ln_ns < 0:
+            raise ValueError("lognormal_sigma_ln_ns must be >= 0")
+        if self.cap_ns < 0:
+            raise ValueError("cap_ns must be >= 0")
+        if self.seed < 0:
+            raise ValueError("seed must be >= 0")
 
 
 class Status(IntEnum):
@@ -413,11 +451,11 @@ class Config:
 
     ```pycon
     >>> import dataclasses
-    >>> base = Config(batch_size=8, sample_shape=(8, 16),
+    >>> base = Config(samples_per_batch=8, sample_shape=(8, 16),
     ...               max_gpu_memory_bytes=1 << 30)
     >>> base.dtype is Dtype.F32
     True
-    >>> dataclasses.replace(base, batch_size=64).batch_size
+    >>> dataclasses.replace(base, samples_per_batch=64, lookahead_samples=128).samples_per_batch
     64
 
     ```
@@ -428,15 +466,15 @@ class Config:
     ``dtype`` argument; the stored field is always a :class:`Dtype`.
 
     ```pycon
-    >>> Config(batch_size=0, sample_shape=(8, 16), max_gpu_memory_bytes=1 << 30)
+    >>> Config(samples_per_batch=0, sample_shape=(8, 16), max_gpu_memory_bytes=1 << 30)
     Traceback (most recent call last):
         ...
-    ValueError: batch_size must be >= 1 (got 0)
+    ValueError: samples_per_batch must be >= 1 (got 0)
 
     ```
 
     Attributes:
-        batch_size: Samples per batch (>= 1).
+        samples_per_batch: Samples per batch (>= 1).
         max_gpu_memory_bytes: Primary GPU budget knob. Hard cap on
             GPU memory allocated for wave-resident buffers, decoder
             scratch, per-wave fanout SOAs, and batch-output pools.
@@ -448,10 +486,14 @@ class Config:
             worst-case observe-and-grow footprint so grows inside a
             successfully-created instance never trip the cap.
         dtype: Destination dtype for assembled batches.
-        lookahead_batches: User-side push-queue depth (>= 2).
-        n_io_threads: IO worker threads (>= 1).
-        n_zarrs_meta_cache: LRU cap for zarr-metadata entries.
-        n_shards_meta_cache: LRU cap for shard-index entries.
+        lookahead_samples: User-side push-queue depth in samples. Defaults
+            to two full output batches.
+        n_io_threads: Bulk data IO worker threads (>= 1). ``None`` selects
+            :func:`max_concurrency`.
+        metadata_io_concurrency: Async metadata request concurrency (>= 1).
+        n_array_meta_cache: LRU cap for zarr-metadata entries.
+        n_shard_index_cache: LRU cap for shard-index entries.
+        n_chunk_layout_cache: LRU cap for per-array blosc1 chunk-layout entries.
         max_chunk_uncompressed_bytes: Largest uncompressed chunk size
             the pipeline accepts; 0 selects the C default (512 KB).
         max_read_op_bytes: Cap on the size of a single coalesced
@@ -487,11 +529,13 @@ class Config:
             in that mode; must be ``-1`` (default) otherwise — the
             constructor rejects a node hint paired with a non-PIN_TO
             strategy rather than silently dropping it.
+        metadata_latency: Synthetic metadata-store latency model used
+            for benchmarking prefetch behavior. ``None`` disables it.
     """
 
-    batch_size: int
+    samples_per_batch: int
     dtype: Dtype
-    lookahead_batches: int
+    lookahead_samples: int
     max_chunk_uncompressed_bytes: int
     max_read_op_bytes: int
     max_gpu_memory_bytes: int
@@ -499,49 +543,66 @@ class Config:
     max_chunks_per_wave: int
     max_substreams_per_chunk: int
     n_io_threads: int
-    n_zarrs_meta_cache: int
-    n_shards_meta_cache: int
+    metadata_io_concurrency: int
+    n_array_meta_cache: int
+    n_shard_index_cache: int
+    n_chunk_layout_cache: int
     sample_shape: tuple[int, ...]
     device: int | None
     pop_timeout_s: float | None
     enable_gds: bool | None
     numa_strategy: NumaStrategy
     numa_node: int
+    metadata_latency: LatencyModel
 
     def __init__(
         self,
         *,
-        batch_size: int,
+        samples_per_batch: int,
         sample_shape: Sequence[int],
         max_gpu_memory_bytes: int,
         dtype: Dtype | str | int = Dtype.F32,
-        lookahead_batches: int = 2,
+        lookahead_samples: int | None = None,
         max_chunk_uncompressed_bytes: int = 0,
         max_read_op_bytes: int = 0,
         host_buffer_waves: int = 0,
         max_chunks_per_wave: int = 0,
         max_substreams_per_chunk: int = 0,
-        n_io_threads: int = 4,
-        n_zarrs_meta_cache: int = 64,
-        n_shards_meta_cache: int = 256,
+        n_io_threads: int | None = None,
+        metadata_io_concurrency: int = 32,
+        n_array_meta_cache: int = 64,
+        n_shard_index_cache: int = 256,
+        n_chunk_layout_cache: int = 64,
         device: int | None = None,
         pop_timeout_s: float | None = 30.0,
         enable_gds: bool | None = None,
         numa_strategy: NumaStrategy | str | int = NumaStrategy.AUTO,
         numa_node: int = -1,
+        metadata_latency: LatencyModel | None = None,
     ) -> None:
         # Custom __init__ rather than __post_init__ so the constructor
         # signature accepts the polymorphic dtype input while reads of
         # `cfg.dtype` always type as Dtype. dataclass(init=False) keeps
         # the auto-generated __eq__ / __hash__ / __repr__.
-        if batch_size < 1:
-            raise ValueError(f"batch_size must be >= 1 (got {batch_size})")
-        if lookahead_batches < 2:
+        if samples_per_batch < 1:
             raise ValueError(
-                f"lookahead_batches must be >= 2 (got {lookahead_batches})"
+                f"samples_per_batch must be >= 1 (got {samples_per_batch})"
             )
+        if lookahead_samples is None:
+            lookahead_samples = 2 * samples_per_batch
+        if lookahead_samples < samples_per_batch:
+            raise ValueError(
+                "lookahead_samples must cover at least one full batch "
+                f"(got {lookahead_samples}, samples_per_batch={samples_per_batch})"
+            )
+        if n_io_threads is None:
+            n_io_threads = max_concurrency()
         if n_io_threads < 1:
             raise ValueError(f"n_io_threads must be >= 1 (got {n_io_threads})")
+        if metadata_io_concurrency < 1:
+            raise ValueError(
+                f"metadata_io_concurrency must be >= 1 (got {metadata_io_concurrency})"
+            )
         if max_chunk_uncompressed_bytes < 0:
             raise ValueError("max_chunk_uncompressed_bytes must be >= 0")
         if max_read_op_bytes < 0:
@@ -576,15 +637,19 @@ class Config:
             raise ValueError(
                 f"numa_node must be -1 when numa_strategy={ns.name} (got {numa_node})"
             )
+        if metadata_latency is not None and not isinstance(
+            metadata_latency, LatencyModel
+        ):
+            raise TypeError("metadata_latency must be a LatencyModel or None")
         shape_t = tuple(int(x) for x in sample_shape)
         if not shape_t:
             raise ValueError("sample_shape must be non-empty")
         if any(d <= 0 for d in shape_t):
             raise ValueError(f"sample_shape entries must be > 0 (got {shape_t})")
         set_ = object.__setattr__  # frozen=True forbids `self.x = ...`
-        set_(self, "batch_size", batch_size)
+        set_(self, "samples_per_batch", samples_per_batch)
         set_(self, "dtype", Dtype.coerce(dtype))
-        set_(self, "lookahead_batches", lookahead_batches)
+        set_(self, "lookahead_samples", lookahead_samples)
         set_(self, "max_chunk_uncompressed_bytes", max_chunk_uncompressed_bytes)
         set_(self, "max_read_op_bytes", max_read_op_bytes)
         set_(self, "max_gpu_memory_bytes", max_gpu_memory_bytes)
@@ -592,14 +657,17 @@ class Config:
         set_(self, "max_chunks_per_wave", max_chunks_per_wave)
         set_(self, "max_substreams_per_chunk", max_substreams_per_chunk)
         set_(self, "n_io_threads", n_io_threads)
-        set_(self, "n_zarrs_meta_cache", n_zarrs_meta_cache)
-        set_(self, "n_shards_meta_cache", n_shards_meta_cache)
+        set_(self, "metadata_io_concurrency", metadata_io_concurrency)
+        set_(self, "n_array_meta_cache", n_array_meta_cache)
+        set_(self, "n_shard_index_cache", n_shard_index_cache)
+        set_(self, "n_chunk_layout_cache", n_chunk_layout_cache)
         set_(self, "sample_shape", shape_t)
         set_(self, "device", device)
         set_(self, "pop_timeout_s", pop_timeout_s)
         set_(self, "enable_gds", None if enable_gds is None else bool(enable_gds))
         set_(self, "numa_strategy", ns)
         set_(self, "numa_node", int(numa_node))
+        set_(self, "metadata_latency", metadata_latency or LatencyModel())
 
 
 @dataclass(frozen=True, slots=True)
@@ -653,7 +721,7 @@ class Stats:
 
     plan: Metric
     io: Metric
-    h2d: Metric
+    input_transfer: Metric
     decode: Metric
     post_decode: Metric
     decode_gap: Metric
@@ -661,10 +729,24 @@ class Stats:
     bind_wait: Metric
     pop_wait: Metric
     flush_wait: Metric
-    zarr_meta_hits: int
-    zarr_meta_misses: int
-    shard_idx_hits: int
-    shard_idx_misses: int
+    array_meta_hits: int
+    array_meta_misses: int
+    shard_index_hits: int
+    shard_index_misses: int
+    chunk_layout_hits: int
+    chunk_layout_misses: int
+    metadata_latency_ops: int
+    metadata_latency_map_ops: int
+    metadata_latency_stat_ops: int
+    metadata_latency_submit_ops: int
+    metadata_latency_submit_dev_ops: int
+    metadata_latency_active: int
+    metadata_latency_max_active: int
+    metadata_latency_total_sleep_ns: int
+    metadata_latency_max_sleep_ns: int
+    metadata_backend_read_jobs: int
+    metadata_backend_read_active: int
+    metadata_backend_read_max_active: int
     batches_emitted: int
     batches_truncated: int
     waves_emitted: int
@@ -681,7 +763,7 @@ class Stats:
         return cls(
             plan=m(st["plan"]),
             io=m(st["io"]),
-            h2d=m(st["h2d"]),
+            input_transfer=m(st["input_transfer"]),
             decode=m(st["decode"]),
             post_decode=m(st["post_decode"]),
             decode_gap=m(st["decode_gap"]),
@@ -689,10 +771,24 @@ class Stats:
             bind_wait=m(st["bind_wait"]),
             pop_wait=m(st["pop_wait"]),
             flush_wait=m(st["flush_wait"]),
-            zarr_meta_hits=st["zarr_meta_hits"],
-            zarr_meta_misses=st["zarr_meta_misses"],
-            shard_idx_hits=st["shard_idx_hits"],
-            shard_idx_misses=st["shard_idx_misses"],
+            array_meta_hits=st["array_meta_hits"],
+            array_meta_misses=st["array_meta_misses"],
+            shard_index_hits=st["shard_index_hits"],
+            shard_index_misses=st["shard_index_misses"],
+            chunk_layout_hits=st["chunk_layout_hits"],
+            chunk_layout_misses=st["chunk_layout_misses"],
+            metadata_latency_ops=st["metadata_latency_ops"],
+            metadata_latency_map_ops=st["metadata_latency_map_ops"],
+            metadata_latency_stat_ops=st["metadata_latency_stat_ops"],
+            metadata_latency_submit_ops=st["metadata_latency_submit_ops"],
+            metadata_latency_submit_dev_ops=st["metadata_latency_submit_dev_ops"],
+            metadata_latency_active=st["metadata_latency_active"],
+            metadata_latency_max_active=st["metadata_latency_max_active"],
+            metadata_latency_total_sleep_ns=st["metadata_latency_total_sleep_ns"],
+            metadata_latency_max_sleep_ns=st["metadata_latency_max_sleep_ns"],
+            metadata_backend_read_jobs=st["metadata_backend_read_jobs"],
+            metadata_backend_read_active=st["metadata_backend_read_active"],
+            metadata_backend_read_max_active=st["metadata_backend_read_max_active"],
             batches_emitted=st["batches_emitted"],
             batches_truncated=st["batches_truncated"],
             waves_emitted=st["waves_emitted"],
@@ -974,7 +1070,7 @@ class Pipeline:
 
     Constructed from a :class:`Config`::
 
-        cfg = damacy.Config(batch_size=8, ...)
+        cfg = damacy.Config(samples_per_batch=8, ...)
         with damacy.Pipeline(cfg) as p:
             ...
 
@@ -997,8 +1093,8 @@ class Pipeline:
     def __init__(self, config: Config) -> None:
         try:
             self._native = _native.Pipeline(
-                batch_size=config.batch_size,
-                lookahead_batches=config.lookahead_batches,
+                samples_per_batch=config.samples_per_batch,
+                lookahead_samples=config.lookahead_samples,
                 dtype=int(config.dtype),  # already coerced by Config.__init__
                 max_chunk_uncompressed_bytes=config.max_chunk_uncompressed_bytes,
                 max_read_op_bytes=config.max_read_op_bytes,
@@ -1007,13 +1103,24 @@ class Pipeline:
                 max_chunks_per_wave=config.max_chunks_per_wave,
                 max_substreams_per_chunk=config.max_substreams_per_chunk,
                 n_io_threads=config.n_io_threads,
-                n_zarrs_meta_cache=config.n_zarrs_meta_cache,
-                n_shards_meta_cache=config.n_shards_meta_cache,
+                metadata_io_concurrency=config.metadata_io_concurrency,
+                n_array_meta_cache=config.n_array_meta_cache,
+                n_shard_index_cache=config.n_shard_index_cache,
+                n_chunk_layout_cache=config.n_chunk_layout_cache,
                 sample_shape=tuple(config.sample_shape),
                 device=-1 if config.device is None else int(config.device),
                 enable_gds=_gds_to_native(config.enable_gds),
                 numa_strategy=int(config.numa_strategy),
                 numa_node=config.numa_node,
+                metadata_latency_baseline_ns=config.metadata_latency.baseline_ns,
+                metadata_latency_lognormal_mu_ln_ns=(
+                    config.metadata_latency.lognormal_mu_ln_ns
+                ),
+                metadata_latency_lognormal_sigma_ln_ns=(
+                    config.metadata_latency.lognormal_sigma_ln_ns
+                ),
+                metadata_latency_cap_ns=config.metadata_latency.cap_ns,
+                metadata_latency_seed=config.metadata_latency.seed,
             )
         except _native.DamacyError as exc:
             _reraise_typed(exc)
@@ -1090,8 +1197,8 @@ class Pipeline:
         # something we don't catch.
         try:
             if not self._closed:
-                self.flush()
-        except DamacyError:
+                self._native.flush()
+        except (DamacyError, _native.DamacyError):
             pass  # don't mask the user's exception
         finally:
             self.close()
@@ -1103,11 +1210,16 @@ class Pipeline:
         generator, infinite generator, …); large or unbounded sources
         are pulled lazily as :meth:`pop` frees space.
 
-        Fatal errors from the C-side validator (``NotFound``,
-        ``DtypeMismatch``, ``RankMismatch``, …) raise the matching
-        :class:`DamacyError` subclass; the offending iterator is
-        discarded but samples accepted by earlier ``push`` calls are
-        unaffected.
+        Local validation (shape/rank against ``Config.sample_shape``)
+        raises the matching :class:`DamacyError` subclass here and
+        discards the offending iterator. Errors that depend on store
+        contents — :class:`NotFound`, :class:`DtypeMismatch`,
+        per-array :class:`RankMismatch`, decode failures — surface at
+        :meth:`pop` instead, since the pipeline fetches metadata
+        asynchronously after push returns. Once any such error fires,
+        the pipeline is terminal — rebuild a fresh :class:`Pipeline`
+        to recover. Calling :meth:`push` on a terminal pipeline raises
+        :class:`ShutdownError`.
         """
         self._check_open()
         self._pending.append(iter(samples))
@@ -1115,43 +1227,52 @@ class Pipeline:
 
     def _drain_pending(self) -> None:
         """Move samples from pending iterators into the native lookahead
-        until the lookahead is full or all pending iterators are
-        exhausted. Best-effort; safe to call any time.
+        until the lookahead is full or one bounded chunk has been
+        accepted. Best-effort; safe to call any time.
 
         Unconsumed samples sit in ``_pending_buf`` (always sourced from
         a single head iterator), not re-wrapped onto ``self._pending[0]``
         — successive backpressure events leave the buffer flat instead
         of nesting ``itertools.chain`` layers."""
-        cap = self._config.lookahead_batches * self._config.batch_size
-        while True:
-            # Top up buffer from the head iterator. Buffer is only ever
-            # filled from one iterator at a time, so on push failure we
-            # know exactly which iterator to drop.
-            if not self._pending_buf and self._pending:
-                taken = list(itertools.islice(self._pending[0], cap))
-                if not taken:
-                    self._pending.popleft()
-                    continue
-                self._pending_buf = taken
-            if not self._pending_buf:
-                return
-            try:
-                r = self._native.push([s._to_native() for s in self._pending_buf])
-            except _native.DamacyError as exc:
-                # Drop the failed iterator and any leftover items it
-                # had produced; other pending iterators keep their
-                # place and will retry on next drain.
-                self._pending_buf = []
-                if self._pending:
-                    self._pending.popleft()
-                _reraise_typed(exc)
-            consumed = int(r["consumed"])
-            if consumed < len(self._pending_buf):
-                # Native is full — keep the unconsumed tail in the
-                # buffer; the next drain (after a pop) resumes here.
-                del self._pending_buf[:consumed]
-                return
+        cap = self._config.lookahead_samples
+        # Top up buffer from the head iterator. Buffer is only ever
+        # filled from one iterator at a time, so on push failure we know
+        # exactly which iterator to drop. Pull at most one lookahead
+        # window per drain call; otherwise an unbounded iterator can be
+        # chased forever if the native queue drains concurrently.
+        while not self._pending_buf and self._pending:
+            taken = list(itertools.islice(self._pending[0], cap))
+            if not taken:
+                self._pending.popleft()
+                continue
+            self._pending_buf = taken
+
+        if not self._pending_buf:
+            return
+
+        try:
+            r = self._native.push([s._to_native() for s in self._pending_buf])
+        except _native.DamacyError as exc:
+            # Drop the failed iterator and any leftover items it had
+            # produced; other pending iterators keep their place and
+            # will retry on next drain.
             self._pending_buf = []
+            if self._pending:
+                self._pending.popleft()
+            _reraise_typed(exc)
+        consumed = int(r["consumed"])
+        if consumed < len(self._pending_buf):
+            # Native is full — keep the unconsumed tail in the buffer;
+            # the next drain (after a pop) resumes here.
+            del self._pending_buf[:consumed]
+            return
+
+        self._pending_buf = []
+        if self._pending:
+            try:
+                self._pending_buf = [next(self._pending[0])]
+            except StopIteration:
+                self._pending.popleft()
 
     def pop(self) -> Batch:
         """Block until the next batch is on-device-ready. Returns a
@@ -1161,9 +1282,19 @@ class Pipeline:
         Raises :class:`PoolStarved` if no batch arrives within
         ``Config.pop_timeout_s`` seconds (default 30). Usually that
         means tensors from previous batches are still being held —
-        drop them, or ``.clone()`` if you need to keep them."""
+        drop them, or ``.clone()`` if you need to keep them.
+
+        Store-derived errors — :class:`NotFound`,
+        :class:`DtypeMismatch`, per-array :class:`RankMismatch`,
+        decode failures — surface here rather than at push. Once any
+        such error fires, the pipeline is terminal; subsequent calls
+        re-raise the same status."""
         self._check_open()
-        self._drain_pending()
+        # Swallow ShutdownError from drain so the sticky error from the
+        # native pipeline (NotFound/DtypeMismatch/…) surfaces from pop,
+        # not the secondary SHUTDOWN raised by re-pushing into a terminal.
+        with contextlib.suppress(ShutdownError):
+            self._drain_pending()
         timeout = self._config.pop_timeout_s
         if timeout is None:
             try:
@@ -1264,9 +1395,9 @@ class Pipeline:
         wave-init to first pop (lazy batch-output sizing) and stays
         flat afterward.
 
-        Use :meth:`stats_reset` to zero the cumulative timing
-        counters. ``gpu_bytes_committed`` is not reset — it reflects
-        the live commitment, not a delta.
+        Use :meth:`stats_reset` to zero the cumulative timing and
+        metadata-latency counters. ``gpu_bytes_committed`` is not reset
+        — it reflects the live commitment, not a delta.
 
         Raises:
             ShutdownError: If the pipeline has been closed.
@@ -1277,7 +1408,8 @@ class Pipeline:
     def stats_reset(self) -> None:
         """Zero the cumulative timing counters and per-stage rolling
         totals. Cache hit/miss counters and ``gpu_bytes_committed`` are
-        left alone — they reflect live state, not deltas.
+        left alone — they reflect live state, not deltas. Metadata
+        latency counters are reset with the timing counters.
 
         Raises:
             ShutdownError: If the pipeline has been closed.

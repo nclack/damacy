@@ -37,16 +37,14 @@ _Static_assert(DAMACY_DEFAULT_READ_OP_MAX_BYTES <= UINT32_MAX,
 // the device-side decode concurrency depth.
 #define DAMACY_N_WAVES 2
 
-// Default depth of the pinned-host slab pool, in waves. = N_WAVES is
-// the minimum; bumping higher lets IO for upcoming waves prefill before
-// a wave struct frees, useful for slow / variable-latency IO backends.
-// On fast local NVMe the extra IO concurrency adds queueing overhead
-// that outweighs the prefill benefit, so the default stays at N_WAVES.
+// Caller-visible batch slots. The current orchestrator is double-buffered:
+// one slot may be held by the caller while the other accumulates/renders.
+#define DAMACY_N_BATCH_SLOTS 2
+
+// Default input staging slot count, in waves.
 #define DAMACY_DEFAULT_HOST_BUFFER_WAVES DAMACY_N_WAVES
 
-// Upper bound on cfg.host_buffer_waves. 8 covers any realistic IO
-// look-ahead need; each extra slot costs one dev_compressed_per_wave of
-// pinned host memory.
+// Upper bound on cfg.host_buffer_waves.
 #define DAMACY_MAX_HOST_BUFFER_WAVES 8
 
 // Default for damacy_tuning.max_chunks_per_wave. nvcomp temp scratch is
@@ -62,10 +60,16 @@ _Static_assert(DAMACY_DEFAULT_READ_OP_MAX_BYTES <= UINT32_MAX,
 // metadata buffer.
 #define DAMACY_MAX_CHUNKS_PER_BATCH 16384u
 
-// Sizes io_queue's per-worker arrays (see io_queue.posix.c). Generous:
-// consumer NVMe saturates well below 32 in-flight reads. Bump if a real
-// workload demonstrates need.
-#define DAMACY_MAX_IO_THREADS 32u
+// Default worker/concurrency counts used by damacy_tuning_defaults().
+// damacy_create requires explicit positive values. n_io_threads is bounded by
+// the host thread count; metadata_io_concurrency is an async request-depth knob
+// and is bounded only by this defensive cap.
+#define DAMACY_DEFAULT_IO_THREADS 8u
+#define DAMACY_DEFAULT_METADATA_IO_CONCURRENCY 32u
+#define DAMACY_MAX_METADATA_IO_CONCURRENCY 4096u
+#define DAMACY_DEFAULT_ARRAY_META_CACHE 64u
+#define DAMACY_DEFAULT_SHARD_INDEX_CACHE 256u
+#define DAMACY_DEFAULT_CHUNK_LAYOUT_CACHE 64u
 
 // Matches DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE. Must be a power of two —
 // io_queue indexes via bitmask.
@@ -99,8 +103,5 @@ _Static_assert(DAMACY_HARD_MAX_SUBSTREAMS_PER_WAVE_U64 <= UINT32_MAX,
 // grows on demand when a wave's actual substream count exceeds the cap.
 #define DAMACY_BLOSC_ZSTD_INITIAL_BATCH_CAP 1024u
 
-static inline uint32_t
-damacy_max_substreams_per_wave(uint32_t chunks, uint32_t substreams_per_chunk)
-{
-  return (uint32_t)((uint64_t)chunks * (uint64_t)substreams_per_chunk);
-}
+#define DAMACY_MAX_SUBSTREAMS_PER_WAVE(chunks, substreams_per_chunk)           \
+  ((uint32_t)((uint64_t)(chunks) * (uint64_t)(substreams_per_chunk)))

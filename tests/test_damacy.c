@@ -8,9 +8,10 @@
 // the shape + offset without needing a shared RNG.
 //
 // Test cases:
-//   test_full_array              — single zarr, batch_size=1, full AABB
+//   test_full_array              — single zarr, samples_per_batch=1, full AABB
 //   test_partial_crossing_chunks — single zarr, sub-window across 4 chunks
-//   test_multi_batch             — single zarr, batch_size=2, 3 pop-release
+//   test_multi_batch             — single zarr, samples_per_batch=2, 3
+//   pop-release
 //                                  cycles with distinct AABBs per batch
 //   test_multi_zarr              — two zarrs distinguished by fill offset;
 //                                  batch with one sample from each
@@ -21,7 +22,9 @@
 
 #include "cuda_init.h"
 #include "damacy.h"
+#include "damacy_internal.h"
 #include "fixture.h"
+#include "platform/platform.h"
 #include "spin_kernel.h"
 
 #include <cuda_runtime.h>
@@ -43,19 +46,21 @@ expected_f32_from_u16_2d(int64_t y, int64_t x, int64_t cols, int64_t off)
 }
 
 static struct damacy_config
-mk_cfg(const char* root, uint32_t batch_size, int64_t sy, int64_t sx)
+mk_cfg(const char* root, uint32_t samples_per_batch, int64_t sy, int64_t sx)
 {
   (void)root;
   struct damacy_config c = {
-    .batch_size = batch_size,
-    .lookahead_batches = 2,
+    .samples_per_batch = samples_per_batch,
+    .lookahead_samples = 2 * samples_per_batch,
     .dtype = DAMACY_F32,
     .sample_rank = 2,
     .device = -1,
     .tuning = {
       .n_io_threads = 1,
-      .n_zarrs_meta_cache = 4,
-      .n_shards_meta_cache = 4,
+      .metadata_io_concurrency = 1,
+      .n_array_meta_cache = 4,
+      .n_shard_index_cache = 4,
+      .n_chunk_layout_cache = 4,
       .max_gpu_memory_bytes = 1ull << 30,
     },
   };
@@ -104,6 +109,7 @@ run_one(struct damacy* d,
   damacy_batch_info(b, &info);
   EXPECT(info.rank == 3);
   EXPECT(info.dtype == DAMACY_F32);
+  EXPECT(info.ready_stream == (void*)d->wave_pool.stream_post);
   EXPECT(info.shape[0] == 1);
   size_t n_elements = (size_t)info.shape[1] * (size_t)info.shape[2];
   EXPECT(n_elements <= out_capacity_elements);
@@ -114,6 +120,23 @@ run_one(struct damacy* d,
   *out_n_elements = n_elements;
   damacy_release(d, b);
   return 0;
+}
+
+static int
+wait_for_accumulating_batch(struct damacy* d)
+{
+  for (int i = 0; i < 2000; ++i) {
+    scheduler_lock(d->sched);
+    int ready = find_accumulating_batch_slot(&d->batch_pool) >= 0;
+    enum damacy_status failed = d->failed_status;
+    scheduler_unlock(d->sched);
+    if (failed != DAMACY_OK)
+      return 1;
+    if (ready)
+      return 0;
+    usleep(1000);
+  }
+  return 1;
 }
 
 // 4×8 zarr, full-AABB sample.
@@ -175,7 +198,7 @@ test_partial_crossing_chunks(void)
   return 0;
 }
 
-// Three sequential batches off one zarr, each batch_size=2 with
+// Three sequential batches off one zarr, each samples_per_batch=2 with
 // distinct per-sample AABBs. Exercises pop-release-pop slot recycling
 // (the failure mode step 5 needs to handle once batches overlap).
 static int
@@ -252,6 +275,44 @@ test_multi_batch(void)
   return 0;
 }
 
+static int
+test_partial_batch_plans_only_on_flush(void)
+{
+  char root[64];
+  EXPECT(mkdtemp_root(root, sizeof root) == 0);
+  char p[256];
+  snprintf(p, sizeof p, "%s/foo", root);
+  int64_t shape[2] = { 4, 8 }, inner[2] = { 2, 4 }, shard[2] = { 4, 8 };
+  EXPECT(fixture_write_zarr(p, shape, inner, shard, 2, "uint16", 0) == 0);
+
+  struct damacy_config cfg = mk_cfg(root, 2, 4, 8);
+  struct damacy* d = NULL;
+  EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
+
+  struct damacy_sample s = mk_sample(p, 0, 4, 0, 8);
+  struct damacy_sample_slice slice = { .beg = &s, .end = &s + 1 };
+  EXPECT(damacy_push(d, slice).status == DAMACY_OK);
+  EXPECT(wait_for_accumulating_batch(d) == 0);
+
+  struct damacy_stats before;
+  damacy_stats_get(d, &before);
+  EXPECT(before.plan.count == 0);
+
+  EXPECT(damacy_flush(d) == DAMACY_OK);
+  struct damacy_stats after;
+  damacy_stats_get(d, &after);
+  EXPECT(after.plan.count == 1);
+  EXPECT(after.batches_truncated == 1);
+
+  struct damacy_batch* b = NULL;
+  EXPECT(damacy_pop(d, &b) == DAMACY_OK);
+  damacy_release(d, b);
+
+  damacy_destroy(d);
+  fixture_rm_tree(root);
+  return 0;
+}
+
 // One batch with samples drawn from two different zarrs. The two zarrs
 // share dtype + sample shape but differ in fill offset, so the popped
 // batch should contain one slot of "a" content and one of "b" content
@@ -296,6 +357,55 @@ test_multi_zarr(void)
       EXPECT(out[0 * 32 + y * 8 + x] == expected_f32_from_u16_2d(y, x, 8, 0));
       EXPECT(out[1 * 32 + y * 8 + x] ==
              expected_f32_from_u16_2d(y, x, 8, 1000));
+    }
+  }
+  damacy_release(d, b);
+
+  damacy_destroy(d);
+  fixture_rm_tree(root);
+  return 0;
+}
+
+static int
+test_incremental_batch_fill(void)
+{
+  char root[64];
+  EXPECT(mkdtemp_root(root, sizeof root) == 0);
+  char p[256];
+  snprintf(p, sizeof p, "%s/foo", root);
+  int64_t shape[2] = { 8, 16 }, inner[2] = { 2, 4 }, shard[2] = { 8, 16 };
+  EXPECT(fixture_write_zarr(p, shape, inner, shard, 2, "uint16", 0) == 0);
+
+  struct damacy_config cfg = mk_cfg(root, 2, 4, 8);
+  cfg.lookahead_samples = 2;
+  struct damacy* d = NULL;
+  EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
+
+  struct damacy_sample s0 = mk_sample(p, 0, 4, 0, 8);
+  struct damacy_sample s1 = mk_sample(p, 4, 8, 8, 16);
+  EXPECT(damacy_push(d, (struct damacy_sample_slice){ &s0, &s0 + 1 }).status ==
+         DAMACY_OK);
+  platform_sleep_ns(20000000);
+  EXPECT(damacy_push(d, (struct damacy_sample_slice){ &s1, &s1 + 1 }).status ==
+         DAMACY_OK);
+
+  struct damacy_batch* b = NULL;
+  EXPECT(damacy_pop(d, &b) == DAMACY_OK);
+  struct damacy_batch_info info;
+  damacy_batch_info(b, &info);
+  EXPECT(info.batch_id == 0);
+  EXPECT(info.shape[0] == 2);
+  EXPECT(info.shape[1] == 4);
+  EXPECT(info.shape[2] == 8);
+
+  float out[2 * 4 * 8] = { 0 };
+  EXPECT(cudaMemcpy(out, info.device_ptr, sizeof out, cudaMemcpyDeviceToHost) ==
+         cudaSuccess);
+  for (int y = 0; y < 4; ++y) {
+    for (int x = 0; x < 8; ++x) {
+      EXPECT(out[y * 8 + x] == expected_f32_from_u16_2d(y, x, 16, 0));
+      EXPECT(out[32 + y * 8 + x] ==
+             expected_f32_from_u16_2d(4 + y, 8 + x, 16, 0));
     }
   }
   damacy_release(d, b);
@@ -376,9 +486,8 @@ test_pipelined(void)
   EXPECT(fixture_write_zarr(p, shape, inner, shard, 2, "uint16", 0) == 0);
 
   struct damacy_config cfg = mk_cfg(root, 2, 4, 8);
-  // Bump lookahead so we can hold 4 batches' worth of samples up front
-  // (4 batches * 2 samples = 8 = lookahead_batches=4 * batch_size=2).
-  cfg.lookahead_batches = 4;
+  // Bump lookahead so we can hold 4 batches' worth of samples up front.
+  cfg.lookahead_samples = 8;
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
@@ -450,9 +559,10 @@ test_lookahead_backpressure(void)
   int64_t shape[2] = { 4, 8 }, inner[2] = { 2, 4 }, shard[2] = { 4, 8 };
   EXPECT(fixture_write_zarr(p, shape, inner, shard, 2, "uint16", 0) == 0);
 
-  // batch_size=1, lookahead_batches=2 → lookahead cap of 2 samples.
+  // samples_per_batch=1, lookahead_samples=2 → lookahead cap of 2 samples.
   struct damacy_config cfg = mk_cfg(root, 1, 4, 8);
-  cfg.lookahead_batches = 2;
+  cfg.lookahead_samples = 2;
+  cfg.debug.metadata_latency.baseline_ns = 50ull * 1000ull * 1000ull;
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
@@ -610,7 +720,7 @@ test_release_event_blocks_assemble(void)
   EXPECT(fixture_write_zarr(p, shape, inner, shard, 2, "uint16", 0) == 0);
 
   struct damacy_config cfg = mk_cfg(root, 1, 4, 8);
-  cfg.lookahead_batches = 3; // pool has 2 slots; 3 pops forces reuse.
+  cfg.lookahead_samples = 3; // pool has 2 slots; 3 pops forces reuse.
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
@@ -708,7 +818,9 @@ main(void)
   RUN(test_full_array);
   RUN(test_partial_crossing_chunks);
   RUN(test_multi_batch);
+  RUN(test_partial_batch_plans_only_on_flush);
   RUN(test_multi_zarr);
+  RUN(test_incremental_batch_fill);
   RUN(test_heterogeneous_dtype);
   RUN(test_pipelined);
   RUN(test_lookahead_backpressure);

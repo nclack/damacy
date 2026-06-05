@@ -86,7 +86,7 @@ def _stage_table(r: Results) -> Table:
     color = {
         "plan": "white",
         "io": "yellow",
-        "h2d": "magenta",
+        "input_transfer": "magenta",
         "decode": "green",
         "post_decode": "green",
         "decode_gap": "red",
@@ -101,8 +101,8 @@ def _stage_table(r: Results) -> Table:
     unit_style = {
         "plan": "italic dim",
         "io": "italic dim",
+        "input_transfer": "bold dim",
         "decompress.parse": "italic dim",
-        "h2d": "bold dim",
         "decode": "bold dim",
         "post_decode": "bold dim",
         "decode_gap": "dim",
@@ -154,8 +154,39 @@ def _counters_table(r: Results) -> Table:
         ),
         ("distinct_zarrs", f"{c.distinct_zarrs}"),
         ("distinct_shards", f"{c.distinct_shards}"),
-        ("zarr_meta hits/misses", f"{c.zarr_meta_hits:,} / {c.zarr_meta_misses:,}"),
-        ("shard_idx hits/misses", f"{c.shard_idx_hits:,} / {c.shard_idx_misses:,}"),
+        ("array_meta hits/misses", f"{c.array_meta_hits:,} / {c.array_meta_misses:,}"),
+        (
+            "shard_index hits/misses",
+            f"{c.shard_index_hits:,} / {c.shard_index_misses:,}",
+        ),
+        (
+            "chunk_layout hits/misses",
+            f"{c.chunk_layout_hits:,} / {c.chunk_layout_misses:,}",
+        ),
+        (
+            "metadata latency ops",
+            f"{c.metadata_latency_ops:,} "
+            f"[dim](map/stat/submit/dev "
+            f"{c.metadata_latency_map_ops:,}/{c.metadata_latency_stat_ops:,}/"
+            f"{c.metadata_latency_submit_ops:,}/"
+            f"{c.metadata_latency_submit_dev_ops:,})[/dim]",
+        ),
+        (
+            "metadata latency concurrency",
+            f"max={c.metadata_latency_max_active:,} "
+            f"active={c.metadata_latency_active:,}",
+        ),
+        (
+            "metadata latency sleep",
+            f"total={c.metadata_latency_total_sleep_ns / 1e9:,.2f}s "
+            f"max={c.metadata_latency_max_sleep_ns / 1e9:,.2f}s",
+        ),
+        (
+            "metadata backend reads",
+            f"jobs={c.metadata_backend_read_jobs:,} "
+            f"max_active={c.metadata_backend_read_max_active:,} "
+            f"active={c.metadata_backend_read_active:,}",
+        ),
         ("gpu_bytes_committed", f"{c.gpu_bytes_committed / 1e6:,.1f} MB"),
     ]
     for k, v in rows:
@@ -222,6 +253,19 @@ def _summary_table(r: Results) -> Table:
 
 def _scenario_panel(r: Results) -> Panel:
     sc = r.scenario
+    lat = sc.metadata_latency
+    latency_line = ""
+    if (
+        lat.baseline_ns
+        or lat.lognormal_mu_ln_ns != 0.0
+        or lat.lognormal_sigma_ln_ns != 0.0
+    ):
+        latency_line = (
+            f"\n[dim]metadata latency[/dim] baseline_ns={lat.baseline_ns} "
+            f"lognormal_mu_ln_ns={lat.lognormal_mu_ln_ns:g} "
+            f"lognormal_sigma_ln_ns={lat.lognormal_sigma_ln_ns:g} "
+            f"cap_ns={lat.cap_ns} seed={lat.seed}"
+        )
     body = (
         f"[bold]{sc.name}[/bold]\n"
         f"[dim]dataset[/dim]  n_zarrs={sc.dataset.n_zarrs} "
@@ -230,12 +274,14 @@ def _scenario_panel(r: Results) -> Panel:
         f"src_dtypes={sc.dataset.dtypes}\n"
         f"[dim]sampling[/dim] n_batches={sc.sampling.n_batches} "
         f"(warmup={sc.sampling.n_warmup_batches}) "
-        f"batch_size={sc.sampling.batch_size} "
+        f"samples_per_batch={sc.sampling.samples_per_batch} "
         f"sample_shape={sc.sampling.sample_shape}\n"
         f"[dim]pipeline[/dim] dst_dtype={sc.pipeline.dtype} "
-        f"lookahead={sc.pipeline.lookahead_batches} "
+        f"lookahead={sc.pipeline.lookahead_samples} "
         f"io_threads={sc.pipeline.n_io_threads} "
+        f"metadata_io_concurrency={sc.pipeline.metadata_io_concurrency} "
         f"max_gpu_mb={sc.pipeline.max_gpu_memory_mb or 'default'}"
+        f"{latency_line}"
     )
     return Panel(body, title="scenario", border_style="cyan")
 

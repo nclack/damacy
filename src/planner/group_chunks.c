@@ -17,7 +17,7 @@ group_chunks_by_read(struct planner_output* out,
   if (!u32_scratch || !chunk_plan_scratch)
     return DAMACY_INVAL;
   if (!out->read_op_groups || out->read_op_groups_cap < R)
-    return DAMACY_OOM;
+    return DAMACY_BUDGET;
 
   uint32_t* head = u32_scratch;
 

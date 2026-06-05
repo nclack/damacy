@@ -3,7 +3,8 @@
 # Build:
 #   docker build -t damacy:dev .
 # Run (cluster, with GPU passthrough):
-#   docker run --rm --gpus all damacy:dev ctest --test-dir build --output-on-failure
+#   docker run --rm --gpus all --security-opt seccomp=unconfined \
+#     damacy:dev ctest --test-dir build --output-on-failure
 #   docker run --rm --gpus all damacy:dev \
 #     python -c "import damacy; print(damacy.__version__)"
 # On hosts using the CDI runtime instead of --gpus, substitute
@@ -19,6 +20,8 @@
 #    >=3.11). uv manages the venv at /opt/venv and drives the editable install.
 #  * nvcomp is the standalone NVIDIA distribution (not the pip wheel) extracted
 #    to /opt/nvcomp; CMake locates it via -DNvcomp_ROOT.
+#  * The default Docker seccomp profile can block io_uring setup. Use
+#    --security-opt seccomp=unconfined when running damacy in this image.
 
 ARG CUDA_IMAGE=nvidia/cuda:13.2.1-devel-ubuntu24.04
 FROM ${CUDA_IMAGE}
@@ -31,10 +34,12 @@ ARG NVCOMP_URL=https://developer.download.nvidia.com/compute/nvcomp/redist/nvcom
 
 # ----- system toolchain via apt ----------------------------------------------
 # Just enough to drive cmake + ninja + python; gcc/g++/nvcc come from the
-# cuda devel base image. libnuma + libcufile are dlopen'd at runtime
-# (src/numa/numa.c, src/store/store_fs_gds.c); -dev packages aren't
-# needed to build. libmount1 + libudev1 are transitive dlopens from
-# libcufile at driver init even in compat mode.
+# cuda devel base image. pkg-config + liburing-dev supply the io_uring
+# discovery metadata and headers for the Linux metadata store. libnuma +
+# libcufile are dlopen'd at runtime (src/numa/numa.c,
+# src/store/store_fs_gds.c); -dev packages aren't needed to build.
+# libmount1 + libudev1 are transitive dlopens from libcufile at driver
+# init even in compat mode.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -42,8 +47,10 @@ RUN apt-get update \
         xz-utils \
         cmake \
         ninja-build \
+        pkg-config \
         python3 \
         python3-dev \
+        liburing-dev \
         libnuma1 \
         libmount1 \
         libudev1 \

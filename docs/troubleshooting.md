@@ -14,6 +14,20 @@ the calling thread yet. Two fixes:
 - Or prime a context implicitly before constructing the pipeline:
   `torch.empty(1, device="cuda")` is enough.
 
+## `InvalidArgument` at `Pipeline(cfg)` from metadata I/O setup
+
+The Linux metadata path uses io_uring for zarr metadata, shard-index, and
+chunk-layout reads. At construction damacy requires kernel support for
+`IORING_OP_STATX`, `IORING_OP_OPENAT2`, `IORING_OP_READ`, and
+`IORING_OP_CLOSE`. If ring creation or the operation probe fails,
+`Pipeline(cfg)` raises `InvalidArgument` rather than falling back to a legacy
+thread pool. Check the native log for the exact io_uring failure.
+
+On supported kernels, an unusually high `metadata_io_concurrency` can also
+stress process file-descriptor limits because each in-flight metadata read can
+hold an open fd. The default is 32; for much deeper settings, check
+`ulimit -n` and remember to multiply by ranks per node.
+
 ## `BudgetExceeded` at `Pipeline(cfg)`
 
 `max_gpu_memory_bytes` is too small for the requested batch
@@ -29,6 +43,27 @@ A chunk's actual uncompressed size exceeds
 that cap to fit the dataset, and raise `max_gpu_memory_bytes`
 along with it if needed. See
 [GPU memory budget](budget.md#when-the-budget-refuses).
+
+## `NotFound` or `DtypeMismatch` from `pop()` (not `push()`)
+
+`push()` only validates what's locally checkable — sample shape and
+rank against `Config.sample_shape`. Errors that depend on store
+contents — missing URIs, unsupported source dtypes, per-array rank
+mismatch — surface from `pop()`, since damacy fetches the zarr
+metadata asynchronously after `push()` returns.
+
+```python
+with Pipeline(cfg) as d:
+    d.push([Sample(uri="missing", aabb=[(0, 8), (0, 16)])])  # returns fine
+    try:
+        d.pop()                                              # raises NotFound
+    except NotFound:
+        ...
+```
+
+Once any pop-side error fires, the pipeline is terminal — subsequent
+`pop()` calls re-raise the same status. Build a fresh `Pipeline` to
+recover.
 
 ## `PoolStarved` from `pop()`
 

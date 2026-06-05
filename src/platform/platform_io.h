@@ -40,8 +40,16 @@ extern "C"
   // File size in bytes. Returns 0 on error.
   uint64_t platform_file_size(platform_file* f);
 
-  // Stat-by-path convenience. Returns 0 on success, non-zero on error.
-  int platform_path_size(const char* path, uint64_t* out);
+  // NOT_FOUND covers ENOENT/ENOTDIR only; other stat failures are ERROR so
+  // callers don't alias them to "absent."
+  enum platform_stat_result
+  {
+    PLATFORM_STAT_OK = 0,
+    PLATFORM_STAT_NOT_FOUND,
+    PLATFORM_STAT_ERROR,
+  };
+
+  enum platform_stat_result platform_path_size(const char* path, uint64_t* out);
 
   // Read-only view into a mapped file. `data`/`len` are public; `opaque`
   // is backend-private (POSIX: unused; Win32 will stash the file mapping

@@ -30,6 +30,12 @@ extern "C"
     uint32_t nblocks;   // == ceil(nbytes / blocksize); <= MAX_BLOCKS_PER_CHUNK
   };
 
+  int zarr_chunk_layout_parse_header(const void* header,
+                                     uint32_t first_chunk_cbytes,
+                                     uint8_t codec_id,
+                                     uint32_t max_substreams_per_chunk,
+                                     struct chunk_layout* out);
+
   // Read the 16-byte blosc1 header at first_chunk_off in shard_path and
   // populate *out. Returns 0 on success, non-zero on IO failure, on a
   // malformed header, or for codecs that don't carry a blosc1 header

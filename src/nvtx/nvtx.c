@@ -1,9 +1,3 @@
-// NVTX wrapper implementation. The body is only compiled in when
-// DAMACY_NVTX_ENABLED=1; otherwise the file is a tiny TU that exists
-// just so damacy_nvtx has a linker language. The disabled flavor's
-// call sites land on the inline no-ops in nvtx.h, so there's nothing
-// to define here.
-
 #include "nvtx/nvtx.h"
 
 #if DAMACY_NVTX_ENABLED
@@ -17,7 +11,7 @@
 #include "platform/platform.h"
 
 // Per-thread printf buffer for damacy_nvtx_range_pushf. Range names are
-// short labels like "kick_h2d/w0" or "finalize_wave/w1" (well under 32
+// short labels like "kick_input/w0" or "finalize_wave/w1" (well under 32
 // chars); 128 is generous headroom. vsnprintf truncates silently on
 // overflow, which is acceptable for a profiling string — worst case is
 // a slightly less informative timeline entry.
@@ -91,6 +85,38 @@ damacy_nvtx_stream_name(CUstream s, const char* name)
   if (!s || !name)
     return;
   nvtxNameCuStreamA(s, name);
+}
+
+#else
+
+void
+damacy_nvtx_range_push(const char* name)
+{
+  (void)name;
+}
+
+void
+damacy_nvtx_range_pushf(const char* fmt, ...)
+{
+  (void)fmt;
+}
+
+void
+damacy_nvtx_range_pop(void)
+{
+}
+
+void
+damacy_nvtx_mark(const char* name)
+{
+  (void)name;
+}
+
+void
+damacy_nvtx_stream_name(CUstream s, const char* name)
+{
+  (void)s;
+  (void)name;
 }
 
 #endif // DAMACY_NVTX_ENABLED

@@ -18,6 +18,7 @@
 #include "damacy.h"
 
 #include <cuda.h>
+#include <math.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -696,14 +697,16 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
 {
   // kws[] / format string / variable list mirror struct damacy_config —
   // keep all three in sync when adding a field.
-  static char* kws[] = { "batch_size",
-                         "lookahead_batches",
+  static char* kws[] = { "samples_per_batch",
+                         "lookahead_samples",
                          "dtype",
                          "max_chunk_uncompressed_bytes",
                          "max_gpu_memory_bytes",
                          "n_io_threads",
-                         "n_zarrs_meta_cache",
-                         "n_shards_meta_cache",
+                         "metadata_io_concurrency",
+                         "n_array_meta_cache",
+                         "n_shard_index_cache",
+                         "n_chunk_layout_cache",
                          "sample_shape",
                          "host_buffer_waves",
                          "max_chunks_per_wave",
@@ -714,15 +717,22 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                          "numa_strategy",
                          "numa_node",
                          "bypass_decode",
+                         "metadata_latency_baseline_ns",
+                         "metadata_latency_lognormal_mu_ln_ns",
+                         "metadata_latency_lognormal_sigma_ln_ns",
+                         "metadata_latency_cap_ns",
+                         "metadata_latency_seed",
                          NULL };
-  unsigned int batch_size = 0;
+  unsigned int samples_per_batch = 0;
   unsigned int lookahead = 2;
   PyObject* dtype_obj = NULL;
   unsigned int max_chunk_uncompressed = 0;
   unsigned long long max_gpu_bytes = 0;
   unsigned int n_io = 4;
-  unsigned int n_zarrs_meta = 64;
-  unsigned int n_shards_meta = 256;
+  unsigned int metadata_io_concurrency = 32;
+  unsigned int n_array_meta = 64;
+  unsigned int n_shard_index = 256;
+  unsigned int n_chunk_layout = 64;
   PyObject* sample_shape_obj = NULL;
   unsigned int host_buffer_waves = 0;
   unsigned int max_chunks_per_wave = 0;
@@ -733,18 +743,25 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   int numa_strategy = DAMACY_NUMA_AUTO;
   int numa_node = -1;
   int bypass_decode = 0;
+  unsigned long long metadata_latency_baseline_ns = 0;
+  double metadata_latency_lognormal_mu_ln_ns = 0.0;
+  double metadata_latency_lognormal_sigma_ln_ns = 0.0;
+  unsigned long long metadata_latency_cap_ns = 0;
+  unsigned long long metadata_latency_seed = 0;
   if (!PyArg_ParseTupleAndKeywords(args,
                                    kw,
-                                   "IIOIKIIIO|IIIKiiiip",
+                                   "IIOIKIIIIIO|IIIKiiiipKddKK",
                                    kws,
-                                   &batch_size,
+                                   &samples_per_batch,
                                    &lookahead,
                                    &dtype_obj,
                                    &max_chunk_uncompressed,
                                    &max_gpu_bytes,
                                    &n_io,
-                                   &n_zarrs_meta,
-                                   &n_shards_meta,
+                                   &metadata_io_concurrency,
+                                   &n_array_meta,
+                                   &n_shard_index,
+                                   &n_chunk_layout,
                                    &sample_shape_obj,
                                    &host_buffer_waves,
                                    &max_chunks_per_wave,
@@ -754,7 +771,12 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                                    &enable_gds,
                                    &numa_strategy,
                                    &numa_node,
-                                   &bypass_decode))
+                                   &bypass_decode,
+                                   &metadata_latency_baseline_ns,
+                                   &metadata_latency_lognormal_mu_ln_ns,
+                                   &metadata_latency_lognormal_sigma_ln_ns,
+                                   &metadata_latency_cap_ns,
+                                   &metadata_latency_seed))
     return -1;
 
   if (enable_gds != DAMACY_GDS_AUTO && enable_gds != DAMACY_GDS_ON &&
@@ -770,14 +792,22 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
       PyExc_ValueError, "numa_strategy out of range (got %d)", numa_strategy);
     return -1;
   }
+  if (!isfinite(metadata_latency_lognormal_mu_ln_ns) ||
+      !isfinite(metadata_latency_lognormal_sigma_ln_ns) ||
+      metadata_latency_lognormal_sigma_ln_ns < 0.0) {
+    PyErr_SetString(PyExc_ValueError,
+                    "metadata latency lognormal mu/sigma must be finite and "
+                    "sigma must be >= 0");
+    return -1;
+  }
 
   enum damacy_dtype dt;
   if (parse_dtype(dtype_obj, &dt) != 0)
     return -1;
 
   struct damacy_config cfg = {
-    .batch_size = batch_size,
-    .lookahead_batches = lookahead,
+    .samples_per_batch = samples_per_batch,
+    .lookahead_samples = lookahead,
     .dtype = dt,
     .device = device,
     .tuning = {
@@ -788,13 +818,24 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
       .max_chunks_per_wave = (uint32_t)max_chunks_per_wave,
       .max_substreams_per_chunk = (uint32_t)max_substreams_per_chunk,
       .n_io_threads = n_io,
-      .n_zarrs_meta_cache = n_zarrs_meta,
-      .n_shards_meta_cache = n_shards_meta,
+      .metadata_io_concurrency = metadata_io_concurrency,
+      .n_array_meta_cache = n_array_meta,
+      .n_shard_index_cache = n_shard_index,
+      .n_chunk_layout_cache = n_chunk_layout,
       .numa_strategy = (enum damacy_numa_strategy)numa_strategy,
       .numa_node = numa_node,
       .enable_gds = (enum damacy_gds_mode)enable_gds,
     },
-    .debug = { .bypass_decode = (uint8_t)(bypass_decode ? 1 : 0) },
+    .debug = { .bypass_decode = (uint8_t)(bypass_decode ? 1 : 0),
+               .metadata_latency = {
+                 .baseline_ns = (uint64_t)metadata_latency_baseline_ns,
+                 .lognormal_mu_ln_ns =
+                   metadata_latency_lognormal_mu_ln_ns,
+                 .lognormal_sigma_ln_ns =
+                   metadata_latency_lognormal_sigma_ln_ns,
+                 .cap_ns = (uint64_t)metadata_latency_cap_ns,
+                 .seed = (uint64_t)metadata_latency_seed,
+               } },
   };
 
   // sample_shape: a sequence of ints; copies into cfg.sample_shape[].
@@ -1012,7 +1053,7 @@ Pipeline_stats(PipelineObj* self, PyObject* Py_UNUSED(ignored))
   } metrics[] = {
     { "plan", &st.plan },
     { "io", &st.io },
-    { "h2d", &st.h2d },
+    { "input_transfer", &st.input_transfer },
     { "decode", &st.decode },
     { "post_decode", &st.post_decode },
     { "decode_gap", &st.decode_gap },
@@ -1030,10 +1071,24 @@ Pipeline_stats(PipelineObj* self, PyObject* Py_UNUSED(ignored))
     const char* name;
     unsigned long long val;
   } counters[] = {
-    { "zarr_meta_hits", st.zarr_meta_hits },
-    { "zarr_meta_misses", st.zarr_meta_misses },
-    { "shard_idx_hits", st.shard_idx_hits },
-    { "shard_idx_misses", st.shard_idx_misses },
+    { "array_meta_hits", st.array_meta.hits },
+    { "array_meta_misses", st.array_meta.misses },
+    { "shard_index_hits", st.shard_index.hits },
+    { "shard_index_misses", st.shard_index.misses },
+    { "chunk_layout_hits", st.chunk_layout.hits },
+    { "chunk_layout_misses", st.chunk_layout.misses },
+    { "metadata_latency_ops", st.metadata_latency.ops },
+    { "metadata_latency_map_ops", st.metadata_latency.map_ops },
+    { "metadata_latency_stat_ops", st.metadata_latency.stat_ops },
+    { "metadata_latency_submit_ops", st.metadata_latency.submit_ops },
+    { "metadata_latency_submit_dev_ops", st.metadata_latency.submit_dev_ops },
+    { "metadata_latency_active", st.metadata_latency.active },
+    { "metadata_latency_max_active", st.metadata_latency.max_active },
+    { "metadata_latency_total_sleep_ns", st.metadata_latency.total_sleep_ns },
+    { "metadata_latency_max_sleep_ns", st.metadata_latency.max_sleep_ns },
+    { "metadata_backend_read_jobs", st.metadata_backend.read_jobs },
+    { "metadata_backend_read_active", st.metadata_backend.read_active },
+    { "metadata_backend_read_max_active", st.metadata_backend.read_max_active },
     { "batches_emitted", st.batches_emitted },
     { "batches_truncated", st.batches_truncated },
     { "waves_emitted", st.waves_emitted },

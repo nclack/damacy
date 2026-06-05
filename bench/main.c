@@ -106,19 +106,22 @@ struct scenario
   int64_t sample_shape[DAMACY_MAX_RANK];
   uint32_t n_batches;
   uint32_t n_warmup_batches;
-  uint32_t batch_size;
+  uint32_t samples_per_batch;
   uint64_t sampling_seed;
 
   // pipeline
-  uint32_t lookahead_batches;
+  uint32_t lookahead_samples;
   uint32_t n_io_threads;
+  uint32_t metadata_io_concurrency;
   uint64_t max_gpu_memory_bytes;         // 0 → library default
   uint32_t max_chunk_uncompressed_bytes; // 0 → library default
   uint64_t max_read_op_bytes;            // 0 → library default
-  uint32_t n_zarrs_meta_cache;
-  uint32_t n_shards_meta_cache;
+  uint32_t n_array_meta_cache;
+  uint32_t n_shard_index_cache;
+  uint32_t n_chunk_layout_cache;
   uint8_t host_buffer_waves; // 0 → library default
   uint8_t bypass_decode;
+  struct damacy_latency_model metadata_latency;
 
   double consumer_hold_ms;
 
@@ -292,8 +295,9 @@ parse_scenario(struct cslice src, struct scenario* sc)
 {
   memset(sc, 0, sizeof(*sc));
   sc->src = src;
-  sc->n_zarrs_meta_cache = 4096;
-  sc->n_shards_meta_cache = 16384;
+  sc->n_array_meta_cache = 4096;
+  sc->n_shard_index_cache = 16384;
+  sc->n_chunk_layout_cache = 4096;
 
   // dataset
   {
@@ -354,9 +358,9 @@ parse_scenario(struct cslice src, struct scenario* sc)
     static const struct json_query p_w[] = {
       { QUERY_KEY, .key = "sampling" }, { QUERY_KEY, .key = "n_warmup_batches" }
     };
-    static const struct json_query p_bs[] = {
-      { QUERY_KEY, .key = "sampling" }, { QUERY_KEY, .key = "batch_size" }
-    };
+    static const struct json_query p_bs[] = { { QUERY_KEY, .key = "sampling" },
+                                              { QUERY_KEY,
+                                                .key = "samples_per_batch" } };
     static const struct json_query p_s[] = { { QUERY_KEY, .key = "sampling" },
                                              { QUERY_KEY, .key = "seed" } };
     if (read_uint(src, p_b, countof(p_b), &v))
@@ -366,7 +370,7 @@ parse_scenario(struct cslice src, struct scenario* sc)
     sc->n_warmup_batches = (uint32_t)v;
     if (read_uint(src, p_bs, countof(p_bs), &v))
       return 1;
-    sc->batch_size = (uint32_t)v;
+    sc->samples_per_batch = (uint32_t)v;
     read_uint_opt(src, p_s, countof(p_s), &sc->sampling_seed, 1234);
   }
 
@@ -375,9 +379,13 @@ parse_scenario(struct cslice src, struct scenario* sc)
     uint64_t v;
     static const struct json_query p_la[] = { { QUERY_KEY, .key = "pipeline" },
                                               { QUERY_KEY,
-                                                .key = "lookahead_batches" } };
+                                                .key = "lookahead_samples" } };
     static const struct json_query p_io[] = {
       { QUERY_KEY, .key = "pipeline" }, { QUERY_KEY, .key = "n_io_threads" }
+    };
+    static const struct json_query p_meta_io[] = {
+      { QUERY_KEY, .key = "pipeline" },
+      { QUERY_KEY, .key = "metadata_io_concurrency" }
     };
     static const struct json_query p_g[] = { { QUERY_KEY, .key = "pipeline" },
                                              { QUERY_KEY,
@@ -388,17 +396,23 @@ parse_scenario(struct cslice src, struct scenario* sc)
     };
     static const struct json_query p_zm[] = { { QUERY_KEY, .key = "pipeline" },
                                               { QUERY_KEY,
-                                                .key = "n_zarrs_meta_cache" } };
+                                                .key = "n_array_meta_cache" } };
     static const struct json_query p_sm[] = {
       { QUERY_KEY, .key = "pipeline" },
-      { QUERY_KEY, .key = "n_shards_meta_cache" }
+      { QUERY_KEY, .key = "n_shard_index_cache" }
+    };
+    static const struct json_query p_cl[] = {
+      { QUERY_KEY, .key = "pipeline" },
+      { QUERY_KEY, .key = "n_chunk_layout_cache" }
     };
     if (read_uint(src, p_la, countof(p_la), &v))
       return 1;
-    sc->lookahead_batches = (uint32_t)v;
+    sc->lookahead_samples = (uint32_t)v;
     if (read_uint(src, p_io, countof(p_io), &v))
       return 1;
     sc->n_io_threads = (uint32_t)v;
+    read_uint_opt(src, p_meta_io, countof(p_meta_io), &v, 8);
+    sc->metadata_io_concurrency = (uint32_t)v;
     read_uint_opt(src, p_g, countof(p_g), &v, 0);
     sc->max_gpu_memory_bytes = v << 20;
     read_uint_opt(src, p_c, countof(p_c), &v, 0);
@@ -409,9 +423,11 @@ parse_scenario(struct cslice src, struct scenario* sc)
     read_uint_opt(src, p_ro, countof(p_ro), &v, 0);
     sc->max_read_op_bytes = v << 10; // KB → bytes
     read_uint_opt(src, p_zm, countof(p_zm), &v, 4096);
-    sc->n_zarrs_meta_cache = (uint32_t)v;
+    sc->n_array_meta_cache = (uint32_t)v;
     read_uint_opt(src, p_sm, countof(p_sm), &v, 16384);
-    sc->n_shards_meta_cache = (uint32_t)v;
+    sc->n_shard_index_cache = (uint32_t)v;
+    read_uint_opt(src, p_cl, countof(p_cl), &v, 4096);
+    sc->n_chunk_layout_cache = (uint32_t)v;
     static const struct json_query p_hw[] = { { QUERY_KEY, .key = "pipeline" },
                                               { QUERY_KEY,
                                                 .key = "host_buffer_waves" } };
@@ -433,7 +449,52 @@ parse_scenario(struct cslice src, struct scenario* sc)
       sc->consumer_hold_ms = 0.0;
   }
 
+  {
+    static const struct json_query p_base[] = {
+      { QUERY_KEY, .key = "metadata_latency" },
+      { QUERY_KEY, .key = "baseline_ns" }
+    };
+    static const struct json_query p_mu[] = {
+      { QUERY_KEY, .key = "metadata_latency" },
+      { QUERY_KEY, .key = "lognormal_mu_ln_ns" }
+    };
+    static const struct json_query p_sigma[] = {
+      { QUERY_KEY, .key = "metadata_latency" },
+      { QUERY_KEY, .key = "lognormal_sigma_ln_ns" }
+    };
+    static const struct json_query p_cap[] = {
+      { QUERY_KEY, .key = "metadata_latency" }, { QUERY_KEY, .key = "cap_ns" }
+    };
+    static const struct json_query p_seed[] = {
+      { QUERY_KEY, .key = "metadata_latency" }, { QUERY_KEY, .key = "seed" }
+    };
+    uint64_t v = 0;
+    read_uint_opt(src, p_base, countof(p_base), &v, 0);
+    sc->metadata_latency.baseline_ns = v;
+    read_double_opt(
+      src, p_mu, countof(p_mu), &sc->metadata_latency.lognormal_mu_ln_ns, 0.0);
+    read_double_opt(src,
+                    p_sigma,
+                    countof(p_sigma),
+                    &sc->metadata_latency.lognormal_sigma_ln_ns,
+                    0.0);
+    read_uint_opt(src, p_cap, countof(p_cap), &v, 0);
+    sc->metadata_latency.cap_ns = v;
+    read_uint_opt(src, p_seed, countof(p_seed), &v, 0);
+    sc->metadata_latency.seed = v;
+    if (sc->metadata_latency.lognormal_sigma_ln_ns < 0.0)
+      return 1;
+  }
+
   // sanity: all axes can fit a sample
+  if (sc->lookahead_samples < sc->samples_per_batch) {
+    fprintf(stderr,
+            "scenario: lookahead_samples=%u must be at least "
+            "samples_per_batch=%u\n",
+            sc->lookahead_samples,
+            sc->samples_per_batch);
+    return 1;
+  }
   for (uint8_t d = 0; d < sc->rank; ++d) {
     if (sc->sample_shape[d] > sc->zarr_shape[d]) {
       fprintf(stderr,
@@ -520,7 +581,7 @@ struct run_metrics
   struct damacy_stats stats;
 };
 
-// Push exactly n_target_batches * batch_size samples and pop
+// Push exactly n_target_batches * samples_per_batch samples and pop
 // n_target_batches batches. When hold_ms > 0, sleeps after a successful
 // pop and before release to simulate the consumer holding the batch.
 // block_out accumulates wait time between releasing batch i-1 (or drive
@@ -541,9 +602,9 @@ drive(struct damacy* d,
       double* push_out,
       double* pop_wait_out)
 {
-  const uint32_t pool_cap = sc->batch_size * sc->lookahead_batches;
+  const uint32_t pool_cap = sc->lookahead_samples;
   const uint64_t samples_target =
-    (uint64_t)n_target_batches * (uint64_t)sc->batch_size;
+    (uint64_t)n_target_batches * (uint64_t)sc->samples_per_batch;
   struct damacy_sample* pool =
     (struct damacy_sample*)calloc(pool_cap, sizeof(*pool));
   if (!pool)
@@ -679,7 +740,7 @@ emit_results(const struct scenario* sc, const struct run_metrics* rm, FILE* out)
   jw_array_begin(&jw);
   emit_metric(&jw, &rm->stats.plan, "batch");
   emit_metric(&jw, &rm->stats.io, "wave");
-  emit_metric(&jw, &rm->stats.h2d, "wave");
+  emit_metric(&jw, &rm->stats.input_transfer, "wave");
   emit_metric(&jw, &rm->stats.decode, "wave");
   emit_metric(&jw, &rm->stats.post_decode, "wave");
   emit_metric(&jw, &rm->stats.decode_gap, "wave");
@@ -711,17 +772,45 @@ emit_results(const struct scenario* sc, const struct run_metrics* rm, FILE* out)
   jw_key(&jw, "reads_issued");
   jw_uint(&jw, rm->stats.reads_issued);
   jw_key(&jw, "distinct_zarrs");
-  jw_uint(&jw, rm->stats.zarr_meta_misses);
+  jw_uint(&jw, rm->stats.array_meta.misses);
   jw_key(&jw, "distinct_shards");
-  jw_uint(&jw, rm->stats.shard_idx_misses);
-  jw_key(&jw, "zarr_meta_hits");
-  jw_uint(&jw, rm->stats.zarr_meta_hits);
-  jw_key(&jw, "zarr_meta_misses");
-  jw_uint(&jw, rm->stats.zarr_meta_misses);
-  jw_key(&jw, "shard_idx_hits");
-  jw_uint(&jw, rm->stats.shard_idx_hits);
-  jw_key(&jw, "shard_idx_misses");
-  jw_uint(&jw, rm->stats.shard_idx_misses);
+  jw_uint(&jw, rm->stats.shard_index.misses);
+  jw_key(&jw, "array_meta_hits");
+  jw_uint(&jw, rm->stats.array_meta.hits);
+  jw_key(&jw, "array_meta_misses");
+  jw_uint(&jw, rm->stats.array_meta.misses);
+  jw_key(&jw, "shard_index_hits");
+  jw_uint(&jw, rm->stats.shard_index.hits);
+  jw_key(&jw, "shard_index_misses");
+  jw_uint(&jw, rm->stats.shard_index.misses);
+  jw_key(&jw, "chunk_layout_hits");
+  jw_uint(&jw, rm->stats.chunk_layout.hits);
+  jw_key(&jw, "chunk_layout_misses");
+  jw_uint(&jw, rm->stats.chunk_layout.misses);
+  jw_key(&jw, "metadata_latency_ops");
+  jw_uint(&jw, rm->stats.metadata_latency.ops);
+  jw_key(&jw, "metadata_latency_map_ops");
+  jw_uint(&jw, rm->stats.metadata_latency.map_ops);
+  jw_key(&jw, "metadata_latency_stat_ops");
+  jw_uint(&jw, rm->stats.metadata_latency.stat_ops);
+  jw_key(&jw, "metadata_latency_submit_ops");
+  jw_uint(&jw, rm->stats.metadata_latency.submit_ops);
+  jw_key(&jw, "metadata_latency_submit_dev_ops");
+  jw_uint(&jw, rm->stats.metadata_latency.submit_dev_ops);
+  jw_key(&jw, "metadata_latency_active");
+  jw_uint(&jw, rm->stats.metadata_latency.active);
+  jw_key(&jw, "metadata_latency_max_active");
+  jw_uint(&jw, rm->stats.metadata_latency.max_active);
+  jw_key(&jw, "metadata_latency_total_sleep_ns");
+  jw_uint(&jw, rm->stats.metadata_latency.total_sleep_ns);
+  jw_key(&jw, "metadata_latency_max_sleep_ns");
+  jw_uint(&jw, rm->stats.metadata_latency.max_sleep_ns);
+  jw_key(&jw, "metadata_backend_read_jobs");
+  jw_uint(&jw, rm->stats.metadata_backend.read_jobs);
+  jw_key(&jw, "metadata_backend_read_active");
+  jw_uint(&jw, rm->stats.metadata_backend.read_active);
+  jw_key(&jw, "metadata_backend_read_max_active");
+  jw_uint(&jw, rm->stats.metadata_backend.read_max_active);
   jw_key(&jw, "gpu_bytes_committed");
   jw_uint(&jw, rm->stats.gpu_bytes_committed);
   jw_object_end(&jw);
@@ -732,14 +821,15 @@ emit_results(const struct scenario* sc, const struct run_metrics* rm, FILE* out)
   for (uint8_t d = 0; d < sc->rank; ++d)
     sample_volume *= (uint64_t)sc->sample_shape[d];
   double sample_bytes_total = (double)rm->stats.batches_emitted *
-                              (double)sc->batch_size * (double)sample_volume;
+                              (double)sc->samples_per_batch *
+                              (double)sample_volume;
   double wall_s = rm->wall_ms / 1e3;
   double throughput_mb_s =
     wall_s > 0.0 ? (sample_bytes_total / 1e6) / wall_s : 0.0;
-  double sum_stage_ms = (double)rm->stats.plan.ms + (double)rm->stats.io.ms +
-                        (double)rm->stats.h2d.ms + (double)rm->stats.decode.ms +
-                        (double)rm->stats.post_decode.ms +
-                        (double)rm->stats.assemble.ms;
+  double sum_stage_ms =
+    (double)rm->stats.plan.ms + (double)rm->stats.io.ms +
+    (double)rm->stats.input_transfer.ms + (double)rm->stats.decode.ms +
+    (double)rm->stats.post_decode.ms + (double)rm->stats.assemble.ms;
   double stage_concurrency =
     rm->wall_ms > 0.0 ? sum_stage_ms / rm->wall_ms : 0.0;
   double chunks_per_batch =
@@ -822,21 +912,24 @@ main(int argc, char** argv)
           sc.n_warmup_batches);
 
   struct damacy_config cfg = {
-    .batch_size = sc.batch_size,
-    .lookahead_batches = sc.lookahead_batches,
+    .samples_per_batch = sc.samples_per_batch,
+    .lookahead_samples = sc.lookahead_samples,
     .dtype = sc.dtype,
     .sample_rank = sc.rank,
     .device = -1,
     .tuning = {
       .n_io_threads = sc.n_io_threads,
-      .n_zarrs_meta_cache = sc.n_zarrs_meta_cache,
-      .n_shards_meta_cache = sc.n_shards_meta_cache,
+      .n_array_meta_cache = sc.n_array_meta_cache,
+      .n_shard_index_cache = sc.n_shard_index_cache,
+      .n_chunk_layout_cache = sc.n_chunk_layout_cache,
       .max_chunk_uncompressed_bytes = sc.max_chunk_uncompressed_bytes,
       .max_read_op_bytes = sc.max_read_op_bytes,
       .max_gpu_memory_bytes = sc.max_gpu_memory_bytes,
       .host_buffer_waves = sc.host_buffer_waves,
+      .metadata_io_concurrency = sc.metadata_io_concurrency,
     },
-    .debug = { .bypass_decode = sc.bypass_decode },
+    .debug = { .bypass_decode = sc.bypass_decode,
+               .metadata_latency = sc.metadata_latency },
   };
   for (uint8_t d = 0; d < sc.rank; ++d)
     cfg.sample_shape[d] = sc.sample_shape[d];
@@ -912,7 +1005,7 @@ main(int argc, char** argv)
 
   rm.ttfb_ms = (t_first_pop > 0.0 ? (t_first_pop - t_first_push) : 0.0) * 1e3;
 
-  // Steady-state run. drive() pushes exactly n_batches * batch_size
+  // Steady-state run. drive() pushes exactly n_batches * samples_per_batch
   // samples and pops exactly n_batches batches, so no trailing flush is
   // needed.
   uint64_t pushed_steady = 0, popped_steady = 0;

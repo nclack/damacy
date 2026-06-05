@@ -1,5 +1,4 @@
-// Internal config helpers: dtype mapping, validation, and the
-// "0 → default" knob resolvers.
+// Internal config helpers: dtype mapping, validation, and sizing resolvers.
 #pragma once
 
 #include "damacy.h"
@@ -40,6 +39,11 @@ resolve_max_chunks_per_wave(const struct damacy_config* cfg);
 uint32_t
 resolve_max_substreams_per_chunk(const struct damacy_config* cfg);
 
+// Returns cfg->tuning.metadata_io_concurrency after validate_config has checked
+// that it is positive and within the host concurrency bound.
+uint32_t
+resolve_metadata_io_concurrency(const struct damacy_config* cfg);
+
 // Explicit config (ON/OFF) wins; AUTO defers to DAMACY_GDS_ENABLE=1.
 // damacy_create rejects with DAMACY_INVAL when this resolves to 1 but
 // libcufile.so.0 is not loadable / cuFileDriverOpen fails.
@@ -54,7 +58,7 @@ resolve_sample_shape(const struct damacy_config* cfg,
                      int64_t* out_shape,
                      uint8_t* out_rank);
 
-// product(sample_shape) × batch_size × dtype_bpe(dtype). Writes the
+// product(sample_shape) × samples_per_batch × dtype_bpe(dtype). Writes the
 // value into *out_bytes. Returns DAMACY_INVAL on a bad sample_shape /
 // rank (same conditions as resolve_sample_shape).
 enum damacy_status

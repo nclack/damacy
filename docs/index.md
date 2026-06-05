@@ -20,7 +20,7 @@ import damacy
 import torch
 
 cfg = damacy.Config(
-    batch_size=8,
+    samples_per_batch=2,
     sample_shape=(64, 256, 256),
     max_gpu_memory_bytes=1 << 30,
     dtype="bf16",
@@ -32,7 +32,7 @@ samples = [
 
 with damacy.Pipeline(cfg) as d:
     d.push(samples)
-    for _ in range(len(samples) // cfg.batch_size):
+    for _ in range(len(samples) // cfg.samples_per_batch):
         with d.pop() as batch:
             x = torch.from_dlpack(batch)
             ...  # train step
@@ -48,7 +48,7 @@ binding model and a torchrun example.
 
 You hand damacy a stream of `Sample`s; it returns a stream of
 `Batch`es, each one a device tensor of shape
-`(batch_size, *sample_shape)`.
+`(samples_per_batch, *sample_shape)`.
 
 - A **`Sample`** is one crop request: a zarr URI plus an `aabb`
   (axis-aligned bounding box) given as a list of `(start, stop)`
@@ -61,7 +61,7 @@ You hand damacy a stream of `Sample`s; it returns a stream of
   Use it inside a `with` block so damacy can reclaim the slot when
   you're done.
 
-`batch_size`, `sample_shape`, and `max_gpu_memory_bytes` are required
+`samples_per_batch`, `sample_shape`, and `max_gpu_memory_bytes` are required
 on `Config`; everything else has a sensible default. The assemble
 kernel casts heterogeneous source dtypes
 (`u8`/`u16`/`i16`/`u32`/`i32`/`f16`/`f32`) to the configured
@@ -97,4 +97,3 @@ Continuous benchmark history (auto-published from
      mkdocs treats unresolved relative links as warnings under --strict. -->
 - [Throughput](https://nclack.github.io/damacy/throughput/) — bigger is better
 - [Timings](https://nclack.github.io/damacy/timings/) — smaller is better
-

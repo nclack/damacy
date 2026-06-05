@@ -4,13 +4,18 @@
 // chunk grid coordinates.
 
 #include "damacy.h"
+#include "damacy_limits.h"
 #include "fixture.h"
 #include "planner/planner.h"
+#include "prefetch/array_meta.h"
+#include "prefetch/chunk_layout.h"
+#include "prefetch/prefetch_cache.h"
+#include "prefetch/shard_index.h"
 #include "store/store.h"
+#include "util/hash.h"
 #include "util/path_intern.h"
-#include "zarr/zarr_meta_cache.h"
+#include "zarr/sample_shard_iterator.h"
 #include "zarr/zarr_metadata.h"
-#include "zarr/zarr_shard_cache.h"
 #include "zarr/zarr_shard_index.h"
 
 #include <stdio.h>
@@ -129,16 +134,99 @@ static const char* BLOSC_ZARR_JSON_FMT =
   "\"index_location\":\"end\"}}]"
   "}";
 
+static int
+sync_post(struct prefetch_executor* self,
+          void (*fn)(void*),
+          void* ctx,
+          void (*ctx_free)(void*))
+{
+  (void)self;
+  fn(ctx);
+  if (ctx_free)
+    ctx_free(ctx);
+  return 0;
+}
+
+static struct prefetch_executor SYNC_EXECUTOR = { .post = sync_post };
+
 // Common fixture: tmpdir + foo array + one shard with 4 entries.
 struct fixture
 {
   char root[64];
   struct store* store;
-  struct zarr_meta_cache* meta;
-  struct zarr_shard_cache* shards;
+  struct array_meta_fetcher amf;
+  struct prefetch_cache* array_meta_cache;
+  struct shard_index_fetcher sif;
+  struct prefetch_cache* shard_index_cache;
+  struct chunk_layout_fetcher clf;
+  struct prefetch_cache* chunk_layout_cache;
   struct planner* planner;
   struct path_intern paths;
+  struct prefetch_handle h_meta;
+  struct prefetch_handle* shard_arrays[32];
+  uint32_t n_shard_arrays;
 };
+
+static int
+fixture_wire_caches(struct fixture* f)
+{
+  f->store = store_fs_create(&(struct store_fs_config){
+    .root = f->root,
+    .nthreads = 1,
+  });
+  EXPECT(f->store);
+
+  array_meta_fetcher_init(&f->amf, f->store);
+  f->array_meta_cache = prefetch_cache_create(&(struct prefetch_cache_config){
+    .capacity = 8,
+    .max_probe = 16,
+    .ops = &array_meta_ops,
+    .fetcher = &f->amf.base,
+    .executor = &SYNC_EXECUTOR,
+  });
+  EXPECT(f->array_meta_cache);
+
+  shard_index_fetcher_init(&f->sif, f->store, f->array_meta_cache);
+  f->shard_index_cache = prefetch_cache_create(&(struct prefetch_cache_config){
+    .capacity = 8,
+    .max_probe = 16,
+    .ops = &shard_index_ops,
+    .fetcher = &f->sif.base,
+    .executor = &SYNC_EXECUTOR,
+  });
+  EXPECT(f->shard_index_cache);
+
+  chunk_layout_fetcher_init(&f->clf,
+                            f->store,
+                            f->array_meta_cache,
+                            f->shard_index_cache,
+                            DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK);
+  f->chunk_layout_cache = prefetch_cache_create(&(struct prefetch_cache_config){
+    .capacity = 8,
+    .max_probe = 16,
+    .ops = &chunk_layout_ops,
+    .fetcher = &f->clf.base,
+    .executor = &SYNC_EXECUTOR,
+  });
+  EXPECT(f->chunk_layout_cache);
+
+  f->h_meta = prefetch_cache_request(
+    f->array_meta_cache, hash_fnv1a_str("foo"), "foo", 0, NULL);
+  EXPECT(prefetch_handle_valid(f->h_meta));
+
+  struct planner_config pcfg = {
+    .array_meta_cache = f->array_meta_cache,
+    .chunk_layout_cache = f->chunk_layout_cache,
+    .shard_index_cache = f->shard_index_cache,
+    .dst_dtype = DAMACY_F32,
+    .max_chunks_per_wave = DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE,
+    .max_substreams_per_chunk = DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK,
+    .page_alignment = PAGE,
+    .read_op_max_bytes = UINT64_MAX,
+  };
+  EXPECT(planner_create(&pcfg, &f->planner) == DAMACY_OK);
+  return 0;
+}
 
 static int
 fixture_init_with_json(struct fixture* f,
@@ -161,24 +249,7 @@ fixture_init_with_json(struct fixture* f,
   // Payload bytes: large enough to hold any chunk we'll address. Last
   // offset+nbytes determines the lower bound; we use 4096 as headroom.
   EXPECT(fixture_write_synthetic_shard(p, 4096, offsets, nbytes, 4) == 0);
-
-  struct store_fs_config sc = { .root = f->root, .nthreads = 1 };
-  f->store = store_fs_create(&sc);
-  EXPECT(f->store);
-  f->meta = zarr_meta_cache_create(f->store, 4);
-  EXPECT(f->meta);
-  f->shards = zarr_shard_cache_create(f->store, 4);
-  EXPECT(f->shards);
-  struct planner_config pcfg = {
-    .meta_cache = f->meta,
-    .shard_cache = f->shards,
-    .max_chunks_per_wave = DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE,
-    .max_substreams_per_chunk = DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK,
-    .page_alignment = PAGE,
-    .read_op_max_bytes = UINT64_MAX,
-  };
-  EXPECT(planner_create(&pcfg, &f->planner) == DAMACY_OK);
-  return 0;
+  return fixture_wire_caches(f);
 }
 
 static int
@@ -191,20 +262,72 @@ static void
 fixture_destroy(struct fixture* f)
 {
   planner_destroy(f->planner);
-  zarr_shard_cache_destroy(f->shards);
-  zarr_meta_cache_destroy(f->meta);
+  prefetch_cache_destroy(f->chunk_layout_cache);
+  prefetch_cache_destroy(f->shard_index_cache);
+  prefetch_cache_destroy(f->array_meta_cache);
   store_destroy(f->store);
   path_intern_free(&f->paths);
+  for (uint32_t i = 0; i < f->n_shard_arrays; ++i)
+    free(f->shard_arrays[i]);
   fixture_rm_tree(f->root);
 }
 
-static struct damacy_sample
-mk_sample(const char* uri, int64_t y0, int64_t y1, int64_t x0, int64_t x1)
+static int
+mk_sample(struct fixture* f,
+          int64_t y0,
+          int64_t y1,
+          int64_t x0,
+          int64_t x1,
+          struct planner_sample* out)
 {
-  struct damacy_sample s = { .uri = uri, .aabb = { .rank = 2 } };
+  struct planner_sample s = {
+    .uri = "foo",
+    .aabb = { .rank = 2 },
+    .h_meta = f->h_meta,
+  };
   s.aabb.dims[0] = (struct damacy_interval){ .beg = y0, .end = y1 };
   s.aabb.dims[1] = (struct damacy_interval){ .beg = x0, .end = x1 };
-  return s;
+
+  const struct zarr_metadata* meta =
+    (const struct zarr_metadata*)prefetch_cache_try_get(f->array_meta_cache,
+                                                        f->h_meta);
+  EXPECT(meta);
+  struct sample_shard_iterator it;
+  EXPECT(sample_shard_iterator_init(&it, meta, &s.aabb) == 0);
+  uint64_t n = 1;
+  for (uint8_t d = 0; d < it.rank; ++d)
+    n *= (it.shard_end[d] - it.shard_beg[d]);
+  EXPECT(n > 0);
+  struct prefetch_handle* arr =
+    (struct prefetch_handle*)calloc((size_t)n, sizeof(struct prefetch_handle));
+  EXPECT(arr);
+  struct shard_index_key probe = { .uri = "foo", .rank = meta->rank };
+  uint32_t i = 0;
+  while (sample_shard_iterator_next(&it, probe.shard_coord))
+    arr[i++] = prefetch_cache_request(
+      f->shard_index_cache, shard_index_key_hash(&probe), &probe, 0, NULL);
+  s.h_shards = arr;
+  s.n_shards = (uint32_t)n;
+  struct chunk_layout_key layout_key = {
+    .uri = "foo",
+    .rank = meta->rank,
+    // Planner unit fixtures use synthetic compressed bytes, so do not probe
+    // a real blosc header here. End-to-end/chunk-layout tests cover probing.
+    .n_shards = 0,
+    .shard_coords = NULL,
+    .h_shards = NULL,
+  };
+  s.h_layout = prefetch_cache_request(f->chunk_layout_cache,
+                                      chunk_layout_key_hash(&layout_key),
+                                      &layout_key,
+                                      0,
+                                      NULL);
+  EXPECT(prefetch_handle_valid(s.h_layout));
+  EXPECT(f->n_shard_arrays <
+         sizeof f->shard_arrays / sizeof f->shard_arrays[0]);
+  f->shard_arrays[f->n_shard_arrays++] = arr;
+  *out = s;
+  return 0;
 }
 
 // Find the chunk_plan whose 2D grid coordinate matches (y, x), or NULL.
@@ -247,7 +370,8 @@ test_single_chunk_aligned(void)
     return 1;
 
   // AABB = inner chunk (1, 0): y in [2,4), x in [0,4).
-  struct damacy_sample s = mk_sample("foo", 2, 4, 0, 4);
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 2, 4, 0, 4, &s) == 0);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 2, 4, dst_strides);
 
@@ -321,7 +445,8 @@ test_multi_chunk_partial(void)
 
   // AABB = y in [1,4), x in [2,7). Touches all 4 chunks (2x2 grid).
   // Chunk grid origin: (0,0). aabb_lo=(1,2). aabb_lo_relative=(1,2).
-  struct damacy_sample s = mk_sample("foo", 1, 4, 2, 7);
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 1, 4, 2, 7, &s) == 0);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 3, 5, dst_strides);
 
@@ -386,10 +511,9 @@ test_two_samples_indices(void)
   if (fixture_init(&f, offsets, nbytes))
     return 1;
 
-  struct damacy_sample s[2] = {
-    mk_sample("foo", 0, 2, 0, 4), // chunk (0,0)
-    mk_sample("foo", 2, 4, 4, 8), // chunk (1,1)
-  };
+  struct planner_sample s[2];
+  EXPECT(mk_sample(&f, 0, 2, 0, 4, &s[0]) == 0); // chunk (0,0)
+  EXPECT(mk_sample(&f, 2, 4, 4, 8, &s[1]) == 0); // chunk (1,1)
   int64_t dst_strides[3];
   mk_dst_strides_2d(2, 2, 4, dst_strides); // strides=[8,4,1]
 
@@ -436,7 +560,8 @@ test_empty_chunk_becomes_fill(void)
   if (fixture_init(&f, offsets, nbytes))
     return 1;
 
-  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8); // all 4 chunks
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 0, 4, 0, 8, &s) == 0); // all 4 chunks
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
 
@@ -487,7 +612,8 @@ test_fill_value_int16_neg1(void)
   if (fixture_init_with_json(&f, INT16_FILL_NEG1_ZARR_JSON, offsets, nbytes))
     return 1;
 
-  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 0, 4, 0, 8, &s) == 0);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
 
@@ -530,7 +656,8 @@ test_fill_value_f32_nan(void)
   if (fixture_init_with_json(&f, F32_FILL_NAN_ZARR_JSON, offsets, nbytes))
     return 1;
 
-  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 0, 4, 0, 8, &s) == 0);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
   struct read_op reads[8] = { 0 };
@@ -560,46 +687,27 @@ test_fill_value_f32_nan(void)
   return 0;
 }
 
-// Sparse shard file (zarr_shard_cache_get → DAMACY_NOTFOUND) makes the
-// whole shard's chunks fill-mode.
 static int
 test_missing_shard_becomes_fill(void)
 {
-  // Same JSON, but no shard file at all under foo/c/0/0.
-  char root[] = "/tmp/damacy_planner_XXXXXX";
-  EXPECT(mkdtemp(root));
+  struct fixture f = { 0 };
+  strcpy(f.root, "/tmp/damacy_planner_XXXXXX");
+  EXPECT(mkdtemp(f.root));
   char p[256];
-  snprintf(p, sizeof p, "%s/foo", root);
+  snprintf(p, sizeof p, "%s/foo", f.root);
   EXPECT(mkdir(p, 0755) == 0);
-  snprintf(p, sizeof p, "%s/foo/zarr.json", root);
+  snprintf(p, sizeof p, "%s/foo/zarr.json", f.root);
   EXPECT(fixture_write_file(p, MINIMAL_ZARR_JSON) == 0);
   // Intentionally do NOT create foo/c/0/0.
+  EXPECT(fixture_wire_caches(&f) == 0);
 
-  struct store_fs_config sc = { .root = root, .nthreads = 1 };
-  struct store* store = store_fs_create(&sc);
-  EXPECT(store);
-  struct zarr_meta_cache* meta = zarr_meta_cache_create(store, 4);
-  EXPECT(meta);
-  struct zarr_shard_cache* shards = zarr_shard_cache_create(store, 4);
-  EXPECT(shards);
-  struct planner_config pcfg = {
-    .meta_cache = meta,
-    .shard_cache = shards,
-    .max_chunks_per_wave = DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE,
-    .max_substreams_per_chunk = DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK,
-    .page_alignment = PAGE,
-    .read_op_max_bytes = UINT64_MAX,
-  };
-  struct planner* planner = NULL;
-  EXPECT(planner_create(&pcfg, &planner) == DAMACY_OK);
-
-  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 0, 4, 0, 8, &s) == 0);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
   struct read_op reads[8] = { 0 };
   struct chunk_plan chunks[8] = { 0 };
   struct sample_plan samples[4] = { 0 };
-  struct path_intern paths = { 0 };
   struct planner_output out = {
     .read_ops = reads,
     .read_ops_cap = 8,
@@ -609,21 +717,16 @@ test_missing_shard_becomes_fill(void)
     .sample_plans_cap = 4,
     .read_op_groups = (struct read_op_group[8]){ { 0 } },
     .read_op_groups_cap = 8,
-    .paths = &paths,
+    .paths = &f.paths,
   };
-  EXPECT(planner_plan(planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
+  EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) == DAMACY_OK);
   EXPECT(out.n_chunk_plans == 4);
   for (uint32_t i = 0; i < 4; ++i) {
     EXPECT(chunks[i].is_fill == 1);
     EXPECT(chunks[i].codec_id == CODEC_FILL);
   }
 
-  path_intern_free(&paths);
-  planner_destroy(planner);
-  zarr_shard_cache_destroy(shards);
-  zarr_meta_cache_destroy(meta);
-  store_destroy(store);
-  fixture_rm_tree(root);
+  fixture_destroy(&f);
   return 0;
 }
 
@@ -639,7 +742,8 @@ test_page_alignment(void)
   if (fixture_init(&f, offsets, nbytes))
     return 1;
 
-  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 0, 4, 0, 8, &s) == 0);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
   struct read_op reads[8] = { 0 };
@@ -694,7 +798,8 @@ run_blosc_codec_id_case(const char* cname, uint8_t expected_codec_id)
   if (fixture_init_with_json(&f, json, offsets, nbytes))
     return 1;
 
-  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 0, 4, 0, 8, &s) == 0);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
 
@@ -721,7 +826,7 @@ run_blosc_codec_id_case(const char* cname, uint8_t expected_codec_id)
   return 0;
 }
 
-// Planner rejects blosc1-lz4 with DAMACY_INVAL (codec is no longer supported).
+// Planner rejects blosc1-lz4 with DAMACY_DECODE (codec is no longer supported).
 static int
 run_blosc_lz4_rejected_case(const char* cname)
 {
@@ -735,7 +840,8 @@ run_blosc_lz4_rejected_case(const char* cname)
   if (fixture_init_with_json(&f, json, offsets, nbytes))
     return 1;
 
-  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 0, 4, 0, 8, &s) == 0);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
 
@@ -754,7 +860,7 @@ run_blosc_lz4_rejected_case(const char* cname)
     .paths = &f.paths,
   };
   EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) ==
-         DAMACY_INVAL);
+         DAMACY_DECODE);
 
   fixture_destroy(&f);
   return 0;
@@ -787,7 +893,8 @@ test_codec_id_none(void)
   if (fixture_init_with_json(&f, NONE_ZARR_JSON, offsets, nbytes))
     return 1;
 
-  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 0, 4, 0, 8, &s) == 0);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
 
@@ -814,8 +921,6 @@ test_codec_id_none(void)
   return 0;
 }
 
-// Unknown blosc cname must propagate as a non-OK status; the resolver
-// only accepts {lz4, lz4hc, zstd}.
 static int
 test_codec_id_blosc_unknown_cname(void)
 {
@@ -829,7 +934,46 @@ test_codec_id_blosc_unknown_cname(void)
   if (fixture_init_with_json(&f, json, offsets, nbytes))
     return 1;
 
-  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  int err = 0;
+  enum prefetch_state st =
+    prefetch_cache_query(f.array_meta_cache, f.h_meta, NULL, &err);
+  EXPECT(st == PREFETCH_STATE_ERROR);
+
+  fixture_destroy(&f);
+  return 0;
+}
+
+static int
+test_unsupported_source_dtype(void)
+{
+  static const char* U64_ZARR_JSON =
+    "{"
+    "\"zarr_format\":3,"
+    "\"node_type\":\"array\","
+    "\"shape\":[4,8],"
+    "\"data_type\":\"uint64\","
+    "\"chunk_grid\":{\"name\":\"regular\",\"configuration\":{"
+    "\"chunk_shape\":[4,8]}},"
+    "\"chunk_key_encoding\":{\"name\":\"default\",\"configuration\":{"
+    "\"separator\":\"/\"}},"
+    "\"fill_value\":0,"
+    "\"codecs\":[{\"name\":\"sharding_indexed\",\"configuration\":{"
+    "\"chunk_shape\":[2,4],"
+    "\"codecs\":[{\"name\":\"bytes\",\"configuration\":{\"endian\":\"little\"}}"
+    "],"
+    "\"index_codecs\":[{\"name\":\"bytes\",\"configuration\":{"
+    "\"endian\":\"little\"}},{\"name\":\"crc32c\"}],"
+    "\"index_location\":\"end\"}}]"
+    "}";
+
+  const uint64_t offsets[4] = { 0, 128, 256, 384 };
+  const uint64_t nbytes[4] = { 64, 64, 64, 64 };
+  struct fixture f = { 0 };
+  if (fixture_init_with_json(&f, U64_ZARR_JSON, offsets, nbytes))
+    return 1;
+
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 0, 4, 0, 8, &s) == 0);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
 
@@ -847,7 +991,8 @@ test_codec_id_blosc_unknown_cname(void)
     .read_op_groups_cap = 8,
     .paths = &f.paths,
   };
-  EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) != DAMACY_OK);
+  EXPECT(planner_plan(f.planner, &s, 1, 0, dst_strides, 3, &out) ==
+         DAMACY_DTYPE);
 
   fixture_destroy(&f);
   return 0;
@@ -916,23 +1061,7 @@ fixture_init_unsharded(struct fixture* f, const uint32_t* chunk_bytes_2x2)
     }
   }
 
-  struct store_fs_config sc = { .root = f->root, .nthreads = 1 };
-  f->store = store_fs_create(&sc);
-  EXPECT(f->store);
-  f->meta = zarr_meta_cache_create(f->store, 4);
-  EXPECT(f->meta);
-  f->shards = zarr_shard_cache_create(f->store, 4);
-  EXPECT(f->shards);
-  struct planner_config pcfg = {
-    .meta_cache = f->meta,
-    .shard_cache = f->shards,
-    .max_chunks_per_wave = DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE,
-    .max_substreams_per_chunk = DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK,
-    .page_alignment = PAGE,
-    .read_op_max_bytes = UINT64_MAX,
-  };
-  EXPECT(planner_create(&pcfg, &f->planner) == DAMACY_OK);
-  return 0;
+  return fixture_wire_caches(f);
 }
 
 static int
@@ -945,7 +1074,8 @@ test_unsharded_single_chunk(void)
     return 1;
 
   // Sample covers exactly chunk (1, 0): y in [2,4), x in [0,4).
-  struct damacy_sample s = mk_sample("foo", 2, 4, 0, 4);
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 2, 4, 0, 4, &s) == 0);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 2, 4, dst_strides);
 
@@ -993,7 +1123,8 @@ test_unsharded_multi_chunk(void)
   if (fixture_init_unsharded(&f, chunk_bytes))
     return 1;
 
-  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 0, 4, 0, 8, &s) == 0);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
 
@@ -1063,24 +1194,10 @@ test_sharded_index_start(void)
   snprintf(p, sizeof p, "%s/foo/c/0/0", f.root);
   EXPECT(fixture_write_synthetic_shard_start(p, 4096, offsets, nbytes, 4) == 0);
 
-  struct store_fs_config sc = { .root = f.root, .nthreads = 1 };
-  f.store = store_fs_create(&sc);
-  EXPECT(f.store);
-  f.meta = zarr_meta_cache_create(f.store, 4);
-  EXPECT(f.meta);
-  f.shards = zarr_shard_cache_create(f.store, 4);
-  EXPECT(f.shards);
-  struct planner_config pcfg = {
-    .meta_cache = f.meta,
-    .shard_cache = f.shards,
-    .max_chunks_per_wave = DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE,
-    .max_substreams_per_chunk = DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK,
-    .page_alignment = PAGE,
-    .read_op_max_bytes = UINT64_MAX,
-  };
-  EXPECT(planner_create(&pcfg, &f.planner) == DAMACY_OK);
+  EXPECT(fixture_wire_caches(&f) == 0);
 
-  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 0, 4, 0, 8, &s) == 0);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
   struct read_op reads[8] = { 0 };
@@ -1123,7 +1240,8 @@ test_coalesce_adjacent_pages(void)
   if (fixture_init(&f, offsets, nbytes))
     return 1;
 
-  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 0, 4, 0, 8, &s) == 0);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
 
@@ -1169,7 +1287,8 @@ test_coalesce_gap_blocks_fusion(void)
   if (fixture_init(&f, offsets, nbytes))
     return 1;
 
-  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 0, 4, 0, 8, &s) == 0);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
 
@@ -1216,7 +1335,8 @@ test_coalesce_fill_does_not_block_fusion(void)
   if (fixture_init(&f, offsets, nbytes))
     return 1;
 
-  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 0, 4, 0, 8, &s) == 0);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
 
@@ -1277,7 +1397,8 @@ test_coalesce_non_monotonic_shard(void)
   if (fixture_init(&f, offsets, nbytes))
     return 1;
 
-  struct damacy_sample s = mk_sample("foo", 0, 4, 0, 8);
+  struct planner_sample s;
+  EXPECT(mk_sample(&f, 0, 4, 0, 8, &s) == 0);
   int64_t dst_strides[3];
   mk_dst_strides_2d(1, 4, 8, dst_strides);
 
@@ -1322,10 +1443,9 @@ test_coalesce_cross_sample(void)
   if (fixture_init(&f, offsets, nbytes))
     return 1;
 
-  struct damacy_sample s[2] = {
-    mk_sample("foo", 0, 2, 0, 8), // chunks (0,0) and (0,1)
-    mk_sample("foo", 2, 4, 0, 8), // chunks (1,0) and (1,1)
-  };
+  struct planner_sample s[2];
+  EXPECT(mk_sample(&f, 0, 2, 0, 8, &s[0]) == 0); // chunks (0,0) and (0,1)
+  EXPECT(mk_sample(&f, 2, 4, 0, 8, &s[1]) == 0); // chunks (1,0) and (1,1)
   int64_t dst_strides[3];
   mk_dst_strides_2d(2, 2, 8, dst_strides);
 
@@ -1376,6 +1496,7 @@ main(void)
   RUN(test_codec_id_blosc_zstd);
   RUN(test_codec_id_none);
   RUN(test_codec_id_blosc_unknown_cname);
+  RUN(test_unsupported_source_dtype);
   RUN(test_unsharded_single_chunk);
   RUN(test_unsharded_multi_chunk);
   RUN(test_sharded_index_start);

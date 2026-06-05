@@ -8,6 +8,7 @@
 #include "platform/platform.h"
 #include "platform/platform_io.h"
 
+#include <stdatomic.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -26,6 +27,17 @@ struct store_fs
   struct lru* fd_cache;
 
   struct pool* job_pool;
+
+  _Atomic uint64_t read_jobs;
+  _Atomic uint64_t read_active;
+  _Atomic uint64_t read_max_active;
+};
+
+struct store_fs_io_stats
+{
+  uint64_t read_jobs;
+  uint64_t read_active;
+  uint64_t read_max_active;
 };
 
 platform_file*
@@ -38,3 +50,9 @@ store_fs_release(struct store_fs* fs, struct lru_entry* pin);
 
 void
 store_fs_stats_get(struct store_fs* fs, struct lru_stats* out);
+
+void
+store_fs_io_stats_get(struct store_fs* fs, struct store_fs_io_stats* out);
+
+void
+store_fs_io_stats_reset(struct store_fs* fs);

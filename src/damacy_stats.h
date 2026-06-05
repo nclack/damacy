@@ -1,4 +1,3 @@
-// Internal stats helpers shared by damacy.c and wave/.
 #pragma once
 
 #include "damacy.h"

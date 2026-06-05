@@ -63,6 +63,7 @@ def set_log_level(level: int, /) -> None: ...
 def set_log_quiet(quiet: bool, /) -> None: ...
 def cuda_init_primary(device: int = 0) -> None: ...
 def cuda_device_count() -> int: ...
+def max_concurrency() -> int: ...
 def _log_emit(level: int, msg: str, /) -> None: ...
 def _log_emit_from_thread(level: int, msg: str, /) -> None: ...
 
@@ -126,14 +127,16 @@ class Pipeline:
 
     def __init__(
         self,
-        batch_size: int,
-        lookahead_batches: int,
+        samples_per_batch: int,
+        lookahead_samples: int,
         dtype: str | int,
         max_chunk_uncompressed_bytes: int,
         max_gpu_memory_bytes: int,
         n_io_threads: int,
-        n_zarrs_meta_cache: int,
-        n_shards_meta_cache: int,
+        metadata_io_concurrency: int,
+        n_array_meta_cache: int,
+        n_shard_index_cache: int,
+        n_chunk_layout_cache: int,
         sample_shape: tuple[int, ...],
         host_buffer_waves: int = 0,
         max_chunks_per_wave: int = 0,
@@ -144,6 +147,11 @@ class Pipeline:
         numa_strategy: int = NUMA_AUTO,
         numa_node: int = -1,
         bypass_decode: bool = False,
+        metadata_latency_baseline_ns: int = 0,
+        metadata_latency_lognormal_mu_ln_ns: float = 0.0,
+        metadata_latency_lognormal_sigma_ln_ns: float = 0.0,
+        metadata_latency_cap_ns: int = 0,
+        metadata_latency_seed: int = 0,
     ) -> None: ...
     @property
     def device(self) -> int: ...

@@ -9,15 +9,18 @@
 struct store_vtable
 {
   void (*destroy)(struct store* s);
-  int (*stat)(struct store* s, const char* key, uint64_t* out);
-  struct store_event (*submit)(struct store* s,
-                               const struct store_read* reads,
-                               size_t n);
-  struct store_event (*submit_dev)(struct store* s,
-                                   const struct store_read* reads,
-                                   size_t n);
-  void (*event_wait)(struct store* s, struct store_event ev);
-  int (*event_query)(struct store* s, struct store_event ev);
+  enum store_stat_result (*stat)(struct store* s,
+                                 const char* key,
+                                 uint64_t* out);
+  struct store_submit_result (*submit)(struct store* s,
+                                       const struct store_read* reads,
+                                       size_t n);
+  struct store_submit_result (*submit_dev)(struct store* s,
+                                           const struct store_read* reads,
+                                           size_t n);
+  enum damacy_status (*event_wait)(struct store* s, struct store_event ev);
+  struct store_event_poll (*event_query)(struct store* s,
+                                         struct store_event ev);
   void (*event_discard)(struct store* s, struct store_event ev);
   int (*map)(struct store* s, const char* key, struct store_view* out);
   void (*unmap)(struct store* s, struct store_view* view);

@@ -122,12 +122,13 @@ def _base_config(dtype: str | int | damacy.Dtype = "f32") -> Config:
     zarrs cast in-kernel; tiny_zarr is u16 → f32 here.
     """
     return Config(
-        batch_size=1,
+        samples_per_batch=1,
         dtype=dtype,
-        lookahead_batches=2,
+        lookahead_samples=2,
         n_io_threads=1,
-        n_zarrs_meta_cache=4,
-        n_shards_meta_cache=4,
+        n_array_meta_cache=4,
+        n_shard_index_cache=4,
+        n_chunk_layout_cache=4,
         sample_shape=(8, 16),
         max_gpu_memory_bytes=1 << 30,
     )
@@ -168,7 +169,7 @@ def test_dtype_coerce():
 
 
 def test_invalid_config_raises_invalid_argument():
-    cfg = dataclasses.replace(_base_config(), n_zarrs_meta_cache=0)
+    cfg = dataclasses.replace(_base_config(), n_array_meta_cache=0)
     with pytest.raises(InvalidArgument) as excinfo:
         Pipeline(cfg)
     # The base class is still _native.DamacyError so legacy `except
@@ -223,19 +224,20 @@ def test_push_pop_release_via_context_managers(tiny_zarr):
             assert "Batch" in repr(batch)
 
 
-def test_unknown_uri_raises_notfound(tiny_zarr):
-    _ = tiny_zarr
+def test_unknown_uri_surfaces_at_pop_as_notfound():
     with Pipeline(_base_config()) as d:
+        d.push([Sample(uri="not_a_zarr", aabb=[(0, 8), (0, 16)])])
         with pytest.raises(NotFound) as excinfo:
-            d.push([Sample(uri="not_a_zarr", aabb=[(0, 8), (0, 16)])])
+            d.pop()
         assert excinfo.value.status is Status.NOTFOUND
 
 
-def test_unsupported_src_dtype_raises_dtype_mismatch(tiny_zarr_no_cast):
+def test_unsupported_src_dtype_surfaces_at_pop_as_dtype_mismatch(tiny_zarr_no_cast):
     uri = tiny_zarr_no_cast
     with Pipeline(_base_config(dtype="f32")) as d:
+        d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
         with pytest.raises(DtypeMismatch) as excinfo:
-            d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
+            d.pop()
         assert excinfo.value.status is Status.DTYPE
 
 
@@ -268,7 +270,7 @@ def test_oversize_chunk_surfaces_at_pop(tmp_path, write_zarr_script):
 def test_batches_iterator_yields_n(tiny_zarr):
     uri = tiny_zarr
     samples = [Sample(uri=uri, aabb=[(0, 8), (0, 16)]) for _ in range(3)]
-    # Default lookahead (= 2 with batch_size=1, capacity=2) is now smaller
+    # Default lookahead (= 2 with samples_per_batch=1, capacity=2) is now smaller
     # than the push; the wrapper queues the overflow and drains as we pop.
     with Pipeline(_base_config()) as d:
         d.push(samples)
@@ -297,7 +299,7 @@ def test_push_overflows_queue_into_pending(tiny_zarr):
     """Pushing more samples than the native lookahead holds is silently
     handled by the Python-side queue; pop drives the drain."""
     uri = tiny_zarr
-    # default lookahead=2, batch_size=1 → capacity=2; we push 5.
+    # default lookahead=2, samples_per_batch=1 → capacity=2; we push 5.
     samples = [Sample(uri=uri, aabb=[(0, 8), (0, 16)]) for _ in range(5)]
     with Pipeline(_base_config()) as d:
         d.push(samples)
@@ -342,20 +344,48 @@ def test_push_chains_multiple_calls(tiny_zarr):
         assert _drain_ids(d, 5) == [0, 1, 2, 3, 4]
 
 
-def test_push_error_drops_offending_iterator(tiny_zarr):
-    """A NotFound surfaces the error and discards the failing iterator's
-    tail. Samples accepted by earlier ``push`` calls (already in the
-    native lookahead) still resolve through ``pop``."""
+def test_pop_error_makes_pipeline_terminal():
+    """Once an async error (here, NotFound) surfaces at pop, the pipeline
+    failed_status is sticky — subsequent pops re-raise the same status."""
+    bad = Sample(uri="not_a_zarr", aabb=[(0, 8), (0, 16)])
+    with Pipeline(_base_config()) as d:
+        d.push([bad])
+        with pytest.raises(NotFound):
+            d.pop()
+        with pytest.raises(NotFound):
+            d.pop()
+
+
+def test_pop_dtype_error_makes_pipeline_terminal(tiny_zarr_no_cast):
+    """The DAMACY_DTYPE path surfaced at pop is also sticky."""
+    uri = tiny_zarr_no_cast
+    with Pipeline(_base_config(dtype="f32")) as d:
+        d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
+        with pytest.raises(DtypeMismatch):
+            d.pop()
+        with pytest.raises(DtypeMismatch):
+            d.pop()
+
+
+def test_pop_surfaces_sticky_error_over_drain(tiny_zarr):
+    """pop()'s internal drain re-pushes pending items into native. Once
+    the pipeline is terminal the re-push raises SHUTDOWN; the suppress
+    around drain must let the sticky error surface from native.pop,
+    not the secondary ShutdownError from drain."""
     uri = tiny_zarr
     good = Sample(uri=uri, aabb=[(0, 8), (0, 16)])
     bad = Sample(uri="not_a_zarr", aabb=[(0, 8), (0, 16)])
     with Pipeline(_base_config()) as d:
-        d.push([good])  # drains synchronously into native
+        # Push bad first + a generator of goods. Cap=2; the generator
+        # holds extra goods that will sit in _pending across the pop
+        # whose drain hits SHUTDOWN after bad fails.
+        d.push([bad])
+        d.push(iter([good, good, good]))
         with pytest.raises(NotFound):
-            d.push([bad, good])  # raises on bad; the trailing good is dropped
-        # The first push's sample is in the lookahead and still pops.
-        with d.pop() as b:
-            assert b.info.batch_id == 0
+            d.pop()
+        # Sticky: second pop also surfaces NotFound, not ShutdownError.
+        with pytest.raises(NotFound):
+            d.pop()
 
 
 # ---- Config dataclass --------------------------------------------------
@@ -364,52 +394,95 @@ def test_push_error_drops_offending_iterator(tiny_zarr):
 def test_config_validates_eagerly():
     ss = (8, 16)
     gpu = 1 << 30
-    with pytest.raises(ValueError, match="batch_size"):
-        Config(batch_size=0, sample_shape=ss, max_gpu_memory_bytes=gpu)
-    with pytest.raises(ValueError, match="lookahead_batches"):
+    with pytest.raises(ValueError, match="samples_per_batch"):
+        Config(samples_per_batch=0, sample_shape=ss, max_gpu_memory_bytes=gpu)
+    with pytest.raises(ValueError, match="lookahead_samples"):
         Config(
-            batch_size=1,
+            samples_per_batch=1,
             sample_shape=ss,
-            lookahead_batches=1,
+            lookahead_samples=0,
             max_gpu_memory_bytes=gpu,
         )
+    assert (
+        Config(
+            samples_per_batch=2,
+            sample_shape=ss,
+            lookahead_samples=2,
+            max_gpu_memory_bytes=gpu,
+        ).lookahead_samples
+        == 2
+    )
     with pytest.raises(ValueError, match="n_io_threads"):
-        Config(batch_size=1, sample_shape=ss, n_io_threads=0, max_gpu_memory_bytes=gpu)
+        Config(
+            samples_per_batch=1,
+            sample_shape=ss,
+            n_io_threads=0,
+            max_gpu_memory_bytes=gpu,
+        )
+    with pytest.raises(TypeError, match="n_prefetch_threads"):
+        Config(
+            samples_per_batch=1,
+            sample_shape=ss,
+            n_prefetch_threads=0,
+            max_gpu_memory_bytes=gpu,
+        )
+    with pytest.raises(ValueError, match="metadata_io_concurrency"):
+        Config(
+            samples_per_batch=1,
+            sample_shape=ss,
+            metadata_io_concurrency=0,
+            max_gpu_memory_bytes=gpu,
+        )
     with pytest.raises(ValueError, match="max_chunk_uncompressed_bytes"):
         Config(
-            batch_size=1,
+            samples_per_batch=1,
             sample_shape=ss,
             max_chunk_uncompressed_bytes=-1,
             max_gpu_memory_bytes=gpu,
         )
     with pytest.raises(ValueError, match="max_gpu_memory_bytes"):
-        Config(batch_size=1, sample_shape=ss, max_gpu_memory_bytes=0)
+        Config(samples_per_batch=1, sample_shape=ss, max_gpu_memory_bytes=0)
     with pytest.raises(ValueError, match="sample_shape"):
-        Config(batch_size=1, sample_shape=(), max_gpu_memory_bytes=gpu)
+        Config(samples_per_batch=1, sample_shape=(), max_gpu_memory_bytes=gpu)
     with pytest.raises(ValueError, match="sample_shape"):
-        Config(batch_size=1, sample_shape=(8, 0), max_gpu_memory_bytes=gpu)
+        Config(samples_per_batch=1, sample_shape=(8, 0), max_gpu_memory_bytes=gpu)
     with pytest.raises(ValueError, match="max_read_op_bytes"):
         Config(
-            batch_size=1,
+            samples_per_batch=1,
             sample_shape=ss,
             max_read_op_bytes=-1,
             max_gpu_memory_bytes=gpu,
         )
     with pytest.raises(ValueError, match="numa_node"):
         Config(
-            batch_size=1,
+            samples_per_batch=1,
             sample_shape=ss,
             max_gpu_memory_bytes=gpu,
             numa_strategy="pin_to",
         )
     with pytest.raises(ValueError, match="numa_node"):
         Config(
-            batch_size=1,
+            samples_per_batch=1,
             sample_shape=ss,
             max_gpu_memory_bytes=gpu,
             numa_strategy="auto",
             numa_node=3,
         )
+
+
+def test_config_default_n_io_threads_uses_max_concurrency(monkeypatch):
+    monkeypatch.setattr(_native, "max_concurrency", lambda: 17)
+
+    cfg = Config(samples_per_batch=1, sample_shape=(8, 16), max_gpu_memory_bytes=1)
+    assert cfg.n_io_threads == 17
+
+    cfg = Config(
+        samples_per_batch=1,
+        sample_shape=(8, 16),
+        max_gpu_memory_bytes=1,
+        n_io_threads=None,
+    )
+    assert cfg.n_io_threads == 17
 
 
 def test_config_numa_defaults_and_coercion():
@@ -428,6 +501,23 @@ def test_config_enable_gds_tri_state():
     assert cfg.enable_gds is None  # AUTO default
     assert dataclasses.replace(cfg, enable_gds=True).enable_gds is True
     assert dataclasses.replace(cfg, enable_gds=False).enable_gds is False
+
+
+def test_config_metadata_latency_model():
+    model = damacy.LatencyModel(
+        baseline_ns=200_000,
+        lognormal_mu_ln_ns=14.5,
+        lognormal_sigma_ln_ns=1.5,
+        cap_ns=500_000_000,
+        seed=7,
+    )
+    cfg = dataclasses.replace(_base_config(), metadata_latency=model)
+    assert cfg.metadata_latency is model
+
+    with pytest.raises(ValueError, match="lognormal_sigma_ln_ns"):
+        damacy.LatencyModel(lognormal_sigma_ln_ns=-1.0)
+    with pytest.raises(TypeError, match="metadata_latency"):
+        dataclasses.replace(_base_config(), metadata_latency=object())
 
 
 def test_pipeline_accepts_new_config_kwargs(tiny_zarr):
@@ -454,11 +544,13 @@ def test_native_pipeline_rejects_out_of_range_enums(tiny_zarr):
 
     def _build(**override):
         return _native.Pipeline(
-            batch_size=1,
-            lookahead_batches=2,
+            samples_per_batch=1,
+            lookahead_samples=2,
             n_io_threads=1,
-            n_zarrs_meta_cache=4,
-            n_shards_meta_cache=4,
+            metadata_io_concurrency=1,
+            n_array_meta_cache=4,
+            n_shard_index_cache=4,
+            n_chunk_layout_cache=4,
             dtype=_native.DTYPE_F32,
             max_chunk_uncompressed_bytes=0,
             max_gpu_memory_bytes=1 << 30,
@@ -479,11 +571,11 @@ def test_config_dtype_coerced():
 
 def test_config_replace_for_variants():
     base = _base_config()
-    big = dataclasses.replace(base, batch_size=4)
-    assert base.batch_size == 1 and big.batch_size == 4
+    big = dataclasses.replace(base, samples_per_batch=4, lookahead_samples=8)
+    assert base.samples_per_batch == 1 and big.samples_per_batch == 4
     # frozen
     with pytest.raises(dataclasses.FrozenInstanceError):
-        base.batch_size = 99  # type: ignore[misc]
+        base.samples_per_batch = 99  # type: ignore[misc]
 
 
 # ---- stats --------------------------------------------------------------
@@ -496,6 +588,10 @@ def test_stats_returns_typed_dataclass(tiny_zarr):
         assert isinstance(s, Stats)
         assert s.gpu_bytes_committed > 0
         assert s.plan.name == "plan"
+        assert s.input_transfer.name == "input_transfer"
+        assert s.metadata_backend_read_jobs >= 0
+        assert s.metadata_backend_read_active >= 0
+        assert s.metadata_backend_read_max_active >= 0
 
 
 def test_stats_gpu_bytes_grows_after_first_pop(tiny_zarr):
@@ -519,6 +615,8 @@ def test_stats_io_planner_counters_advance(tiny_zarr):
         assert s.chunks_planned > 0
         assert s.chunks_to_load > 0
         assert s.reads_issued > 0
+        assert s.metadata_backend_read_jobs > 0
+        assert s.metadata_backend_read_max_active > 0
         assert s.chunks_to_load <= s.chunks_planned
 
 
@@ -540,6 +638,25 @@ def test_flush_and_stats_reset_are_idempotent(tiny_zarr):
         # buffers and stays put.
         assert s_after.batches_emitted == 0
         assert s_before.batches_emitted >= 1
+
+
+def test_flush_emits_partial_final_batch(tiny_zarr):
+    """A batch shorter than ``samples_per_batch`` is not emitted until
+    ``flush()`` seals it; ``pop()`` blocks on the partial tail rather
+    than returning, so a caller that pushes a non-multiple of
+    ``samples_per_batch`` must ``flush()`` to drain the last batch. Pins
+    the flush/pop contract for partial batches — the
+    ``samples_per_batch == 1`` tests elsewhere never exercise it."""
+    uri = tiny_zarr
+    cfg = dataclasses.replace(_base_config(), samples_per_batch=2, lookahead_samples=4)
+    samples = [Sample(uri=uri, aabb=[(0, 8), (0, 16)]) for _ in range(3)]
+    with Pipeline(cfg) as d:
+        d.push(samples)
+        with d.pop() as b:  # full batch {0, 1} emits without a flush
+            assert b.info.batch_id == 0
+        d.flush()  # seals the partial {2}; pop would otherwise block on it
+        with d.pop() as b:
+            assert b.info.batch_id == 1
 
 
 # ---- DLPack export -----------------------------------------------------
@@ -865,7 +982,7 @@ def test_use_after_close_raises(tiny_zarr):
 
 def test_per_status_exceptions_share_base():
     # Cheap construction-time INVAL.
-    cfg = dataclasses.replace(_base_config(), n_zarrs_meta_cache=0)
+    cfg = dataclasses.replace(_base_config(), n_array_meta_cache=0)
     with pytest.raises(DamacyError) as excinfo:
         Pipeline(cfg)
     assert isinstance(excinfo.value, InvalidArgument)

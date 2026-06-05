@@ -1,5 +1,25 @@
 # dev log
 
+## 2026-06-01
+
+Cleanup of prefetcher seems like it's converging.
+
+- [x] io_uring for prefetcher
+- [ ] api: dependency injection - stores, prefetcher
+
+## 2026-05-18
+
+Investigating some of the threading primitives that showed up in a perf scan.
+Maybe a futex etc will help.
+
+Found some other good leads in store_fs.
+
+
+## 2026-05-17
+
+Getting things back into consistently using the platform layer. Got a speed
+up out of this which is weird.
+
 ## 2026-05-16
 
 Looking to measure backpressure, so added a hold time to the benchmark.
@@ -19,7 +39,7 @@ Also looking into chunk coalescing. Folks reported some high variance in nfs
 latencies, so this might help. It would also help with resilience in the face
 of small chunk sizes. May think about coalescing at page granularity.
 
-- [ ] bench with a store with some noisy latency
+- [x] bench with a store with some noisy latency
 
 decomp masks the upstream pipeline so it's hard to get a read on performance
 at some point. Added a flag to treat chunks as "fill chunks" post io. These
@@ -43,7 +63,7 @@ can make - I think it's basically just 1 substream.
 Ritvik saw some large variance in latencies over NFS. Should take a look at
 being robust to that.
 
-- [ ] chunk coalescing.
+- [x] chunk coalescing.
 
 Found a better design for the parsing kernel. Adding that now.
 
@@ -71,8 +91,8 @@ I forgot about nvidia's DALI. I need to evaluate positioning wrt that.
 Added a TODO about comparative benchmarking. Looks like there have been some
 hackathon projects wrt zarr on DALI. Should look at that.
 
-- [ ] think about caller supplied memory. Batch memory reuse. The pointer might
-      pin the device so there's no ambiguity.
+- [x] (WONT DO) think about caller supplied memory. Batch memory reuse. The
+      pointer might pin the device so there's no ambiguity.
 - [x] maybe move different ddp examples to docs and off the readme
 
 Ran `try-nvcomp` on this machine, and I get 42 GB/s, so we've got lots of
@@ -82,7 +102,7 @@ headroom on this machine.
 
 cleanup
 
-- [ ] refactor long files
+- [x] refactor long files
 
 ## 2026-05-07
 
