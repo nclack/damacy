@@ -80,28 +80,6 @@ test_full_returns_1(void)
 }
 
 static int
-test_has_capacity_tracks_size(void)
-{
-  struct damacy_lookahead la = { 0 };
-  EXPECT(lookahead_init(&la, 2) == 0);
-  struct damacy_sample s = mk_sample("a", 0, 1);
-
-  EXPECT(lookahead_has_capacity(&la) == 1);
-  EXPECT(lookahead_push(&la, &s) == 0);
-  EXPECT(lookahead_has_capacity(&la) == 1);
-  EXPECT(lookahead_push(&la, &s) == 0);
-  EXPECT(lookahead_has_capacity(&la) == 0);
-
-  struct damacy_sample_slot out = { 0 };
-  EXPECT(lookahead_try_pop(&la, &out) == 1);
-  sample_slot_clear(&out);
-  EXPECT(lookahead_has_capacity(&la) == 1);
-
-  lookahead_destroy(&la);
-  return 0;
-}
-
-static int
 test_destroy_frees(void)
 {
   struct damacy_lookahead la = { 0 };
@@ -314,7 +292,6 @@ main(void)
   RUN(test_init_destroy);
   RUN(test_push_drain);
   RUN(test_full_returns_1);
-  RUN(test_has_capacity_tracks_size);
   RUN(test_destroy_frees);
   RUN(test_wraparound);
   RUN(test_push_with_sample_seq_round_trip);

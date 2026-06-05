@@ -256,8 +256,29 @@ job_free(struct metadata_job* job)
 {
   if (!job)
     return;
+  // Closes fd if a submit_close couldn't get an SQE (normal path sets -1).
+  if (job->fd >= 0)
+    close(job->fd);
   free(job->key);
   free(job);
+}
+
+static struct metadata_job*
+job_new(struct metadata_store_async* s, const char* key, enum request_kind kind)
+{
+  struct metadata_job* job = (struct metadata_job*)calloc(1, sizeof(*job));
+  if (!job)
+    return NULL;
+  // fd 0 is valid stdin; -1 marks "no fd" so an early job_free won't close it.
+  job->fd = -1;
+  job->key = strdup(key);
+  if (!job->key) {
+    job_free(job);
+    return NULL;
+  }
+  job->s = s;
+  job->kind = kind;
+  return job;
 }
 
 static struct io_uring_sqe*
@@ -508,20 +529,6 @@ handle_statx_complete(struct metadata_store_async* s, struct metadata_job* job)
     return;
   }
 
-  if ((uint64_t)job->stx.stx_size > SIZE_MAX) {
-    job->status = DAMACY_BUDGET;
-    if (job->open_done) {
-      if (job->fd >= 0) {
-        if (submit_close(s, job)) {
-          job->close_res = 0;
-          complete_job(s, job);
-        }
-      } else {
-        complete_job(s, job);
-      }
-    }
-    return;
-  }
   job->len = (size_t)job->stx.stx_size;
   if (job->open_done && job->fd < 0) {
     complete_job(s, job);
@@ -962,16 +969,9 @@ post_read(struct metadata_store_async* s,
 {
   if (!s || !key || !cb)
     return 1;
-  struct metadata_job* job = (struct metadata_job*)calloc(1, sizeof(*job));
+  struct metadata_job* job = job_new(s, key, kind);
   if (!job)
     return 1;
-  job->key = strdup(key);
-  if (!job->key) {
-    job_free(job);
-    return 1;
-  }
-  job->s = s;
-  job->kind = kind;
   job->offset = offset;
   job->requested_len = len;
   job->read_cb = cb;
@@ -1011,16 +1011,9 @@ metadata_store_async_stat(struct metadata_store_async* s,
 {
   if (!s || !key || !cb)
     return 1;
-  struct metadata_job* job = (struct metadata_job*)calloc(1, sizeof(*job));
+  struct metadata_job* job = job_new(s, key, REQ_STAT);
   if (!job)
     return 1;
-  job->key = strdup(key);
-  if (!job->key) {
-    job_free(job);
-    return 1;
-  }
-  job->s = s;
-  job->kind = REQ_STAT;
   job->stat_cb = cb;
   job->user = user;
   if (enqueue_job(s, job)) {

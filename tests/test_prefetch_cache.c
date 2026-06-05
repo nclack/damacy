@@ -588,6 +588,38 @@ test_handle_survives_sibling_eviction(void)
 }
 
 static int
+test_hit_after_watermark_release_reacquires_pin(void)
+{
+  struct prefetch_cache_config cfg = make_config();
+  cfg.capacity = 2;
+  struct prefetch_cache* c = prefetch_cache_create(&cfg);
+  EXPECT(c);
+
+  struct prefetch_gate gate;
+  prefetch_gate_init(&gate);
+
+  (void)prefetch_cache_request(c, khash("a"), "a", 0, &gate);
+  prefetch_cache_advance_watermark(c, 1);
+
+  struct prefetch_handle ha =
+    prefetch_cache_request(c, khash("a"), "a", 1, &gate);
+  EXPECT(prefetch_handle_valid(ha));
+  EXPECT(prefetch_cache_query(c, ha, NULL, NULL) == PREFETCH_STATE_READY);
+
+  struct prefetch_handle hb =
+    prefetch_cache_request(c, khash("b"), "b", 1, &gate);
+  EXPECT(prefetch_handle_valid(hb));
+
+  struct prefetch_handle hc =
+    prefetch_cache_request(c, khash("c"), "c", 1, &gate);
+  EXPECT(!prefetch_handle_valid(hc));
+  EXPECT(prefetch_cache_query(c, ha, NULL, NULL) == PREFETCH_STATE_READY);
+
+  prefetch_cache_destroy(c);
+  return 0;
+}
+
+static int
 test_stats_track_size_and_pending(void)
 {
   struct delayed_executor exec = { .base = { .post = delayed_post } };
@@ -703,6 +735,7 @@ main(void)
   RUN(test_eviction_after_watermark_advances);
   RUN(test_max_batch_id_widens_under_hit);
   RUN(test_handle_survives_sibling_eviction);
+  RUN(test_hit_after_watermark_release_reacquires_pin);
   RUN(test_stats_track_size_and_pending);
   RUN(test_async_fetcher_completion_marks_ready);
   RUN(test_async_fetcher_completion_marks_error);

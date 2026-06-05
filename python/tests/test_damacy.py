@@ -640,6 +640,25 @@ def test_flush_and_stats_reset_are_idempotent(tiny_zarr):
         assert s_before.batches_emitted >= 1
 
 
+def test_flush_emits_partial_final_batch(tiny_zarr):
+    """A batch shorter than ``samples_per_batch`` is not emitted until
+    ``flush()`` seals it; ``pop()`` blocks on the partial tail rather
+    than returning, so a caller that pushes a non-multiple of
+    ``samples_per_batch`` must ``flush()`` to drain the last batch. Pins
+    the flush/pop contract for partial batches — the
+    ``samples_per_batch == 1`` tests elsewhere never exercise it."""
+    uri = tiny_zarr
+    cfg = dataclasses.replace(_base_config(), samples_per_batch=2, lookahead_samples=4)
+    samples = [Sample(uri=uri, aabb=[(0, 8), (0, 16)]) for _ in range(3)]
+    with Pipeline(cfg) as d:
+        d.push(samples)
+        with d.pop() as b:  # full batch {0, 1} emits without a flush
+            assert b.info.batch_id == 0
+        d.flush()  # seals the partial {2}; pop would otherwise block on it
+        with d.pop() as b:
+            assert b.info.batch_id == 1
+
+
 # ---- DLPack export -----------------------------------------------------
 
 

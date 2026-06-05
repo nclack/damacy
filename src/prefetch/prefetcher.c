@@ -256,8 +256,14 @@ advance_from_meta(struct prefetcher* p, struct prefetcher_slot* s)
   CHECK(Bad, sample_shard_iterator_init(&it, meta, &s->aabb) == 0);
 
   uint64_t n = 1;
-  for (uint8_t d = 0; d < it.rank; ++d)
-    n *= (it.shard_end[d] - it.shard_beg[d]);
+  err = DAMACY_BUDGET; // a shard-count overflow below fails the sample as
+                       // over-budget
+  for (uint8_t d = 0; d < it.rank; ++d) {
+    uint64_t span = it.shard_end[d] - it.shard_beg[d];
+    CHECK_MUL_OVERFLOW(Bad, n, span, UINT64_MAX);
+    n *= span;
+  }
+  err = 0;
 
   if (n == 0) {
     s->n_shards = 0;

@@ -331,26 +331,26 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   array_meta_async_fetcher_init(&self->array_meta_async_fetcher,
                                 self->store_meta_async);
   {
-    struct prefetch_cache_config amc_cfg = {
+    struct prefetch_cache_config array_meta_cache_cfg = {
       .capacity = cfg->tuning.n_array_meta_cache,
       .max_probe = 16,
       .ops = &array_meta_ops,
       .async_fetcher = &self->array_meta_async_fetcher.base,
     };
-    self->array_meta_cache = prefetch_cache_create(&amc_cfg);
+    self->array_meta_cache = prefetch_cache_create(&array_meta_cache_cfg);
     CHECK(Fail, self->array_meta_cache);
   }
   shard_index_async_fetcher_init(&self->shard_index_async_fetcher,
                                  self->store_meta_async,
                                  self->array_meta_cache);
   {
-    struct prefetch_cache_config sic_cfg = {
+    struct prefetch_cache_config shard_index_cache_cfg = {
       .capacity = cfg->tuning.n_shard_index_cache,
       .max_probe = 16,
       .ops = &shard_index_ops,
       .async_fetcher = &self->shard_index_async_fetcher.base,
     };
-    self->shard_index_cache = prefetch_cache_create(&sic_cfg);
+    self->shard_index_cache = prefetch_cache_create(&shard_index_cache_cfg);
     CHECK(Fail, self->shard_index_cache);
   }
   chunk_layout_async_fetcher_init(&self->chunk_layout_async_fetcher,
@@ -359,13 +359,13 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
                                   self->shard_index_cache,
                                   geom.max_substreams_per_chunk);
   {
-    struct prefetch_cache_config clc_cfg = {
+    struct prefetch_cache_config chunk_layout_cache_cfg = {
       .capacity = cfg->tuning.n_chunk_layout_cache,
       .max_probe = 16,
       .ops = &chunk_layout_ops,
       .async_fetcher = &self->chunk_layout_async_fetcher.base,
     };
-    self->chunk_layout_cache = prefetch_cache_create(&clc_cfg);
+    self->chunk_layout_cache = prefetch_cache_create(&chunk_layout_cache_cfg);
     CHECK(Fail, self->chunk_layout_cache);
   }
 
@@ -422,7 +422,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
   CHECK(Fail, lookahead_init(&self->lookahead, cfg->lookahead_samples) == 0);
 
   {
-    struct prefetcher_config pf_cfg = {
+    struct prefetcher_config prefetcher_cfg = {
       .lookahead = &self->lookahead,
       .array_meta_cache = self->array_meta_cache,
       .shard_index_cache = self->shard_index_cache,
@@ -430,7 +430,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
       .capacity = cfg->lookahead_samples,
       .owner_capacity = cfg->lookahead_samples + 4u,
     };
-    self->prefetcher = prefetcher_create(&pf_cfg);
+    self->prefetcher = prefetcher_create(&prefetcher_cfg);
     CHECK(Fail, self->prefetcher);
   }
 

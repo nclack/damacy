@@ -323,7 +323,10 @@ damacy_stats_reset(struct damacy* self)
 {
   if (!self)
     return;
+  // Lock so this reset doesn't race the worker's stat writes (see stats_get).
+  scheduler_lock(self->sched);
   stats_init(&self->stats);
+  scheduler_unlock(self->sched);
   metadata_store_async_latency_stats_reset(self->store_meta_async);
   metadata_store_async_backend_stats_reset(self->store_meta_async);
 }

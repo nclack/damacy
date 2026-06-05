@@ -401,10 +401,15 @@ prefetch_cache_request_result(struct prefetch_cache* self,
   struct lru_entry* hit = lru_get(self->idx, key_hash, key);
   if (hit) {
     struct prefetch_slot* s = (struct prefetch_slot*)lru_entry_value(hit);
+    int needs_pin = !s->lru_ent && owner_id >= self->watermark;
     if (owner_id > s->max_owner_id)
       s->max_owner_id = owner_id;
     if (owner_id < s->min_owner_id)
       s->min_owner_id = owner_id;
+    if (needs_pin) {
+      lru_entry_acquire_locked(hit);
+      s->lru_ent = hit;
+    }
 
     if (s->state == PREFETCH_STATE_PENDING) {
       gate_inc_pending(gate);

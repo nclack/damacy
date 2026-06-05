@@ -25,6 +25,7 @@ docs = [
 cmake.args = ["-DDAMACY_PYTHON=ON"]
 cmake.build-type = "RelWithDebInfo"
 build-dir = "build/{wheel_tag}"
+editable.rebuild = true
 wheel.packages = ["python/damacy"]
 wheel.py-api = ""
 
