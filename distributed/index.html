@@ -714,36 +714,37 @@ but the bound device differs.</p>
 </span><span id="__span-1-25"><a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a>    <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">set_device</span><span class="p">(</span><span class="n">local_rank</span><span class="p">)</span>
 </span><span id="__span-1-26"><a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a>
 </span><span id="__span-1-27"><a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a>    <span class="n">cfg</span> <span class="o">=</span> <span class="n">damacy</span><span class="o">.</span><span class="n">Config</span><span class="p">(</span>
-</span><span id="__span-1-28"><a id="__codelineno-1-28" name="__codelineno-1-28" href="#__codelineno-1-28"></a>        <span class="n">batch_size</span><span class="o">=</span><span class="mi">8</span><span class="p">,</span>
+</span><span id="__span-1-28"><a id="__codelineno-1-28" name="__codelineno-1-28" href="#__codelineno-1-28"></a>        <span class="n">samples_per_batch</span><span class="o">=</span><span class="mi">8</span><span class="p">,</span>
 </span><span id="__span-1-29"><a id="__codelineno-1-29" name="__codelineno-1-29" href="#__codelineno-1-29"></a>        <span class="n">sample_shape</span><span class="o">=</span><span class="p">(</span><span class="mi">64</span><span class="p">,</span> <span class="mi">256</span><span class="p">,</span> <span class="mi">256</span><span class="p">),</span>
 </span><span id="__span-1-30"><a id="__codelineno-1-30" name="__codelineno-1-30" href="#__codelineno-1-30"></a>        <span class="n">max_gpu_memory_bytes</span><span class="o">=</span><span class="mi">1</span> <span class="o">&lt;&lt;</span> <span class="mi">30</span><span class="p">,</span>   <span class="c1"># per-rank GPU budget</span>
 </span><span id="__span-1-31"><a id="__codelineno-1-31" name="__codelineno-1-31" href="#__codelineno-1-31"></a>        <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;bf16&quot;</span><span class="p">,</span>
-</span><span id="__span-1-32"><a id="__codelineno-1-32" name="__codelineno-1-32" href="#__codelineno-1-32"></a>        <span class="n">n_io_threads</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>                 <span class="c1"># per-rank</span>
-</span><span id="__span-1-33"><a id="__codelineno-1-33" name="__codelineno-1-33" href="#__codelineno-1-33"></a>        <span class="n">device</span><span class="o">=</span><span class="n">local_rank</span><span class="p">,</span>
-</span><span id="__span-1-34"><a id="__codelineno-1-34" name="__codelineno-1-34" href="#__codelineno-1-34"></a>    <span class="p">)</span>
-</span><span id="__span-1-35"><a id="__codelineno-1-35" name="__codelineno-1-35" href="#__codelineno-1-35"></a>
-</span><span id="__span-1-36"><a id="__codelineno-1-36" name="__codelineno-1-36" href="#__codelineno-1-36"></a>    <span class="n">model</span> <span class="o">=</span> <span class="o">...</span>        <span class="c1"># your DDP-wrapped module</span>
-</span><span id="__span-1-37"><a id="__codelineno-1-37" name="__codelineno-1-37" href="#__codelineno-1-37"></a>    <span class="n">optimizer</span> <span class="o">=</span> <span class="o">...</span>    <span class="c1"># your optimizer</span>
-</span><span id="__span-1-38"><a id="__codelineno-1-38" name="__codelineno-1-38" href="#__codelineno-1-38"></a>    <span class="n">n_steps</span> <span class="o">=</span> <span class="mi">10_000</span>
-</span><span id="__span-1-39"><a id="__codelineno-1-39" name="__codelineno-1-39" href="#__codelineno-1-39"></a>
-</span><span id="__span-1-40"><a id="__codelineno-1-40" name="__codelineno-1-40" href="#__codelineno-1-40"></a>    <span class="k">with</span> <span class="n">damacy</span><span class="o">.</span><span class="n">Pipeline</span><span class="p">(</span><span class="n">cfg</span><span class="p">)</span> <span class="k">as</span> <span class="n">p</span><span class="p">:</span>
-</span><span id="__span-1-41"><a id="__codelineno-1-41" name="__codelineno-1-41" href="#__codelineno-1-41"></a>        <span class="c1"># Hand the generator off once; the pipeline pulls lazily as</span>
-</span><span id="__span-1-42"><a id="__codelineno-1-42" name="__codelineno-1-42" href="#__codelineno-1-42"></a>        <span class="c1"># pops free space, so memory stays bounded even though</span>
-</span><span id="__span-1-43"><a id="__codelineno-1-43" name="__codelineno-1-43" href="#__codelineno-1-43"></a>        <span class="c1"># crops_for_rank is unbounded.</span>
-</span><span id="__span-1-44"><a id="__codelineno-1-44" name="__codelineno-1-44" href="#__codelineno-1-44"></a>        <span class="n">p</span><span class="o">.</span><span class="n">push</span><span class="p">(</span><span class="n">crops_for_rank</span><span class="p">(</span><span class="n">local_rank</span><span class="p">,</span> <span class="n">world_size</span><span class="p">))</span>
-</span><span id="__span-1-45"><a id="__codelineno-1-45" name="__codelineno-1-45" href="#__codelineno-1-45"></a>
-</span><span id="__span-1-46"><a id="__codelineno-1-46" name="__codelineno-1-46" href="#__codelineno-1-46"></a>        <span class="k">for</span> <span class="n">step</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_steps</span><span class="p">):</span>
-</span><span id="__span-1-47"><a id="__codelineno-1-47" name="__codelineno-1-47" href="#__codelineno-1-47"></a>            <span class="k">with</span> <span class="n">p</span><span class="o">.</span><span class="n">pop</span><span class="p">()</span> <span class="k">as</span> <span class="n">batch</span><span class="p">:</span>
-</span><span id="__span-1-48"><a id="__codelineno-1-48" name="__codelineno-1-48" href="#__codelineno-1-48"></a>                <span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">from_dlpack</span><span class="p">(</span><span class="n">batch</span><span class="p">)</span>  <span class="c1"># zero-copy, stream-fenced</span>
-</span><span id="__span-1-49"><a id="__codelineno-1-49" name="__codelineno-1-49" href="#__codelineno-1-49"></a>                <span class="c1"># forward / backward / optimizer step:</span>
-</span><span id="__span-1-50"><a id="__codelineno-1-50" name="__codelineno-1-50" href="#__codelineno-1-50"></a>                <span class="c1"># loss = model(x).mean(); loss.backward(); optimizer.step()</span>
-</span><span id="__span-1-51"><a id="__codelineno-1-51" name="__codelineno-1-51" href="#__codelineno-1-51"></a>                <span class="o">...</span>
-</span><span id="__span-1-52"><a id="__codelineno-1-52" name="__codelineno-1-52" href="#__codelineno-1-52"></a>
-</span><span id="__span-1-53"><a id="__codelineno-1-53" name="__codelineno-1-53" href="#__codelineno-1-53"></a>    <span class="n">dist</span><span class="o">.</span><span class="n">destroy_process_group</span><span class="p">()</span>
-</span><span id="__span-1-54"><a id="__codelineno-1-54" name="__codelineno-1-54" href="#__codelineno-1-54"></a>
+</span><span id="__span-1-32"><a id="__codelineno-1-32" name="__codelineno-1-32" href="#__codelineno-1-32"></a>        <span class="n">n_io_threads</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>                 <span class="c1"># bulk chunk reads, per-rank; None uses host max</span>
+</span><span id="__span-1-33"><a id="__codelineno-1-33" name="__codelineno-1-33" href="#__codelineno-1-33"></a>        <span class="n">metadata_io_concurrency</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span>     <span class="c1"># async metadata request concurrency</span>
+</span><span id="__span-1-34"><a id="__codelineno-1-34" name="__codelineno-1-34" href="#__codelineno-1-34"></a>        <span class="n">device</span><span class="o">=</span><span class="n">local_rank</span><span class="p">,</span>
+</span><span id="__span-1-35"><a id="__codelineno-1-35" name="__codelineno-1-35" href="#__codelineno-1-35"></a>    <span class="p">)</span>
+</span><span id="__span-1-36"><a id="__codelineno-1-36" name="__codelineno-1-36" href="#__codelineno-1-36"></a>
+</span><span id="__span-1-37"><a id="__codelineno-1-37" name="__codelineno-1-37" href="#__codelineno-1-37"></a>    <span class="n">model</span> <span class="o">=</span> <span class="o">...</span>        <span class="c1"># your DDP-wrapped module</span>
+</span><span id="__span-1-38"><a id="__codelineno-1-38" name="__codelineno-1-38" href="#__codelineno-1-38"></a>    <span class="n">optimizer</span> <span class="o">=</span> <span class="o">...</span>    <span class="c1"># your optimizer</span>
+</span><span id="__span-1-39"><a id="__codelineno-1-39" name="__codelineno-1-39" href="#__codelineno-1-39"></a>    <span class="n">n_steps</span> <span class="o">=</span> <span class="mi">10_000</span>
+</span><span id="__span-1-40"><a id="__codelineno-1-40" name="__codelineno-1-40" href="#__codelineno-1-40"></a>
+</span><span id="__span-1-41"><a id="__codelineno-1-41" name="__codelineno-1-41" href="#__codelineno-1-41"></a>    <span class="k">with</span> <span class="n">damacy</span><span class="o">.</span><span class="n">Pipeline</span><span class="p">(</span><span class="n">cfg</span><span class="p">)</span> <span class="k">as</span> <span class="n">p</span><span class="p">:</span>
+</span><span id="__span-1-42"><a id="__codelineno-1-42" name="__codelineno-1-42" href="#__codelineno-1-42"></a>        <span class="c1"># Hand the generator off once; the pipeline pulls lazily as</span>
+</span><span id="__span-1-43"><a id="__codelineno-1-43" name="__codelineno-1-43" href="#__codelineno-1-43"></a>        <span class="c1"># pops free space, so memory stays bounded even though</span>
+</span><span id="__span-1-44"><a id="__codelineno-1-44" name="__codelineno-1-44" href="#__codelineno-1-44"></a>        <span class="c1"># crops_for_rank is unbounded.</span>
+</span><span id="__span-1-45"><a id="__codelineno-1-45" name="__codelineno-1-45" href="#__codelineno-1-45"></a>        <span class="n">p</span><span class="o">.</span><span class="n">push</span><span class="p">(</span><span class="n">crops_for_rank</span><span class="p">(</span><span class="n">local_rank</span><span class="p">,</span> <span class="n">world_size</span><span class="p">))</span>
+</span><span id="__span-1-46"><a id="__codelineno-1-46" name="__codelineno-1-46" href="#__codelineno-1-46"></a>
+</span><span id="__span-1-47"><a id="__codelineno-1-47" name="__codelineno-1-47" href="#__codelineno-1-47"></a>        <span class="k">for</span> <span class="n">step</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_steps</span><span class="p">):</span>
+</span><span id="__span-1-48"><a id="__codelineno-1-48" name="__codelineno-1-48" href="#__codelineno-1-48"></a>            <span class="k">with</span> <span class="n">p</span><span class="o">.</span><span class="n">pop</span><span class="p">()</span> <span class="k">as</span> <span class="n">batch</span><span class="p">:</span>
+</span><span id="__span-1-49"><a id="__codelineno-1-49" name="__codelineno-1-49" href="#__codelineno-1-49"></a>                <span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">from_dlpack</span><span class="p">(</span><span class="n">batch</span><span class="p">)</span>  <span class="c1"># zero-copy, stream-fenced</span>
+</span><span id="__span-1-50"><a id="__codelineno-1-50" name="__codelineno-1-50" href="#__codelineno-1-50"></a>                <span class="c1"># forward / backward / optimizer step:</span>
+</span><span id="__span-1-51"><a id="__codelineno-1-51" name="__codelineno-1-51" href="#__codelineno-1-51"></a>                <span class="c1"># loss = model(x).mean(); loss.backward(); optimizer.step()</span>
+</span><span id="__span-1-52"><a id="__codelineno-1-52" name="__codelineno-1-52" href="#__codelineno-1-52"></a>                <span class="o">...</span>
+</span><span id="__span-1-53"><a id="__codelineno-1-53" name="__codelineno-1-53" href="#__codelineno-1-53"></a>
+</span><span id="__span-1-54"><a id="__codelineno-1-54" name="__codelineno-1-54" href="#__codelineno-1-54"></a>    <span class="n">dist</span><span class="o">.</span><span class="n">destroy_process_group</span><span class="p">()</span>
 </span><span id="__span-1-55"><a id="__codelineno-1-55" name="__codelineno-1-55" href="#__codelineno-1-55"></a>
-</span><span id="__span-1-56"><a id="__codelineno-1-56" name="__codelineno-1-56" href="#__codelineno-1-56"></a><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
-</span><span id="__span-1-57"><a id="__codelineno-1-57" name="__codelineno-1-57" href="#__codelineno-1-57"></a>    <span class="n">main</span><span class="p">()</span>
+</span><span id="__span-1-56"><a id="__codelineno-1-56" name="__codelineno-1-56" href="#__codelineno-1-56"></a>
+</span><span id="__span-1-57"><a id="__codelineno-1-57" name="__codelineno-1-57" href="#__codelineno-1-57"></a><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+</span><span id="__span-1-58"><a id="__codelineno-1-58" name="__codelineno-1-58" href="#__codelineno-1-58"></a>    <span class="n">main</span><span class="p">()</span>
 </span></code></pre></div>
 <h2 id="sharding-samples-across-ranks">Sharding samples across ranks<a class="headerlink" href="#sharding-samples-across-ranks" title="Permanent link">&para;</a></h2>
 <p><code>crops_for_rank</code> decides which samples each rank sees. Damacy
@@ -782,18 +783,28 @@ deterministic and disjoint.</p>
 </tr>
 <tr>
 <td><code>n_io_threads</code></td>
-<td>I/O worker threads</td>
+<td>bulk chunk-read worker threads</td>
 </tr>
 <tr>
-<td><code>n_zarrs_meta_cache</code>, <code>n_shards_meta_cache</code></td>
+<td><code>metadata_io_concurrency</code></td>
+<td>async metadata request concurrency</td>
+</tr>
+<tr>
+<td><code>n_array_meta_cache</code>, <code>n_shard_index_cache</code>, <code>n_chunk_layout_cache</code></td>
 <td>LRU caps for parsed metadata</td>
 </tr>
 </tbody>
 </table>
-<p>Tune <code>n_io_threads</code> to your storage tier (NVMe pool, parallel
-filesystem, object store). When stacking multiple ranks on one GPU
-(uncommon, but valid), divide <code>max_gpu_memory_bytes</code> so the per-GPU
-total fits within the device.</p>
+<p>Tune <code>n_io_threads</code> to your storage tier's bulk read behavior. In Python,
+<code>n_io_threads=None</code> uses <code>damacy.max_concurrency()</code>, the same host cap used by
+the C config validator. Keep <code>metadata_io_concurrency</code> high enough to cover
+small, latency-bound metadata dependency work. The Linux metadata path uses it
+as an io_uring request-depth budget, not as a host thread count. The default is
+32. Larger values can help high-latency metadata filesystems, but each
+in-flight metadata read can hold an open file descriptor, so very deep settings
+should be checked against <code>ulimit -n</code> and multiplied by ranks per node. When
+stacking multiple ranks on one GPU (uncommon, but valid), divide
+<code>max_gpu_memory_bytes</code> so the per-GPU total fits within the device.</p>
 <h2 id="numa-placement">NUMA placement<a class="headerlink" href="#numa-placement" title="Permanent link">&para;</a></h2>
 <p>On multi-socket hosts, <code>Config.numa_strategy</code> controls where damacy
 pins its pinned-host slabs and worker threads:</p>

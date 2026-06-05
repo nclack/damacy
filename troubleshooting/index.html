@@ -441,6 +441,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#invalidargument-at-pipelinecfg-from-metadata-io-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        InvalidArgument at Pipeline(cfg) from metadata I/O setup
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#budgetexceeded-at-pipelinecfg" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -456,6 +467,17 @@
     <span class="md-ellipsis">
       
         BudgetExceeded mid-stream
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#notfound-or-dtypemismatch-from-pop-not-push" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        NotFound or DtypeMismatch from pop() (not push())
       
     </span>
   </a>
@@ -557,6 +579,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#invalidargument-at-pipelinecfg-from-metadata-io-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        InvalidArgument at Pipeline(cfg) from metadata I/O setup
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#budgetexceeded-at-pipelinecfg" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -572,6 +605,17 @@
     <span class="md-ellipsis">
       
         BudgetExceeded mid-stream
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#notfound-or-dtypemismatch-from-pop-not-push" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        NotFound or DtypeMismatch from pop() (not push())
       
     </span>
   </a>
@@ -633,6 +677,17 @@ the calling thread yet. Two fixes:</p>
 <li>Or prime a context implicitly before constructing the pipeline:
   <code>torch.empty(1, device="cuda")</code> is enough.</li>
 </ul>
+<h2 id="invalidargument-at-pipelinecfg-from-metadata-io-setup"><code>InvalidArgument</code> at <code>Pipeline(cfg)</code> from metadata I/O setup<a class="headerlink" href="#invalidargument-at-pipelinecfg-from-metadata-io-setup" title="Permanent link">&para;</a></h2>
+<p>The Linux metadata path uses io_uring for zarr metadata, shard-index, and
+chunk-layout reads. At construction damacy requires kernel support for
+<code>IORING_OP_STATX</code>, <code>IORING_OP_OPENAT2</code>, <code>IORING_OP_READ</code>, and
+<code>IORING_OP_CLOSE</code>. If ring creation or the operation probe fails,
+<code>Pipeline(cfg)</code> raises <code>InvalidArgument</code> rather than falling back to a legacy
+thread pool. Check the native log for the exact io_uring failure.</p>
+<p>On supported kernels, an unusually high <code>metadata_io_concurrency</code> can also
+stress process file-descriptor limits because each in-flight metadata read can
+hold an open fd. The default is 32; for much deeper settings, check
+<code>ulimit -n</code> and remember to multiply by ranks per node.</p>
 <h2 id="budgetexceeded-at-pipelinecfg"><code>BudgetExceeded</code> at <code>Pipeline(cfg)</code><a class="headerlink" href="#budgetexceeded-at-pipelinecfg" title="Permanent link">&para;</a></h2>
 <p><code>max_gpu_memory_bytes</code> is too small for the requested batch
 geometry. The log message includes a byte-level breakdown of what
@@ -645,6 +700,22 @@ the usual answer is to raise the cap.</p>
 that cap to fit the dataset, and raise <code>max_gpu_memory_bytes</code>
 along with it if needed. See
 <a href="../budget/#when-the-budget-refuses">GPU memory budget</a>.</p>
+<h2 id="notfound-or-dtypemismatch-from-pop-not-push"><code>NotFound</code> or <code>DtypeMismatch</code> from <code>pop()</code> (not <code>push()</code>)<a class="headerlink" href="#notfound-or-dtypemismatch-from-pop-not-push" title="Permanent link">&para;</a></h2>
+<p><code>push()</code> only validates what's locally checkable — sample shape and
+rank against <code>Config.sample_shape</code>. Errors that depend on store
+contents — missing URIs, unsupported source dtypes, per-array rank
+mismatch — surface from <code>pop()</code>, since damacy fetches the zarr
+metadata asynchronously after <code>push()</code> returns.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="k">with</span> <span class="n">Pipeline</span><span class="p">(</span><span class="n">cfg</span><span class="p">)</span> <span class="k">as</span> <span class="n">d</span><span class="p">:</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">d</span><span class="o">.</span><span class="n">push</span><span class="p">([</span><span class="n">Sample</span><span class="p">(</span><span class="n">uri</span><span class="o">=</span><span class="s2">&quot;missing&quot;</span><span class="p">,</span> <span class="n">aabb</span><span class="o">=</span><span class="p">[(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">8</span><span class="p">),</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">16</span><span class="p">)])])</span>  <span class="c1"># returns fine</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="k">try</span><span class="p">:</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>        <span class="n">d</span><span class="o">.</span><span class="n">pop</span><span class="p">()</span>                                              <span class="c1"># raises NotFound</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="k">except</span> <span class="n">NotFound</span><span class="p">:</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>        <span class="o">...</span>
+</span></code></pre></div>
+<p>Once any pop-side error fires, the pipeline is terminal — subsequent
+<code>pop()</code> calls re-raise the same status. Build a fresh <code>Pipeline</code> to
+recover.</p>
 <h2 id="poolstarved-from-pop"><code>PoolStarved</code> from <code>pop()</code><a class="headerlink" href="#poolstarved-from-pop" title="Permanent link">&para;</a></h2>
 <p>The pool was empty for longer than <code>Config.pop_timeout_s</code>
 (default 30 s). The usual cause is holding references to tensors

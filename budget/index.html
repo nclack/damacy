@@ -739,7 +739,7 @@ and the error paths.</p>
 <h2 id="sizing-the-budget">Sizing the budget<a class="headerlink" href="#sizing-the-budget" title="Permanent link">&para;</a></h2>
 <p>Compute the <em>floor</em> — the smallest budget that admits the
 configuration — then round up generously:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pool_reservation       = 2 × batch_size × prod(sample_shape) × dtype_bytes
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pool_reservation       = 2 × samples_per_batch × prod(sample_shape) × dtype_bytes
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>one_chunk_per_wave     ≈ max_chunk_uncompressed_bytes × 2   # compressed + decoded buffers, one chunk
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>both_waves_one_chunk   ≈ 2 × one_chunk_per_wave             # two GPU waves resident at once
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>budget_floor           ≈ pool_reservation + both_waves_one_chunk + scratch_slack
@@ -756,7 +756,7 @@ decompose into many sub-streams.</p>
 wave at the configured chunk cap. Any budget headroom above the
 floor lets damacy size each wave to hold many chunks at once —
 fewer wave turnovers per batch, better overlap.</p>
-<p>A worked example for <code>batch_size=8</code>, <code>bf16</code> (2 bytes/element),
+<p>A worked example for <code>samples_per_batch=8</code>, <code>bf16</code> (2 bytes/element),
 <code>sample_shape=(64, 256, 256)</code>, <code>max_chunk_uncompressed_bytes=4 MiB</code>:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>pool_reservation       = 2 × 8 × (64 × 256 × 256) × 2  ≈ 128 MiB
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>one_chunk_per_wave     ≈ 4 MiB × 2                     =   8 MiB
@@ -812,7 +812,7 @@ budget.</p>
 <tr>
 <td>Output batch pool</td>
 <td>The batches you <code>pop</code>, double-buffered</td>
-<td><code>batch_size</code>, <code>sample_shape</code>, dtype</td>
+<td><code>samples_per_batch</code>, <code>sample_shape</code>, dtype</td>
 </tr>
 <tr>
 <td>Wave-resident buffers</td>
@@ -874,7 +874,7 @@ with a logged breakdown of what it tried to reserve, before any
 streaming has started. The fix is one of:</p>
 <ol>
 <li>Raise <code>max_gpu_memory_bytes</code>. This is the usual answer.</li>
-<li>Reduce <code>batch_size</code> or <code>sample_shape</code>. The pool reservation
+<li>Reduce <code>samples_per_batch</code> or <code>sample_shape</code>. The pool reservation
    scales linearly with both, and it is the part of the budget
    you control most directly.</li>
 <li>Reduce <code>max_chunk_uncompressed_bytes</code> if your dataset happens
