@@ -43,6 +43,9 @@ lookahead_push_with_sample_seq(struct damacy_lookahead* la,
                                const struct damacy_sample* sample,
                                uint64_t sample_seq);
 
+int
+lookahead_has_capacity(struct damacy_lookahead* la);
+
 void
 lookahead_drain(struct damacy_lookahead* la,
                 struct damacy_sample_slot* out,

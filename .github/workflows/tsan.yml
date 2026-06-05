@@ -1,7 +1,7 @@
 # ThreadSanitizer build + concurrent stress test. Runs the `tsan`-labeled
-# subset of ctest (currently just test_zarr_cache_threading) against a
-# build configured with -DDAMACY_TSAN=ON, so unsynchronized access to
-# shared state surfaces as a TSan report rather than a flaky hang.
+# subset of ctest against a build configured with -DDAMACY_TSAN=ON, so
+# unsynchronized access to shared state surfaces as a TSan report rather than
+# a flaky hang.
 #
 # The test itself is pure C, but the test binary links transitively
 # against libcuda via the shared test fixture / zarr / store libs, so

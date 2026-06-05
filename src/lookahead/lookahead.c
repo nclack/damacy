@@ -95,6 +95,18 @@ lookahead_push(struct damacy_lookahead* la, const struct damacy_sample* sample)
   return lookahead_push_with_sample_seq(la, sample, 0);
 }
 
+int
+lookahead_has_capacity(struct damacy_lookahead* la)
+{
+  CHECK(Bad, la);
+  platform_mutex_lock(la->lock);
+  int has_capacity = la->size < la->cap;
+  platform_mutex_unlock(la->lock);
+  return has_capacity;
+Bad:
+  return 0;
+}
+
 static void
 pop_one_locked(struct damacy_lookahead* la, struct damacy_sample_slot* out)
 {
