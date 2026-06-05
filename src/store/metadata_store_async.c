@@ -523,6 +523,10 @@ handle_statx_complete(struct metadata_store_async* s, struct metadata_job* job)
     return;
   }
   job->len = (size_t)job->stx.stx_size;
+  if (job->open_done && job->fd < 0) {
+    complete_job(s, job);
+    return;
+  }
   if (job->open_done && job->fd >= 0) {
     if (job->len) {
       job->data = malloc(job->len);

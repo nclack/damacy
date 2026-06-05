@@ -726,6 +726,19 @@ Bad:
   return 0;
 }
 
+uint64_t
+prefetcher_unconsumed_count(struct prefetcher* self, uint64_t pushed_samples)
+{
+  CHECK(Bad, self);
+  platform_mutex_lock(self->lock);
+  uint64_t next_consume_seq = self->next_consume_seq;
+  platform_mutex_unlock(self->lock);
+  return pushed_samples > next_consume_seq ? pushed_samples - next_consume_seq
+                                           : 0;
+Bad:
+  return 0;
+}
+
 uint32_t
 prefetcher_in_flight(struct prefetcher* self)
 {

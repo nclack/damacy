@@ -6,6 +6,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
 
 struct read_wait
 {
@@ -89,6 +92,30 @@ read_wait_block(struct read_wait* w)
   while (!w->done)
     pthread_cond_wait(&w->cond, &w->mutex);
   pthread_mutex_unlock(&w->mutex);
+}
+
+static int
+read_wait_block_ms(struct read_wait* w, int timeout_ms)
+{
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);
+  ts.tv_sec += timeout_ms / 1000;
+  ts.tv_nsec += (long)(timeout_ms % 1000) * 1000000L;
+  if (ts.tv_nsec >= 1000000000L) {
+    ts.tv_sec++;
+    ts.tv_nsec -= 1000000000L;
+  }
+
+  pthread_mutex_lock(&w->mutex);
+  while (!w->done) {
+    int rc = pthread_cond_timedwait(&w->cond, &w->mutex, &ts);
+    if (rc) {
+      pthread_mutex_unlock(&w->mutex);
+      return 0;
+    }
+  }
+  pthread_mutex_unlock(&w->mutex);
+  return 1;
 }
 
 static void
@@ -184,9 +211,41 @@ test_read_stat_and_stats(void)
   return 0;
 }
 
+static int
+test_read_file_open_error_completes(void)
+{
+  char root[128];
+  EXPECT(make_root(root, sizeof root) == 0);
+
+  char path[256];
+  snprintf(path, sizeof path, "%s/unreadable", root);
+  EXPECT(fixture_write_file(path, "secret") == 0);
+  EXPECT(chmod(path, 0000) == 0);
+
+  struct metadata_store_async* s =
+    metadata_store_async_create(1, NULL, &(struct damacy_latency_model){ 0 });
+  EXPECT(s);
+
+  struct read_wait w;
+  read_wait_init(&w);
+  EXPECT(metadata_store_async_read_file(s, path, read_cb, &w) == 0);
+  EXPECT(read_wait_block_ms(&w, 2000) == 1);
+  if (geteuid() == 0)
+    EXPECT(w.status == DAMACY_OK || w.status == DAMACY_IO);
+  else
+    EXPECT(w.status == DAMACY_IO);
+  read_wait_done(&w);
+
+  metadata_store_async_destroy(s);
+  chmod(path, 0600);
+  fixture_rm_tree(root);
+  return 0;
+}
+
 int
 main(void)
 {
   RUN(test_read_stat_and_stats);
+  RUN(test_read_file_open_error_completes);
   return 0;
 }

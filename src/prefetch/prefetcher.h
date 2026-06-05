@@ -85,6 +85,13 @@ extern "C"
 
   uint32_t prefetcher_ready_prefix_count(struct prefetcher* p);
 
+  // Samples pushed by the caller but not yet consumed from the prefetcher
+  // ready/error prefix by the planner. This is the push-side backpressure
+  // budget, independent of whether those samples are still in lookahead, in
+  // the worker's pop/admit window, or occupying prefetcher slots.
+  uint64_t prefetcher_unconsumed_count(struct prefetcher* p,
+                                       uint64_t pushed_samples);
+
   uint32_t prefetcher_in_flight(struct prefetcher* p);
 
   int prefetcher_has_ready(struct prefetcher* p);

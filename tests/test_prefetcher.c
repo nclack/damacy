@@ -565,6 +565,7 @@ test_take_wave_yields_ticket(void)
 
   EXPECT(prefetcher_has_ready(fx.p) == 1);
   EXPECT(prefetcher_ready_prefix_count(fx.p) == 3);
+  EXPECT(prefetcher_unconsumed_count(fx.p, 3) == 3);
 
   struct prefetcher_ready ready[3] = { 0 };
   struct prefetcher_wave_ticket ticket = { 0 };
@@ -576,12 +577,14 @@ test_take_wave_yields_ticket(void)
   prefetcher_ready_free(&ready[0]);
   prefetcher_ready_free(&ready[1]);
   EXPECT(prefetcher_ready_prefix_count(fx.p) == 1);
+  EXPECT(prefetcher_unconsumed_count(fx.p, 3) == 1);
 
   EXPECT(prefetcher_take_ready_wave(fx.p, 1, &ticket, ready) == 1);
   EXPECT(ticket.sample_seq_begin == 2);
   EXPECT(ticket.n_samples == 1);
   EXPECT(ready[0].sample_seq == 2);
   prefetcher_ready_free(&ready[0]);
+  EXPECT(prefetcher_unconsumed_count(fx.p, 3) == 0);
 
   fixture_teardown(&fx);
   return 0;

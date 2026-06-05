@@ -47,15 +47,17 @@ damacy_push(struct damacy* self, struct damacy_sample_slice samples)
     return r;
   }
   // No ctx_guard: push touches no CUDA. The scheduler lock serializes
-  // pushers; lookahead state itself is guarded by lookahead.lock because
-  // the prefetcher worker pops concurrently.
+  // pushers and pairs pushed_samples with planner consumption of the
+  // prefetcher ready/error prefix.
   scheduler_lock(self->sched);
   if (self->failed_status != DAMACY_OK) {
     r.status = DAMACY_SHUTDOWN;
     goto Done;
   }
   for (const struct damacy_sample* s = samples.beg; s != samples.end; ++s) {
-    if (!lookahead_has_capacity(&self->lookahead)) {
+    uint64_t unconsumed =
+      prefetcher_unconsumed_count(self->prefetcher, self->pushed_samples);
+    if (unconsumed >= self->cfg.lookahead_samples) {
       r.unconsumed.beg = s;
       r.status = DAMACY_AGAIN;
       goto Done;
