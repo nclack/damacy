@@ -1,0 +1,33 @@
+{
+  "name": "throughput",
+  "dataset": {
+    "store_root": "/mnt/main0/home/nclack/data/damacy/throughput",
+    "n_zarrs": 16,
+    "uri_fmt": "z%03u/scale0/image",
+    "zarr_shape": [512, 512, 512],
+    "chunk_shape": [32, 64, 64],
+    "shard_shape": [256, 256, 512],
+    "dtypes": ["u16"],
+    "codecs": ["zstd"],
+    "clevel": 3,
+    "entropy": 0.5,
+    "seed": 42
+  },
+  "sampling": {
+    "sample_shape": [128, 128, 128],
+    "n_batches": 100,
+    "n_warmup_batches": 10,
+    "samples_per_batch": 128,
+    "seed": 1234
+  },
+  "pipeline": {
+    "dtype": "f32",
+    "lookahead_samples": 512,
+    "n_io_threads": 16,
+    "metadata_io_concurrency": 64,
+    "max_gpu_memory_mb": 6144,
+    "n_array_meta_cache": 8192,
+    "n_shard_index_cache": 32768,
+    "n_chunk_layout_cache": 8192
+  }
+}

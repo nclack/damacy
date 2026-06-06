@@ -223,6 +223,13 @@ def main(
         help="skip the page-cache drop before running "
         "(default: drop pages so the bench measures cold IO)",
     ),
+    gen_only: bool = typer.Option(
+        False,
+        "--gen-only",
+        help="only ensure the scenario's datasets exist, then exit "
+        "(no GPU needed; run on a CPU node, then rerun without this flag "
+        "on a GPU node to benchmark against the cached data)",
+    ),
 ):
     try:
         sc = Scenario.model_validate_json(scenario_path.read_text())
@@ -234,6 +241,13 @@ def main(
         raise typer.Exit(1)
 
     ensure_zarrs(sc, regen)
+
+    if gen_only:
+        console.print(
+            f"[green]✓[/green] gen-only: datasets ready under "
+            f"[cyan]{resolve_path(sc.dataset.store_root)}[/cyan]; skipping bench"
+        )
+        return
 
     if not warm:
         store_root = resolve_path(sc.dataset.store_root)
