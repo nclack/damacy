@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780682273601,
+  "lastUpdate": 1780777009976,
   "repoUrl": "https://github.com/nclack/damacy",
   "entries": {
     "damacy throughput": [
@@ -1055,6 +1055,38 @@ window.BENCHMARK_DATA = {
           {
             "name": "damacy/mixed/throughput",
             "value": 5718.36,
+            "unit": "MB/s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Nathan Clack",
+            "username": "nclack",
+            "email": "nclack@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "7dcc03f7b7cd4dea194a552f3ec76f6db3fc8c4d",
+          "message": "damacy rewrite: metadata prefetch (#120)\n\n## Summary\n\n- Add the metadata prefetch pipeline: `prefetch_cache`, array metadata\nfetcher, shard-index fetcher, chunk-layout fetcher, and the prefetcher\nworker.\n- Split the old monolithic `damacy.c` orchestrator into lifecycle, push,\nplan, pop, and scheduler modules.\n- Make the prefetcher the producer for planning, so samples are planned\nonly after metadata/shard/layout prefetch has reached a terminal state.\n- Rewire the planner to consume prefetch handles directly and delete the\nlegacy synchronous `zarr_meta_cache` / `zarr_shard_cache` path.\n- Preserve sparse-zarr behavior: missing shard files become fill chunks,\nwhile IO, permission, malformed-shard, and decode errors still fail the\nsample.\n- Update public config/stats, Python bindings, docs, and benchmark\nschema for the new `array_meta`, `shard_index`, and `chunk_layout`\ncaches.\n\n## Reviewer Notes\n\n- Start with `src/prefetch/prefetcher.c`,\n`src/prefetch/prefetch_cache.c`, `src/damacy_plan.c`,\n`src/damacy_scheduler.c`, and `src/planner/planner.c`.\n- Store-derived validation is now asynchronous. Missing URIs,\nunsupported source dtypes, per-array rank mismatch, and decode failures\nsurface from `pop()`, not `push()`.\n- Prefetch slots preserve push order with `admit_seq`, even if metadata\nrequests complete out of order.\n- `store_stat` now distinguishes `NOT_FOUND` from other stat failures so\nsparse data does not mask IO/permission errors.\n- Chunk-layout probing uses a ready shard touched by the sample rather\nthan assuming the origin shard exists.\n\n## Tests\n\n- `cmake --build build --target damacy test_chunk_layout_cache\ntest_prefetcher test_planner`\n- `env UV_CACHE_DIR=/tmp/uv-cache timeout 90s ctest --test-dir build -R\n'test_(planner|chunk_layout_cache|prefetcher)$' --output-on-failure`\n\nAdditional coverage in this branch includes unit/integration tests for\n`prefetch_cache`, array metadata fetch, shard index fetch, chunk layout\nfetch, prefetcher ordering/readiness/error paths, sample-shard\niteration, and planner handle consumption.",
+          "timestamp": "2026-06-05T16:52:49Z",
+          "url": "https://github.com/nclack/damacy/commit/7dcc03f7b7cd4dea194a552f3ec76f6db3fc8c4d"
+        },
+        "date": 1780777009186,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "damacy/default/throughput",
+            "value": 6229.91,
+            "unit": "MB/s"
+          },
+          {
+            "name": "damacy/mixed/throughput",
+            "value": 6137.72,
             "unit": "MB/s"
           }
         ]
