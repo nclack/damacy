@@ -266,12 +266,27 @@ def _scenario_panel(r: Results) -> Panel:
             f"lognormal_sigma_ln_ns={lat.lognormal_sigma_ln_ns:g} "
             f"cap_ns={lat.cap_ns} seed={lat.seed}"
         )
+    ds = sc.dataset
+    if ds.uris is not None:
+        dataset_line = (
+            f"[dim]dataset[/dim]  uris={len(ds.uris)} real arrays  "
+            f"store_root={ds.store_root}"
+        )
+    else:
+        dataset_line = (
+            f"[dim]dataset[/dim]  n_zarrs={ds.n_zarrs} "
+            f"shape={ds.zarr_shape} "
+            f"chunk={ds.chunk_shape} shard={ds.shard_shape} "
+            f"src_dtypes={ds.dtypes}"
+        )
+    read_op_line = (
+        f" max_read_op_kb={sc.pipeline.max_read_op_kb}"
+        if sc.pipeline.max_read_op_kb
+        else ""
+    )
     body = (
         f"[bold]{sc.name}[/bold]\n"
-        f"[dim]dataset[/dim]  n_zarrs={sc.dataset.n_zarrs} "
-        f"shape={sc.dataset.zarr_shape} "
-        f"chunk={sc.dataset.chunk_shape} shard={sc.dataset.shard_shape} "
-        f"src_dtypes={sc.dataset.dtypes}\n"
+        f"{dataset_line}\n"
         f"[dim]sampling[/dim] n_batches={sc.sampling.n_batches} "
         f"(warmup={sc.sampling.n_warmup_batches}) "
         f"samples_per_batch={sc.sampling.samples_per_batch} "
@@ -281,6 +296,7 @@ def _scenario_panel(r: Results) -> Panel:
         f"io_threads={sc.pipeline.n_io_threads} "
         f"metadata_io_concurrency={sc.pipeline.metadata_io_concurrency} "
         f"max_gpu_mb={sc.pipeline.max_gpu_memory_mb or 'default'}"
+        f"{read_op_line}"
         f"{latency_line}"
     )
     return Panel(body, title="scenario", border_style="cyan")

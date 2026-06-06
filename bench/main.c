@@ -99,6 +99,7 @@ struct scenario
   uint32_t n_zarrs;
   char uri_fmt[128];
   uint8_t rank;
+  uint8_t has_zarr_shape;
   int64_t zarr_shape[DAMACY_MAX_RANK];
   enum damacy_dtype dtype;
 
@@ -318,15 +319,21 @@ parse_scenario(struct cslice src, struct scenario* sc)
   {
     static const struct json_query p[] = { { QUERY_KEY, .key = "dataset" },
                                            { QUERY_KEY, .key = "uri_fmt" } };
+    // Optional: absent in `uris` mode (real arrays listed explicitly).
     if (read_string_into(src, p, countof(p), sc->uri_fmt, sizeof(sc->uri_fmt)))
-      return 1;
+      sc->uri_fmt[0] = '\0';
   }
   {
     static const struct json_query p[] = { { QUERY_KEY, .key = "dataset" },
                                            { QUERY_KEY, .key = "zarr_shape" } };
+    // Optional: in `uris` mode each array's shape is read from its own
+    // zarr.json and the rank is taken from sample_shape instead.
+    uint8_t zn = 0;
     if (read_int_array(
-          src, p, countof(p), sc->zarr_shape, DAMACY_MAX_RANK, &sc->rank))
-      return 1;
+          src, p, countof(p), sc->zarr_shape, DAMACY_MAX_RANK, &zn) == 0) {
+      sc->rank = zn;
+      sc->has_zarr_shape = 1;
+    }
   }
   {
     // Destination dtype lives on `pipeline.dtype` now; per-zarr source
@@ -347,8 +354,12 @@ parse_scenario(struct cslice src, struct scenario* sc)
     if (read_int_array(
           src, p, countof(p), sc->sample_shape, DAMACY_MAX_RANK, &n))
       return 1;
-    if (n != sc->rank)
-      return 1;
+    if (sc->has_zarr_shape) {
+      if (n != sc->rank)
+        return 1;
+    } else {
+      sc->rank = n; // uris mode: rank comes from the sample
+    }
   }
   {
     uint64_t v;
@@ -495,69 +506,181 @@ parse_scenario(struct cslice src, struct scenario* sc)
             sc->samples_per_batch);
     return 1;
   }
-  for (uint8_t d = 0; d < sc->rank; ++d) {
-    if (sc->sample_shape[d] > sc->zarr_shape[d]) {
-      fprintf(stderr,
-              "scenario: sample_shape[%u]=%lld > zarr_shape[%u]=%lld\n",
-              d,
-              (long long)sc->sample_shape[d],
-              d,
-              (long long)sc->zarr_shape[d]);
-      return 1;
+  if (sc->has_zarr_shape)
+    for (uint8_t d = 0; d < sc->rank; ++d) {
+      if (sc->sample_shape[d] > sc->zarr_shape[d]) {
+        fprintf(stderr,
+                "scenario: sample_shape[%u]=%lld > zarr_shape[%u]=%lld\n",
+                d,
+                (long long)sc->sample_shape[d],
+                d,
+                (long long)sc->zarr_shape[d]);
+        return 1;
+      }
     }
-  }
   return 0;
 }
 
 // ---- sample generation ------------------------------------------------------
 
-// One owned URI string per zarr, fixed-size for the bench harness.
+// Owned absolute URI + real shape per array, fixed-size for the bench harness.
 #define BENCH_MAX_URI 256
-struct uri_table
+struct array_table
 {
-  char* mem; // n_zarrs * BENCH_MAX_URI
+  char* uris;      // n * BENCH_MAX_URI (absolute)
+  int64_t* shapes; // n * DAMACY_MAX_RANK
   uint32_t n;
+  uint8_t rank;
 };
 
-static int
-uri_table_init(struct uri_table* t, const char* fmt, uint32_t n_zarrs)
-{
-  t->mem = (char*)calloc((size_t)n_zarrs, BENCH_MAX_URI);
-  t->n = n_zarrs;
-  if (!t->mem)
-    return 1;
-  for (uint32_t i = 0; i < n_zarrs; ++i) {
-    int w = snprintf(&t->mem[i * BENCH_MAX_URI], BENCH_MAX_URI, fmt, i);
-    if (w < 0 || w >= BENCH_MAX_URI)
-      return 1;
-  }
-  return 0;
-}
 static void
-uri_table_free(struct uri_table* t)
+array_table_free(struct array_table* t)
 {
   if (!t)
     return;
-  free(t->mem);
-  t->mem = NULL;
+  free(t->uris);
+  free(t->shapes);
+  t->uris = NULL;
+  t->shapes = NULL;
 }
-static const char*
-uri_table_get(const struct uri_table* t, uint32_t i)
+
+// Synthetic path: n arrays named abs_fmt % i, all sharing one shape.
+static int
+array_table_init_fmt(struct array_table* t,
+                     const char* abs_fmt,
+                     uint32_t n,
+                     const int64_t* shape,
+                     uint8_t rank)
 {
-  return &t->mem[(i % t->n) * BENCH_MAX_URI];
+  t->uris = (char*)calloc((size_t)n, BENCH_MAX_URI);
+  t->shapes = (int64_t*)calloc((size_t)n * DAMACY_MAX_RANK, sizeof(int64_t));
+  if (!t->uris || !t->shapes)
+    return 1;
+  t->n = n;
+  t->rank = rank;
+  for (uint32_t i = 0; i < n; ++i) {
+    int w =
+      snprintf(&t->uris[(size_t)i * BENCH_MAX_URI], BENCH_MAX_URI, abs_fmt, i);
+    if (w < 0 || w >= BENCH_MAX_URI)
+      return 1;
+    int64_t* dst = &t->shapes[(size_t)i * DAMACY_MAX_RANK];
+    for (uint8_t d = 0; d < rank; ++d)
+      dst[d] = shape[d];
+  }
+  return 0;
+}
+
+static int
+read_array_shape(const char* abs_uri, int64_t* shape, uint8_t* rank)
+{
+  char path[BENCH_MAX_URI + 16];
+  if (snprintf(path, sizeof path, "%s/zarr.json", abs_uri) >= (int)sizeof path)
+    return 1;
+  char* buf = NULL;
+  size_t len = 0;
+  if (slurp_file(path, &buf, &len))
+    return 1;
+  struct cslice s = { .beg = buf, .end = buf + len };
+  static const struct json_query p[] = { { QUERY_KEY, .key = "shape" } };
+  int rc = read_int_array(s, p, countof(p), shape, DAMACY_MAX_RANK, rank);
+  free(buf);
+  return rc;
+}
+
+// Real path: build from an explicit `dataset.uris` list, reading each array's
+// own shape. Arrays of the wrong rank or too small for the sample are dropped.
+static int
+array_table_init_uris(struct array_table* t,
+                      struct cslice src,
+                      const char* store_root,
+                      const int64_t* sample_shape,
+                      uint8_t rank)
+{
+  static const struct json_query p[] = { { QUERY_KEY, .key = "dataset" },
+                                         { QUERY_KEY, .key = "uris" } };
+  struct json_node arr;
+  if (json_resolve(src, p, countof(p), &arr, NULL) || arr.type != JSON_ARRAY)
+    return 1;
+  static const struct json_query iter_q[] = { { .kind = QUERY_ITER } };
+
+  uint32_t cap = 0;
+  {
+    struct json_iter it;
+    if (json_iter_init(arr.s, iter_q, countof(iter_q), &it, NULL))
+      return 1;
+    for (;;) {
+      struct json_node v;
+      enum json_err e = json_iter_next(&it, &v);
+      if (e == JSON_ERR_NOT_FOUND)
+        break;
+      if (e != JSON_OK)
+        return 1;
+      ++cap;
+    }
+  }
+  if (!cap)
+    return 1;
+  t->uris = (char*)calloc((size_t)cap, BENCH_MAX_URI);
+  t->shapes = (int64_t*)calloc((size_t)cap * DAMACY_MAX_RANK, sizeof(int64_t));
+  if (!t->uris || !t->shapes)
+    return 1;
+  t->rank = rank;
+  t->n = 0;
+
+  uint32_t skipped = 0;
+  struct json_iter it;
+  if (json_iter_init(arr.s, iter_q, countof(iter_q), &it, NULL))
+    return 1;
+  for (;;) {
+    struct json_node v;
+    enum json_err e = json_iter_next(&it, &v);
+    if (e == JSON_ERR_NOT_FOUND)
+      break;
+    if (e != JSON_OK || v.type != JSON_STRING)
+      return 1;
+    char* slot = &t->uris[(size_t)t->n * BENCH_MAX_URI];
+    int w = snprintf(
+      slot, BENCH_MAX_URI, "%s/%.*s", store_root, (int)cslice_len(v.s), v.s.beg);
+    if (w < 0 || w >= BENCH_MAX_URI)
+      return 1;
+    int64_t shp[DAMACY_MAX_RANK];
+    uint8_t r = 0;
+    if (read_array_shape(slot, shp, &r)) {
+      fprintf(stderr, "bench: cannot read shape from %s/zarr.json\n", slot);
+      return 1;
+    }
+    int ok = (r == rank);
+    for (uint8_t d = 0; ok && d < rank; ++d)
+      if (shp[d] < sample_shape[d])
+        ok = 0;
+    if (!ok) {
+      ++skipped;
+      continue;
+    }
+    int64_t* dst = &t->shapes[(size_t)t->n * DAMACY_MAX_RANK];
+    for (uint8_t d = 0; d < rank; ++d)
+      dst[d] = shp[d];
+    ++t->n;
+  }
+  if (skipped)
+    fprintf(stderr,
+            "bench: skipped %u uri(s) of wrong rank or too small for sample\n",
+            skipped);
+  return t->n ? 0 : 1;
 }
 
 static void
 fill_random_sample(const struct scenario* sc,
-                   const struct uri_table* uris,
+                   const struct array_table* at,
                    struct rng* rng,
                    struct damacy_sample* s)
 {
-  uint32_t z = (uint32_t)rng_range(rng, sc->n_zarrs);
-  s->uri = uri_table_get(uris, z);
-  s->aabb.rank = sc->rank;
-  for (uint8_t d = 0; d < sc->rank; ++d) {
-    int64_t span = sc->zarr_shape[d] - sc->sample_shape[d] + 1;
+  uint32_t z = (uint32_t)rng_range(rng, at->n);
+  s->uri = &at->uris[(size_t)z * BENCH_MAX_URI];
+  s->aabb.rank = at->rank;
+  const int64_t* shape = &at->shapes[(size_t)z * DAMACY_MAX_RANK];
+  for (uint8_t d = 0; d < at->rank; ++d) {
+    int64_t span = shape[d] - sc->sample_shape[d] + 1;
     int64_t beg = (int64_t)rng_range(rng, (uint64_t)span);
     s->aabb.dims[d].beg = beg;
     s->aabb.dims[d].end = beg + sc->sample_shape[d];
@@ -591,7 +714,7 @@ struct run_metrics
 static int
 drive(struct damacy* d,
       const struct scenario* sc,
-      const struct uri_table* uris,
+      const struct array_table* at,
       struct rng* rng,
       uint32_t n_target_batches,
       double hold_ms,
@@ -624,7 +747,7 @@ drive(struct damacy* d,
         uint64_t remaining = samples_target - pushed_local;
         in_pool = remaining < pool_cap ? (uint32_t)remaining : pool_cap;
         for (uint32_t i = 0; i < in_pool; ++i)
-          fill_random_sample(sc, uris, rng, &pool[i]);
+          fill_random_sample(sc, at, rng, &pool[i]);
       }
       struct damacy_sample_slice slice = { .beg = pool + cursor,
                                            .end = pool + in_pool };
@@ -888,25 +1011,41 @@ main(int argc, char** argv)
     return 1;
   }
 
-  // damacy now wants absolute uris; prepend the scenario's store_root.
-  char abs_fmt[BENCH_MAX_URI];
-  if (snprintf(abs_fmt, sizeof abs_fmt, "%s/%s", sc.store_root, sc.uri_fmt) >=
-      (int)sizeof abs_fmt) {
-    fprintf(stderr, "bench: store_root + uri_fmt exceeds BENCH_MAX_URI\n");
-    free(json_buf);
-    return 1;
-  }
-  struct uri_table uris = { 0 };
-  if (uri_table_init(&uris, abs_fmt, sc.n_zarrs) != 0) {
-    fprintf(stderr, "bench: uri table alloc failed\n");
-    free(json_buf);
-    return 1;
+  // damacy wants absolute uris. `uris` mode lists real arrays (each with its
+  // own shape); otherwise arrays are the synthetic uri_fmt % i over one shape.
+  struct array_table at = { 0 };
+  {
+    static const struct json_query pu[] = { { QUERY_KEY, .key = "dataset" },
+                                            { QUERY_KEY, .key = "uris" } };
+    struct json_node un;
+    int rc;
+    if (json_resolve(src, pu, countof(pu), &un, NULL) == 0 &&
+        un.type == JSON_ARRAY) {
+      rc =
+        array_table_init_uris(&at, src, sc.store_root, sc.sample_shape, sc.rank);
+    } else {
+      char abs_fmt[BENCH_MAX_URI];
+      if (snprintf(
+            abs_fmt, sizeof abs_fmt, "%s/%s", sc.store_root, sc.uri_fmt) >=
+          (int)sizeof abs_fmt) {
+        fprintf(stderr, "bench: store_root + uri_fmt exceeds BENCH_MAX_URI\n");
+        free(json_buf);
+        return 1;
+      }
+      rc =
+        array_table_init_fmt(&at, abs_fmt, sc.n_zarrs, sc.zarr_shape, sc.rank);
+    }
+    if (rc != 0) {
+      fprintf(stderr, "bench: array table init failed\n");
+      free(json_buf);
+      return 1;
+    }
   }
 
   fprintf(stderr,
-          "scenario: store_root=%s n_zarrs=%u rank=%u batches=%u (warmup=%u)\n",
+          "scenario: store_root=%s n_arrays=%u rank=%u batches=%u (warmup=%u)\n",
           sc.store_root,
-          sc.n_zarrs,
+          at.n,
           sc.rank,
           sc.n_batches,
           sc.n_warmup_batches);
@@ -939,7 +1078,7 @@ main(int argc, char** argv)
   // damacy_create requires a CUcontext current. Retain dev 0's primary.
   if (cuInit(0) != CUDA_SUCCESS) {
     fprintf(stderr, "cuInit failed\n");
-    uri_table_free(&uris);
+    array_table_free(&at);
     free(json_buf);
     return 1;
   }
@@ -949,7 +1088,7 @@ main(int argc, char** argv)
       cuDevicePrimaryCtxRetain(&cu_ctx, cu_dev) != CUDA_SUCCESS ||
       cuCtxSetCurrent(cu_ctx) != CUDA_SUCCESS) {
     fprintf(stderr, "primary ctx setup failed\n");
-    uri_table_free(&uris);
+    array_table_free(&at);
     free(json_buf);
     return 1;
   }
@@ -960,7 +1099,7 @@ main(int argc, char** argv)
   double t_init_b = now_seconds();
   if (cs != DAMACY_OK) {
     fprintf(stderr, "damacy_create: %s\n", damacy_status_str(cs));
-    uri_table_free(&uris);
+    array_table_free(&at);
     free(json_buf);
     return 1;
   }
@@ -977,7 +1116,7 @@ main(int argc, char** argv)
   if (sc.n_warmup_batches > 0) {
     if (drive(d,
               &sc,
-              &uris,
+              &at,
               &rng,
               sc.n_warmup_batches,
               sc.consumer_hold_ms,
@@ -988,7 +1127,7 @@ main(int argc, char** argv)
               NULL,
               NULL)) {
       damacy_destroy(d);
-      uri_table_free(&uris);
+      array_table_free(&at);
       free(json_buf);
       return 1;
     }
@@ -1014,7 +1153,7 @@ main(int argc, char** argv)
   if (sc.n_warmup_batches == 0) {
     if (drive(d,
               &sc,
-              &uris,
+              &at,
               &rng,
               sc.n_batches,
               sc.consumer_hold_ms,
@@ -1025,7 +1164,7 @@ main(int argc, char** argv)
               &rm.consumer_push_ms_total,
               &rm.consumer_pop_wait_ms_total)) {
       damacy_destroy(d);
-      uri_table_free(&uris);
+      array_table_free(&at);
       free(json_buf);
       return 1;
     }
@@ -1033,7 +1172,7 @@ main(int argc, char** argv)
   } else {
     if (drive(d,
               &sc,
-              &uris,
+              &at,
               &rng,
               sc.n_batches,
               sc.consumer_hold_ms,
@@ -1044,7 +1183,7 @@ main(int argc, char** argv)
               &rm.consumer_push_ms_total,
               &rm.consumer_pop_wait_ms_total)) {
       damacy_destroy(d);
-      uri_table_free(&uris);
+      array_table_free(&at);
       free(json_buf);
       return 1;
     }
@@ -1057,7 +1196,7 @@ main(int argc, char** argv)
 
   damacy_stats_get(d, &rm.stats);
   damacy_destroy(d);
-  uri_table_free(&uris);
+  array_table_free(&at);
 
   emit_results(&sc, &rm, stdout);
   free(json_buf);
