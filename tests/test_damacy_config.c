@@ -191,21 +191,6 @@ test_resolvers_return_literal_value(void)
 }
 
 static int
-test_resolvers_clamp_above_hard_max(void)
-{
-  struct damacy_config cfg = { 0 };
-  cfg.tuning.host_buffer_waves = DAMACY_MAX_HOST_BUFFER_WAVES + 5;
-  cfg.tuning.max_chunks_per_wave = DAMACY_HARD_MAX_CHUNKS_PER_WAVE + 100u;
-  cfg.tuning.max_substreams_per_chunk =
-    DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK + 100u;
-  EXPECT(resolve_host_buffer_waves(&cfg) == DAMACY_MAX_HOST_BUFFER_WAVES);
-  EXPECT(resolve_max_chunks_per_wave(&cfg) == DAMACY_HARD_MAX_CHUNKS_PER_WAVE);
-  EXPECT(resolve_max_substreams_per_chunk(&cfg) ==
-         DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK);
-  return 0;
-}
-
-static int
 test_validate_io_threads_bound_by_machine(void)
 {
   uint32_t too_many = (uint32_t)platform_default_thread_count() + 1u;
@@ -234,7 +219,6 @@ main(void)
   RUN(test_validate_metadata_io_concurrency_reject_zero);
   RUN(test_validate_tuning_fields_reject_out_of_range);
   RUN(test_resolvers_return_literal_value);
-  RUN(test_resolvers_clamp_above_hard_max);
   RUN(test_validate_io_threads_bound_by_machine);
   log_info("all tests passed");
   return 0;

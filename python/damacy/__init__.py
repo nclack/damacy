@@ -608,10 +608,10 @@ class Config:
                 "max_chunk_uncompressed_bytes must be in "
                 f"[1, {_native.MAX_CHUNK_BYTES}] (got {max_chunk_uncompressed_bytes})"
             )
-        if not 1 <= max_read_op_bytes <= 0xFFFFFFFF:
+        if not 1 <= max_read_op_bytes <= _native.MAX_READ_OP_BYTES:
             raise ValueError(
                 "max_read_op_bytes must be in "
-                f"[1, {0xFFFFFFFF}] (got {max_read_op_bytes})"
+                f"[1, {_native.MAX_READ_OP_BYTES}] (got {max_read_op_bytes})"
             )
         if max_gpu_memory_bytes < 1:
             raise ValueError(

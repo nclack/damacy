@@ -457,7 +457,7 @@ def test_config_validates_eagerly():
     # rejected as out of range.
     for field, over_max in (
         ("max_chunk_uncompressed_bytes", _native.MAX_CHUNK_BYTES + 1),
-        ("max_read_op_bytes", 0x1_0000_0000),
+        ("max_read_op_bytes", _native.MAX_READ_OP_BYTES + 1),
         ("host_buffer_waves", _native.MAX_HOST_BUFFER_WAVES + 1),
         ("max_chunks_per_wave", _native.HARD_MAX_CHUNKS_PER_WAVE + 1),
         ("max_substreams_per_chunk", _native.HARD_MAX_SUBSTREAMS_PER_CHUNK + 1),

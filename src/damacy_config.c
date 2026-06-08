@@ -167,30 +167,19 @@ resolve_max_read_op_bytes(const struct damacy_config* cfg)
 uint8_t
 resolve_host_buffer_waves(const struct damacy_config* cfg)
 {
-  uint8_t v = cfg->tuning.host_buffer_waves;
-  if (v < DAMACY_N_WAVES)
-    v = DAMACY_N_WAVES;
-  if (v > DAMACY_MAX_HOST_BUFFER_WAVES)
-    v = DAMACY_MAX_HOST_BUFFER_WAVES;
-  return v;
+  return cfg->tuning.host_buffer_waves;
 }
 
 uint32_t
 resolve_max_chunks_per_wave(const struct damacy_config* cfg)
 {
-  uint32_t v = cfg->tuning.max_chunks_per_wave;
-  if (v > DAMACY_HARD_MAX_CHUNKS_PER_WAVE)
-    v = DAMACY_HARD_MAX_CHUNKS_PER_WAVE;
-  return v;
+  return cfg->tuning.max_chunks_per_wave;
 }
 
 uint32_t
 resolve_max_substreams_per_chunk(const struct damacy_config* cfg)
 {
-  uint32_t v = cfg->tuning.max_substreams_per_chunk;
-  if (v > DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK)
-    v = DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK;
-  return v;
+  return cfg->tuning.max_substreams_per_chunk;
 }
 
 uint32_t

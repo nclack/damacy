@@ -247,20 +247,14 @@ test_pool_reserve_fits_default_budget(void)
     .sample_shape = { 16, 1, 256, 256 },
     .sample_rank = 4,
     .device = -1,
-    .tuning = {
-      .n_io_threads = 1,
-      .metadata_io_concurrency = 1,
-      .n_array_meta_cache = 4,
-      .n_shard_index_cache = 4,
-      .n_chunk_layout_cache = 4,
-      .max_chunk_uncompressed_bytes = DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES,
-      .max_read_op_bytes = DAMACY_DEFAULT_READ_OP_MAX_BYTES,
-      .host_buffer_waves = DAMACY_DEFAULT_HOST_BUFFER_WAVES,
-      .max_chunks_per_wave = DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE,
-      .max_substreams_per_chunk = DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK,
-      .max_gpu_memory_bytes = 1ull << 30,
-    },
   };
+  cfg.tuning = damacy_tuning_defaults();
+  cfg.tuning.n_io_threads = 1;
+  cfg.tuning.metadata_io_concurrency = 1;
+  cfg.tuning.n_array_meta_cache = 4;
+  cfg.tuning.n_shard_index_cache = 4;
+  cfg.tuning.n_chunk_layout_cache = 4;
+  cfg.tuning.max_gpu_memory_bytes = 1ull << 30;
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
@@ -306,20 +300,14 @@ test_pool_exceeds_budget_rejected_at_create(void)
     .sample_shape = { 16, 1, 256, 256 },
     .sample_rank = 4,
     .device = -1,
-    .tuning = {
-      .n_io_threads = 1,
-      .metadata_io_concurrency = 1,
-      .n_array_meta_cache = 4,
-      .n_shard_index_cache = 4,
-      .n_chunk_layout_cache = 4,
-      .max_chunk_uncompressed_bytes = DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES,
-      .max_read_op_bytes = DAMACY_DEFAULT_READ_OP_MAX_BYTES,
-      .host_buffer_waves = DAMACY_DEFAULT_HOST_BUFFER_WAVES,
-      .max_chunks_per_wave = DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE,
-      .max_substreams_per_chunk = DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK,
-      .max_gpu_memory_bytes = 32ull << 20,
-    },
   };
+  cfg.tuning = damacy_tuning_defaults();
+  cfg.tuning.n_io_threads = 1;
+  cfg.tuning.metadata_io_concurrency = 1;
+  cfg.tuning.n_array_meta_cache = 4;
+  cfg.tuning.n_shard_index_cache = 4;
+  cfg.tuning.n_chunk_layout_cache = 4;
+  cfg.tuning.max_gpu_memory_bytes = 32ull << 20;
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_BUDGET);
   EXPECT(d == NULL);
