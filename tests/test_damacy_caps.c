@@ -64,15 +64,14 @@ mk_cfg(const char* root, uint32_t samples_per_batch, int64_t sy, int64_t sx)
     .dtype = DAMACY_F32,
     .sample_rank = 2,
     .device = -1,
-    .tuning = {
-      .n_io_threads = 1,
-      .metadata_io_concurrency = 1,
-      .n_array_meta_cache = 4,
-      .n_shard_index_cache = 4,
-      .n_chunk_layout_cache = 4,
-      .max_gpu_memory_bytes = 1ull << 30,
-    },
   };
+  c.tuning = damacy_tuning_defaults();
+  c.tuning.n_io_threads = 1;
+  c.tuning.metadata_io_concurrency = 1;
+  c.tuning.n_array_meta_cache = 4;
+  c.tuning.n_shard_index_cache = 4;
+  c.tuning.n_chunk_layout_cache = 4;
+  c.tuning.max_gpu_memory_bytes = 1ull << 30;
   c.sample_shape[0] = sy;
   c.sample_shape[1] = sx;
   return c;
@@ -87,8 +86,8 @@ mk_sample(const char* uri, int64_t y0, int64_t y1, int64_t x0, int64_t x1)
   return s;
 }
 
-// chunk_uncompressed_bytes at 0 picks the C default (512 KB) and brings
-// the pipeline up cleanly.
+// The default chunk cap (512 KB, via damacy_tuning_defaults) brings the
+// pipeline up cleanly.
 static int
 test_create_default_caps(void)
 {
@@ -101,7 +100,6 @@ test_create_default_caps(void)
            p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
 
   struct damacy_config cfg = mk_cfg(root, 1, 8, 16);
-  cfg.tuning.max_chunk_uncompressed_bytes = 0;
 
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
@@ -249,15 +247,14 @@ test_pool_reserve_fits_default_budget(void)
     .sample_shape = { 16, 1, 256, 256 },
     .sample_rank = 4,
     .device = -1,
-    .tuning = {
-      .n_io_threads = 1,
-      .metadata_io_concurrency = 1,
-      .n_array_meta_cache = 4,
-      .n_shard_index_cache = 4,
-      .n_chunk_layout_cache = 4,
-      .max_gpu_memory_bytes = 1ull << 30,
-    },
   };
+  cfg.tuning = damacy_tuning_defaults();
+  cfg.tuning.n_io_threads = 1;
+  cfg.tuning.metadata_io_concurrency = 1;
+  cfg.tuning.n_array_meta_cache = 4;
+  cfg.tuning.n_shard_index_cache = 4;
+  cfg.tuning.n_chunk_layout_cache = 4;
+  cfg.tuning.max_gpu_memory_bytes = 1ull << 30;
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
@@ -303,15 +300,14 @@ test_pool_exceeds_budget_rejected_at_create(void)
     .sample_shape = { 16, 1, 256, 256 },
     .sample_rank = 4,
     .device = -1,
-    .tuning = {
-      .n_io_threads = 1,
-      .metadata_io_concurrency = 1,
-      .n_array_meta_cache = 4,
-      .n_shard_index_cache = 4,
-      .n_chunk_layout_cache = 4,
-      .max_gpu_memory_bytes = 32ull << 20,
-    },
   };
+  cfg.tuning = damacy_tuning_defaults();
+  cfg.tuning.n_io_threads = 1;
+  cfg.tuning.metadata_io_concurrency = 1;
+  cfg.tuning.n_array_meta_cache = 4;
+  cfg.tuning.n_shard_index_cache = 4;
+  cfg.tuning.n_chunk_layout_cache = 4;
+  cfg.tuning.max_gpu_memory_bytes = 32ull << 20;
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_BUDGET);
   EXPECT(d == NULL);

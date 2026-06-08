@@ -114,13 +114,13 @@ struct scenario
   uint32_t lookahead_samples;
   uint32_t n_io_threads;
   uint32_t metadata_io_concurrency;
-  uint64_t max_gpu_memory_bytes;         // 0 → library default
-  uint32_t max_chunk_uncompressed_bytes; // 0 → library default
-  uint64_t max_read_op_bytes;            // 0 → library default
+  uint64_t max_gpu_memory_bytes;         // required
+  uint32_t max_chunk_uncompressed_bytes; // 0 → tuning_defaults() baseline
+  uint64_t max_read_op_bytes;            // 0 → tuning_defaults() baseline
   uint32_t n_array_meta_cache;
   uint32_t n_shard_index_cache;
   uint32_t n_chunk_layout_cache;
-  uint8_t host_buffer_waves; // 0 → library default
+  uint8_t host_buffer_waves; // 0 → tuning_defaults() baseline
   uint8_t bypass_decode;
   struct damacy_latency_model metadata_latency;
 
@@ -1054,20 +1054,24 @@ main(int argc, char** argv)
     .dtype = sc.dtype,
     .sample_rank = sc.rank,
     .device = -1,
-    .tuning = {
-      .n_io_threads = sc.n_io_threads,
-      .n_array_meta_cache = sc.n_array_meta_cache,
-      .n_shard_index_cache = sc.n_shard_index_cache,
-      .n_chunk_layout_cache = sc.n_chunk_layout_cache,
-      .max_chunk_uncompressed_bytes = sc.max_chunk_uncompressed_bytes,
-      .max_read_op_bytes = sc.max_read_op_bytes,
-      .max_gpu_memory_bytes = sc.max_gpu_memory_bytes,
-      .host_buffer_waves = sc.host_buffer_waves,
-      .metadata_io_concurrency = sc.metadata_io_concurrency,
-    },
+    .tuning = damacy_tuning_defaults(),
     .debug = { .bypass_decode = sc.bypass_decode,
                .metadata_latency = sc.metadata_latency },
   };
+  // Scenario fields left at 0 keep the tuning_defaults() baseline.
+  cfg.tuning.n_io_threads = sc.n_io_threads;
+  cfg.tuning.n_array_meta_cache = sc.n_array_meta_cache;
+  cfg.tuning.n_shard_index_cache = sc.n_shard_index_cache;
+  cfg.tuning.n_chunk_layout_cache = sc.n_chunk_layout_cache;
+  cfg.tuning.metadata_io_concurrency = sc.metadata_io_concurrency;
+  if (sc.max_chunk_uncompressed_bytes)
+    cfg.tuning.max_chunk_uncompressed_bytes = sc.max_chunk_uncompressed_bytes;
+  if (sc.max_read_op_bytes)
+    cfg.tuning.max_read_op_bytes = sc.max_read_op_bytes;
+  if (sc.max_gpu_memory_bytes)
+    cfg.tuning.max_gpu_memory_bytes = sc.max_gpu_memory_bytes;
+  if (sc.host_buffer_waves)
+    cfg.tuning.host_buffer_waves = sc.host_buffer_waves;
   for (uint8_t d = 0; d < sc.rank; ++d)
     cfg.sample_shape[d] = sc.sample_shape[d];
 

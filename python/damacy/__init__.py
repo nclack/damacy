@@ -563,16 +563,16 @@ class Config:
         max_gpu_memory_bytes: int,
         dtype: Dtype | str | int = Dtype.F32,
         lookahead_samples: int | None = None,
-        max_chunk_uncompressed_bytes: int = 0,
-        max_read_op_bytes: int = 0,
-        host_buffer_waves: int = 0,
-        max_chunks_per_wave: int = 0,
-        max_substreams_per_chunk: int = 0,
+        max_chunk_uncompressed_bytes: int = _native.DEFAULT_CHUNK_UNCOMPRESSED_BYTES,
+        max_read_op_bytes: int = _native.DEFAULT_READ_OP_MAX_BYTES,
+        host_buffer_waves: int = _native.DEFAULT_HOST_BUFFER_WAVES,
+        max_chunks_per_wave: int = _native.DEFAULT_MAX_CHUNKS_PER_WAVE,
+        max_substreams_per_chunk: int = _native.DEFAULT_MAX_SUBSTREAMS_PER_CHUNK,
         n_io_threads: int | None = None,
-        metadata_io_concurrency: int = 32,
-        n_array_meta_cache: int = 64,
-        n_shard_index_cache: int = 256,
-        n_chunk_layout_cache: int = 64,
+        metadata_io_concurrency: int = _native.DEFAULT_METADATA_IO_CONCURRENCY,
+        n_array_meta_cache: int = _native.DEFAULT_ARRAY_META_CACHE,
+        n_shard_index_cache: int = _native.DEFAULT_SHARD_INDEX_CACHE,
+        n_chunk_layout_cache: int = _native.DEFAULT_CHUNK_LAYOUT_CACHE,
         device: int | None = None,
         pop_timeout_s: float | None = 30.0,
         enable_gds: bool | None = None,
@@ -603,27 +603,36 @@ class Config:
             raise ValueError(
                 f"metadata_io_concurrency must be >= 1 (got {metadata_io_concurrency})"
             )
-        if max_chunk_uncompressed_bytes < 0:
-            raise ValueError("max_chunk_uncompressed_bytes must be >= 0")
-        if max_read_op_bytes < 0:
-            raise ValueError("max_read_op_bytes must be >= 0")
+        if not 1 <= max_chunk_uncompressed_bytes <= _native.MAX_CHUNK_BYTES:
+            raise ValueError(
+                "max_chunk_uncompressed_bytes must be in "
+                f"[1, {_native.MAX_CHUNK_BYTES}] (got {max_chunk_uncompressed_bytes})"
+            )
+        if not 1 <= max_read_op_bytes <= _native.MAX_READ_OP_BYTES:
+            raise ValueError(
+                "max_read_op_bytes must be in "
+                f"[1, {_native.MAX_READ_OP_BYTES}] (got {max_read_op_bytes})"
+            )
         if max_gpu_memory_bytes < 1:
             raise ValueError(
                 f"max_gpu_memory_bytes must be >= 1 (got {max_gpu_memory_bytes})"
             )
-        if host_buffer_waves < 0:
-            raise ValueError("host_buffer_waves must be >= 0")
-        if max_chunks_per_wave < 0:
-            raise ValueError("max_chunks_per_wave must be >= 0")
-        if max_chunks_per_wave > 0xFFFF:
+        if not _native.N_WAVES <= host_buffer_waves <= _native.MAX_HOST_BUFFER_WAVES:
             raise ValueError(
-                f"max_chunks_per_wave must be <= 0xFFFF (got {max_chunks_per_wave})"
+                "host_buffer_waves must be in "
+                f"[{_native.N_WAVES}, {_native.MAX_HOST_BUFFER_WAVES}] "
+                f"(got {host_buffer_waves})"
             )
-        if max_substreams_per_chunk < 0:
-            raise ValueError("max_substreams_per_chunk must be >= 0")
-        if max_substreams_per_chunk > 0xFFFF:
+        if not 1 <= max_chunks_per_wave <= _native.HARD_MAX_CHUNKS_PER_WAVE:
             raise ValueError(
-                f"max_substreams_per_chunk must be <= 0xFFFF (got {max_substreams_per_chunk})"
+                "max_chunks_per_wave must be in "
+                f"[1, {_native.HARD_MAX_CHUNKS_PER_WAVE}] (got {max_chunks_per_wave})"
+            )
+        if not 1 <= max_substreams_per_chunk <= _native.HARD_MAX_SUBSTREAMS_PER_CHUNK:
+            raise ValueError(
+                "max_substreams_per_chunk must be in "
+                f"[1, {_native.HARD_MAX_SUBSTREAMS_PER_CHUNK}] "
+                f"(got {max_substreams_per_chunk})"
             )
         if pop_timeout_s is not None and pop_timeout_s <= 0:
             raise ValueError(f"pop_timeout_s must be > 0 or None (got {pop_timeout_s})")

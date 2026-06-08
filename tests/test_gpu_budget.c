@@ -17,21 +17,22 @@
 static struct damacy_config
 mk_cfg(uint32_t chunk_cap)
 {
-  return (struct damacy_config){
+  struct damacy_config c = {
     .samples_per_batch = 4,
     .lookahead_samples = 8,
     .dtype = DAMACY_F32,
     .device = -1,
-    .tuning = {
-      .n_io_threads = 1,
-      .metadata_io_concurrency = 1,
-      .n_array_meta_cache = 4,
-      .n_shard_index_cache = 4,
-      .n_chunk_layout_cache = 4,
-      .max_chunk_uncompressed_bytes = chunk_cap,
-      .max_gpu_memory_bytes = 0,
-    },
   };
+  c.tuning = damacy_tuning_defaults();
+  c.tuning.n_io_threads = 1;
+  c.tuning.metadata_io_concurrency = 1;
+  c.tuning.n_array_meta_cache = 4;
+  c.tuning.n_shard_index_cache = 4;
+  c.tuning.n_chunk_layout_cache = 4;
+  c.tuning.max_gpu_memory_bytes = 0;
+  if (chunk_cap)
+    c.tuning.max_chunk_uncompressed_bytes = chunk_cap;
+  return c;
 }
 
 static int

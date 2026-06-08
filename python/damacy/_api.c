@@ -726,18 +726,18 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   unsigned int samples_per_batch = 0;
   unsigned int lookahead = 2;
   PyObject* dtype_obj = NULL;
-  unsigned int max_chunk_uncompressed = 0;
+  unsigned int max_chunk_uncompressed = DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES;
   unsigned long long max_gpu_bytes = 0;
   unsigned int n_io = 4;
-  unsigned int metadata_io_concurrency = 32;
-  unsigned int n_array_meta = 64;
-  unsigned int n_shard_index = 256;
-  unsigned int n_chunk_layout = 64;
+  unsigned int metadata_io_concurrency = DAMACY_DEFAULT_METADATA_IO_CONCURRENCY;
+  unsigned int n_array_meta = DAMACY_DEFAULT_ARRAY_META_CACHE;
+  unsigned int n_shard_index = DAMACY_DEFAULT_SHARD_INDEX_CACHE;
+  unsigned int n_chunk_layout = DAMACY_DEFAULT_CHUNK_LAYOUT_CACHE;
   PyObject* sample_shape_obj = NULL;
-  unsigned int host_buffer_waves = 0;
-  unsigned int max_chunks_per_wave = 0;
-  unsigned int max_substreams_per_chunk = 0;
-  unsigned long long max_read_op_bytes = 0;
+  unsigned int host_buffer_waves = DAMACY_DEFAULT_HOST_BUFFER_WAVES;
+  unsigned int max_chunks_per_wave = DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE;
+  unsigned int max_substreams_per_chunk = DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK;
+  unsigned long long max_read_op_bytes = DAMACY_DEFAULT_READ_OP_MAX_BYTES;
   int device = -1;
   int enable_gds = DAMACY_GDS_AUTO;
   int numa_strategy = DAMACY_NUMA_AUTO;
@@ -1239,5 +1239,38 @@ api_register_types(PyObject* m)
     return -1;
   if (PyModule_AddIntConstant(m, "GDS_OFF", DAMACY_GDS_OFF) < 0)
     return -1;
+
+  // Tuning defaults + bounds mirrored from damacy_limits.h so the Python
+  // Config surface uses real values, not 0-sentinels, and validates against
+  // the same ranges as validate_config().
+  struct
+  {
+    const char* name;
+    long long value;
+  } limits[] = {
+    { "DEFAULT_CHUNK_UNCOMPRESSED_BYTES",
+      DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES },
+    { "DEFAULT_READ_OP_MAX_BYTES", DAMACY_DEFAULT_READ_OP_MAX_BYTES },
+    { "DEFAULT_HOST_BUFFER_WAVES", DAMACY_DEFAULT_HOST_BUFFER_WAVES },
+    { "DEFAULT_MAX_CHUNKS_PER_WAVE", DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE },
+    { "DEFAULT_MAX_SUBSTREAMS_PER_CHUNK",
+      DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK },
+    { "DEFAULT_METADATA_IO_CONCURRENCY",
+      DAMACY_DEFAULT_METADATA_IO_CONCURRENCY },
+    { "DEFAULT_ARRAY_META_CACHE", DAMACY_DEFAULT_ARRAY_META_CACHE },
+    { "DEFAULT_SHARD_INDEX_CACHE", DAMACY_DEFAULT_SHARD_INDEX_CACHE },
+    { "DEFAULT_CHUNK_LAYOUT_CACHE", DAMACY_DEFAULT_CHUNK_LAYOUT_CACHE },
+    { "MAX_CHUNK_BYTES", DAMACY_MAX_CHUNK_BYTES },
+    { "MAX_READ_OP_BYTES", UINT32_MAX },
+    { "N_WAVES", DAMACY_N_WAVES },
+    { "MAX_HOST_BUFFER_WAVES", DAMACY_MAX_HOST_BUFFER_WAVES },
+    { "HARD_MAX_CHUNKS_PER_WAVE", DAMACY_HARD_MAX_CHUNKS_PER_WAVE },
+    { "HARD_MAX_SUBSTREAMS_PER_CHUNK", DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK },
+    { "MAX_METADATA_IO_CONCURRENCY", DAMACY_MAX_METADATA_IO_CONCURRENCY },
+  };
+  for (size_t i = 0; i < sizeof(limits) / sizeof(limits[0]); ++i) {
+    if (PyModule_AddIntConstant(m, limits[i].name, limits[i].value) < 0)
+      return -1;
+  }
   return 0;
 }

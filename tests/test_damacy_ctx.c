@@ -41,15 +41,14 @@ mk_cfg(const char* root, int64_t sy, int64_t sx)
     .dtype = DAMACY_F32,
     .sample_rank = 2,
     .device = -1,
-    .tuning = {
-      .n_io_threads = 1,
-      .metadata_io_concurrency = 1,
-      .n_array_meta_cache = 4,
-      .n_shard_index_cache = 4,
-      .n_chunk_layout_cache = 4,
-      .max_gpu_memory_bytes = 1ull << 30,
-    },
   };
+  c.tuning = damacy_tuning_defaults();
+  c.tuning.n_io_threads = 1;
+  c.tuning.metadata_io_concurrency = 1;
+  c.tuning.n_array_meta_cache = 4;
+  c.tuning.n_shard_index_cache = 4;
+  c.tuning.n_chunk_layout_cache = 4;
+  c.tuning.max_gpu_memory_bytes = 1ull << 30;
   c.sample_shape[0] = sy;
   c.sample_shape[1] = sx;
   return c;

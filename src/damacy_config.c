@@ -1,6 +1,7 @@
 #include "damacy_config.h"
 
 #include "damacy_limits.h"
+#include "log/log.h"
 #include "platform/platform.h"
 #include "util/prelude.h"
 
@@ -55,11 +56,43 @@ validate_config(const struct damacy_config* cfg)
   CHECK_SILENT(Invalid,
                cfg->tuning.metadata_io_concurrency <=
                  DAMACY_MAX_METADATA_IO_CONCURRENCY);
-  CHECK_SILENT(
-    Invalid,
-    cfg->tuning.host_buffer_waves == 0 ||
-      (cfg->tuning.host_buffer_waves >= DAMACY_N_WAVES &&
-       cfg->tuning.host_buffer_waves <= DAMACY_MAX_HOST_BUFFER_WAVES));
+  if (cfg->tuning.max_chunk_uncompressed_bytes == 0 ||
+      cfg->tuning.max_chunk_uncompressed_bytes > DAMACY_MAX_CHUNK_BYTES) {
+    log_error("max_chunk_uncompressed_bytes=%llu out of range (1..%llu)",
+              (unsigned long long)cfg->tuning.max_chunk_uncompressed_bytes,
+              (unsigned long long)DAMACY_MAX_CHUNK_BYTES);
+    goto Invalid;
+  }
+  if (cfg->tuning.max_read_op_bytes == 0 ||
+      cfg->tuning.max_read_op_bytes > UINT32_MAX) {
+    log_error("max_read_op_bytes=%llu out of range (1..%llu)",
+              (unsigned long long)cfg->tuning.max_read_op_bytes,
+              (unsigned long long)UINT32_MAX);
+    goto Invalid;
+  }
+  if (cfg->tuning.host_buffer_waves < DAMACY_N_WAVES ||
+      cfg->tuning.host_buffer_waves > DAMACY_MAX_HOST_BUFFER_WAVES) {
+    log_error("host_buffer_waves=%u out of range (%u..%u)",
+              (unsigned)cfg->tuning.host_buffer_waves,
+              (unsigned)DAMACY_N_WAVES,
+              (unsigned)DAMACY_MAX_HOST_BUFFER_WAVES);
+    goto Invalid;
+  }
+  if (cfg->tuning.max_chunks_per_wave == 0 ||
+      cfg->tuning.max_chunks_per_wave > DAMACY_HARD_MAX_CHUNKS_PER_WAVE) {
+    log_error("max_chunks_per_wave=%u out of range (1..%u)",
+              (unsigned)cfg->tuning.max_chunks_per_wave,
+              (unsigned)DAMACY_HARD_MAX_CHUNKS_PER_WAVE);
+    goto Invalid;
+  }
+  if (cfg->tuning.max_substreams_per_chunk == 0 ||
+      cfg->tuning.max_substreams_per_chunk >
+        DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK) {
+    log_error("max_substreams_per_chunk=%u out of range (1..%u)",
+              (unsigned)cfg->tuning.max_substreams_per_chunk,
+              (unsigned)DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK);
+    goto Invalid;
+  }
   CHECK_SILENT(Invalid, cfg->tuning.n_array_meta_cache > 0);
   CHECK_SILENT(Invalid, cfg->tuning.n_shard_index_cache > 0);
   CHECK_SILENT(Invalid, cfg->tuning.n_chunk_layout_cache > 0);
@@ -122,54 +155,31 @@ damacy_tuning_defaults(void)
 uint64_t
 resolve_max_chunk_uncompressed(const struct damacy_config* cfg)
 {
-  uint64_t v = cfg->tuning.max_chunk_uncompressed_bytes;
-  if (v == 0)
-    v = DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES;
-  return v;
+  return cfg->tuning.max_chunk_uncompressed_bytes;
 }
 
 uint64_t
 resolve_max_read_op_bytes(const struct damacy_config* cfg)
 {
-  uint64_t v = cfg->tuning.max_read_op_bytes;
-  if (v == 0)
-    v = DAMACY_DEFAULT_READ_OP_MAX_BYTES;
-  return v;
+  return cfg->tuning.max_read_op_bytes;
 }
 
 uint8_t
 resolve_host_buffer_waves(const struct damacy_config* cfg)
 {
-  uint8_t v = cfg->tuning.host_buffer_waves;
-  if (v == 0)
-    v = DAMACY_DEFAULT_HOST_BUFFER_WAVES;
-  if (v < DAMACY_N_WAVES)
-    v = DAMACY_N_WAVES;
-  if (v > DAMACY_MAX_HOST_BUFFER_WAVES)
-    v = DAMACY_MAX_HOST_BUFFER_WAVES;
-  return v;
+  return cfg->tuning.host_buffer_waves;
 }
 
 uint32_t
 resolve_max_chunks_per_wave(const struct damacy_config* cfg)
 {
-  uint32_t v = cfg->tuning.max_chunks_per_wave;
-  if (v == 0)
-    v = DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE;
-  if (v > DAMACY_HARD_MAX_CHUNKS_PER_WAVE)
-    v = DAMACY_HARD_MAX_CHUNKS_PER_WAVE;
-  return v;
+  return cfg->tuning.max_chunks_per_wave;
 }
 
 uint32_t
 resolve_max_substreams_per_chunk(const struct damacy_config* cfg)
 {
-  uint32_t v = cfg->tuning.max_substreams_per_chunk;
-  if (v == 0)
-    v = DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK;
-  if (v > DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK)
-    v = DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK;
-  return v;
+  return cfg->tuning.max_substreams_per_chunk;
 }
 
 uint32_t
