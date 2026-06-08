@@ -70,6 +70,10 @@ damacy_scheduler_step(void* arg)
   enum damacy_status r = wave_pool_advance(&self->wave_pool, &changed);
   if (r == DAMACY_OK && self->failed_status == DAMACY_OK)
     r = kick_input_into_free_slots(self, &changed);
+  // Retriable backpressure: the reservation was already rolled back, so
+  // retry next tick rather than latching a fatal error.
+  if (r == DAMACY_AGAIN)
+    return changed;
   if (r != DAMACY_OK && self->failed_status == DAMACY_OK) {
     self->failed_status = r;
     return 1;

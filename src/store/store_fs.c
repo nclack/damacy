@@ -299,6 +299,8 @@ fs_submit(struct store* s, const struct store_read* reads, size_t n)
       log_warn("store_fs: job_pool exhausted (cap=%zu); draining batch",
                pool_capacity(fs->job_pool));
       store_fs_release(fs, pin);
+      // Retriable backpressure, not a shard read/open failure.
+      result.status = DAMACY_AGAIN;
       goto Drain;
     }
     j->fs = fs;

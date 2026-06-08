@@ -470,8 +470,13 @@ worker_fn(void* arg)
     struct damacy_sample_slot popped = { 0 };
     int popped_ok = 0;
     if (slot) {
-      atomic_fetch_add_explicit(&p->in_transit, 1, memory_order_acq_rel);
-      popped_ok = lookahead_try_pop(p->lookahead, &popped);
+      int has_queued_work = lookahead_size(p->lookahead) > 0;
+      if (has_queued_work) {
+        atomic_fetch_add_explicit(&p->in_transit, 1, memory_order_acq_rel);
+        popped_ok = lookahead_try_pop(p->lookahead, &popped);
+        if (!popped_ok)
+          atomic_fetch_sub_explicit(&p->in_transit, 1, memory_order_acq_rel);
+      }
     } else {
       // TODO(perf): replace polling with a condvar signaled from
       // pop_terminal_slot_locked when a slot frees up.
@@ -485,7 +490,6 @@ worker_fn(void* arg)
       atomic_fetch_sub_explicit(&p->in_transit, 1, memory_order_acq_rel);
       platform_mutex_unlock(p->lock);
     } else if (slot) {
-      atomic_fetch_sub_explicit(&p->in_transit, 1, memory_order_acq_rel);
       (void)lookahead_wait_nonempty_timeout(p->lookahead,
                                             has_in_flight ? 1 : -1);
     }

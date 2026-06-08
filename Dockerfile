@@ -27,7 +27,7 @@ ARG CUDA_IMAGE=nvidia/cuda:13.2.1-devel-ubuntu24.04
 FROM ${CUDA_IMAGE}
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG NVCOMP_VERSION=5.0.0.6
+ARG NVCOMP_VERSION=5.2.0.10
 # nvcomp standalone tarball (CUDA 13 build). NVIDIA serves these from a
 # redist tree keyed on the (linux-arch, version) tuple.
 ARG NVCOMP_URL=https://developer.download.nvidia.com/compute/nvcomp/redist/nvcomp/linux-x86_64/nvcomp-linux-x86_64-${NVCOMP_VERSION}_cuda13-archive.tar.xz

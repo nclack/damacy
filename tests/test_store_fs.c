@@ -1,5 +1,6 @@
 // Bound + pinning assertions for the store_fs LRU fd cache.
 
+#include "damacy_limits.h"
 #include "expect.h"
 #include "store/store.h"
 #include "store/store_fs.h"
@@ -308,6 +309,58 @@ test_async_read_error_reports_io(void)
   return 0;
 }
 
+// A burst past the fixed job_pool is retriable backpressure (DAMACY_AGAIN),
+// not the fatal DAMACY_IO the scheduler would latch.
+static int
+test_job_pool_exhaustion_reports_again(void)
+{
+  char root[] = "/tmp/damacy_store_fs_burst_XXXXXX";
+  EXPECT(mkdtemp(root));
+
+  enum
+  {
+    FILE_LEN = 4096
+  };
+  char path[256];
+  snprintf(path, sizeof path, "%s/k0", root);
+  {
+    static char zeros[FILE_LEN] = { 0 };
+    FILE* f = fopen(path, "wb");
+    EXPECT(f);
+    size_t w = fwrite(zeros, 1, FILE_LEN, f);
+    fclose(f);
+    EXPECT(w == FILE_LEN);
+  }
+
+  struct store_fs_config sc = {
+    .root = root,
+    .nthreads = 1,
+    .fd_cache_capacity = CAP,
+  };
+  struct store* store = store_fs_create(&sc);
+  EXPECT(store);
+
+  // Outpace the single io worker so in-flight climbs past the pool cap.
+  const size_t n = (size_t)DAMACY_IO_QUEUE_INITIAL_CAP * 4u;
+  struct store_read* reads = (struct store_read*)calloc(n, sizeof *reads);
+  EXPECT(reads);
+  static char dst[FILE_LEN];
+  for (size_t i = 0; i < n; ++i)
+    reads[i] = (struct store_read){
+      .key = "k0",
+      .dst = dst,
+      .offset = 0,
+      .len = FILE_LEN,
+    };
+
+  struct store_submit_result submit = store_read_submit(store, reads, n);
+  EXPECT(submit.status == DAMACY_AGAIN);
+
+  free(reads);
+  store_destroy(store);
+  return 0;
+}
+
 int
 main(void)
 {
@@ -317,5 +370,6 @@ main(void)
   RUN(test_lock_free_release_under_contention);
   RUN(test_read_job_stats);
   RUN(test_async_read_error_reports_io);
+  RUN(test_job_pool_exhaustion_reports_again);
   return 0;
 }
