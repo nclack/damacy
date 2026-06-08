@@ -123,6 +123,8 @@ jobs:
 
       - name: Upload coverage HTML artifact
         if: always()
+        timeout-minutes: 2
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: coverage-html-${{ github.sha }}
