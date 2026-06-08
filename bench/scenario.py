@@ -98,7 +98,8 @@ class Pipeline(BaseModel):
     metadata_io_concurrency: int = Field(default=32, gt=0)
     max_gpu_memory_mb: int = 0  # 0 → library default
     max_chunk_uncompressed_mb: int = 0  # 0 → library default
-    max_read_op_kb: int = 0  # cap on coalesced read_op size; 0 → library default
+    # cap on coalesced read_op size; unset → library default, 0 is a real value
+    max_read_op_kb: int | None = None
     n_array_meta_cache: int = 4096
     n_shard_index_cache: int = 16384
     n_chunk_layout_cache: int = 4096

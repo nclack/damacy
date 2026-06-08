@@ -281,7 +281,7 @@ def _scenario_panel(r: Results) -> Panel:
         )
     read_op_line = (
         f" max_read_op_kb={sc.pipeline.max_read_op_kb}"
-        if sc.pipeline.max_read_op_kb
+        if sc.pipeline.max_read_op_kb is not None
         else ""
     )
     body = (

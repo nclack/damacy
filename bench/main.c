@@ -589,6 +589,8 @@ read_array_shape(const char* abs_uri, int64_t* shape, uint8_t* rank)
 
 // Real path: build from an explicit `dataset.uris` list, reading each array's
 // own shape. Arrays of the wrong rank or too small for the sample are dropped.
+// Tri-state: <0 means no `uris` key (caller falls back to fmt mode), 0 success,
+// >0 a real error (malformed/empty manifest).
 static int
 array_table_init_uris(struct array_table* t,
                       struct cslice src,
@@ -600,7 +602,7 @@ array_table_init_uris(struct array_table* t,
                                          { QUERY_KEY, .key = "uris" } };
   struct json_node arr;
   if (json_resolve(src, p, countof(p), &arr, NULL) || arr.type != JSON_ARRAY)
-    return 1;
+    return -1;
   static const struct json_query iter_q[] = { { .kind = QUERY_ITER } };
 
   uint32_t cap = 0;
@@ -1012,18 +1014,13 @@ main(int argc, char** argv)
   }
 
   // damacy wants absolute uris. `uris` mode lists real arrays (each with its
-  // own shape); otherwise arrays are the synthetic uri_fmt % i over one shape.
+  // own shape); a missing `uris` key falls through to the synthetic uri_fmt % i
+  // over one shape.
   struct array_table at = { 0 };
   {
-    static const struct json_query pu[] = { { QUERY_KEY, .key = "dataset" },
-                                            { QUERY_KEY, .key = "uris" } };
-    struct json_node un;
-    int rc;
-    if (json_resolve(src, pu, countof(pu), &un, NULL) == 0 &&
-        un.type == JSON_ARRAY) {
-      rc =
-        array_table_init_uris(&at, src, sc.store_root, sc.sample_shape, sc.rank);
-    } else {
+    int rc =
+      array_table_init_uris(&at, src, sc.store_root, sc.sample_shape, sc.rank);
+    if (rc < 0) {
       char abs_fmt[BENCH_MAX_URI];
       if (snprintf(
             abs_fmt, sizeof abs_fmt, "%s/%s", sc.store_root, sc.uri_fmt) >=
@@ -1037,6 +1034,7 @@ main(int argc, char** argv)
     }
     if (rc != 0) {
       fprintf(stderr, "bench: array table init failed\n");
+      array_table_free(&at);
       free(json_buf);
       return 1;
     }
