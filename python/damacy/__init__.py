@@ -745,10 +745,8 @@ class Stats:
     chunk_layout_hits: int
     chunk_layout_misses: int
     metadata_latency_ops: int
-    metadata_latency_map_ops: int
     metadata_latency_stat_ops: int
     metadata_latency_submit_ops: int
-    metadata_latency_submit_dev_ops: int
     metadata_latency_active: int
     metadata_latency_max_active: int
     metadata_latency_total_sleep_ns: int
@@ -787,10 +785,8 @@ class Stats:
             chunk_layout_hits=st["chunk_layout_hits"],
             chunk_layout_misses=st["chunk_layout_misses"],
             metadata_latency_ops=st["metadata_latency_ops"],
-            metadata_latency_map_ops=st["metadata_latency_map_ops"],
             metadata_latency_stat_ops=st["metadata_latency_stat_ops"],
             metadata_latency_submit_ops=st["metadata_latency_submit_ops"],
-            metadata_latency_submit_dev_ops=st["metadata_latency_submit_dev_ops"],
             metadata_latency_active=st["metadata_latency_active"],
             metadata_latency_max_active=st["metadata_latency_max_active"],
             metadata_latency_total_sleep_ns=st["metadata_latency_total_sleep_ns"],

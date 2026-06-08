@@ -942,14 +942,10 @@ emit_results(const struct scenario* sc, const struct run_metrics* rm, FILE* out)
   jw_uint(&jw, rm->stats.chunk_layout.misses);
   jw_key(&jw, "metadata_latency_ops");
   jw_uint(&jw, rm->stats.metadata_latency.ops);
-  jw_key(&jw, "metadata_latency_map_ops");
-  jw_uint(&jw, rm->stats.metadata_latency.map_ops);
   jw_key(&jw, "metadata_latency_stat_ops");
   jw_uint(&jw, rm->stats.metadata_latency.stat_ops);
   jw_key(&jw, "metadata_latency_submit_ops");
   jw_uint(&jw, rm->stats.metadata_latency.submit_ops);
-  jw_key(&jw, "metadata_latency_submit_dev_ops");
-  jw_uint(&jw, rm->stats.metadata_latency.submit_dev_ops);
   jw_key(&jw, "metadata_latency_active");
   jw_uint(&jw, rm->stats.metadata_latency.active);
   jw_key(&jw, "metadata_latency_max_active");

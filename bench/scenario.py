@@ -204,10 +204,8 @@ class Counters(BaseModel):
     chunk_layout_hits: int
     chunk_layout_misses: int
     metadata_latency_ops: int = 0
-    metadata_latency_map_ops: int = 0
     metadata_latency_stat_ops: int = 0
     metadata_latency_submit_ops: int = 0
-    metadata_latency_submit_dev_ops: int = 0
     metadata_latency_active: int = 0
     metadata_latency_max_active: int = 0
     metadata_latency_total_sleep_ns: int = 0

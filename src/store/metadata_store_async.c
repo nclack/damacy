@@ -90,10 +90,8 @@ struct metadata_metrics
 {
   struct {
     _Atomic uint64_t ops;
-    _Atomic uint64_t map_ops;
     _Atomic uint64_t stat_ops;
     _Atomic uint64_t submit_ops;
-    _Atomic uint64_t submit_dev_ops;
     _Atomic uint64_t active;
     _Atomic uint64_t max_active;
     _Atomic uint64_t total_sleep_ns;
@@ -1065,14 +1063,10 @@ metadata_store_async_latency_stats_get(
     return;
   *out = (struct metadata_store_async_latency_stats){
     .ops = atomic_load_explicit(&s->metrics.injector.ops, memory_order_relaxed),
-    .map_ops =
-      atomic_load_explicit(&s->metrics.injector.map_ops, memory_order_relaxed),
     .stat_ops =
       atomic_load_explicit(&s->metrics.injector.stat_ops, memory_order_relaxed),
     .submit_ops = atomic_load_explicit(&s->metrics.injector.submit_ops,
                                        memory_order_relaxed),
-    .submit_dev_ops = atomic_load_explicit(&s->metrics.injector.submit_dev_ops,
-                                           memory_order_relaxed),
     .active =
       atomic_load_explicit(&s->metrics.injector.active, memory_order_relaxed),
     .max_active = atomic_load_explicit(&s->metrics.injector.max_active,
@@ -1092,12 +1086,9 @@ metadata_store_async_latency_stats_reset(struct metadata_store_async* s)
   uint64_t active =
     atomic_load_explicit(&s->metrics.injector.active, memory_order_relaxed);
   atomic_store_explicit(&s->metrics.injector.ops, 0, memory_order_relaxed);
-  atomic_store_explicit(&s->metrics.injector.map_ops, 0, memory_order_relaxed);
   atomic_store_explicit(&s->metrics.injector.stat_ops, 0, memory_order_relaxed);
   atomic_store_explicit(
     &s->metrics.injector.submit_ops, 0, memory_order_relaxed);
-  atomic_store_explicit(
-    &s->metrics.injector.submit_dev_ops, 0, memory_order_relaxed);
   atomic_store_explicit(
     &s->metrics.injector.max_active, active, memory_order_relaxed);
   atomic_store_explicit(

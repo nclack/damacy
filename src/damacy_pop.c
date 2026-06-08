@@ -302,10 +302,8 @@ damacy_stats_get(const struct damacy* self, struct damacy_stats* out)
     struct metadata_store_async_latency_stats ls;
     metadata_store_async_latency_stats_get(m->store_meta_async, &ls);
     out->metadata_latency.ops = ls.ops;
-    out->metadata_latency.map_ops = ls.map_ops;
     out->metadata_latency.stat_ops = ls.stat_ops;
     out->metadata_latency.submit_ops = ls.submit_ops;
-    out->metadata_latency.submit_dev_ops = ls.submit_dev_ops;
     out->metadata_latency.active = ls.active;
     out->metadata_latency.max_active = ls.max_active;
     out->metadata_latency.total_sleep_ns = ls.total_sleep_ns;

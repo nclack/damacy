@@ -33,10 +33,8 @@ extern "C"
   struct metadata_store_async_latency_stats
   {
     uint64_t ops;
-    uint64_t map_ops;
     uint64_t stat_ops;
     uint64_t submit_ops;
-    uint64_t submit_dev_ops;
     uint64_t active;
     uint64_t max_active;
     uint64_t total_sleep_ns;

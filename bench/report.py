@@ -166,10 +166,9 @@ def _counters_table(r: Results) -> Table:
         (
             "metadata latency (injected) ops",
             f"{c.metadata_latency_ops:,} "
-            f"[dim](map/stat/submit/dev "
-            f"{c.metadata_latency_map_ops:,}/{c.metadata_latency_stat_ops:,}/"
-            f"{c.metadata_latency_submit_ops:,}/"
-            f"{c.metadata_latency_submit_dev_ops:,})[/dim]",
+            f"[dim](stat/submit "
+            f"{c.metadata_latency_stat_ops:,}/"
+            f"{c.metadata_latency_submit_ops:,})[/dim]",
         ),
         (
             "metadata latency (injected) concurrency",
