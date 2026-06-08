@@ -96,18 +96,16 @@ extern "C"
     // Required — no default; a value too small for the requested
     // geometry returns DAMACY_BUDGET from damacy_create.
     uint64_t max_gpu_memory_bytes;
-    // 0 → DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES.
+    // Required: must be in [1, DAMACY_MAX_CHUNK_BYTES].
     uint32_t max_chunk_uncompressed_bytes;
-    // 0 → DAMACY_DEFAULT_READ_OP_MAX_BYTES.
+    // Required: must be in [1, UINT32_MAX] (read_op.nbytes is uint32_t).
     uint64_t max_read_op_bytes;
-    // Input staging slot count, in waves. 0 →
-    // DAMACY_DEFAULT_HOST_BUFFER_WAVES. Clamped to
+    // Input staging slot count, in waves. Required: must be in
     // [DAMACY_N_WAVES, DAMACY_MAX_HOST_BUFFER_WAVES].
     uint8_t host_buffer_waves;
-    // 0 → DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE. Clamped to 0xFFFFu.
+    // Required: must be in [1, DAMACY_HARD_MAX_CHUNKS_PER_WAVE].
     uint32_t max_chunks_per_wave;
-    // 0 → DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK. Clamped to
-    // DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK.
+    // Required: must be in [1, DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK].
     uint32_t max_substreams_per_chunk;
 
     // Bulk chunk-read worker threads. Wave IO uses this queue. Required:

@@ -102,8 +102,8 @@ test_resolve_metadata_io_concurrency_explicit(void)
   return 0;
 }
 
-static int
-test_validate_accepts_tuning_defaults(void)
+static struct damacy_config
+mk_valid_cfg(void)
 {
   struct damacy_config cfg = {
     .dtype = DAMACY_F32,
@@ -115,6 +115,13 @@ test_validate_accepts_tuning_defaults(void)
   };
   cfg.tuning = damacy_tuning_defaults();
   cfg.tuning.max_gpu_memory_bytes = 1ull << 20;
+  return cfg;
+}
+
+static int
+test_validate_accepts_tuning_defaults(void)
+{
+  struct damacy_config cfg = mk_valid_cfg();
   EXPECT(validate_config(&cfg) == DAMACY_OK);
   return 0;
 }
@@ -122,24 +129,79 @@ test_validate_accepts_tuning_defaults(void)
 static int
 test_validate_metadata_io_concurrency_reject_zero(void)
 {
-  struct damacy_config cfg = {
-    .dtype = DAMACY_F32,
-    .sample_shape = { 1 },
-    .sample_rank = 1,
-    .samples_per_batch = 1,
-    .lookahead_samples = 1,
-    .device = -1,
-    .tuning = {
-      .max_gpu_memory_bytes = 1ull << 20,
-      .n_io_threads = 1,
-      .metadata_io_concurrency = 1,
-      .n_array_meta_cache = 1,
-      .n_shard_index_cache = 1,
-      .n_chunk_layout_cache = 1,
-    },
-  };
+  struct damacy_config cfg = mk_valid_cfg();
   cfg.tuning.metadata_io_concurrency = 0;
   EXPECT(validate_config(&cfg) == DAMACY_INVAL);
+  return 0;
+}
+
+static int
+test_validate_tuning_fields_reject_out_of_range(void)
+{
+  struct damacy_config cfg = mk_valid_cfg();
+  EXPECT(validate_config(&cfg) == DAMACY_OK);
+
+  cfg = mk_valid_cfg();
+  cfg.tuning.max_chunk_uncompressed_bytes = 0;
+  EXPECT(validate_config(&cfg) == DAMACY_INVAL);
+
+  cfg = mk_valid_cfg();
+  cfg.tuning.max_read_op_bytes = 0;
+  EXPECT(validate_config(&cfg) == DAMACY_INVAL);
+  cfg.tuning.max_read_op_bytes = (uint64_t)UINT32_MAX + 1;
+  EXPECT(validate_config(&cfg) == DAMACY_INVAL);
+
+  cfg = mk_valid_cfg();
+  cfg.tuning.host_buffer_waves = 0;
+  EXPECT(validate_config(&cfg) == DAMACY_INVAL);
+  cfg.tuning.host_buffer_waves = DAMACY_N_WAVES - 1;
+  EXPECT(validate_config(&cfg) == DAMACY_INVAL);
+  cfg.tuning.host_buffer_waves = DAMACY_MAX_HOST_BUFFER_WAVES + 1;
+  EXPECT(validate_config(&cfg) == DAMACY_INVAL);
+
+  cfg = mk_valid_cfg();
+  cfg.tuning.max_chunks_per_wave = 0;
+  EXPECT(validate_config(&cfg) == DAMACY_INVAL);
+  cfg.tuning.max_chunks_per_wave = DAMACY_HARD_MAX_CHUNKS_PER_WAVE + 1;
+  EXPECT(validate_config(&cfg) == DAMACY_INVAL);
+
+  cfg = mk_valid_cfg();
+  cfg.tuning.max_substreams_per_chunk = 0;
+  EXPECT(validate_config(&cfg) == DAMACY_INVAL);
+  cfg.tuning.max_substreams_per_chunk = DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK + 1;
+  EXPECT(validate_config(&cfg) == DAMACY_INVAL);
+  return 0;
+}
+
+static int
+test_resolvers_return_literal_value(void)
+{
+  struct damacy_config cfg = { 0 };
+  cfg.tuning.max_chunk_uncompressed_bytes = 1u << 20;
+  cfg.tuning.max_read_op_bytes = 1ull << 21;
+  cfg.tuning.host_buffer_waves = DAMACY_N_WAVES + 1;
+  cfg.tuning.max_chunks_per_wave = 7;
+  cfg.tuning.max_substreams_per_chunk = 9;
+  EXPECT(resolve_max_chunk_uncompressed(&cfg) == (1u << 20));
+  EXPECT(resolve_max_read_op_bytes(&cfg) == (1ull << 21));
+  EXPECT(resolve_host_buffer_waves(&cfg) == DAMACY_N_WAVES + 1);
+  EXPECT(resolve_max_chunks_per_wave(&cfg) == 7);
+  EXPECT(resolve_max_substreams_per_chunk(&cfg) == 9);
+  return 0;
+}
+
+static int
+test_resolvers_clamp_above_hard_max(void)
+{
+  struct damacy_config cfg = { 0 };
+  cfg.tuning.host_buffer_waves = DAMACY_MAX_HOST_BUFFER_WAVES + 5;
+  cfg.tuning.max_chunks_per_wave = DAMACY_HARD_MAX_CHUNKS_PER_WAVE + 100u;
+  cfg.tuning.max_substreams_per_chunk =
+    DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK + 100u;
+  EXPECT(resolve_host_buffer_waves(&cfg) == DAMACY_MAX_HOST_BUFFER_WAVES);
+  EXPECT(resolve_max_chunks_per_wave(&cfg) == DAMACY_HARD_MAX_CHUNKS_PER_WAVE);
+  EXPECT(resolve_max_substreams_per_chunk(&cfg) ==
+         DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK);
   return 0;
 }
 
@@ -147,22 +209,8 @@ static int
 test_validate_io_threads_bound_by_machine(void)
 {
   uint32_t too_many = (uint32_t)platform_default_thread_count() + 1u;
-  struct damacy_config cfg = {
-    .dtype = DAMACY_F32,
-    .sample_shape = { 1 },
-    .sample_rank = 1,
-    .samples_per_batch = 1,
-    .lookahead_samples = 1,
-    .device = -1,
-    .tuning = {
-      .max_gpu_memory_bytes = 1ull << 20,
-      .n_io_threads = 1,
-      .metadata_io_concurrency = 1,
-      .n_array_meta_cache = 1,
-      .n_shard_index_cache = 1,
-      .n_chunk_layout_cache = 1,
-    },
-  };
+  struct damacy_config cfg = mk_valid_cfg();
+  cfg.tuning.n_io_threads = 1;
   cfg.tuning.metadata_io_concurrency = too_many;
   EXPECT(validate_config(&cfg) == DAMACY_OK);
   cfg.tuning.metadata_io_concurrency = DAMACY_MAX_METADATA_IO_CONCURRENCY + 1u;
@@ -184,6 +232,9 @@ main(void)
   RUN(test_resolve_metadata_io_concurrency_explicit);
   RUN(test_validate_accepts_tuning_defaults);
   RUN(test_validate_metadata_io_concurrency_reject_zero);
+  RUN(test_validate_tuning_fields_reject_out_of_range);
+  RUN(test_resolvers_return_literal_value);
+  RUN(test_resolvers_clamp_above_hard_max);
   RUN(test_validate_io_threads_bound_by_machine);
   log_info("all tests passed");
   return 0;
