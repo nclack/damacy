@@ -678,6 +678,43 @@ class Config:
         set_(self, "numa_node", int(numa_node))
         set_(self, "metadata_latency", metadata_latency or LatencyModel())
 
+    @classmethod
+    def default(
+        cls,
+        *,
+        samples_per_batch: int,
+        sample_shape: Sequence[int],
+        max_gpu_memory_bytes: int,
+        dtype: Dtype | str | int = Dtype.F32,
+        **overrides: Any,
+    ) -> Self:
+        """Recommended config for networked-FS (NFS) training.
+
+        Fills the cluster-tuned IO/decode knobs and takes explicit library
+        defaults for the rest; the caller supplies the workload geometry. Any
+        field may be overridden by keyword, and overrides win over the preset.
+        """
+        preset: dict[str, Any] = {
+            "n_io_threads": 64,
+            "metadata_io_concurrency": 64,
+            "max_read_op_bytes": 4 * 1024 * 1024,
+            "max_chunk_uncompressed_bytes": 2 * 1024 * 1024,
+            "host_buffer_waves": _native.DEFAULT_HOST_BUFFER_WAVES,
+            "max_chunks_per_wave": _native.DEFAULT_MAX_CHUNKS_PER_WAVE,
+            "max_substreams_per_chunk": _native.DEFAULT_MAX_SUBSTREAMS_PER_CHUNK,
+            "n_array_meta_cache": _native.DEFAULT_ARRAY_META_CACHE,
+            "n_shard_index_cache": _native.DEFAULT_SHARD_INDEX_CACHE,
+            "n_chunk_layout_cache": _native.DEFAULT_CHUNK_LAYOUT_CACHE,
+        }
+        preset.update(overrides)
+        return cls(
+            samples_per_batch=samples_per_batch,
+            sample_shape=sample_shape,
+            max_gpu_memory_bytes=max_gpu_memory_bytes,
+            dtype=dtype,
+            **preset,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class BatchInfo:
