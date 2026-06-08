@@ -23,6 +23,7 @@
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #define URING_MAX_EPOLL_EVENTS 2
@@ -78,6 +79,8 @@ struct metadata_job
   void* data;
   size_t len;
   enum damacy_status status;
+
+  uint64_t submit_ts[METADATA_OP_LATENCY_NKINDS];
 };
 
 _Static_assert(_Alignof(struct metadata_job) >= 8,
@@ -119,6 +122,12 @@ struct metadata_store_async
   _Atomic uint64_t read_active;
   _Atomic uint64_t read_max_active;
 
+  _Atomic uint64_t op_latency_count[METADATA_OP_LATENCY_NKINDS];
+  _Atomic uint64_t op_latency_sum_ns[METADATA_OP_LATENCY_NKINDS];
+  _Atomic uint64_t op_latency_max_ns[METADATA_OP_LATENCY_NKINDS];
+  _Atomic uint64_t op_latency_buckets[METADATA_OP_LATENCY_NKINDS]
+                                     [METADATA_OP_LATENCY_NBUCKETS];
+
 #ifdef DAMACY_METADATA_ASYNC_NUMA
   struct numa_resolved affinity;
 #endif
@@ -132,6 +141,45 @@ atomic_max_u64(_Atomic uint64_t* dst, uint64_t val)
          !atomic_compare_exchange_weak_explicit(
            dst, &cur, val, memory_order_relaxed, memory_order_relaxed)) {
   }
+}
+
+static uint64_t
+monotonic_ns(void)
+{
+  struct timespec now;
+  clock_gettime(CLOCK_MONOTONIC, &now);
+  return (uint64_t)now.tv_sec * 1000000000ull + (uint64_t)now.tv_nsec;
+}
+
+static unsigned
+latency_bucket(uint64_t ns)
+{
+  if (ns == 0)
+    return 0;
+  unsigned idx = 63u - (unsigned)__builtin_clzll(ns);
+  if (idx >= METADATA_OP_LATENCY_NBUCKETS)
+    idx = METADATA_OP_LATENCY_NBUCKETS - 1;
+  return idx;
+}
+
+static void
+record_op_latency(struct metadata_store_async* s,
+                  enum op_kind kind,
+                  uint64_t submit_ts)
+{
+  if (!submit_ts)
+    return;
+  uint64_t now = monotonic_ns();
+  uint64_t elapsed = now > submit_ts ? now - submit_ts : 0;
+  atomic_fetch_add_explicit(
+    &s->op_latency_count[kind], 1, memory_order_relaxed);
+  atomic_fetch_add_explicit(
+    &s->op_latency_sum_ns[kind], elapsed, memory_order_relaxed);
+  atomic_max_u64(&s->op_latency_max_ns[kind], elapsed);
+  atomic_fetch_add_explicit(
+    &s->op_latency_buckets[kind][latency_bucket(elapsed)],
+    1,
+    memory_order_relaxed);
 }
 
 static int
@@ -323,6 +371,7 @@ submit_op(struct metadata_store_async* s,
   if (!sqe)
     return 1;
   set_sqe_data(sqe, job, kind);
+  job->submit_ts[kind] = monotonic_ns();
   *sqe_out = sqe;
   return 0;
 }
@@ -625,6 +674,7 @@ handle_cqe(struct metadata_store_async* s, struct io_uring_cqe* cqe)
     return;
   struct metadata_job* job = (struct metadata_job*)(data & ~OP_TAG_MASK);
   enum op_kind kind = (enum op_kind)(data & OP_TAG_MASK);
+  record_op_latency(s, kind, job->submit_ts[kind]);
   switch (kind) {
     case OP_STATX:
       job->stat_res = cqe->res;
@@ -1060,4 +1110,42 @@ metadata_store_async_backend_stats_reset(struct metadata_store_async* s)
   uint64_t active = atomic_load_explicit(&s->read_active, memory_order_relaxed);
   atomic_store_explicit(&s->read_jobs, 0, memory_order_relaxed);
   atomic_store_explicit(&s->read_max_active, active, memory_order_relaxed);
+}
+
+void
+metadata_store_async_op_latency_stats_get(
+  struct metadata_store_async* s,
+  struct metadata_store_async_op_latency_stats* out)
+{
+  if (!out)
+    return;
+  *out = (struct metadata_store_async_op_latency_stats){ 0 };
+  if (!s)
+    return;
+  for (unsigned k = 0; k < METADATA_OP_LATENCY_NKINDS; ++k) {
+    out->kinds[k].count =
+      atomic_load_explicit(&s->op_latency_count[k], memory_order_relaxed);
+    out->kinds[k].sum_ns =
+      atomic_load_explicit(&s->op_latency_sum_ns[k], memory_order_relaxed);
+    out->kinds[k].max_ns =
+      atomic_load_explicit(&s->op_latency_max_ns[k], memory_order_relaxed);
+    for (unsigned b = 0; b < METADATA_OP_LATENCY_NBUCKETS; ++b)
+      out->kinds[k].buckets[b] = atomic_load_explicit(
+        &s->op_latency_buckets[k][b], memory_order_relaxed);
+  }
+}
+
+void
+metadata_store_async_op_latency_stats_reset(struct metadata_store_async* s)
+{
+  if (!s)
+    return;
+  for (unsigned k = 0; k < METADATA_OP_LATENCY_NKINDS; ++k) {
+    atomic_store_explicit(&s->op_latency_count[k], 0, memory_order_relaxed);
+    atomic_store_explicit(&s->op_latency_sum_ns[k], 0, memory_order_relaxed);
+    atomic_store_explicit(&s->op_latency_max_ns[k], 0, memory_order_relaxed);
+    for (unsigned b = 0; b < METADATA_OP_LATENCY_NBUCKETS; ++b)
+      atomic_store_explicit(
+        &s->op_latency_buckets[k][b], 0, memory_order_relaxed);
+  }
 }

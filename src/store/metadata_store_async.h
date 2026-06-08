@@ -50,6 +50,28 @@ extern "C"
     uint64_t read_max_active;
   };
 
+// Log2-scale histogram of measured submit->completion latency. Bucket i holds
+// ops whose latency in ns has floor(log2(ns)) == i (bucket 0 also catches 0 ns,
+// the last bucket catches everything above). Percentiles are derived from the
+// raw buckets at report time so the estimator can change without an ABI change.
+#define METADATA_OP_LATENCY_NBUCKETS DAMACY_METADATA_OP_LATENCY_NBUCKETS
+#define METADATA_OP_LATENCY_NKINDS DAMACY_METADATA_OP_LATENCY_NKINDS
+
+  struct metadata_store_async_op_latency_kind
+  {
+    uint64_t count;
+    uint64_t sum_ns;
+    uint64_t max_ns;
+    uint64_t buckets[METADATA_OP_LATENCY_NBUCKETS];
+  };
+
+  // Indexed by enum op_kind: statx, open, read, close.
+  struct metadata_store_async_op_latency_stats
+  {
+    struct metadata_store_async_op_latency_kind
+      kinds[METADATA_OP_LATENCY_NKINDS];
+  };
+
   void metadata_store_async_latency_stats_get(
     struct metadata_store_async* s,
     struct metadata_store_async_latency_stats* out);
@@ -59,6 +81,12 @@ extern "C"
     struct metadata_store_async* s,
     struct metadata_store_async_backend_stats* out);
   void metadata_store_async_backend_stats_reset(struct metadata_store_async* s);
+
+  void metadata_store_async_op_latency_stats_get(
+    struct metadata_store_async* s,
+    struct metadata_store_async_op_latency_stats* out);
+  void metadata_store_async_op_latency_stats_reset(
+    struct metadata_store_async* s);
 
   int metadata_store_async_read_file(struct metadata_store_async* s,
                                      const char* key,

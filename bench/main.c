@@ -825,6 +825,34 @@ emit_metric(struct json_writer* jw,
 }
 
 static void
+emit_metadata_op_latency(struct json_writer* jw, const struct run_metrics* rm)
+{
+  static const char* names[DAMACY_METADATA_OP_LATENCY_NKINDS] = {
+    "statx", "open", "read", "close"
+  };
+  jw_key(jw, "metadata_op_latency");
+  jw_array_begin(jw);
+  for (unsigned k = 0; k < DAMACY_METADATA_OP_LATENCY_NKINDS; ++k) {
+    jw_object_begin(jw);
+    jw_key(jw, "op");
+    jw_string(jw, names[k]);
+    jw_key(jw, "count");
+    jw_uint(jw, rm->stats.metadata_op_latency[k].count);
+    jw_key(jw, "sum_ns");
+    jw_uint(jw, rm->stats.metadata_op_latency[k].sum_ns);
+    jw_key(jw, "max_ns");
+    jw_uint(jw, rm->stats.metadata_op_latency[k].max_ns);
+    jw_key(jw, "buckets");
+    jw_array_begin(jw);
+    for (unsigned b = 0; b < DAMACY_METADATA_OP_LATENCY_NBUCKETS; ++b)
+      jw_uint(jw, rm->stats.metadata_op_latency[k].buckets[b]);
+    jw_array_end(jw);
+    jw_object_end(jw);
+  }
+  jw_array_end(jw);
+}
+
+static void
 emit_results(const struct scenario* sc, const struct run_metrics* rm, FILE* out)
 {
   struct strbuf sb = { 0 };
@@ -936,6 +964,7 @@ emit_results(const struct scenario* sc, const struct run_metrics* rm, FILE* out)
   jw_uint(&jw, rm->stats.metadata_backend.read_active);
   jw_key(&jw, "metadata_backend_read_max_active");
   jw_uint(&jw, rm->stats.metadata_backend.read_max_active);
+  emit_metadata_op_latency(&jw, rm);
   jw_key(&jw, "gpu_bytes_committed");
   jw_uint(&jw, rm->stats.gpu_bytes_committed);
   jw_object_end(&jw);

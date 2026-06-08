@@ -343,6 +343,17 @@ extern "C"
       uint64_t read_active;
       uint64_t read_max_active;
     } metadata_backend;
+    // Real, measured submit->completion latency of the io_uring metadata ops,
+    // broken out by op kind (statx/open/read/close). Distinct from the injected
+    // synthetic latency in metadata_latency above. Buckets are log2-scale on ns
+    // (bucket i: floor(log2(ns)) == i); percentiles are derived from them.
+    struct
+    {
+      uint64_t count;
+      uint64_t sum_ns;
+      uint64_t max_ns;
+      uint64_t buckets[DAMACY_METADATA_OP_LATENCY_NBUCKETS];
+    } metadata_op_latency[DAMACY_METADATA_OP_LATENCY_NKINDS];
     uint64_t batches_emitted;
     uint64_t batches_truncated;
     uint64_t waves_emitted;

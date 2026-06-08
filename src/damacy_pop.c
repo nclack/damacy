@@ -315,6 +315,15 @@ damacy_stats_get(const struct damacy* self, struct damacy_stats* out)
     out->metadata_backend.read_jobs = fs.read_jobs;
     out->metadata_backend.read_active = fs.read_active;
     out->metadata_backend.read_max_active = fs.read_max_active;
+    struct metadata_store_async_op_latency_stats os;
+    metadata_store_async_op_latency_stats_get(m->store_meta_async, &os);
+    for (unsigned k = 0; k < DAMACY_METADATA_OP_LATENCY_NKINDS; ++k) {
+      out->metadata_op_latency[k].count = os.kinds[k].count;
+      out->metadata_op_latency[k].sum_ns = os.kinds[k].sum_ns;
+      out->metadata_op_latency[k].max_ns = os.kinds[k].max_ns;
+      for (unsigned b = 0; b < DAMACY_METADATA_OP_LATENCY_NBUCKETS; ++b)
+        out->metadata_op_latency[k].buckets[b] = os.kinds[k].buckets[b];
+    }
   }
 }
 
@@ -329,4 +338,5 @@ damacy_stats_reset(struct damacy* self)
   scheduler_unlock(self->sched);
   metadata_store_async_latency_stats_reset(self->store_meta_async);
   metadata_store_async_backend_stats_reset(self->store_meta_async);
+  metadata_store_async_op_latency_stats_reset(self->store_meta_async);
 }
