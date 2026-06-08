@@ -33,9 +33,11 @@ def main() -> None:
     ap.add_argument("--n-batches", type=int, default=50)
     ap.add_argument("--warmup", type=int, default=5)
     ap.add_argument("--lookahead", type=int, default=256)
+    ap.add_argument("--n-io-threads", type=int, default=16)
     ap.add_argument("--gpu-mb", type=int, default=8192)
     ap.add_argument("--max-chunk-mb", type=int, default=4)
-    ap.add_argument("--max-read-op-kb", type=int, default=0, help="0 = library default")
+    ap.add_argument("--max-read-op-kb", type=int, default=None,
+                    help="omit for the library default; an explicit value (incl. 0) is passed through")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
 
@@ -54,7 +56,7 @@ def main() -> None:
     pipeline = {
         "dtype": "f32",
         "lookahead_samples": a.lookahead,
-        "n_io_threads": 16,
+        "n_io_threads": a.n_io_threads,
         "metadata_io_concurrency": 64,
         "max_gpu_memory_mb": a.gpu_mb,
         "max_chunk_uncompressed_mb": a.max_chunk_mb,
@@ -62,7 +64,7 @@ def main() -> None:
         "n_shard_index_cache": 16384,
         "n_chunk_layout_cache": 4096,
     }
-    if a.max_read_op_kb:
+    if a.max_read_op_kb is not None:
         pipeline["max_read_op_kb"] = a.max_read_op_kb
 
     scenario = {
