@@ -89,9 +89,25 @@ def gen_one_zarr(out: Path, sc: Scenario, seed: int, codec: str, dtype: str) -> 
     return subprocess.run(cmd, stdout=subprocess.DEVNULL).returncode
 
 
+def array_dirs(sc: Scenario) -> list[Path]:
+    """Absolute dir of each array the scenario references (uris mode)."""
+    store_root = resolve_path(sc.dataset.store_root)
+    return [store_root / u for u in (sc.dataset.uris or [])]
+
+
 def ensure_zarrs(sc: Scenario, regen: bool) -> None:
     ds = sc.dataset
     store_root = resolve_path(ds.store_root)
+
+    if ds.uris is not None:
+        missing = [u for u, d in zip(ds.uris, array_dirs(sc)) if not (d / "zarr.json").exists()]
+        if missing:
+            console.print(f"[red]error:[/red] {len(missing)} listed uri(s) have no zarr.json, e.g. {missing[0]}")
+            raise typer.Exit(1)
+        console.print(f"[green]✓[/green] {len(ds.uris)} real array(s) present under {store_root}")
+        return
+
+    assert ds.uri_fmt is not None
     sub_fmt = zarr_subdir_fmt(ds.uri_fmt, ds.array_path)
 
     pending: list[tuple[int, Path]] = []
@@ -250,8 +266,10 @@ def main(
         return
 
     if not warm:
-        store_root = resolve_path(sc.dataset.store_root)
-        n, sz = drop_page_cache([store_root])
+        roots = array_dirs(sc) if sc.dataset.uris is not None else [
+            resolve_path(sc.dataset.store_root)
+        ]
+        n, sz = drop_page_cache(roots)
         console.print(
             f"[green]✓[/green] page cache dropped: {n} files, {sz / 1e9:.2f} GB hinted"
         )

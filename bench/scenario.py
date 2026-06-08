@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 SrcDType = Literal["u8", "u16", "i16", "u32", "i32", "f16", "f32"]
 DstDType = Literal["f32", "bf16"]
@@ -29,14 +29,20 @@ NUMPY_DTYPE = {
 class Dataset(BaseModel):
     store_root: str
     n_zarrs: int = Field(gt=0)
-    uri_fmt: str
+    # Explicit per-array URIs relative to store_root. When set, the bench
+    # samples these real arrays (reading each one's shape from its
+    # zarr.json) and the synthetic-generation fields below are unused.
+    # When None, the synthetic path applies: arrays are named uri_fmt % i
+    # and generated to a single uniform zarr_shape.
+    uris: list[str] | None = None
+    uri_fmt: str | None = None
     array_path: str = "scale0/image"
-    zarr_shape: list[int]
-    chunk_shape: list[int]
-    shard_shape: list[int]
+    zarr_shape: list[int] | None = None
+    chunk_shape: list[int] | None = None
+    shard_shape: list[int] | None = None
     # Source dtype assigned per-zarr cycling through this list. Length
     # must be >= 1 and ideally divide n_zarrs.
-    dtypes: list[SrcDType]
+    dtypes: list[SrcDType] | None = None
     # Codec assigned per-zarr cycling through this list. Length must
     # divide n_zarrs (or be 1). `["zstd"]` reproduces the original
     # single-codec scenario.
@@ -47,22 +53,32 @@ class Dataset(BaseModel):
 
     @field_validator("zarr_shape", "chunk_shape", "shard_shape")
     @classmethod
-    def _positive(cls, v: list[int]) -> list[int]:
-        if not v or any(x <= 0 for x in v):
+    def _positive(cls, v: list[int] | None) -> list[int] | None:
+        if v is not None and (not v or any(x <= 0 for x in v)):
             raise ValueError("shape entries must be positive")
         return v
 
-    @field_validator("codecs", "dtypes")
-    @classmethod
-    def _nonempty(cls, v: list[str]) -> list[str]:
-        if not v:
-            raise ValueError("must be non-empty")
-        return v
+    @model_validator(mode="after")
+    def _gen_fields_present(self) -> "Dataset":
+        if self.uris is None:
+            missing = [
+                f
+                for f in ("uri_fmt", "zarr_shape", "chunk_shape", "shard_shape", "dtypes")
+                if getattr(self, f) is None
+            ]
+            if missing:
+                raise ValueError(
+                    f"synthetic dataset (no `uris`) requires: {', '.join(missing)}"
+                )
+        elif not self.uris:
+            raise ValueError("`uris` must be non-empty when present")
+        return self
 
     def codec_for(self, zarr_idx: int) -> Codec:
         return self.codecs[zarr_idx % len(self.codecs)]
 
     def dtype_for(self, zarr_idx: int) -> SrcDType:
+        assert self.dtypes is not None
         return self.dtypes[zarr_idx % len(self.dtypes)]
 
 
@@ -82,7 +98,8 @@ class Pipeline(BaseModel):
     metadata_io_concurrency: int = Field(default=32, gt=0)
     max_gpu_memory_mb: int = 0  # 0 → library default
     max_chunk_uncompressed_mb: int = 0  # 0 → library default
-    max_read_op_kb: int = 0  # cap on coalesced read_op size; 0 → library default
+    # cap on coalesced read_op size; unset → library default, 0 is a real value
+    max_read_op_kb: int | None = None
     n_array_meta_cache: int = 4096
     n_shard_index_cache: int = 16384
     n_chunk_layout_cache: int = 4096
