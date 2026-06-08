@@ -105,3 +105,9 @@ _Static_assert(DAMACY_HARD_MAX_SUBSTREAMS_PER_WAVE_U64 <= UINT32_MAX,
 
 #define DAMACY_MAX_SUBSTREAMS_PER_WAVE(chunks, substreams_per_chunk)           \
   ((uint32_t)((uint64_t)(chunks) * (uint64_t)(substreams_per_chunk)))
+
+// Measured metadata-op latency histogram dimensions (see damacy_stats's
+// metadata_op_latency). NKINDS matches the io_uring op kinds statx/open/read/
+// close; NBUCKETS spans ~1ns..~tens of seconds on a log2 scale.
+#define DAMACY_METADATA_OP_LATENCY_NKINDS 4
+#define DAMACY_METADATA_OP_LATENCY_NBUCKETS 48

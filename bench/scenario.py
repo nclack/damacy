@@ -153,6 +153,39 @@ class Timings(BaseModel):
     consumer_pop_wait: float = 0.0
 
 
+class MetadataOpLatency(BaseModel):
+    """Real, measured submit->completion latency for one io_uring op kind.
+
+    Buckets are a log2-scale histogram on nanoseconds: bucket i counts ops whose
+    latency satisfies floor(log2(ns)) == i. Percentiles are derived here from the
+    raw buckets so the estimator can evolve without touching the C ABI."""
+
+    op: str
+    count: int = 0
+    sum_ns: int = 0
+    max_ns: int = 0
+    buckets: list[int] = Field(default_factory=list)
+
+    def avg_ns(self) -> float:
+        return self.sum_ns / self.count if self.count else 0.0
+
+    def percentile_ns(self, q: float) -> float:
+        """Geometric-mean estimate of the q-quantile (0..1) from the buckets.
+
+        Bucket i covers [2^i, 2^(i+1)); we return the bucket's geometric mean
+        2^(i+0.5) as the estimate, clamped to max_ns for the tail."""
+        if self.count == 0:
+            return 0.0
+        rank = q * self.count
+        cum = 0
+        for i, n in enumerate(self.buckets):
+            cum += n
+            if cum >= rank:
+                est = 2.0 ** (i + 0.5) if i > 0 else 0.0
+                return min(est, float(self.max_ns)) if self.max_ns else est
+        return float(self.max_ns)
+
+
 class Counters(BaseModel):
     samples_pushed: int
     batches_emitted: int
@@ -171,10 +204,8 @@ class Counters(BaseModel):
     chunk_layout_hits: int
     chunk_layout_misses: int
     metadata_latency_ops: int = 0
-    metadata_latency_map_ops: int = 0
     metadata_latency_stat_ops: int = 0
     metadata_latency_submit_ops: int = 0
-    metadata_latency_submit_dev_ops: int = 0
     metadata_latency_active: int = 0
     metadata_latency_max_active: int = 0
     metadata_latency_total_sleep_ns: int = 0
@@ -182,6 +213,7 @@ class Counters(BaseModel):
     metadata_backend_read_jobs: int = 0
     metadata_backend_read_active: int = 0
     metadata_backend_read_max_active: int = 0
+    metadata_op_latency: list[MetadataOpLatency] = Field(default_factory=list)
     gpu_bytes_committed: int = 0
 
 

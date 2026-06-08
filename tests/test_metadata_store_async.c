@@ -211,6 +211,73 @@ test_read_stat_and_stats(void)
   return 0;
 }
 
+static uint64_t
+op_latency_bucket_total(const struct metadata_store_async_op_latency_kind* k)
+{
+  uint64_t total = 0;
+  for (unsigned b = 0; b < METADATA_OP_LATENCY_NBUCKETS; ++b)
+    total += k->buckets[b];
+  return total;
+}
+
+static int
+test_op_latency_measured(void)
+{
+  char root[128];
+  EXPECT(make_root(root, sizeof root) == 0);
+
+  char path[256];
+  snprintf(path, sizeof path, "%s/payload", root);
+  EXPECT(fixture_write_file(path, "abcdef") == 0);
+
+  struct metadata_store_async* s =
+    metadata_store_async_create(1, NULL, &(struct damacy_latency_model){ 0 });
+  EXPECT(s);
+
+  struct read_wait whole;
+  read_wait_init(&whole);
+  EXPECT(metadata_store_async_read_file(s, path, read_cb, &whole) == 0);
+  read_wait_block(&whole);
+  EXPECT(whole.status == DAMACY_OK);
+  read_wait_done(&whole);
+
+  struct stat_wait st;
+  stat_wait_init(&st);
+  EXPECT(metadata_store_async_stat(s, path, stat_cb, &st) == 0);
+  stat_wait_block(&st);
+  EXPECT(st.status == STORE_STAT_OK);
+  stat_wait_done(&st);
+
+  struct metadata_store_async_op_latency_stats ol;
+  metadata_store_async_op_latency_stats_get(s, &ol);
+
+  // REQ_READ_FILE issues statx+open+read+close; REQ_STAT issues one statx.
+  EXPECT(ol.kinds[0].count >= 2); // statx
+  EXPECT(ol.kinds[1].count >= 1); // open
+  EXPECT(ol.kinds[2].count >= 1); // read
+  EXPECT(ol.kinds[3].count >= 1); // close
+  for (unsigned k = 0; k < METADATA_OP_LATENCY_NKINDS; ++k) {
+    EXPECT(op_latency_bucket_total(&ol.kinds[k]) == ol.kinds[k].count);
+    if (ol.kinds[k].count) {
+      EXPECT(ol.kinds[k].max_ns > 0);
+      EXPECT(ol.kinds[k].sum_ns >= ol.kinds[k].max_ns);
+    }
+  }
+
+  metadata_store_async_op_latency_stats_reset(s);
+  metadata_store_async_op_latency_stats_get(s, &ol);
+  for (unsigned k = 0; k < METADATA_OP_LATENCY_NKINDS; ++k) {
+    EXPECT(ol.kinds[k].count == 0);
+    EXPECT(ol.kinds[k].sum_ns == 0);
+    EXPECT(ol.kinds[k].max_ns == 0);
+    EXPECT(op_latency_bucket_total(&ol.kinds[k]) == 0);
+  }
+
+  metadata_store_async_destroy(s);
+  fixture_rm_tree(root);
+  return 0;
+}
+
 static int
 test_read_file_open_error_completes(void)
 {
@@ -246,6 +313,7 @@ int
 main(void)
 {
   RUN(test_read_stat_and_stats);
+  RUN(test_op_latency_measured);
   RUN(test_read_file_open_error_completes);
   return 0;
 }

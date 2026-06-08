@@ -164,20 +164,19 @@ def _counters_table(r: Results) -> Table:
             f"{c.chunk_layout_hits:,} / {c.chunk_layout_misses:,}",
         ),
         (
-            "metadata latency ops",
+            "metadata latency (injected) ops",
             f"{c.metadata_latency_ops:,} "
-            f"[dim](map/stat/submit/dev "
-            f"{c.metadata_latency_map_ops:,}/{c.metadata_latency_stat_ops:,}/"
-            f"{c.metadata_latency_submit_ops:,}/"
-            f"{c.metadata_latency_submit_dev_ops:,})[/dim]",
+            f"[dim](stat/submit "
+            f"{c.metadata_latency_stat_ops:,}/"
+            f"{c.metadata_latency_submit_ops:,})[/dim]",
         ),
         (
-            "metadata latency concurrency",
+            "metadata latency (injected) concurrency",
             f"max={c.metadata_latency_max_active:,} "
             f"active={c.metadata_latency_active:,}",
         ),
         (
-            "metadata latency sleep",
+            "metadata latency (injected) sleep",
             f"total={c.metadata_latency_total_sleep_ns / 1e9:,.2f}s "
             f"max={c.metadata_latency_max_sleep_ns / 1e9:,.2f}s",
         ),
@@ -191,6 +190,49 @@ def _counters_table(r: Results) -> Table:
     ]
     for k, v in rows:
         t.add_row(k, v)
+    return t
+
+
+def _fmt_lat_ns(ns: float) -> str:
+    if ns <= 0:
+        return "-"
+    if ns >= 1e9:
+        return f"{ns / 1e9:.2f} s"
+    if ns >= 1e6:
+        return f"{ns / 1e6:.2f} ms"
+    if ns >= 1e3:
+        return f"{ns / 1e3:.2f} us"
+    return f"{ns:.0f} ns"
+
+
+def _meta_op_latency_table(r: Results) -> Table | None:
+    ops = [o for o in r.counters.metadata_op_latency if o.count]
+    if not ops:
+        return None
+    t = Table(
+        title="metadata op latency (measured)",
+        title_style="bold cyan",
+        show_lines=False,
+        header_style="bold",
+        padding=(0, 2),
+    )
+    t.add_column("op", style="cyan", no_wrap=True)
+    t.add_column("count", justify="right")
+    t.add_column("avg", justify="right")
+    t.add_column("p50", justify="right")
+    t.add_column("p90", justify="right")
+    t.add_column("p99", justify="right")
+    t.add_column("max", justify="right")
+    for o in ops:
+        t.add_row(
+            o.op,
+            f"{o.count:,}",
+            _fmt_lat_ns(o.avg_ns()),
+            _fmt_lat_ns(o.percentile_ns(0.50)),
+            _fmt_lat_ns(o.percentile_ns(0.90)),
+            _fmt_lat_ns(o.percentile_ns(0.99)),
+            _fmt_lat_ns(float(o.max_ns)),
+        )
     return t
 
 
@@ -308,6 +350,9 @@ def render(r: Results, out: Console | None = None) -> None:
     out.print(_stage_table(r))
     out.print(_summary_table(r))
     out.print(_counters_table(r))
+    meta = _meta_op_latency_table(r)
+    if meta is not None:
+        out.print(meta)
 
 
 @app.command()
