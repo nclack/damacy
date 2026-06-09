@@ -1211,6 +1211,11 @@ class Pipeline:
         the pipeline is terminal — rebuild a fresh :class:`Pipeline`
         to recover. Calling :meth:`push` on a terminal pipeline raises
         :class:`ShutdownError`.
+
+        Batching is ``drop_last=True``: only complete batches of
+        ``Config.samples_per_batch`` are emitted, so trailing samples
+        beyond the last whole multiple are never returned. (Emitting
+        the ragged final batch is not yet supported — issue #139.)
         """
         self._check_open()
         self._pending.append(iter(samples))
@@ -1273,7 +1278,10 @@ class Pipeline:
         Raises :class:`PoolStarved` if no batch arrives within
         ``Config.pop_timeout_s`` seconds (default 30). Usually that
         means tensors from previous batches are still being held —
-        drop them, or ``.clone()`` if you need to keep them.
+        drop them, or ``.clone()`` if you need to keep them. It also
+        fires if you pop past the batches produced: only
+        ``len(pushed) // Config.samples_per_batch`` exist (drop_last),
+        and a further pop waits on a batch that is never sealed.
 
         Store-derived errors — :class:`NotFound`,
         :class:`DtypeMismatch`, per-array :class:`RankMismatch`,
