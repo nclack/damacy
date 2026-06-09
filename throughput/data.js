@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780936302035,
+  "lastUpdate": 1781045688539,
   "repoUrl": "https://github.com/nclack/damacy",
   "entries": {
     "damacy throughput": [
@@ -1119,6 +1119,38 @@ window.BENCHMARK_DATA = {
           {
             "name": "damacy/mixed/throughput",
             "value": 6069.77,
+            "unit": "MB/s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Nathan Clack",
+            "username": "nclack",
+            "email": "nclack@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "0db456b8d1a8f2c4fc3174f8681bd276bfa8636f",
+          "message": "python: fix stale n_io_threads docstring (#141)\n\nThe n_io_threads parameter docstring still said `None` selects\n`max_concurrency()`. After #136 made the cluster-tuned values the\ndefault, n_io_threads defaults to the literal `DEFAULT_IO_THREADS` and\nno longer accepts `None`. Docstring-only; no functional change.\n\n---------\n\nCo-authored-by: Nathan Clack <nclack@biohub.org>",
+          "timestamp": "2026-06-09T21:21:44Z",
+          "url": "https://github.com/nclack/damacy/commit/0db456b8d1a8f2c4fc3174f8681bd276bfa8636f"
+        },
+        "date": 1781045687809,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "damacy/default/throughput",
+            "value": 5834.49,
+            "unit": "MB/s"
+          },
+          {
+            "name": "damacy/mixed/throughput",
+            "value": 5768.59,
             "unit": "MB/s"
           }
         ]
