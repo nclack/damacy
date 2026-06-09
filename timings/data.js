@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780936298970,
+  "lastUpdate": 1781045685997,
   "repoUrl": "https://github.com/nclack/damacy",
   "entries": {
     "damacy timings": [
@@ -3259,6 +3259,88 @@ window.BENCHMARK_DATA = {
           {
             "name": "damacy/mixed/assemble.ms_avg",
             "value": 1.84258,
+            "unit": "ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Nathan Clack",
+            "username": "nclack",
+            "email": "nclack@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "0db456b8d1a8f2c4fc3174f8681bd276bfa8636f",
+          "message": "python: fix stale n_io_threads docstring (#141)\n\nThe n_io_threads parameter docstring still said `None` selects\n`max_concurrency()`. After #136 made the cluster-tuned values the\ndefault, n_io_threads defaults to the literal `DEFAULT_IO_THREADS` and\nno longer accepts `None`. Docstring-only; no functional change.\n\n---------\n\nCo-authored-by: Nathan Clack <nclack@biohub.org>",
+          "timestamp": "2026-06-09T21:21:44Z",
+          "url": "https://github.com/nclack/damacy/commit/0db456b8d1a8f2c4fc3174f8681bd276bfa8636f"
+        },
+        "date": 1781045684727,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "damacy/default/init",
+            "value": 77.9587,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/time_to_first_batch",
+            "value": 1005.52,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/wall",
+            "value": 9201.68,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/io.ms_avg",
+            "value": 2.94419,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/input_transfer.ms_avg",
+            "value": 3.84823,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/assemble.ms_avg",
+            "value": 1.69994,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/init",
+            "value": 77.5424,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/time_to_first_batch",
+            "value": 228.386,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/wall",
+            "value": 9306.8,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/io.ms_avg",
+            "value": 2.98002,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/input_transfer.ms_avg",
+            "value": 3.91929,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/assemble.ms_avg",
+            "value": 1.91133,
             "unit": "ms"
           }
         ]
