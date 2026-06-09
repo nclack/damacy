@@ -1,10 +1,26 @@
 #include "damacy.h"
 #include "damacy_config.h"
 #include "damacy_limits.h"
+#include "damacy_log.h"
 #include "expect.h"
 #include "platform/platform.h"
 
 #include <stdlib.h>
+#include <string.h>
+
+// Captures the most recent ERROR-level log message so floor-validation
+// tests can assert the actionable diagnostic text.
+static char g_last_log[512];
+
+static void
+capture_log(const damacy_log_event* ev, void* udata)
+{
+  (void)udata;
+  if (ev->msg) {
+    strncpy(g_last_log, ev->msg, sizeof(g_last_log) - 1);
+    g_last_log[sizeof(g_last_log) - 1] = '\0';
+  }
+}
 
 static struct damacy_config
 mk_cfg(enum damacy_gds_mode mode)
@@ -202,9 +218,91 @@ test_validate_io_threads_bound_by_machine(void)
   return 0;
 }
 
+// max_shards_per_sample must be > 0.
+static int
+test_validate_max_shards_per_sample_reject_zero(void)
+{
+  struct damacy_config cfg = mk_valid_cfg();
+  cfg.tuning.max_shards_per_sample = 0;
+  EXPECT(validate_config(&cfg) == DAMACY_INVAL);
+  return 0;
+}
+
+// n_array_meta_cache below lookahead_samples is rejected, and the message
+// names the knob, the observed/required values, and the fix.
+static int
+test_validate_array_meta_cache_floor(void)
+{
+  struct damacy_config cfg = mk_valid_cfg();
+  cfg.lookahead_samples = 32;
+  cfg.tuning.n_array_meta_cache = 8;
+  cfg.tuning.n_chunk_layout_cache = 32;
+  cfg.tuning.n_shard_index_cache = 32 * cfg.tuning.max_shards_per_sample;
+  g_last_log[0] = '\0';
+  EXPECT(validate_config(&cfg) == DAMACY_INVAL);
+  EXPECT(strstr(g_last_log, "n_array_meta_cache=8"));
+  EXPECT(strstr(g_last_log, "lookahead_samples(32)"));
+  EXPECT(strstr(g_last_log, "Raise n_array_meta_cache to >= 32"));
+  return 0;
+}
+
+// n_chunk_layout_cache below lookahead_samples is rejected with an
+// actionable message.
+static int
+test_validate_chunk_layout_cache_floor(void)
+{
+  struct damacy_config cfg = mk_valid_cfg();
+  cfg.lookahead_samples = 32;
+  cfg.tuning.n_array_meta_cache = 32;
+  cfg.tuning.n_chunk_layout_cache = 8;
+  cfg.tuning.n_shard_index_cache = 32 * cfg.tuning.max_shards_per_sample;
+  g_last_log[0] = '\0';
+  EXPECT(validate_config(&cfg) == DAMACY_INVAL);
+  EXPECT(strstr(g_last_log, "n_chunk_layout_cache=8"));
+  EXPECT(strstr(g_last_log, "lookahead_samples(32)"));
+  EXPECT(strstr(g_last_log, "Raise n_chunk_layout_cache to >= 32"));
+  return 0;
+}
+
+// n_shard_index_cache below lookahead_samples * max_shards_per_sample is
+// rejected; message reports the product and the required minimum.
+static int
+test_validate_shard_index_cache_floor(void)
+{
+  struct damacy_config cfg = mk_valid_cfg();
+  cfg.lookahead_samples = 32;
+  cfg.tuning.max_shards_per_sample = 4;
+  cfg.tuning.n_array_meta_cache = 32;
+  cfg.tuning.n_chunk_layout_cache = 32;
+  cfg.tuning.n_shard_index_cache = 64; // < 32 * 4 = 128
+  g_last_log[0] = '\0';
+  EXPECT(validate_config(&cfg) == DAMACY_INVAL);
+  EXPECT(strstr(g_last_log, "n_shard_index_cache=64"));
+  EXPECT(strstr(g_last_log, "lookahead_samples(32)"));
+  EXPECT(strstr(g_last_log, "max_shards_per_sample(4)"));
+  EXPECT(strstr(g_last_log, "= 128"));
+  EXPECT(strstr(g_last_log, "Raise n_shard_index_cache to >= 128"));
+  return 0;
+}
+
+// A floor-satisfying config of the same depth validates clean.
+static int
+test_validate_floors_satisfied_ok(void)
+{
+  struct damacy_config cfg = mk_valid_cfg();
+  cfg.lookahead_samples = 32;
+  cfg.tuning.max_shards_per_sample = 4;
+  cfg.tuning.n_array_meta_cache = 32;
+  cfg.tuning.n_chunk_layout_cache = 32;
+  cfg.tuning.n_shard_index_cache = 128;
+  EXPECT(validate_config(&cfg) == DAMACY_OK);
+  return 0;
+}
+
 int
 main(void)
 {
+  EXPECT(damacy_log_add_callback(capture_log, NULL, DAMACY_LOG_ERROR) == 0);
   RUN(test_resolve_enable_gds_auto_defers_to_env);
   RUN(test_resolve_enable_gds_on_overrides_env);
   RUN(test_resolve_enable_gds_off_overrides_env);
@@ -216,6 +314,11 @@ main(void)
   RUN(test_validate_tuning_fields_reject_out_of_range);
   RUN(test_resolvers_return_literal_value);
   RUN(test_validate_io_threads_bound_by_machine);
+  RUN(test_validate_max_shards_per_sample_reject_zero);
+  RUN(test_validate_array_meta_cache_floor);
+  RUN(test_validate_chunk_layout_cache_floor);
+  RUN(test_validate_shard_index_cache_floor);
+  RUN(test_validate_floors_satisfied_ok);
   log_info("all tests passed");
   return 0;
 }

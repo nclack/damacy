@@ -57,6 +57,8 @@ struct prefetch_cache
   uint64_t pending_count;
   uint64_t errored_count;
 
+  const char* knob_name;
+
   const struct prefetch_ops* ops;
   struct prefetch_fetcher* fetcher;
   struct prefetch_async_fetcher* async_fetcher;
@@ -321,6 +323,7 @@ prefetch_cache_create(const struct prefetch_cache_config* cfg)
   CHECK(Error, self);
   *self = (struct prefetch_cache){
     .capacity = cfg->capacity,
+    .knob_name = cfg->knob_name,
     .ops = cfg->ops,
     .fetcher = cfg->fetcher,
     .async_fetcher = cfg->async_fetcher,
@@ -452,8 +455,22 @@ prefetch_cache_request_result(struct prefetch_cache* self,
   struct lru_entry* ent = lru_put(self->idx, key_hash, key, s);
   if (!ent) {
     // lru_put has already called lru_slot_destroy on s.
+    //
+    // Saturation: every slot is pinned (max_owner_id >= watermark), so no
+    // entry could be evicted to make room. This is impossible by
+    // construction — damacy_config sizes each metadata cache to hold the
+    // full in-flight working set and the prefetcher caps per-sample shard
+    // count — so reaching here is a library invariant violation, not a
+    // recoverable budget condition. Abort with a message naming the knob.
+    log_fatal("prefetch_cache invariant violated: %s (capacity=%u) saturated "
+              "— every entry is pinned. This cache must be sized to hold the "
+              "whole in-flight working set (raise %s); validation should have "
+              "prevented this.",
+              self->knob_name ? self->knob_name : "(cache)",
+              (unsigned)self->capacity,
+              self->knob_name ? self->knob_name : "the cache capacity");
     platform_mutex_unlock(self->lock);
-    return (struct prefetch_request_result){ .status = DAMACY_BUDGET };
+    abort();
   }
   s->lru_ent = ent;
   lru_entry_acquire_locked(ent);

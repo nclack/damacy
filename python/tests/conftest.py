@@ -95,6 +95,41 @@ def tiny_zarr(tmp_path: Path, write_zarr_script: Path) -> str:
 
 
 @pytest.fixture
+def multishard_zarr(tmp_path: Path, write_zarr_script: Path) -> str:
+    """A 2D u16 zarr (32x32, 8x8 shards → a 4x4 = 16-shard grid). A
+    full-extent sample intersects 16 shards, used to exercise the
+    max_shards_per_sample runtime cap. Returns the absolute uri."""
+    if not _have_uv():
+        pytest.skip("uv not on PATH; needed to materialise the zarr fixture")
+    out = tmp_path / "multishard"
+    cmd = [
+        "uv",
+        "run",
+        "--script",
+        str(write_zarr_script),
+        "--out",
+        str(out),
+        "--shape",
+        "32,32",
+        "--inner",
+        "8,8",
+        "--shard",
+        "8,8",
+        "--dtype",
+        "uint16",
+        "--offset",
+        "0",
+        "--codec",
+        "blosc-zstd",
+    ]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.stderr.write(r.stderr)
+        pytest.skip(f"write_zarr.py failed (rc={r.returncode}); skipping")
+    return str(out)
+
+
+@pytest.fixture
 def tiny_zarr_no_cast(tmp_path: Path, write_zarr_script: Path) -> str:
     """Same shape as tiny_zarr but int64 — has no cast path to f32/bf16
     (post-#16: only u8/u16/i16/u32/i32/f16/f32 sources are supported).

@@ -51,6 +51,13 @@
 #define DAMACY_DEFAULT_SHARD_INDEX_CACHE 256u
 #define DAMACY_DEFAULT_CHUNK_LAYOUT_CACHE 64u
 
+// Declared upper bound on the shard count a single sample's AABB may
+// intersect. Sizes the shard_index cache floor at config time
+// (n_shard_index_cache >= lookahead_samples * max_shards_per_sample) and
+// caps per-sample shard enumeration at runtime. Default pairs with the
+// default shard_index cache (256) for a lookahead of >= 4.
+#define DAMACY_DEFAULT_MAX_SHARDS_PER_SAMPLE 64u
+
 // Matches DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE. Must be a power of two —
 // io_queue indexes via bitmask.
 #define DAMACY_IO_QUEUE_INITIAL_CAP 512u

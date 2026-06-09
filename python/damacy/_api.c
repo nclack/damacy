@@ -707,6 +707,7 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                          "n_array_meta_cache",
                          "n_shard_index_cache",
                          "n_chunk_layout_cache",
+                         "max_shards_per_sample",
                          "sample_shape",
                          "host_buffer_waves",
                          "max_chunks_per_wave",
@@ -734,6 +735,7 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   unsigned int n_array_meta = DAMACY_DEFAULT_ARRAY_META_CACHE;
   unsigned int n_shard_index = DAMACY_DEFAULT_SHARD_INDEX_CACHE;
   unsigned int n_chunk_layout = DAMACY_DEFAULT_CHUNK_LAYOUT_CACHE;
+  unsigned int max_shards_per_sample = DAMACY_DEFAULT_MAX_SHARDS_PER_SAMPLE;
   PyObject* sample_shape_obj = NULL;
   unsigned int host_buffer_waves = DAMACY_DEFAULT_HOST_BUFFER_WAVES;
   unsigned int max_chunks_per_wave = DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE;
@@ -751,7 +753,7 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   unsigned long long metadata_latency_seed = 0;
   if (!PyArg_ParseTupleAndKeywords(args,
                                    kw,
-                                   "IIOIKIIIIIO|IIIKiiiipKddKK",
+                                   "IIOIKIIIIIIO|IIIKiiiipKddKK",
                                    kws,
                                    &samples_per_batch,
                                    &lookahead,
@@ -763,6 +765,7 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                                    &n_array_meta,
                                    &n_shard_index,
                                    &n_chunk_layout,
+                                   &max_shards_per_sample,
                                    &sample_shape_obj,
                                    &host_buffer_waves,
                                    &max_chunks_per_wave,
@@ -823,6 +826,7 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
       .n_array_meta_cache = n_array_meta,
       .n_shard_index_cache = n_shard_index,
       .n_chunk_layout_cache = n_chunk_layout,
+      .max_shards_per_sample = max_shards_per_sample,
       .numa_strategy = (enum damacy_numa_strategy)numa_strategy,
       .numa_node = numa_node,
       .enable_gds = (enum damacy_gds_mode)enable_gds,
@@ -1242,6 +1246,7 @@ api_register_types(PyObject* m)
     { "DEFAULT_ARRAY_META_CACHE", d.n_array_meta_cache },
     { "DEFAULT_SHARD_INDEX_CACHE", d.n_shard_index_cache },
     { "DEFAULT_CHUNK_LAYOUT_CACHE", d.n_chunk_layout_cache },
+    { "DEFAULT_MAX_SHARDS_PER_SAMPLE", d.max_shards_per_sample },
     { "MAX_CHUNK_BYTES", DAMACY_MAX_CHUNK_BYTES },
     { "MAX_READ_OP_BYTES", UINT32_MAX },
     { "N_WAVES", DAMACY_N_WAVES },

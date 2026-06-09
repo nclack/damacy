@@ -61,9 +61,12 @@ mk_cfg(const char* root, uint32_t samples_per_batch, int64_t sy, int64_t sx)
   c.tuning = damacy_tuning_defaults();
   c.tuning.n_io_threads = 1;
   c.tuning.metadata_io_concurrency = 1;
-  c.tuning.n_array_meta_cache = 4;
-  c.tuning.n_shard_index_cache = 4;
-  c.tuning.n_chunk_layout_cache = 4;
+  // Cache floors (#134): shard==array shape here (1 shard/sample) so
+  // max_shards=1; 16 covers every lookahead used (<= 8).
+  c.tuning.n_array_meta_cache = 16;
+  c.tuning.n_shard_index_cache = 16;
+  c.tuning.n_chunk_layout_cache = 16;
+  c.tuning.max_shards_per_sample = 1;
   c.tuning.max_gpu_memory_bytes = 1ull << 30;
   c.sample_shape[0] = sy;
   c.sample_shape[1] = sx;
@@ -297,9 +300,10 @@ test_multi_wave_per_batch(void)
   cfg.tuning = damacy_tuning_defaults();
   cfg.tuning.n_io_threads = 1;
   cfg.tuning.metadata_io_concurrency = 1;
-  cfg.tuning.n_array_meta_cache = 4;
-  cfg.tuning.n_shard_index_cache = 4;
-  cfg.tuning.n_chunk_layout_cache = 4;
+  cfg.tuning.n_array_meta_cache = 16;
+  cfg.tuning.n_shard_index_cache = 16;
+  cfg.tuning.n_chunk_layout_cache = 16;
+  cfg.tuning.max_shards_per_sample = 1;
   cfg.tuning.max_chunk_uncompressed_bytes = 4ull << 10;
   // Resolver minimum so the 16-chunk batch spills into ≥2 waves.
   cfg.tuning.max_gpu_memory_bytes = 116ull << 20;
@@ -375,9 +379,10 @@ test_wave_grows_substream_cap(void)
   cfg.tuning = damacy_tuning_defaults();
   cfg.tuning.n_io_threads = 1;
   cfg.tuning.metadata_io_concurrency = 1;
-  cfg.tuning.n_array_meta_cache = 4;
-  cfg.tuning.n_shard_index_cache = 4;
-  cfg.tuning.n_chunk_layout_cache = 4;
+  cfg.tuning.n_array_meta_cache = 16;
+  cfg.tuning.n_shard_index_cache = 16;
+  cfg.tuning.n_chunk_layout_cache = 16;
+  cfg.tuning.max_shards_per_sample = 1;
   cfg.tuning.max_chunk_uncompressed_bytes = 1ull << 20;
   cfg.tuning.max_gpu_memory_bytes = 1ull << 30;
   struct damacy* d = NULL;
@@ -452,9 +457,10 @@ test_grow_inside_tight_budget(void)
   cfg.tuning = damacy_tuning_defaults();
   cfg.tuning.n_io_threads = 1;
   cfg.tuning.metadata_io_concurrency = 1;
-  cfg.tuning.n_array_meta_cache = 4;
-  cfg.tuning.n_shard_index_cache = 4;
-  cfg.tuning.n_chunk_layout_cache = 4;
+  cfg.tuning.n_array_meta_cache = 16;
+  cfg.tuning.n_shard_index_cache = 16;
+  cfg.tuning.n_chunk_layout_cache = 16;
+  cfg.tuning.max_shards_per_sample = 1;
   cfg.tuning.max_chunk_uncompressed_bytes = 4ull << 10;
   cfg.tuning.max_gpu_memory_bytes = 120ull << 20;
   struct damacy* d = NULL;
@@ -511,9 +517,10 @@ test_layout_probe_avoids_decoder_grow(void)
   cfg.tuning = damacy_tuning_defaults();
   cfg.tuning.n_io_threads = 1;
   cfg.tuning.metadata_io_concurrency = 1;
-  cfg.tuning.n_array_meta_cache = 4;
-  cfg.tuning.n_shard_index_cache = 4;
-  cfg.tuning.n_chunk_layout_cache = 4;
+  cfg.tuning.n_array_meta_cache = 16;
+  cfg.tuning.n_shard_index_cache = 16;
+  cfg.tuning.n_chunk_layout_cache = 16;
+  cfg.tuning.max_shards_per_sample = 1;
   cfg.tuning.max_chunk_uncompressed_bytes = 4ull << 10;
   cfg.tuning.max_gpu_memory_bytes = 120ull << 20;
   struct damacy* d = NULL;

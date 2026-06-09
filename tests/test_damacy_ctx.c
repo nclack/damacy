@@ -48,6 +48,9 @@ mk_cfg(const char* root, int64_t sy, int64_t sx)
   c.tuning.n_array_meta_cache = 4;
   c.tuning.n_shard_index_cache = 4;
   c.tuning.n_chunk_layout_cache = 4;
+  // lookahead_samples=2; shard floor = 2 * max_shards_per_sample must fit
+  // n_shard_index_cache=4 → max_shards=2 (1 shard/sample fixtures).
+  c.tuning.max_shards_per_sample = 2;
   c.tuning.max_gpu_memory_bytes = 1ull << 30;
   c.sample_shape[0] = sy;
   c.sample_shape[1] = sx;

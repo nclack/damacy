@@ -137,6 +137,7 @@ class Pipeline:
         n_array_meta_cache: int,
         n_shard_index_cache: int,
         n_chunk_layout_cache: int,
+        max_shards_per_sample: int,
         sample_shape: tuple[int, ...],
         host_buffer_waves: int = 0,
         max_chunks_per_wave: int = 0,

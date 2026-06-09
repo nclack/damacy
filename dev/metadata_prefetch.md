@@ -86,7 +86,7 @@ called by the scheduler when batch `w−1` is fully planned
 and its metadata is no longer needed; entries with
 `max_batch_id < w` become eligible for eviction.
 
-### Ordinal-range pinning and backpressure
+### Ordinal-range pinning, sized to never saturate
 
 The cache is driven by a monotonic batch ordinal stamped on
 each sample by lookahead. Each entry holds a `[min_batch_id,
@@ -103,17 +103,49 @@ entries until the scheduler proves they're done. The
 monotonic ordinal makes "done" a single integer compare
 instead of a multi-handle refcount.
 
-With long lead time, entries accumulate against capacity.
-Once every entry has `max_batch_id ≥ watermark`, admission
-is rejected:
+The in-flight window is bounded at `lookahead_samples`
+(the prefetcher's slot capacity), so the worst-case number
+of simultaneously-pinned entries per cache is bounded too:
+
+- **array_meta**: ≤ `lookahead_samples` (1 key/sample).
+- **chunk_layout**: ≤ `lookahead_samples` (1 key/sample).
+- **shard_index**: ≤ `lookahead_samples × max_shards_per_sample`
+  — the per-sample shard footprint times the window.
+
+Rather than build stall/back-pressure machinery for the case
+where every entry is pinned, **saturation is made impossible
+by construction**. `damacy_config` validation enforces a floor
+so each cache can hold its entire worst-case in-flight set:
 
 ```
-prefetch_handle_t prefetch_cache_try_request(c, key, batch_id, &gate);  // NULL when saturated
+n_array_meta_cache   >= lookahead_samples
+n_chunk_layout_cache >= lookahead_samples
+n_shard_index_cache  >= lookahead_samples * max_shards_per_sample
 ```
 
-When `try_request` returns NULL, the prefetcher stalls that
-stage for that sample until the scheduler advances the
-watermark.
+Each floor violation is rejected at `damacy_create` with
+`DAMACY_INVAL` and an actionable message that names the knob,
+the observed vs. required value, and the concrete fix (which
+knob to raise and to what minimum). The cache sizes remain
+explicit tuning knobs — useful as reuse/hit-rate levers above
+the floor.
+
+`max_shards_per_sample` is the one footprint not knowable at
+config time (shard geometry is only read at runtime), so it is
+declared as an explicit, validated (`> 0`) tuning knob. It does
+double duty: it sizes the shard_index floor above, and at
+runtime the prefetcher rejects any sample whose AABB intersects
+more shards than declared (`DAMACY_INVAL`, with a message that
+reports the observed vs. allowed shard count). That runtime cap
+is what makes the declared bound sound — without it an
+under-declared value could still overrun the cache.
+
+With the floors enforced, the oldest in-flight sample can
+always be admitted, so no stall is ever required. The cache's
+admission path therefore treats "every entry pinned" as a
+should-never-happen invariant: `prefetch_cache_request_result`
+aborts with a fatal log naming the offending cache knob
+(defense-in-depth) instead of returning a recoverable status.
 
 ### Readiness gate
 
@@ -189,15 +221,24 @@ same `error` state. Downstream consumers (eventually the
 chunk planner) see a single error transition and fail the
 batch cleanly.
 
-### Backpressure under saturation
+### No back-pressure: sized to fit + reject oversized samples
 
-Backpressure is per-cache, not global. If shard indices
-saturate but array metadata has capacity, the prefetcher
-keeps advancing the first stage and stalls on the second
-for samples that need it. The scheduler's watermark is the
-back-stop: until it advances past a saturated stage's
-existing `max_batch_id` values, no new requests can be
-admitted on that stage.
+There is no per-cache or global back-pressure. The cache-size
+floors (see *Ordinal-range pinning, sized to never saturate*)
+guarantee every cache can hold the whole in-flight working
+set, so admission can never be refused for lack of an evictable
+slot. The prefetcher never stalls a stage waiting on the
+watermark.
+
+The single thing that could violate the shard_index sizing —
+a sample that intersects more shards than `max_shards_per_sample`
+— is rejected up front in `advance_from_meta`: when the
+`sample_shard_iterator` count exceeds the declared bound the
+sample fails with `DAMACY_INVAL` and a message reporting the
+observed vs. allowed shard count and how to raise the bound
+(and the matching `n_shard_index_cache`). A configuration that
+previously hit the saturation path now either validates and
+runs, or fails fast at `damacy_create`.
 
 ## Integration
 

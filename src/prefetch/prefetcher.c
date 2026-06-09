@@ -11,6 +11,7 @@
 #include "zarr/zarr_metadata.h"
 
 #include <stdatomic.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -78,6 +79,8 @@ struct prefetcher
 
   struct prefetcher_owner_entry* owners;
   uint32_t owner_capacity;
+
+  uint32_t max_shards_per_sample;
 
   struct platform_mutex* lock;
   struct platform_thread* worker;
@@ -238,6 +241,29 @@ request_chunk_layout(struct prefetcher* p, struct prefetcher_slot* s)
                                        s->gate);
 }
 
+// Renders an AABB as "[beg,end)x[beg,end)..." into a static buffer for
+// diagnostics. Only called from the single prefetcher worker thread on an
+// error path, so the static buffer is safe. Truncates gracefully.
+static const char*
+format_aabb(const struct damacy_aabb* a)
+{
+  static char buf[256];
+  size_t off = 0;
+  buf[0] = '\0';
+  for (uint8_t d = 0; d < a->rank && off < sizeof(buf); ++d) {
+    int w = snprintf(buf + off,
+                     sizeof(buf) - off,
+                     "%s[%lld,%lld)",
+                     d ? "x" : "",
+                     (long long)a->dims[d].beg,
+                     (long long)a->dims[d].end);
+    if (w < 0)
+      break;
+    off += (size_t)w;
+  }
+  return buf;
+}
+
 static void
 advance_from_meta(struct prefetcher* p, struct prefetcher_slot* s)
 {
@@ -256,14 +282,34 @@ advance_from_meta(struct prefetcher* p, struct prefetcher_slot* s)
   CHECK(Bad, sample_shard_iterator_init(&it, meta, &s->aabb) == 0);
 
   uint64_t n = 1;
-  err = DAMACY_BUDGET; // a shard-count overflow below fails the sample as
-                       // over-budget
+  err = DAMACY_INVAL; // a shard-count overflow below fails the sample as
+                      // an oversized (invalid) sample
   for (uint8_t d = 0; d < it.rank; ++d) {
     uint64_t span = it.shard_end[d] - it.shard_beg[d];
     CHECK_MUL_OVERFLOW(Bad, n, span, UINT64_MAX);
     n *= span;
   }
   err = 0;
+
+  // Per-sample shard cap. The shard_index cache is sized at config time
+  // for lookahead_samples * max_shards_per_sample entries; honoring this
+  // bound is what makes that sizing sound, so a sample intersecting more
+  // shards is a configuration error, surfaced with an actionable message.
+  if (n > p->max_shards_per_sample) {
+    log_error(
+      "sample %s aabb=%s intersects %llu shards, exceeds "
+      "max_shards_per_sample=%u. Raise max_shards_per_sample to >= %llu (and "
+      "n_shard_index_cache to >= lookahead_samples * %llu), or use a smaller "
+      "sample extent.",
+      s->uri ? s->uri : "(null)",
+      format_aabb(&s->aabb),
+      (unsigned long long)n,
+      (unsigned)p->max_shards_per_sample,
+      (unsigned long long)n,
+      (unsigned long long)n);
+    err = DAMACY_INVAL;
+    goto Bad;
+  }
 
   if (n == 0) {
     s->n_shards = 0;
@@ -503,6 +549,7 @@ prefetcher_create(const struct prefetcher_config* cfg)
   CHECK(Error, cfg);
   CHECK(Error, cfg->capacity > 0);
   CHECK(Error, cfg->owner_capacity > 0);
+  CHECK(Error, cfg->max_shards_per_sample > 0);
   CHECK(Error, cfg->lookahead);
   CHECK(Error, cfg->array_meta_cache);
   CHECK(Error, cfg->shard_index_cache);
@@ -517,6 +564,7 @@ prefetcher_create(const struct prefetcher_config* cfg)
     .chunk_layout_cache = cfg->chunk_layout_cache,
     .capacity = cfg->capacity,
     .owner_capacity = cfg->owner_capacity,
+    .max_shards_per_sample = cfg->max_shards_per_sample,
   };
   self->slots =
     (struct prefetcher_slot*)calloc(cfg->capacity, sizeof(*self->slots));

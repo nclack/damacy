@@ -52,6 +52,7 @@ def _mk_cfg() -> Config:
         n_array_meta_cache=4,
         n_shard_index_cache=4,
         n_chunk_layout_cache=4,
+        max_shards_per_sample=2,
         sample_shape=(8, 16),
         max_gpu_memory_bytes=1 << 30,
     )

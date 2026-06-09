@@ -334,6 +334,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     struct prefetch_cache_config array_meta_cache_cfg = {
       .capacity = cfg->tuning.n_array_meta_cache,
       .max_probe = 16,
+      .knob_name = "n_array_meta_cache",
       .ops = &array_meta_ops,
       .async_fetcher = &self->array_meta_async_fetcher.base,
     };
@@ -347,6 +348,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     struct prefetch_cache_config shard_index_cache_cfg = {
       .capacity = cfg->tuning.n_shard_index_cache,
       .max_probe = 16,
+      .knob_name = "n_shard_index_cache",
       .ops = &shard_index_ops,
       .async_fetcher = &self->shard_index_async_fetcher.base,
     };
@@ -362,6 +364,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
     struct prefetch_cache_config chunk_layout_cache_cfg = {
       .capacity = cfg->tuning.n_chunk_layout_cache,
       .max_probe = 16,
+      .knob_name = "n_chunk_layout_cache",
       .ops = &chunk_layout_ops,
       .async_fetcher = &self->chunk_layout_async_fetcher.base,
     };
@@ -429,6 +432,7 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
       .chunk_layout_cache = self->chunk_layout_cache,
       .capacity = cfg->lookahead_samples,
       .owner_capacity = cfg->lookahead_samples + 4u,
+      .max_shards_per_sample = cfg->tuning.max_shards_per_sample,
     };
     self->prefetcher = prefetcher_create(&prefetcher_cfg);
     CHECK(Fail, self->prefetcher);
