@@ -557,6 +557,8 @@ test_batch_pool_rejected_at_inflated_committed(void)
 
   struct damacy_config cfg = mk_cfg(root, 1, 8, 16);
   cfg.tuning.max_gpu_memory_bytes = 120ull << 20;
+  // Pin a small chunk cap so the tight budget admits one chunk per wave.
+  cfg.tuning.max_chunk_uncompressed_bytes = 512ull << 10;
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 

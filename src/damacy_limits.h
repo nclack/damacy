@@ -17,22 +17,6 @@
 // shards are ~1 GB.
 #define DAMACY_MAX_SHARD_BYTES (1ull << 46)
 
-// Default for damacy_config.max_chunk_uncompressed_bytes when the user
-// leaves it at 0. Matches the pre-runtime-cap behaviour and keeps the
-// 8 GB-class GPU budget viable out of the box.
-#define DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES (512ull << 10) // 512 KB
-
-// Default cap on post-coalesce read_op size. read_op.nbytes is uint32_t,
-// so the cap must fit there too — coalesce_chunks won't fuse past it.
-#define DAMACY_DEFAULT_READ_OP_MAX_BYTES (512ull << 10)
-#ifdef __cplusplus
-static_assert(DAMACY_DEFAULT_READ_OP_MAX_BYTES <= UINT32_MAX,
-              "read_op.nbytes is uint32_t");
-#else
-_Static_assert(DAMACY_DEFAULT_READ_OP_MAX_BYTES <= UINT32_MAX,
-               "read_op.nbytes is uint32_t");
-#endif
-
 // In-flight wave count. Fixed; sets the minimum host_buffer_waves and
 // the device-side decode concurrency depth.
 #define DAMACY_N_WAVES 2
@@ -60,12 +44,8 @@ _Static_assert(DAMACY_DEFAULT_READ_OP_MAX_BYTES <= UINT32_MAX,
 // metadata buffer.
 #define DAMACY_MAX_CHUNKS_PER_BATCH 16384u
 
-// Default worker/concurrency counts used by damacy_tuning_defaults().
-// damacy_create requires explicit positive values. n_io_threads is bounded by
-// the host thread count; metadata_io_concurrency is an async request-depth knob
-// and is bounded only by this defensive cap.
-#define DAMACY_DEFAULT_IO_THREADS 8u
-#define DAMACY_DEFAULT_METADATA_IO_CONCURRENCY 32u
+// Defensive cap on damacy_tuning.metadata_io_concurrency (async request
+// depth). The default values live in damacy_tuning_defaults().
 #define DAMACY_MAX_METADATA_IO_CONCURRENCY 4096u
 #define DAMACY_DEFAULT_ARRAY_META_CACHE 64u
 #define DAMACY_DEFAULT_SHARD_INDEX_CACHE 256u

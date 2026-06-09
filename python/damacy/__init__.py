@@ -568,7 +568,7 @@ class Config:
         host_buffer_waves: int = _native.DEFAULT_HOST_BUFFER_WAVES,
         max_chunks_per_wave: int = _native.DEFAULT_MAX_CHUNKS_PER_WAVE,
         max_substreams_per_chunk: int = _native.DEFAULT_MAX_SUBSTREAMS_PER_CHUNK,
-        n_io_threads: int | None = None,
+        n_io_threads: int = _native.DEFAULT_IO_THREADS,
         metadata_io_concurrency: int = _native.DEFAULT_METADATA_IO_CONCURRENCY,
         n_array_meta_cache: int = _native.DEFAULT_ARRAY_META_CACHE,
         n_shard_index_cache: int = _native.DEFAULT_SHARD_INDEX_CACHE,
@@ -595,8 +595,6 @@ class Config:
                 "lookahead_samples must cover at least one full batch "
                 f"(got {lookahead_samples}, samples_per_batch={samples_per_batch})"
             )
-        if n_io_threads is None:
-            n_io_threads = max_concurrency()
         if n_io_threads < 1:
             raise ValueError(f"n_io_threads must be >= 1 (got {n_io_threads})")
         if metadata_io_concurrency < 1:
@@ -677,6 +675,30 @@ class Config:
         set_(self, "numa_strategy", ns)
         set_(self, "numa_node", int(numa_node))
         set_(self, "metadata_latency", metadata_latency or LatencyModel())
+
+    @classmethod
+    def default(
+        cls,
+        *,
+        samples_per_batch: int,
+        sample_shape: Sequence[int],
+        max_gpu_memory_bytes: int,
+        dtype: Dtype | str | int = Dtype.F32,
+        **overrides: Any,
+    ) -> Self:
+        """Recommended config for networked-FS (NFS) training.
+
+        Convenience over the constructor: the tuning field defaults already
+        carry the cluster-tuned values (see damacy_tuning_defaults). The caller
+        supplies the workload geometry; any field may be overridden by keyword.
+        """
+        return cls(
+            samples_per_batch=samples_per_batch,
+            sample_shape=sample_shape,
+            max_gpu_memory_bytes=max_gpu_memory_bytes,
+            dtype=dtype,
+            **overrides,
+        )
 
 
 @dataclass(frozen=True, slots=True)

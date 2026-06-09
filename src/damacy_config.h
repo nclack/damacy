@@ -16,26 +16,18 @@ cast_path_supported(enum damacy_dtype dst, enum dtype src);
 enum damacy_status
 validate_config(const struct damacy_config* cfg);
 
-// 0 → DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES; clamped to DAMACY_MAX_*.
 uint64_t
 resolve_max_chunk_uncompressed(const struct damacy_config* cfg);
 
-// 0 → DAMACY_DEFAULT_READ_OP_MAX_BYTES.
 uint64_t
 resolve_max_read_op_bytes(const struct damacy_config* cfg);
 
-// 0 → DAMACY_DEFAULT_HOST_BUFFER_WAVES; clamped to
-// [DAMACY_N_WAVES, DAMACY_MAX_HOST_BUFFER_WAVES].
 uint8_t
 resolve_host_buffer_waves(const struct damacy_config* cfg);
 
-// 0 → DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE; clamped to
-// DAMACY_HARD_MAX_CHUNKS_PER_WAVE.
 uint32_t
 resolve_max_chunks_per_wave(const struct damacy_config* cfg);
 
-// 0 → DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK; clamped to
-// DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK.
 uint32_t
 resolve_max_substreams_per_chunk(const struct damacy_config* cfg);
 

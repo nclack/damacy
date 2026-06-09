@@ -79,14 +79,10 @@ static int
 test_tuning_defaults_thread_counts(void)
 {
   struct damacy_tuning tuning = damacy_tuning_defaults();
-  uint32_t max_threads = (uint32_t)platform_default_thread_count();
-  uint32_t expected_io = DAMACY_DEFAULT_IO_THREADS;
-  if (expected_io > max_threads)
-    expected_io = max_threads;
-
-  EXPECT(tuning.n_io_threads == expected_io);
-  EXPECT(tuning.metadata_io_concurrency ==
-         DAMACY_DEFAULT_METADATA_IO_CONCURRENCY);
+  EXPECT(tuning.n_io_threads == 64);
+  EXPECT(tuning.metadata_io_concurrency == 64);
+  EXPECT(tuning.max_read_op_bytes == 4 * 1024 * 1024);
+  EXPECT(tuning.max_chunk_uncompressed_bytes == 2 * 1024 * 1024);
   EXPECT(tuning.n_array_meta_cache == DAMACY_DEFAULT_ARRAY_META_CACHE);
   EXPECT(tuning.n_shard_index_cache == DAMACY_DEFAULT_SHARD_INDEX_CACHE);
   EXPECT(tuning.n_chunk_layout_cache == DAMACY_DEFAULT_CHUNK_LAYOUT_CACHE);

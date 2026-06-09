@@ -522,19 +522,41 @@ def test_config_tuning_values_preserved():
     assert cfg.max_substreams_per_chunk == 9
 
 
-def test_config_default_n_io_threads_uses_max_concurrency(monkeypatch):
-    monkeypatch.setattr(_native, "max_concurrency", lambda: 17)
-
-    cfg = Config(samples_per_batch=1, sample_shape=(8, 16), max_gpu_memory_bytes=1)
-    assert cfg.n_io_threads == 17
-
-    cfg = Config(
-        samples_per_batch=1,
-        sample_shape=(8, 16),
-        max_gpu_memory_bytes=1,
-        n_io_threads=None,
+def test_config_default_preset():
+    cfg = Config.default(
+        samples_per_batch=8,
+        sample_shape=(8, 256, 256),
+        max_gpu_memory_bytes=1 << 30,
     )
-    assert cfg.n_io_threads == 17
+    # The four cluster-tuned values.
+    assert cfg.n_io_threads == 64
+    assert cfg.metadata_io_concurrency == 64
+    assert cfg.max_read_op_bytes == 4 * 1024 * 1024
+    assert cfg.max_chunk_uncompressed_bytes == 2 * 1024 * 1024
+    # Remaining tuning knobs keep their explicit library defaults.
+    assert cfg.host_buffer_waves == _native.DEFAULT_HOST_BUFFER_WAVES
+    assert cfg.max_chunks_per_wave == _native.DEFAULT_MAX_CHUNKS_PER_WAVE
+    # Geometry threaded through.
+    assert cfg.samples_per_batch == 8
+    assert cfg.sample_shape == (8, 256, 256)
+    # A plain frozen Config that survives replace.
+    assert dataclasses.replace(cfg, samples_per_batch=16).samples_per_batch == 16
+
+
+def test_config_default_override_wins():
+    cfg = Config.default(
+        samples_per_batch=8,
+        sample_shape=(8, 256, 256),
+        max_gpu_memory_bytes=1 << 30,
+        n_io_threads=32,
+    )
+    assert cfg.n_io_threads == 32
+    assert cfg.metadata_io_concurrency == 64
+
+
+def test_config_default_n_io_threads():
+    cfg = Config(samples_per_batch=1, sample_shape=(8, 16), max_gpu_memory_bytes=1)
+    assert cfg.n_io_threads == _native.DEFAULT_IO_THREADS
 
 
 def test_config_numa_defaults_and_coercion():
