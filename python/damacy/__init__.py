@@ -1194,19 +1194,7 @@ class Pipeline:
         tb: TracebackType | None,
     ) -> None:
         del exc_type, exc, tb  # protocol-required, not consumed
-        # Drain any in-flight work so a clean shutdown doesn't drop a
-        # partial last batch silently. Pending samples that don't fit
-        # are discarded — the user is on the hook for popping
-        # everything they pushed before exiting. close() runs in
-        # finally so the native handle releases even if flush raises
-        # something we don't catch.
-        try:
-            if not self._closed:
-                self._native.flush()
-        except (DamacyError, _native.DamacyError):
-            pass  # don't mask the user's exception
-        finally:
-            self.close()
+        self.close()
 
     # ---- pipeline ----------------------------------------------------
 

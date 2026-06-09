@@ -335,6 +335,29 @@ def test_push_accepts_infinite_generator(tiny_zarr):
         assert d.pending  # generator still has more
 
 
+def test_exit_cancels_undrained_work_without_flush(tiny_zarr):
+    """Exiting with batches pushed but never popped tears down, not hangs."""
+    uri = tiny_zarr
+    samples = [Sample(uri=uri, aabb=[(0, 8), (0, 16)]) for _ in range(5)]
+    with Pipeline(_base_config()) as d:
+        d.push(samples)
+    assert d._closed
+
+
+def test_exit_with_undrained_infinite_source(tiny_zarr):
+    """Exiting while an unbounded source is still feeding must not wedge."""
+    uri = tiny_zarr
+
+    def forever():
+        while True:
+            yield Sample(uri=uri, aabb=[(0, 8), (0, 16)])
+
+    with Pipeline(_base_config()) as d:
+        d.push(forever())
+        assert _drain_ids(d, 1) == [0]
+    assert d._closed
+
+
 def test_push_chains_multiple_calls(tiny_zarr):
     uri = tiny_zarr
     s = Sample(uri=uri, aabb=[(0, 8), (0, 16)])
