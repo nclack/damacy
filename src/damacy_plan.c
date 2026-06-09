@@ -231,39 +231,13 @@ plan_commit(struct damacy* self,
 }
 
 static enum damacy_status
-seal_accumulating_slot(struct damacy* self, uint16_t slot_idx, int* changed)
+run_sealed_plan(struct damacy* self, uint16_t slot_idx, int* changed)
 {
-  struct damacy_batch_slot* slot = &self->batch_pool.slots[slot_idx];
-  if (slot->state != BATCH_ACCUMULATING || slot->n_samples == 0)
-    return DAMACY_INVAL;
-  enum damacy_status status = batch_pool_allocate(self);
-  if (status != DAMACY_OK) {
-    self->failed_status = status;
-    return status;
-  }
-  slot->planning_close_batch = 1;
-  slot->state = BATCH_PLANNING;
-  if (changed)
-    *changed = 1;
-  return DAMACY_OK;
-}
-
-static enum damacy_status
-run_sealed_plan(struct damacy* self,
-                uint16_t slot_idx,
-                int* changed,
-                int* out_truncated)
-{
-  struct damacy_batch_slot* slot = &self->batch_pool.slots[slot_idx];
-  int truncated = slot->n_samples < self->cfg.samples_per_batch;
   scheduler_unlock(self->sched);
   float plan_ms = 0.f;
   enum damacy_status rs = plan_run(self, slot_idx, &plan_ms);
   scheduler_lock(self->sched);
-  enum damacy_status status = plan_commit(self, slot_idx, rs, plan_ms, changed);
-  if (out_truncated)
-    *out_truncated = truncated;
-  return status;
+  return plan_commit(self, slot_idx, rs, plan_ms, changed);
 }
 
 static uint32_t
@@ -303,25 +277,10 @@ free_ready_range(struct prefetcher_ready* ready, uint32_t n)
 }
 
 enum damacy_status
-plan_ready_prefetch(struct damacy* self, int close_partial, int* changed)
+plan_ready_prefetch(struct damacy* self, int* changed)
 {
   enum damacy_status status = DAMACY_OK;
   for (;;) {
-    if (close_partial && prefetcher_ready_prefix_count(self->prefetcher) == 0) {
-      int open_slot = find_accumulating_batch_slot(&self->batch_pool);
-      if (open_slot >= 0) {
-        status = seal_accumulating_slot(self, (uint16_t)open_slot, changed);
-        if (status != DAMACY_OK)
-          return status;
-        int truncated = 0;
-        status =
-          run_sealed_plan(self, (uint16_t)open_slot, changed, &truncated);
-        if (status == DAMACY_OK && truncated)
-          self->stats.batches_truncated++;
-        return status;
-      }
-    }
-
     uint32_t cap = planning_capacity_locked(self);
     if (cap == 0)
       return DAMACY_OK;
@@ -345,10 +304,7 @@ plan_ready_prefetch(struct damacy* self, int close_partial, int* changed)
       uint32_t room = self->cfg.samples_per_batch - begin;
       uint32_t remaining = ticket.n_samples - cursor;
       uint32_t n = remaining < room ? remaining : room;
-      int close_batch = (begin + n == self->cfg.samples_per_batch) ||
-                        (close_partial && ticket.n_samples < cap &&
-                         cursor + n == ticket.n_samples);
-      int truncated = close_batch && begin + n < self->cfg.samples_per_batch;
+      int close_batch = begin + n == self->cfg.samples_per_batch;
 
       status = plan_reserve(
         self, (uint16_t)slot_idx, &self->staging[cursor], n, close_batch);
@@ -361,11 +317,7 @@ plan_ready_prefetch(struct damacy* self, int close_partial, int* changed)
         *changed = 1;
 
       if (close_batch) {
-        int planned_truncated = 0;
-        status = run_sealed_plan(
-          self, (uint16_t)slot_idx, changed, &planned_truncated);
-        if (status == DAMACY_OK && (truncated || planned_truncated))
-          self->stats.batches_truncated++;
+        status = run_sealed_plan(self, (uint16_t)slot_idx, changed);
         if (status != DAMACY_OK) {
           free_ready_range(&self->staging[cursor + n],
                            ticket.n_samples - cursor - n);

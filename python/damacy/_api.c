@@ -1076,7 +1076,6 @@ Pipeline_stats(PipelineObj* self, PyObject* Py_UNUSED(ignored))
     { "metadata_backend_read_active", st.metadata_backend.read_active },
     { "metadata_backend_read_max_active", st.metadata_backend.read_max_active },
     { "batches_emitted", st.batches_emitted },
-    { "batches_truncated", st.batches_truncated },
     { "waves_emitted", st.waves_emitted },
     { "worker_steps", st.worker_steps },
     { "chunks_planned", st.chunks_planned },

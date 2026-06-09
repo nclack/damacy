@@ -909,8 +909,6 @@ emit_results(const struct scenario* sc, const struct run_metrics* rm, FILE* out)
   jw_uint(&jw, rm->pushed);
   jw_key(&jw, "batches_emitted");
   jw_uint(&jw, rm->stats.batches_emitted);
-  jw_key(&jw, "batches_truncated");
-  jw_uint(&jw, rm->stats.batches_truncated);
   jw_key(&jw, "waves_emitted");
   jw_uint(&jw, rm->stats.waves_emitted);
   jw_key(&jw, "worker_steps");

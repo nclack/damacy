@@ -346,7 +346,6 @@ extern "C"
       uint64_t buckets[DAMACY_METADATA_OP_LATENCY_NBUCKETS];
     } metadata_op_latency[DAMACY_METADATA_OP_LATENCY_NKINDS];
     uint64_t batches_emitted;
-    uint64_t batches_truncated;
     uint64_t waves_emitted;
     uint64_t chunks_dispatched;
     uint64_t chunks_planned; // total chunk_plans emitted (incl. fills)

@@ -754,7 +754,6 @@ class Stats:
     metadata_backend_read_active: int
     metadata_backend_read_max_active: int
     batches_emitted: int
-    batches_truncated: int
     waves_emitted: int
     chunks_planned: int
     chunks_to_load: int
@@ -793,7 +792,6 @@ class Stats:
             metadata_backend_read_active=st["metadata_backend_read_active"],
             metadata_backend_read_max_active=st["metadata_backend_read_max_active"],
             batches_emitted=st["batches_emitted"],
-            batches_truncated=st["batches_truncated"],
             waves_emitted=st["waves_emitted"],
             chunks_planned=st["chunks_planned"],
             chunks_to_load=st["chunks_to_load"],

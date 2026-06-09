@@ -142,7 +142,6 @@ def _counters_table(r: Results) -> Table:
     rows = [
         ("samples_pushed", f"{c.samples_pushed:,}"),
         ("batches_emitted", f"{c.batches_emitted:,}"),
-        ("batches_truncated", f"{c.batches_truncated:,}"),
         ("waves_emitted", f"{c.waves_emitted:,}"),
         ("chunks_dispatched", f"{c.chunks_dispatched:,}"),
         ("chunks_planned", f"{c.chunks_planned:,}"),

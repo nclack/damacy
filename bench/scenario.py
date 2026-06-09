@@ -189,7 +189,6 @@ class MetadataOpLatency(BaseModel):
 class Counters(BaseModel):
     samples_pushed: int
     batches_emitted: int
-    batches_truncated: int
     waves_emitted: int
     chunks_dispatched: int
     chunks_planned: int = 0
