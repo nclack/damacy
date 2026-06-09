@@ -488,8 +488,7 @@ class Config:
         dtype: Destination dtype for assembled batches.
         lookahead_samples: User-side push-queue depth in samples. Defaults
             to two full output batches.
-        n_io_threads: Bulk data IO worker threads (>= 1). Defaults to the
-            cluster-tuned value.
+        n_io_threads: Bulk data IO worker threads (>= 1). Defaults to 64.
         metadata_io_concurrency: Async metadata request concurrency (>= 1).
         n_array_meta_cache: LRU cap for zarr-metadata entries.
         n_shard_index_cache: LRU cap for shard-index entries.
