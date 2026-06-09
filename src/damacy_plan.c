@@ -44,8 +44,8 @@ batch_pool_allocate(struct damacy* self)
 
 // --- plan: accumulate [locked] → run sealed [unlocked] → commit [locked] ----
 // Ready samples are staged cheaply while the batch is still open. Only a
-// sealed full/flush batch enters BATCH_PLANNING; plan_run then does planner
-// CPU work + sample_plans upload off scheduler_lock. Pop and flush treat
+// sealed full batch enters BATCH_PLANNING; plan_run then does planner
+// CPU work + sample_plans upload off scheduler_lock. Pop treats
 // BATCH_PLANNING as "planner work is outstanding".
 
 static void
@@ -178,7 +178,7 @@ InvalidArg:
   return DAMACY_INVAL;
 }
 
-// *changed (nullable; flush passes NULL): OR-set on every BATCH transition.
+// *changed (nullable): OR-set on every BATCH transition.
 enum damacy_status
 plan_commit(struct damacy* self,
             uint16_t slot_idx,

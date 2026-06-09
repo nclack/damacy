@@ -38,5 +38,4 @@ stats_init(struct damacy_stats* s)
   metric_init(&s->assemble, "assemble");
   metric_init(&s->bind_wait, "bind_wait");
   metric_init(&s->pop_wait, "pop_wait");
-  metric_init(&s->flush_wait, "flush_wait");
 }

@@ -900,7 +900,6 @@ emit_results(const struct scenario* sc, const struct run_metrics* rm, FILE* out)
   emit_metric(&jw, &rm->stats.assemble, "wave");
   emit_metric(&jw, &rm->stats.bind_wait, "wave");
   emit_metric(&jw, &rm->stats.pop_wait, "poll");
-  emit_metric(&jw, &rm->stats.flush_wait, "call");
   jw_array_end(&jw);
 
   // Counters.
@@ -1138,8 +1137,9 @@ main(int argc, char** argv)
   double t_first_push = now_seconds();
   double t_first_pop = 0.0;
 
-  // Warmup: warms caches, codec init, kernel JIT. Drain in-flight then
-  // reset stats so steady-state metrics are clean.
+  // Warmup: warms caches, codec init, kernel JIT. drive() pops exactly the
+  // batches it pushes, so the pipeline is drained on return; reset stats so
+  // steady-state metrics are clean.
   if (sc.n_warmup_batches > 0) {
     if (drive(d,
               &sc,
@@ -1158,22 +1158,14 @@ main(int argc, char** argv)
       free(json_buf);
       return 1;
     }
-    enum damacy_status fs = damacy_flush(d);
-    if (fs != DAMACY_OK && fs != DAMACY_AGAIN)
-      fprintf(stderr, "damacy_flush(warmup): %s\n", damacy_status_str(fs));
-    struct damacy_batch* b = NULL;
-    while (damacy_pop(d, &b) == DAMACY_OK) {
-      ++rm.popped;
-      damacy_release(d, b);
-    }
     damacy_stats_reset(d);
   }
 
   rm.ttfb_ms = (t_first_pop > 0.0 ? (t_first_pop - t_first_push) : 0.0) * 1e3;
 
   // Steady-state run. drive() pushes exactly n_batches * samples_per_batch
-  // samples and pops exactly n_batches batches, so no trailing flush is
-  // needed.
+  // samples and pops exactly n_batches batches, so the pipeline drains on
+  // return.
   uint64_t pushed_steady = 0, popped_steady = 0;
   double t_steady_a = now_seconds();
   double t_first_pop_steady = 0.0;

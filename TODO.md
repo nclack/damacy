@@ -2,7 +2,7 @@
 
 ## To triage
 
-- [ ] thread-safe public API (push/pop/flush)
+- [ ] thread-safe public API (push/pop)
 - [x] support for fp16 sources
 - [x] support for bf16 output
 - [ ] testing the hashmap/lru

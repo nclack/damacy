@@ -121,23 +121,6 @@ run_one(struct damacy* d,
   return 0;
 }
 
-static int
-wait_for_accumulating_batch(struct damacy* d)
-{
-  for (int i = 0; i < 2000; ++i) {
-    scheduler_lock(d->sched);
-    int ready = find_accumulating_batch_slot(&d->batch_pool) >= 0;
-    enum damacy_status failed = d->failed_status;
-    scheduler_unlock(d->sched);
-    if (failed != DAMACY_OK)
-      return 1;
-    if (ready)
-      return 0;
-    usleep(1000);
-  }
-  return 1;
-}
-
 // 4×8 zarr, full-AABB sample.
 static int
 test_full_array(void)
@@ -268,44 +251,6 @@ test_multi_batch(void)
 
     damacy_release(d, b);
   }
-
-  damacy_destroy(d);
-  fixture_rm_tree(root);
-  return 0;
-}
-
-static int
-test_partial_batch_plans_only_on_flush(void)
-{
-  char root[64];
-  EXPECT(mkdtemp_root(root, sizeof root) == 0);
-  char p[256];
-  snprintf(p, sizeof p, "%s/foo", root);
-  int64_t shape[2] = { 4, 8 }, inner[2] = { 2, 4 }, shard[2] = { 4, 8 };
-  EXPECT(fixture_write_zarr(p, shape, inner, shard, 2, "uint16", 0) == 0);
-
-  struct damacy_config cfg = mk_cfg(root, 2, 4, 8);
-  struct damacy* d = NULL;
-  EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
-
-  struct damacy_sample s = mk_sample(p, 0, 4, 0, 8);
-  struct damacy_sample_slice slice = { .beg = &s, .end = &s + 1 };
-  EXPECT(damacy_push(d, slice).status == DAMACY_OK);
-  EXPECT(wait_for_accumulating_batch(d) == 0);
-
-  struct damacy_stats before;
-  damacy_stats_get(d, &before);
-  EXPECT(before.plan.count == 0);
-
-  EXPECT(damacy_flush(d) == DAMACY_OK);
-  struct damacy_stats after;
-  damacy_stats_get(d, &after);
-  EXPECT(after.plan.count == 1);
-  EXPECT(after.batches_truncated == 1);
-
-  struct damacy_batch* b = NULL;
-  EXPECT(damacy_pop(d, &b) == DAMACY_OK);
-  damacy_release(d, b);
 
   damacy_destroy(d);
   fixture_rm_tree(root);
@@ -817,7 +762,6 @@ main(void)
   RUN(test_full_array);
   RUN(test_partial_crossing_chunks);
   RUN(test_multi_batch);
-  RUN(test_partial_batch_plans_only_on_flush);
   RUN(test_multi_zarr);
   RUN(test_incremental_batch_fill);
   RUN(test_heterogeneous_dtype);

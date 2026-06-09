@@ -737,7 +737,6 @@ class Stats:
     assemble: Metric
     bind_wait: Metric
     pop_wait: Metric
-    flush_wait: Metric
     array_meta_hits: int
     array_meta_misses: int
     shard_index_hits: int
@@ -777,7 +776,6 @@ class Stats:
             assemble=m(st["assemble"]),
             bind_wait=m(st["bind_wait"]),
             pop_wait=m(st["pop_wait"]),
-            flush_wait=m(st["flush_wait"]),
             array_meta_hits=st["array_meta_hits"],
             array_meta_misses=st["array_meta_misses"],
             shard_index_hits=st["shard_index_hits"],
@@ -1064,8 +1062,8 @@ def _warn_if_multi_gpu_implicit(cfg_device: int | None, bound: int) -> None:
 
 
 class Pipeline:
-    """Streaming GPU data pipeline. Drive :meth:`push`, :meth:`pop`,
-    :meth:`flush`. Stages are plan → host I/O → H2D copy → on-device
+    """Streaming GPU data pipeline. Drive :meth:`push`, :meth:`pop`.
+    Stages are plan → host I/O → H2D copy → on-device
     decompress → assemble; output batches are double-buffered (B=2)
     and waves are double-buffered internally.
 
@@ -1132,7 +1130,7 @@ class Pipeline:
         self._closed = False
         self._config = config
         # User-side queue of pending sample iterators. push() appends
-        # here and best-effort drains; pop()/flush() top up before
+        # here and best-effort drains; pop() tops up before
         # touching native. This makes push() consume-everything from
         # the user's perspective and lets generators flow naturally.
         # _pending_buf is the head iterator's already-pulled-but-not-yet-
@@ -1337,19 +1335,6 @@ class Pipeline:
             self._pop_err = exc
         finally:
             self._pop_done.set()
-
-    def flush(self) -> None:
-        """Drain pending samples into the pipeline (best-effort) and
-        ready any partial last batch for pop. Idempotent. Pending
-        samples that don't fit before flush are dropped — pop until
-        :attr:`pending` reads False if you want every queued sample to
-        emit as a batch."""
-        self._check_open()
-        self._drain_pending()
-        try:
-            self._native.flush()
-        except _native.DamacyError as exc:
-            _reraise_typed(exc)
 
     @property
     def pending(self) -> bool:

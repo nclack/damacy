@@ -2,7 +2,7 @@
 // assembled from many sharded NGFF zarr stores.
 //
 // Threading model: a single user thread should own a `damacy*` instance
-// and drive push/pop/flush on it. damacy_release is safe to call from
+// and drive push/pop on it. damacy_release is safe to call from
 // another thread holding a damacy_batch* (a typical PyTorch-DataLoader
 // shape: dataloader thread pops, training thread releases).
 #pragma once
@@ -266,12 +266,6 @@ extern "C"
                                           struct damacy_batch* b,
                                           void* event);
 
-  // Drain anything currently planned/in-flight, finalize any partial last
-  // batch (truncated to the number of complete samples) and ready it for
-  // pop. Idempotent. Stream is resumable after flush; subsequent push
-  // starts a fresh batch.
-  enum damacy_status damacy_flush(struct damacy* d);
-
   struct damacy_batch_info
   {
     void* device_ptr;                   // dtype-typed, contiguous
@@ -318,7 +312,6 @@ extern "C"
     // Time an input_slot sat in SLOT_READY waiting for a WAVE_FREE wave.
     struct damacy_metric bind_wait;
     struct damacy_metric pop_wait; // user thread blocked on the scheduler cv
-    struct damacy_metric flush_wait;
 
     struct
     {

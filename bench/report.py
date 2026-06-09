@@ -93,7 +93,6 @@ def _stage_table(r: Results) -> Table:
         "decompress.parse": "green",
         "assemble": "green",
         "pop_wait": "red",
-        "flush_wait": "red",
     }
 
     # encode where each stage's time is spent in the unit column:
@@ -108,7 +107,6 @@ def _stage_table(r: Results) -> Table:
         "decode_gap": "dim",
         "assemble": "bold dim",
         "pop_wait": "dim",
-        "flush_wait": "dim",
     }
 
     for s in r.stages:
