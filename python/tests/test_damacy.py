@@ -554,19 +554,9 @@ def test_config_default_override_wins():
     assert cfg.metadata_io_concurrency == 64
 
 
-def test_config_default_n_io_threads_uses_max_concurrency(monkeypatch):
-    monkeypatch.setattr(_native, "max_concurrency", lambda: 17)
-
+def test_config_default_n_io_threads():
     cfg = Config(samples_per_batch=1, sample_shape=(8, 16), max_gpu_memory_bytes=1)
-    assert cfg.n_io_threads == 17
-
-    cfg = Config(
-        samples_per_batch=1,
-        sample_shape=(8, 16),
-        max_gpu_memory_bytes=1,
-        n_io_threads=None,
-    )
-    assert cfg.n_io_threads == 17
+    assert cfg.n_io_threads == _native.DEFAULT_IO_THREADS
 
 
 def test_config_numa_defaults_and_coercion():

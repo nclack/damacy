@@ -723,13 +723,14 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                          "metadata_latency_cap_ns",
                          "metadata_latency_seed",
                          NULL };
+  struct damacy_tuning td = damacy_tuning_defaults();
   unsigned int samples_per_batch = 0;
   unsigned int lookahead = 2;
   PyObject* dtype_obj = NULL;
-  unsigned int max_chunk_uncompressed = DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES;
+  unsigned int max_chunk_uncompressed = td.max_chunk_uncompressed_bytes;
   unsigned long long max_gpu_bytes = 0;
-  unsigned int n_io = 4;
-  unsigned int metadata_io_concurrency = DAMACY_DEFAULT_METADATA_IO_CONCURRENCY;
+  unsigned int n_io = td.n_io_threads;
+  unsigned int metadata_io_concurrency = td.metadata_io_concurrency;
   unsigned int n_array_meta = DAMACY_DEFAULT_ARRAY_META_CACHE;
   unsigned int n_shard_index = DAMACY_DEFAULT_SHARD_INDEX_CACHE;
   unsigned int n_chunk_layout = DAMACY_DEFAULT_CHUNK_LAYOUT_CACHE;
@@ -737,7 +738,7 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   unsigned int host_buffer_waves = DAMACY_DEFAULT_HOST_BUFFER_WAVES;
   unsigned int max_chunks_per_wave = DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE;
   unsigned int max_substreams_per_chunk = DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK;
-  unsigned long long max_read_op_bytes = DAMACY_DEFAULT_READ_OP_MAX_BYTES;
+  unsigned long long max_read_op_bytes = td.max_read_op_bytes;
   int device = -1;
   int enable_gds = DAMACY_GDS_AUTO;
   int numa_strategy = DAMACY_NUMA_AUTO;
@@ -1238,26 +1239,26 @@ api_register_types(PyObject* m)
   if (PyModule_AddIntConstant(m, "GDS_OFF", DAMACY_GDS_OFF) < 0)
     return -1;
 
-  // Tuning defaults + bounds mirrored from damacy_limits.h so the Python
-  // Config surface uses real values, not 0-sentinels, and validates against
-  // the same ranges as validate_config().
+  // Tuning defaults come from damacy_tuning_defaults() (the single source of
+  // truth); bounds are mirrored from damacy_limits.h. The Python Config
+  // surface uses real values, not 0-sentinels, and validates against the same
+  // ranges as validate_config().
+  struct damacy_tuning d = damacy_tuning_defaults();
   struct
   {
     const char* name;
     long long value;
   } limits[] = {
-    { "DEFAULT_CHUNK_UNCOMPRESSED_BYTES",
-      DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES },
-    { "DEFAULT_READ_OP_MAX_BYTES", DAMACY_DEFAULT_READ_OP_MAX_BYTES },
-    { "DEFAULT_HOST_BUFFER_WAVES", DAMACY_DEFAULT_HOST_BUFFER_WAVES },
-    { "DEFAULT_MAX_CHUNKS_PER_WAVE", DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE },
-    { "DEFAULT_MAX_SUBSTREAMS_PER_CHUNK",
-      DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK },
-    { "DEFAULT_METADATA_IO_CONCURRENCY",
-      DAMACY_DEFAULT_METADATA_IO_CONCURRENCY },
-    { "DEFAULT_ARRAY_META_CACHE", DAMACY_DEFAULT_ARRAY_META_CACHE },
-    { "DEFAULT_SHARD_INDEX_CACHE", DAMACY_DEFAULT_SHARD_INDEX_CACHE },
-    { "DEFAULT_CHUNK_LAYOUT_CACHE", DAMACY_DEFAULT_CHUNK_LAYOUT_CACHE },
+    { "DEFAULT_CHUNK_UNCOMPRESSED_BYTES", d.max_chunk_uncompressed_bytes },
+    { "DEFAULT_READ_OP_MAX_BYTES", d.max_read_op_bytes },
+    { "DEFAULT_HOST_BUFFER_WAVES", d.host_buffer_waves },
+    { "DEFAULT_MAX_CHUNKS_PER_WAVE", d.max_chunks_per_wave },
+    { "DEFAULT_MAX_SUBSTREAMS_PER_CHUNK", d.max_substreams_per_chunk },
+    { "DEFAULT_METADATA_IO_CONCURRENCY", d.metadata_io_concurrency },
+    { "DEFAULT_IO_THREADS", d.n_io_threads },
+    { "DEFAULT_ARRAY_META_CACHE", d.n_array_meta_cache },
+    { "DEFAULT_SHARD_INDEX_CACHE", d.n_shard_index_cache },
+    { "DEFAULT_CHUNK_LAYOUT_CACHE", d.n_chunk_layout_cache },
     { "MAX_CHUNK_BYTES", DAMACY_MAX_CHUNK_BYTES },
     { "MAX_READ_OP_BYTES", UINT32_MAX },
     { "N_WAVES", DAMACY_N_WAVES },

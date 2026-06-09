@@ -124,26 +124,17 @@ Invalid:
   return DAMACY_INVAL;
 }
 
-static uint32_t
-clamp_default_threads(uint32_t requested)
-{
-  uint32_t max_threads = (uint32_t)platform_default_thread_count();
-  if (requested > max_threads)
-    return max_threads;
-  return requested;
-}
-
 struct damacy_tuning
 damacy_tuning_defaults(void)
 {
   return (struct damacy_tuning){
-    .max_chunk_uncompressed_bytes = DAMACY_DEFAULT_CHUNK_UNCOMPRESSED_BYTES,
-    .max_read_op_bytes = DAMACY_DEFAULT_READ_OP_MAX_BYTES,
+    .max_chunk_uncompressed_bytes = 2 * 1024 * 1024,
+    .max_read_op_bytes = 4 * 1024 * 1024,
     .host_buffer_waves = DAMACY_DEFAULT_HOST_BUFFER_WAVES,
     .max_chunks_per_wave = DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE,
     .max_substreams_per_chunk = DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK,
-    .n_io_threads = clamp_default_threads(DAMACY_DEFAULT_IO_THREADS),
-    .metadata_io_concurrency = DAMACY_DEFAULT_METADATA_IO_CONCURRENCY,
+    .n_io_threads = 64,
+    .metadata_io_concurrency = 64,
     .n_array_meta_cache = DAMACY_DEFAULT_ARRAY_META_CACHE,
     .n_shard_index_cache = DAMACY_DEFAULT_SHARD_INDEX_CACHE,
     .n_chunk_layout_cache = DAMACY_DEFAULT_CHUNK_LAYOUT_CACHE,
