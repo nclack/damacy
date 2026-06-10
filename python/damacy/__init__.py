@@ -1252,9 +1252,10 @@ class Pipeline:
         cap = self._config.lookahead_samples
         # Top up buffer from the head iterator. Buffer is only ever
         # filled from one iterator at a time, so on push failure we know
-        # exactly which iterator to drop. Pull at most one lookahead
-        # window per drain call; otherwise an unbounded iterator can be
-        # chased forever if the native queue drains concurrently.
+        # exactly which iterator to drop. Each refill pulls at most one
+        # lookahead window; a drain may refill twice (here and after a
+        # full push below) but pushes once, so an unbounded iterator is
+        # still advanced a bounded amount per drain — never chased forever.
         while not self._pending_buf and self._pending:
             taken = list(itertools.islice(self._pending[0], cap))
             if not taken:
@@ -1287,8 +1288,10 @@ class Pipeline:
             # Refill from the head iterator with the same bounded window
             # pull used above — a single next() here would dribble one
             # sample per drain in steady state, starving any batch that
-            # needs samples_per_batch > 1 to seal. An empty list is the
-            # StopIteration signal that the head iterator is exhausted.
+            # needs samples_per_batch > 1 to seal. An empty list means the
+            # head iterator is exhausted; dropping it here (not on the next
+            # drain) keeps `pending` from reporting a drained iterator as
+            # still queued.
             taken = list(itertools.islice(self._pending[0], cap))
             if taken:
                 self._pending_buf = taken
