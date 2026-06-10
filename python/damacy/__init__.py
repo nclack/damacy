@@ -606,8 +606,11 @@ class Config:
                 "lookahead_samples must cover at least one full batch "
                 f"(got {lookahead_samples}, samples_per_batch={samples_per_batch})"
             )
-        if n_io_threads < 1:
-            raise ValueError(f"n_io_threads must be >= 1 (got {n_io_threads})")
+        if not 1 <= n_io_threads <= _native.MAX_IO_THREADS:
+            raise ValueError(
+                "n_io_threads must be in "
+                f"[1, {_native.MAX_IO_THREADS}] (got {n_io_threads})"
+            )
         if metadata_io_concurrency < 1:
             raise ValueError(
                 f"metadata_io_concurrency must be >= 1 (got {metadata_io_concurrency})"

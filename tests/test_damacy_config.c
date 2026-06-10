@@ -203,17 +203,22 @@ test_resolvers_return_literal_value(void)
 }
 
 static int
-test_validate_io_threads_bound_by_machine(void)
+test_validate_io_threads_bound(void)
 {
-  uint32_t too_many = (uint32_t)platform_default_thread_count() + 1u;
+  uint32_t over_cpus = (uint32_t)platform_default_thread_count() + 1u;
   struct damacy_config cfg = mk_valid_cfg();
   cfg.tuning.n_io_threads = 1;
-  cfg.tuning.metadata_io_concurrency = too_many;
+  cfg.tuning.metadata_io_concurrency = over_cpus;
   EXPECT(validate_config(&cfg) == DAMACY_OK);
   cfg.tuning.metadata_io_concurrency = DAMACY_MAX_METADATA_IO_CONCURRENCY + 1u;
   EXPECT(validate_config(&cfg) == DAMACY_INVAL);
   cfg.tuning.metadata_io_concurrency = 1;
-  cfg.tuning.n_io_threads = too_many;
+  // IO workers are blocking; over-CPU counts are valid, only the cap binds.
+  cfg.tuning.n_io_threads = over_cpus;
+  EXPECT(validate_config(&cfg) == DAMACY_OK);
+  cfg.tuning.n_io_threads = DAMACY_MAX_IO_THREADS;
+  EXPECT(validate_config(&cfg) == DAMACY_OK);
+  cfg.tuning.n_io_threads = DAMACY_MAX_IO_THREADS + 1u;
   EXPECT(validate_config(&cfg) == DAMACY_INVAL);
   return 0;
 }
@@ -315,7 +320,7 @@ main(void)
   RUN(test_validate_metadata_io_concurrency_reject_zero);
   RUN(test_validate_tuning_fields_reject_out_of_range);
   RUN(test_resolvers_return_literal_value);
-  RUN(test_validate_io_threads_bound_by_machine);
+  RUN(test_validate_io_threads_bound);
   RUN(test_validate_max_shards_per_sample_reject_zero);
   RUN(test_validate_array_meta_cache_floor);
   RUN(test_validate_chunk_layout_cache_floor);
