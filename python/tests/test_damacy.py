@@ -358,6 +358,32 @@ def test_exit_with_undrained_infinite_source(tiny_zarr):
     assert d._closed
 
 
+def test_infinite_generator_feeds_multi_sample_batches(tiny_zarr):
+    """Regression for #135: after the first lookahead window is consumed,
+    the drain tail must keep pulling a full window from the head iterator,
+    not dribble a single sample per pop. With samples_per_batch > 1 the
+    old single-next() top-up never accumulated enough to seal a batch, so
+    pop() stalled out at ~lookahead_samples/samples_per_batch batches and
+    then raised PoolStarved. Here we pop well past that stall point."""
+    uri = tiny_zarr
+
+    def forever():
+        while True:
+            yield Sample(uri=uri, aabb=[(0, 8), (0, 16)])
+
+    cfg = dataclasses.replace(
+        _base_config(),
+        samples_per_batch=8,
+        lookahead_samples=64,
+        pop_timeout_s=10.0,
+    )
+    # Old behaviour stalled around lookahead_samples/samples_per_batch == 8
+    # batches; pop the window-worth and several more to prove the refill.
+    with Pipeline(cfg) as d:
+        d.push(forever())
+        assert _drain_ids(d, 24) == list(range(24))
+
+
 def test_push_chains_multiple_calls(tiny_zarr):
     uri = tiny_zarr
     s = Sample(uri=uri, aabb=[(0, 8), (0, 16)])
