@@ -733,6 +733,11 @@ a slot:</p>
   releases its slot before the next <code>pop()</code>.</li>
 <li>Verify you're popping at the rate you push (or push lazily via
   a generator so backpressure is automatic).</li>
+<li>Don't pop more batches than were produced: only
+  <code>len(pushed) // Config.samples_per_batch</code> complete batches are
+  emitted (<code>drop_last=True</code>), so a <code>pop()</code> past that waits on a
+  partial tail that is never sealed. Ragged-batch support is
+  planned — see issue #139.</li>
 </ul>
 
 
