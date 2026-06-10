@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781045688539,
+  "lastUpdate": 1781101980547,
   "repoUrl": "https://github.com/nclack/damacy",
   "entries": {
     "damacy throughput": [
@@ -1151,6 +1151,38 @@ window.BENCHMARK_DATA = {
           {
             "name": "damacy/mixed/throughput",
             "value": 5768.59,
+            "unit": "MB/s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Nathan Clack",
+            "username": "nclack",
+            "email": "nclack@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "dbc633eaafe28fa4c3b67219b4d1271867733814",
+          "message": "config: size metadata caches to fit lookahead (closes #134) (#142)\n\n## Problem\n\nOn the metadata-prefetch path, a saturated metadata cache surfaced as a\n**fatal `DAMACY_BUDGET`** from `pop()` instead of back-pressuring —\nfailing the sample and taking the whole pipeline terminal. The design\ndoc said saturation should *stall* the stage until the watermark\nadvances. Closes #134.\n\n## What\n\nSize the caches so the in-flight + staging working set always fits, and\nmake any residual saturation a recoverable stall rather than fatal:\n\n- **Cache floors at create.** array-meta / chunk-layout caches must be\n`>= lookahead_samples + 2*samples_per_batch`; shard-index `>=\n(lookahead_samples + 2*samples_per_batch) * max_shards_per_sample`. The\n`+ 2*samples_per_batch` is the staging lag — samples\npopped-but-not-yet-committed still pin their cache entries until the\nwatermark passes them (bounded by the 2 batch slots). Sub-floor configs\nare rejected at `Pipeline()` with a clear `InvalidArgument`.\n- **Bounded per-sample shard fan-out.** New `max_shards_per_sample`\nknob; a sample whose AABB touches more shards is rejected at runtime\n(`DAMACY_INVAL`), making the shard floor a sound bound.\n- **Saturation is recoverable, not fatal.** The cache returns\n`DAMACY_AGAIN`; the prefetcher stalls the sample and replays it on a\nlater tick once the watermark advances (the #127 back-pressure\nconvention, and the design doc's original \"stall until the watermark\nadvances\" intent). No `abort()`, no crash.\n- `max_shards_per_sample` defaults via `damacy_tuning_defaults()` (the\nsingle source of truth, #136) — explicit, no `0`-sentinel. The design\ndoc was updated to match.\n\n## Verification\n\n- L40 (sm_89): C **ctest 33/33**, **pytest 92 passed / 2 skipped**\n(torch-absent).\n- New `test_saturation_returns_again` drives the all-pinned regime and\nasserts `DAMACY_AGAIN` + retry-succeeds-after-`advance_watermark` (not a\ncrash).\n- CI on the self-hosted runner.\n\n---------\n\nCo-authored-by: Nathan Clack <nclack@biohub.org>",
+          "timestamp": "2026-06-10T03:23:45Z",
+          "url": "https://github.com/nclack/damacy/commit/dbc633eaafe28fa4c3b67219b4d1271867733814"
+        },
+        "date": 1781101979732,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "damacy/default/throughput",
+            "value": 5793.79,
+            "unit": "MB/s"
+          },
+          {
+            "name": "damacy/mixed/throughput",
+            "value": 5758.51,
             "unit": "MB/s"
           }
         ]
