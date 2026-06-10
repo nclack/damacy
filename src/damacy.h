@@ -121,6 +121,15 @@ extern "C"
     uint32_t n_shard_index_cache;
     uint32_t n_chunk_layout_cache;
 
+    // Declared upper bound on the number of shards a single sample's AABB
+    // may intersect. Required: must be > 0. Sizes the shard_index cache
+    // floor at config-create (n_shard_index_cache must be
+    // >= lookahead_samples * max_shards_per_sample) so the in-flight
+    // working set always fits and metadata-cache saturation cannot occur;
+    // also caps per-sample shard enumeration at runtime. A sample that
+    // intersects more shards than this is rejected with DAMACY_INVAL.
+    uint32_t max_shards_per_sample;
+
     enum damacy_numa_strategy numa_strategy;
     int numa_node;
 

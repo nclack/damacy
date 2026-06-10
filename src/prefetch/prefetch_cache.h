@@ -92,6 +92,10 @@ extern "C"
   {
     uint32_t capacity;
     uint32_t max_probe;
+    // Name of the config knob that sizes this cache (e.g.
+    // "n_shard_index_cache"). Used only in the saturation invariant's
+    // fatal message so it names the actual knob to raise. May be NULL.
+    const char* knob_name;
     const struct prefetch_ops* ops;
     struct prefetch_fetcher* fetcher;
     struct prefetch_async_fetcher* async_fetcher;
@@ -109,9 +113,19 @@ extern "C"
     enum damacy_status status;
   };
 
-  // Returns DAMACY_OK + a valid handle on success. Saturation (every entry has
-  // max_owner_id >= watermark) returns DAMACY_BUDGET; host allocation failures
+  // Returns DAMACY_OK + a valid handle on success. Host allocation failures
   // return DAMACY_OOM. gate may be NULL.
+  //
+  // Saturation (every entry pinned: max_owner_id >= watermark, so no slot is
+  // evictable) returns DAMACY_AGAIN. The damacy_config floors size each cache
+  // to hold the whole in-flight working set *plus* the staging lag between
+  // next_consume_seq and the watermark (n_array_meta_cache /
+  // n_chunk_layout_cache >= lookahead_samples + 2*samples_per_batch;
+  // n_shard_index_cache scales by max_shards_per_sample), so saturation should
+  // not occur under a validated config. AGAIN is a defense-in-depth safety
+  // net: the prefetcher stalls the request and retries on a later tick once
+  // the scheduler advances the watermark, degrading gracefully instead of
+  // crashing if a residual overshoot or an unvalidated caller ever hits it.
   struct prefetch_request_result prefetch_cache_request_result(
     struct prefetch_cache* c,
     uint64_t key_hash,

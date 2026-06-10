@@ -114,6 +114,7 @@ fixture_setup_layout(struct fixture* fx,
     .chunk_layout_cache = fx->chunk_layout_cache,
     .capacity = 16,
     .owner_capacity = 8,
+    .max_shards_per_sample = 64,
   };
   fx->p = prefetcher_create(&pcfg);
   EXPECT(fx->p);

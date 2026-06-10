@@ -127,8 +127,12 @@ def _base_config(dtype: str | int | damacy.Dtype = "f32") -> Config:
         lookahead_samples=2,
         n_io_threads=1,
         n_array_meta_cache=4,
-        n_shard_index_cache=4,
+        n_shard_index_cache=8,
         n_chunk_layout_cache=4,
+        # tiny_zarr: 8x16 shards → 1 shard/sample. Floor = lookahead_samples +
+        # 2*samples_per_batch = 2 + 2 = 4; shard floor scales by
+        # max_shards_per_sample (4 * 2 = 8).
+        max_shards_per_sample=2,
         sample_shape=(8, 16),
         max_gpu_memory_bytes=1 << 30,
     )
@@ -184,6 +188,67 @@ def test_max_gpu_memory_too_small_raises_budget():
     with pytest.raises(BudgetExceeded) as excinfo:
         Pipeline(cfg)
     assert excinfo.value.status is Status.BUDGET
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        # n_array_meta_cache below lookahead_samples + 2*samples_per_batch.
+        dict(lookahead_samples=8, n_array_meta_cache=4),
+        # n_chunk_layout_cache below the same floor.
+        dict(lookahead_samples=8, n_chunk_layout_cache=4),
+        # n_shard_index_cache below (floor) * max_shards_per_sample.
+        dict(lookahead_samples=8, max_shards_per_sample=4, n_shard_index_cache=8),
+    ],
+)
+def test_metadata_cache_floor_rejected_with_invalid(override):
+    """Cache-sizing floors (#134): a metadata cache below its floor
+    (lookahead_samples + 2*samples_per_batch) fails fast at create with
+    InvalidArgument, not a stall."""
+    # Bump the other caches clear of their floors so the targeted one trips.
+    base = dict(
+        n_array_meta_cache=64,
+        n_chunk_layout_cache=64,
+        n_shard_index_cache=256,
+        max_shards_per_sample=2,
+    )
+    base.update(override)
+    cfg = dataclasses.replace(_base_config(), **base)
+    with pytest.raises(InvalidArgument) as excinfo:
+        Pipeline(cfg)
+    assert excinfo.value.status is Status.INVAL
+
+
+def test_max_shards_per_sample_must_be_positive():
+    cfg = dataclasses.replace(_base_config(), max_shards_per_sample=0)
+    with pytest.raises(InvalidArgument) as excinfo:
+        Pipeline(cfg)
+    assert excinfo.value.status is Status.INVAL
+
+
+def test_oversized_sample_shard_count_rejected(multishard_zarr):
+    """A sample whose AABB intersects more shards than
+    max_shards_per_sample is rejected at runtime with InvalidArgument
+    (surfaced at pop)."""
+    uri = multishard_zarr
+    # 32x32 array, 8x8 shards → full extent touches 16 shards. Cap at 4.
+    cfg = Config(
+        samples_per_batch=1,
+        dtype="f32",
+        lookahead_samples=2,
+        n_io_threads=1,
+        n_array_meta_cache=4,
+        n_chunk_layout_cache=4,
+        n_shard_index_cache=16,
+        max_shards_per_sample=4,
+        sample_shape=(32, 32),
+        max_gpu_memory_bytes=1 << 30,
+    )
+    with Pipeline(cfg) as d:
+        d.push([Sample(uri=uri, aabb=[(0, 32), (0, 32)])])
+        with pytest.raises(InvalidArgument) as excinfo:
+            d.pop()
+        assert excinfo.value.status is Status.INVAL
 
 
 @pytest.mark.parametrize("dtype", ["f32", "bf16", "float32", "bfloat16"])
@@ -674,6 +739,7 @@ def test_native_pipeline_rejects_out_of_range_enums(tiny_zarr):
             n_array_meta_cache=4,
             n_shard_index_cache=4,
             n_chunk_layout_cache=4,
+            max_shards_per_sample=2,
             dtype=_native.DTYPE_F32,
             max_chunk_uncompressed_bytes=0,
             max_gpu_memory_bytes=1 << 30,

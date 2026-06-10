@@ -86,7 +86,7 @@ called by the scheduler when batch `w−1` is fully planned
 and its metadata is no longer needed; entries with
 `max_batch_id < w` become eligible for eviction.
 
-### Ordinal-range pinning and backpressure
+### Ordinal-range pinning, sized to never saturate
 
 The cache is driven by a monotonic batch ordinal stamped on
 each sample by lookahead. Each entry holds a `[min_batch_id,
@@ -103,17 +103,69 @@ entries until the scheduler proves they're done. The
 monotonic ordinal makes "done" a single integer compare
 instead of a multi-handle refcount.
 
-With long lead time, entries accumulate against capacity.
-Once every entry has `max_batch_id ≥ watermark`, admission
-is rejected:
+Each cache pins every sample seq in `[watermark, pushed_samples)`
+(an entry stays pinned while `max_owner_id >= watermark`). Two
+bounds size that pinned set:
+
+- **Push back-pressure** bounds `pushed_samples −
+  next_consume_seq <= lookahead_samples`
+  (`damacy_push` stalls with `DAMACY_AGAIN` at the floor).
+- **The watermark lags `next_consume_seq`.** `next_consume_seq`
+  advances when the planner *takes* a ready wave
+  (`prefetcher_take_ready_wave`), but the watermark only advances
+  later, at `plan_commit`, once a batch is sealed. The consumed-
+  but-not-yet-committed samples sit in the staging window, capped
+  at `2 * samples_per_batch` (`planning_capacity_locked`). So
+  `next_consume_seq − watermark <= 2 * samples_per_batch`.
+
+Adding the two terms, the worst-case simultaneously-pinned set per
+cache is `lookahead_samples + 2 * samples_per_batch` keys (times
+the per-sample shard footprint for shard_index). The earlier
+design claimed `lookahead_samples` alone; that ignored the staging
+lag and under-sized the floors — distinct-URI workloads with deep
+lookahead could exceed `lookahead_samples` pinned keys and saturate
+the cache.
+
+`damacy_config` validation enforces a floor so each cache can hold
+its entire worst-case in-flight set, including the lag term:
 
 ```
-prefetch_handle_t prefetch_cache_try_request(c, key, batch_id, &gate);  // NULL when saturated
+n_array_meta_cache   >= lookahead_samples + 2*samples_per_batch
+n_chunk_layout_cache >= lookahead_samples + 2*samples_per_batch
+n_shard_index_cache  >= (lookahead_samples + 2*samples_per_batch)
+                        * max_shards_per_sample
 ```
 
-When `try_request` returns NULL, the prefetcher stalls that
-stage for that sample until the scheduler advances the
-watermark.
+Each floor violation is rejected at `damacy_create` with
+`DAMACY_INVAL` and an actionable message that names the knob,
+the observed vs. required value, and the concrete fix (which
+knob to raise and to what minimum). The cache sizes remain
+explicit tuning knobs — useful as reuse/hit-rate levers above
+the floor.
+
+`max_shards_per_sample` is the one footprint not knowable at
+config time (shard geometry is only read at runtime), so it is
+declared as an explicit, validated (`> 0`) tuning knob. It does
+double duty: it sizes the shard_index floor above, and at
+runtime the prefetcher rejects any sample whose AABB intersects
+more shards than declared (`DAMACY_INVAL`, with a message that
+reports the observed vs. allowed shard count). That runtime cap
+is what makes the declared bound sound — without it an
+under-declared value could still overrun the cache.
+
+With the floors enforced, the oldest in-flight sample can
+always be admitted in normal operation. As **defense in depth**,
+the cache still degrades gracefully if "every entry pinned" is
+ever reached anyway — a residual overshoot, a future refactor, or
+a caller that bypassed validation. `prefetch_cache_request_result`
+returns `DAMACY_AGAIN` (logging a warning that names the cache
+knob) rather than `abort()`-ing the process. The prefetcher treats
+that as back-pressure: it leaves the request un-admitted (or holds
+the in-progress sample in its current stage) and retries on a later
+tick, once the scheduler advances the watermark and frees a pin.
+Shard enumeration resumes from a per-slot cursor so a mid-stream
+stall never re-issues — and thus never double-counts — an already-
+issued request's gate.
 
 ### Readiness gate
 
@@ -189,15 +241,30 @@ same `error` state. Downstream consumers (eventually the
 chunk planner) see a single error transition and fail the
 batch cleanly.
 
-### Backpressure under saturation
+### Sized to fit, with a back-pressure safety net
 
-Backpressure is per-cache, not global. If shard indices
-saturate but array metadata has capacity, the prefetcher
-keeps advancing the first stage and stalls on the second
-for samples that need it. The scheduler's watermark is the
-back-stop: until it advances past a saturated stage's
-existing `max_batch_id` values, no new requests can be
-admitted on that stage.
+The cache-size floors (see *Ordinal-range pinning, sized to never
+saturate*) guarantee every cache can hold the whole in-flight
+working set plus the staging lag, so under a validated config
+admission is never refused for lack of an evictable slot, and the
+prefetcher never stalls a stage in normal operation.
+
+If saturation is ever hit anyway, the cache returns `DAMACY_AGAIN`
+and the prefetcher applies back-pressure: an array_meta stall holds
+the popped sample and replays it next tick; a shard_index /
+chunk_layout stall keeps the slot in its current stage and retries.
+Both clear once the watermark advances. This is a recoverable
+degradation, not a crash.
+
+The single thing that could violate the shard_index sizing —
+a sample that intersects more shards than `max_shards_per_sample`
+— is rejected up front in `advance_from_meta`: when the
+`sample_shard_iterator` count exceeds the declared bound the
+sample fails with `DAMACY_INVAL` and a message reporting the
+observed vs. allowed shard count and how to raise the bound
+(and the matching `n_shard_index_cache`). A configuration that
+previously hit the saturation path now either validates and
+runs, or fails fast at `damacy_create`.
 
 ## Integration
 

@@ -28,7 +28,8 @@
     "max_gpu_memory_mb": 6144,
     "n_array_meta_cache": 4096,
     "n_shard_index_cache": 16384,
-    "n_chunk_layout_cache": 4096
+    "n_chunk_layout_cache": 4096,
+    "max_shards_per_sample": 8
   },
   "consumer": {
     "hold_ms": 200

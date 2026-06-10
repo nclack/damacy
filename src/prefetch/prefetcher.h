@@ -19,6 +19,11 @@ extern "C"
     struct prefetch_cache* chunk_layout_cache;
     uint32_t capacity;
     uint32_t owner_capacity;
+    // Declared upper bound on shards a single sample may intersect. A
+    // sample whose AABB intersects more shards is rejected with
+    // DAMACY_INVAL (the shard_index cache is sized for this bound, so
+    // honoring it keeps cache saturation impossible by construction).
+    uint32_t max_shards_per_sample;
   };
 
   enum prefetcher_result

@@ -490,9 +490,19 @@ class Config:
             to two full output batches.
         n_io_threads: Bulk data IO worker threads (>= 1). Defaults to 64.
         metadata_io_concurrency: Async metadata request concurrency (>= 1).
-        n_array_meta_cache: LRU cap for zarr-metadata entries.
-        n_shard_index_cache: LRU cap for shard-index entries.
+        n_array_meta_cache: LRU cap for zarr-metadata entries. Must be
+            ``>= lookahead_samples + 2 * samples_per_batch`` so the in-flight
+            working set plus the staging lag fits.
+        n_shard_index_cache: LRU cap for shard-index entries. Must be
+            ``>= (lookahead_samples + 2 * samples_per_batch)
+            * max_shards_per_sample``.
         n_chunk_layout_cache: LRU cap for per-array blosc1 chunk-layout entries.
+            Must be ``>= lookahead_samples + 2 * samples_per_batch``.
+        max_shards_per_sample: Declared upper bound on the number of shards
+            a single sample's AABB may intersect (>= 1). Sizes the
+            ``n_shard_index_cache`` floor so metadata-cache saturation cannot
+            occur, and caps per-sample shard enumeration at runtime: a sample
+            intersecting more shards is rejected with :class:`InvalidArgument`.
         max_chunk_uncompressed_bytes: Largest uncompressed chunk size
             the pipeline accepts; 0 selects the C default (512 KB).
         max_read_op_bytes: Cap on the size of a single coalesced
@@ -546,6 +556,7 @@ class Config:
     n_array_meta_cache: int
     n_shard_index_cache: int
     n_chunk_layout_cache: int
+    max_shards_per_sample: int
     sample_shape: tuple[int, ...]
     device: int | None
     pop_timeout_s: float | None
@@ -572,6 +583,7 @@ class Config:
         n_array_meta_cache: int = _native.DEFAULT_ARRAY_META_CACHE,
         n_shard_index_cache: int = _native.DEFAULT_SHARD_INDEX_CACHE,
         n_chunk_layout_cache: int = _native.DEFAULT_CHUNK_LAYOUT_CACHE,
+        max_shards_per_sample: int = _native.DEFAULT_MAX_SHARDS_PER_SAMPLE,
         device: int | None = None,
         pop_timeout_s: float | None = 30.0,
         enable_gds: bool | None = None,
@@ -631,6 +643,12 @@ class Config:
                 f"[1, {_native.HARD_MAX_SUBSTREAMS_PER_CHUNK}] "
                 f"(got {max_substreams_per_chunk})"
             )
+        # Cache floor validation (n_*_cache >= lookahead_samples +
+        # 2*samples_per_batch; n_shard_index_cache scales by
+        # max_shards_per_sample) plus the > 0 checks are enforced by the C
+        # config validator, which
+        # surfaces an actionable message via InvalidArgument from Pipeline().
+        # Not duplicated here so a single source of truth owns the floors.
         if pop_timeout_s is not None and pop_timeout_s <= 0:
             raise ValueError(f"pop_timeout_s must be > 0 or None (got {pop_timeout_s})")
         ns = NumaStrategy.coerce(numa_strategy)
@@ -667,6 +685,7 @@ class Config:
         set_(self, "n_array_meta_cache", n_array_meta_cache)
         set_(self, "n_shard_index_cache", n_shard_index_cache)
         set_(self, "n_chunk_layout_cache", n_chunk_layout_cache)
+        set_(self, "max_shards_per_sample", max_shards_per_sample)
         set_(self, "sample_shape", shape_t)
         set_(self, "device", device)
         set_(self, "pop_timeout_s", pop_timeout_s)
@@ -1129,6 +1148,7 @@ class Pipeline:
                 n_array_meta_cache=config.n_array_meta_cache,
                 n_shard_index_cache=config.n_shard_index_cache,
                 n_chunk_layout_cache=config.n_chunk_layout_cache,
+                max_shards_per_sample=config.max_shards_per_sample,
                 sample_shape=tuple(config.sample_shape),
                 device=-1 if config.device is None else int(config.device),
                 enable_gds=_gds_to_native(config.enable_gds),

@@ -467,27 +467,39 @@ test_sticky_error_hits_propagate(void)
   return 0;
 }
 
+// #134: the config floors keep saturation out of normal operation, but the
+// cache must still degrade gracefully (DAMACY_AGAIN, not abort()) if every
+// entry is pinned — a defense-in-depth net for residual overshoot or an
+// unvalidated caller. Drive the all-pinned regime directly and assert the
+// recoverable return.
 static int
-test_admission_rejection_when_all_pinned(void)
+test_saturation_returns_again(void)
 {
   struct prefetch_cache_config cfg = make_config();
   cfg.capacity = 2;
+  cfg.knob_name = "n_array_meta_cache";
   struct prefetch_cache* c = prefetch_cache_create(&cfg);
   EXPECT(c);
 
   struct prefetch_gate gate;
   prefetch_gate_init(&gate);
 
-  struct prefetch_handle h1 =
-    prefetch_cache_request(c, khash("a"), "a", 0, &gate);
-  struct prefetch_handle h2 =
-    prefetch_cache_request(c, khash("b"), "b", 0, &gate);
-  EXPECT(prefetch_handle_valid(h1));
-  EXPECT(prefetch_handle_valid(h2));
+  // Pin both slots at/above the watermark (0), then request a third distinct
+  // key: no slot is evictable. Pre-#134 this abort()ed; now it returns AGAIN.
+  (void)prefetch_cache_request(c, khash("a"), "a", 0, &gate);
+  (void)prefetch_cache_request(c, khash("b"), "b", 1, &gate);
 
-  struct prefetch_handle h3 =
-    prefetch_cache_request(c, khash("c"), "c", 0, &gate);
-  EXPECT(!prefetch_handle_valid(h3));
+  struct prefetch_request_result r =
+    prefetch_cache_request_result(c, khash("c"), "c", 2, &gate);
+  EXPECT(r.status == DAMACY_AGAIN);
+  EXPECT(!prefetch_handle_valid(r.handle));
+
+  // Advancing the watermark frees the pins; the retry then admits.
+  prefetch_cache_advance_watermark(c, 3);
+  struct prefetch_request_result r2 =
+    prefetch_cache_request_result(c, khash("c"), "c", 3, &gate);
+  EXPECT(r2.status == DAMACY_OK);
+  EXPECT(prefetch_handle_valid(r2.handle));
 
   prefetch_cache_destroy(c);
   return 0;
@@ -505,12 +517,12 @@ test_eviction_after_watermark_advances(void)
   prefetch_gate_init(&g0);
   prefetch_gate_init(&g1);
 
+  // Fill both slots at batch 0, then advance the watermark past them so
+  // both become evictable. A new key then admits by evicting an old one.
+  // (We deliberately do NOT request a 3rd key while all slots are pinned:
+  // that is now an aborting invariant, prevented by config-time sizing.)
   (void)prefetch_cache_request(c, khash("a"), "a", 0, &g0);
   (void)prefetch_cache_request(c, khash("b"), "b", 0, &g0);
-
-  struct prefetch_handle h_fail =
-    prefetch_cache_request(c, khash("c"), "c", 0, &g0);
-  EXPECT(!prefetch_handle_valid(h_fail));
 
   prefetch_cache_advance_watermark(c, 1);
 
@@ -598,22 +610,34 @@ test_hit_after_watermark_release_reacquires_pin(void)
   struct prefetch_gate gate;
   prefetch_gate_init(&gate);
 
+  // a is requested at batch 0, then the watermark releases it (evictable).
   (void)prefetch_cache_request(c, khash("a"), "a", 0, &gate);
   prefetch_cache_advance_watermark(c, 1);
 
+  // A hit at batch 1 re-acquires the pin: a.max_batch_id widens to 1, so
+  // with the watermark at 1 the entry is no longer evictable
+  // (max_batch_id < watermark is 1 < 1 → false).
   struct prefetch_handle ha =
     prefetch_cache_request(c, khash("a"), "a", 1, &gate);
   EXPECT(prefetch_handle_valid(ha));
   EXPECT(prefetch_cache_query(c, ha, NULL, NULL) == PREFETCH_STATE_READY);
 
+  // Fill the second slot, also pinned at batch 1.
   struct prefetch_handle hb =
     prefetch_cache_request(c, khash("b"), "b", 1, &gate);
   EXPECT(prefetch_handle_valid(hb));
 
+  // Advance the watermark past batch 1: the re-pinned a is now evictable
+  // again, proving the hit moved its range to batch 1 (had the re-pin not
+  // happened, a would have been evicted by the b admission above and this
+  // handle would be stale). A fresh key admits by evicting an entry, and
+  // a's handle still resolves to its ready value.
+  prefetch_cache_advance_watermark(c, 2);
+  struct prefetch_gate g2;
+  prefetch_gate_init(&g2);
   struct prefetch_handle hc =
-    prefetch_cache_request(c, khash("c"), "c", 1, &gate);
-  EXPECT(!prefetch_handle_valid(hc));
-  EXPECT(prefetch_cache_query(c, ha, NULL, NULL) == PREFETCH_STATE_READY);
+    prefetch_cache_request(c, khash("c"), "c", 2, &g2);
+  EXPECT(prefetch_handle_valid(hc));
 
   prefetch_cache_destroy(c);
   return 0;
@@ -731,8 +755,8 @@ main(void)
   RUN(test_two_gates_decremented_on_completion);
   RUN(test_error_propagates_to_gate);
   RUN(test_sticky_error_hits_propagate);
-  RUN(test_admission_rejection_when_all_pinned);
   RUN(test_eviction_after_watermark_advances);
+  RUN(test_saturation_returns_again);
   RUN(test_max_batch_id_widens_under_hit);
   RUN(test_handle_survives_sibling_eviction);
   RUN(test_hit_after_watermark_release_reacquires_pin);

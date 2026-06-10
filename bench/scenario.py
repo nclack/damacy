@@ -103,6 +103,10 @@ class Pipeline(BaseModel):
     n_array_meta_cache: int = 4096
     n_shard_index_cache: int = 16384
     n_chunk_layout_cache: int = 4096
+    # Declared upper bound on shards a sample's AABB may intersect. Sizes the
+    # n_shard_index_cache floor (>= lookahead_samples * max_shards_per_sample)
+    # and caps per-sample shard enumeration at runtime.
+    max_shards_per_sample: int = Field(default=64, gt=0)
     # Bench bypass: skip decode by flipping chunks to fill at parse +
     # assemble time. IO and input transfer still run; assemble broadcasts the
     # array's fill_value. Useful for isolating decode cost.

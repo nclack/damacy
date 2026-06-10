@@ -120,6 +120,7 @@ struct scenario
   uint32_t n_array_meta_cache;
   uint32_t n_shard_index_cache;
   uint32_t n_chunk_layout_cache;
+  uint32_t max_shards_per_sample;
   uint8_t host_buffer_waves; // 0 → tuning_defaults() baseline
   uint8_t bypass_decode;
   struct damacy_latency_model metadata_latency;
@@ -299,6 +300,7 @@ parse_scenario(struct cslice src, struct scenario* sc)
   sc->n_array_meta_cache = 4096;
   sc->n_shard_index_cache = 16384;
   sc->n_chunk_layout_cache = 4096;
+  sc->max_shards_per_sample = 64;
 
   // dataset
   {
@@ -416,6 +418,10 @@ parse_scenario(struct cslice src, struct scenario* sc)
       { QUERY_KEY, .key = "pipeline" },
       { QUERY_KEY, .key = "n_chunk_layout_cache" }
     };
+    static const struct json_query p_ms[] = {
+      { QUERY_KEY, .key = "pipeline" },
+      { QUERY_KEY, .key = "max_shards_per_sample" }
+    };
     if (read_uint(src, p_la, countof(p_la), &v))
       return 1;
     sc->lookahead_samples = (uint32_t)v;
@@ -439,6 +445,8 @@ parse_scenario(struct cslice src, struct scenario* sc)
     sc->n_shard_index_cache = (uint32_t)v;
     read_uint_opt(src, p_cl, countof(p_cl), &v, 4096);
     sc->n_chunk_layout_cache = (uint32_t)v;
+    read_uint_opt(src, p_ms, countof(p_ms), &v, 64);
+    sc->max_shards_per_sample = (uint32_t)v;
     static const struct json_query p_hw[] = { { QUERY_KEY, .key = "pipeline" },
                                               { QUERY_KEY,
                                                 .key = "host_buffer_waves" } };
@@ -1085,6 +1093,7 @@ main(int argc, char** argv)
   cfg.tuning.n_array_meta_cache = sc.n_array_meta_cache;
   cfg.tuning.n_shard_index_cache = sc.n_shard_index_cache;
   cfg.tuning.n_chunk_layout_cache = sc.n_chunk_layout_cache;
+  cfg.tuning.max_shards_per_sample = sc.max_shards_per_sample;
   cfg.tuning.metadata_io_concurrency = sc.metadata_io_concurrency;
   if (sc.max_chunk_uncompressed_bytes)
     cfg.tuning.max_chunk_uncompressed_bytes = sc.max_chunk_uncompressed_bytes;
