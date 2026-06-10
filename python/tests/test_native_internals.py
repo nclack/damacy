@@ -65,7 +65,7 @@ def test_native_damacy_error_carries_status_and_what():
             n_io_threads=1,
             metadata_io_concurrency=1,
             n_array_meta_cache=4,
-            n_shard_index_cache=4,
+            n_shard_index_cache=8,
             n_chunk_layout_cache=4,
             max_shards_per_sample=2,
             dtype="f32",

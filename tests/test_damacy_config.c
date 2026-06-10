@@ -228,60 +228,62 @@ test_validate_max_shards_per_sample_reject_zero(void)
   return 0;
 }
 
-// n_array_meta_cache below lookahead_samples is rejected, and the message
-// names the knob, the observed/required values, and the fix.
+// n_array_meta_cache below lookahead_samples + 2*samples_per_batch is
+// rejected, and the message names the knob, the observed/required values,
+// and the fix. mk_valid_cfg uses samples_per_batch=1, so the floor is 34.
 static int
 test_validate_array_meta_cache_floor(void)
 {
   struct damacy_config cfg = mk_valid_cfg();
   cfg.lookahead_samples = 32;
   cfg.tuning.n_array_meta_cache = 8;
-  cfg.tuning.n_chunk_layout_cache = 32;
-  cfg.tuning.n_shard_index_cache = 32 * cfg.tuning.max_shards_per_sample;
+  cfg.tuning.n_chunk_layout_cache = 34;
+  cfg.tuning.n_shard_index_cache = 34 * cfg.tuning.max_shards_per_sample;
   g_last_log[0] = '\0';
   EXPECT(validate_config(&cfg) == DAMACY_INVAL);
   EXPECT(strstr(g_last_log, "n_array_meta_cache=8"));
   EXPECT(strstr(g_last_log, "lookahead_samples(32)"));
-  EXPECT(strstr(g_last_log, "Raise n_array_meta_cache to >= 32"));
+  EXPECT(strstr(g_last_log, "Raise n_array_meta_cache to >= 34"));
   return 0;
 }
 
-// n_chunk_layout_cache below lookahead_samples is rejected with an
+// n_chunk_layout_cache below the same floor is rejected with an
 // actionable message.
 static int
 test_validate_chunk_layout_cache_floor(void)
 {
   struct damacy_config cfg = mk_valid_cfg();
   cfg.lookahead_samples = 32;
-  cfg.tuning.n_array_meta_cache = 32;
+  cfg.tuning.n_array_meta_cache = 34;
   cfg.tuning.n_chunk_layout_cache = 8;
-  cfg.tuning.n_shard_index_cache = 32 * cfg.tuning.max_shards_per_sample;
+  cfg.tuning.n_shard_index_cache = 34 * cfg.tuning.max_shards_per_sample;
   g_last_log[0] = '\0';
   EXPECT(validate_config(&cfg) == DAMACY_INVAL);
   EXPECT(strstr(g_last_log, "n_chunk_layout_cache=8"));
   EXPECT(strstr(g_last_log, "lookahead_samples(32)"));
-  EXPECT(strstr(g_last_log, "Raise n_chunk_layout_cache to >= 32"));
+  EXPECT(strstr(g_last_log, "Raise n_chunk_layout_cache to >= 34"));
   return 0;
 }
 
-// n_shard_index_cache below lookahead_samples * max_shards_per_sample is
-// rejected; message reports the product and the required minimum.
+// n_shard_index_cache below (lookahead_samples + 2*samples_per_batch) *
+// max_shards_per_sample is rejected; message reports the product and the
+// required minimum. Floor = (32 + 2*1) * 4 = 136.
 static int
 test_validate_shard_index_cache_floor(void)
 {
   struct damacy_config cfg = mk_valid_cfg();
   cfg.lookahead_samples = 32;
   cfg.tuning.max_shards_per_sample = 4;
-  cfg.tuning.n_array_meta_cache = 32;
-  cfg.tuning.n_chunk_layout_cache = 32;
-  cfg.tuning.n_shard_index_cache = 64; // < 32 * 4 = 128
+  cfg.tuning.n_array_meta_cache = 34;
+  cfg.tuning.n_chunk_layout_cache = 34;
+  cfg.tuning.n_shard_index_cache = 64; // < 34 * 4 = 136
   g_last_log[0] = '\0';
   EXPECT(validate_config(&cfg) == DAMACY_INVAL);
   EXPECT(strstr(g_last_log, "n_shard_index_cache=64"));
   EXPECT(strstr(g_last_log, "lookahead_samples(32)"));
   EXPECT(strstr(g_last_log, "max_shards_per_sample(4)"));
-  EXPECT(strstr(g_last_log, "= 128"));
-  EXPECT(strstr(g_last_log, "Raise n_shard_index_cache to >= 128"));
+  EXPECT(strstr(g_last_log, "= 136"));
+  EXPECT(strstr(g_last_log, "Raise n_shard_index_cache to >= 136"));
   return 0;
 }
 
@@ -292,9 +294,9 @@ test_validate_floors_satisfied_ok(void)
   struct damacy_config cfg = mk_valid_cfg();
   cfg.lookahead_samples = 32;
   cfg.tuning.max_shards_per_sample = 4;
-  cfg.tuning.n_array_meta_cache = 32;
-  cfg.tuning.n_chunk_layout_cache = 32;
-  cfg.tuning.n_shard_index_cache = 128;
+  cfg.tuning.n_array_meta_cache = 34;
+  cfg.tuning.n_chunk_layout_cache = 34;
+  cfg.tuning.n_shard_index_cache = 136;
   EXPECT(validate_config(&cfg) == DAMACY_OK);
   return 0;
 }

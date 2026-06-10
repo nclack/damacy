@@ -467,13 +467,43 @@ test_sticky_error_hits_propagate(void)
   return 0;
 }
 
-// NOTE: the former test_admission_rejection_when_all_pinned was removed in
-// #134. Admission saturation (every entry pinned) is now impossible by
-// construction — damacy_config sizes each cache to the in-flight working
-// set — so prefetch_cache_request_result aborts as an invariant violation
-// rather than returning a recoverable status. There is no graceful-reject
-// behavior left to unit-test here; the floor validation is covered in
-// test_damacy_config.c and the runtime cap in test_damacy_caps.c.
+// #134: the config floors keep saturation out of normal operation, but the
+// cache must still degrade gracefully (DAMACY_AGAIN, not abort()) if every
+// entry is pinned — a defense-in-depth net for residual overshoot or an
+// unvalidated caller. Drive the all-pinned regime directly and assert the
+// recoverable return.
+static int
+test_saturation_returns_again(void)
+{
+  struct prefetch_cache_config cfg = make_config();
+  cfg.capacity = 2;
+  cfg.knob_name = "n_array_meta_cache";
+  struct prefetch_cache* c = prefetch_cache_create(&cfg);
+  EXPECT(c);
+
+  struct prefetch_gate gate;
+  prefetch_gate_init(&gate);
+
+  // Pin both slots at/above the watermark (0), then request a third distinct
+  // key: no slot is evictable. Pre-#134 this abort()ed; now it returns AGAIN.
+  (void)prefetch_cache_request(c, khash("a"), "a", 0, &gate);
+  (void)prefetch_cache_request(c, khash("b"), "b", 1, &gate);
+
+  struct prefetch_request_result r =
+    prefetch_cache_request_result(c, khash("c"), "c", 2, &gate);
+  EXPECT(r.status == DAMACY_AGAIN);
+  EXPECT(!prefetch_handle_valid(r.handle));
+
+  // Advancing the watermark frees the pins; the retry then admits.
+  prefetch_cache_advance_watermark(c, 3);
+  struct prefetch_request_result r2 =
+    prefetch_cache_request_result(c, khash("c"), "c", 3, &gate);
+  EXPECT(r2.status == DAMACY_OK);
+  EXPECT(prefetch_handle_valid(r2.handle));
+
+  prefetch_cache_destroy(c);
+  return 0;
+}
 
 static int
 test_eviction_after_watermark_advances(void)
@@ -726,6 +756,7 @@ main(void)
   RUN(test_error_propagates_to_gate);
   RUN(test_sticky_error_hits_propagate);
   RUN(test_eviction_after_watermark_advances);
+  RUN(test_saturation_returns_again);
   RUN(test_max_batch_id_widens_under_hit);
   RUN(test_handle_survives_sibling_eviction);
   RUN(test_hit_after_watermark_release_reacquires_pin);

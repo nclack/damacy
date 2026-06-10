@@ -103,24 +103,37 @@ entries until the scheduler proves they're done. The
 monotonic ordinal makes "done" a single integer compare
 instead of a multi-handle refcount.
 
-The in-flight window is bounded at `lookahead_samples`
-(the prefetcher's slot capacity), so the worst-case number
-of simultaneously-pinned entries per cache is bounded too:
+Each cache pins every sample seq in `[watermark, pushed_samples)`
+(an entry stays pinned while `max_owner_id >= watermark`). Two
+bounds size that pinned set:
 
-- **array_meta**: ≤ `lookahead_samples` (1 key/sample).
-- **chunk_layout**: ≤ `lookahead_samples` (1 key/sample).
-- **shard_index**: ≤ `lookahead_samples × max_shards_per_sample`
-  — the per-sample shard footprint times the window.
+- **Push back-pressure** bounds `pushed_samples −
+  next_consume_seq <= lookahead_samples`
+  (`damacy_push` stalls with `DAMACY_AGAIN` at the floor).
+- **The watermark lags `next_consume_seq`.** `next_consume_seq`
+  advances when the planner *takes* a ready wave
+  (`prefetcher_take_ready_wave`), but the watermark only advances
+  later, at `plan_commit`, once a batch is sealed. The consumed-
+  but-not-yet-committed samples sit in the staging window, capped
+  at `2 * samples_per_batch` (`planning_capacity_locked`). So
+  `next_consume_seq − watermark <= 2 * samples_per_batch`.
 
-Rather than build stall/back-pressure machinery for the case
-where every entry is pinned, **saturation is made impossible
-by construction**. `damacy_config` validation enforces a floor
-so each cache can hold its entire worst-case in-flight set:
+Adding the two terms, the worst-case simultaneously-pinned set per
+cache is `lookahead_samples + 2 * samples_per_batch` keys (times
+the per-sample shard footprint for shard_index). The earlier
+design claimed `lookahead_samples` alone; that ignored the staging
+lag and under-sized the floors — distinct-URI workloads with deep
+lookahead could exceed `lookahead_samples` pinned keys and saturate
+the cache.
+
+`damacy_config` validation enforces a floor so each cache can hold
+its entire worst-case in-flight set, including the lag term:
 
 ```
-n_array_meta_cache   >= lookahead_samples
-n_chunk_layout_cache >= lookahead_samples
-n_shard_index_cache  >= lookahead_samples * max_shards_per_sample
+n_array_meta_cache   >= lookahead_samples + 2*samples_per_batch
+n_chunk_layout_cache >= lookahead_samples + 2*samples_per_batch
+n_shard_index_cache  >= (lookahead_samples + 2*samples_per_batch)
+                        * max_shards_per_sample
 ```
 
 Each floor violation is rejected at `damacy_create` with
@@ -141,11 +154,18 @@ is what makes the declared bound sound — without it an
 under-declared value could still overrun the cache.
 
 With the floors enforced, the oldest in-flight sample can
-always be admitted, so no stall is ever required. The cache's
-admission path therefore treats "every entry pinned" as a
-should-never-happen invariant: `prefetch_cache_request_result`
-aborts with a fatal log naming the offending cache knob
-(defense-in-depth) instead of returning a recoverable status.
+always be admitted in normal operation. As **defense in depth**,
+the cache still degrades gracefully if "every entry pinned" is
+ever reached anyway — a residual overshoot, a future refactor, or
+a caller that bypassed validation. `prefetch_cache_request_result`
+returns `DAMACY_AGAIN` (logging a warning that names the cache
+knob) rather than `abort()`-ing the process. The prefetcher treats
+that as back-pressure: it leaves the request un-admitted (or holds
+the in-progress sample in its current stage) and retries on a later
+tick, once the scheduler advances the watermark and frees a pin.
+Shard enumeration resumes from a per-slot cursor so a mid-stream
+stall never re-issues — and thus never double-counts — an already-
+issued request's gate.
 
 ### Readiness gate
 
@@ -221,14 +241,20 @@ same `error` state. Downstream consumers (eventually the
 chunk planner) see a single error transition and fail the
 batch cleanly.
 
-### No back-pressure: sized to fit + reject oversized samples
+### Sized to fit, with a back-pressure safety net
 
-There is no per-cache or global back-pressure. The cache-size
-floors (see *Ordinal-range pinning, sized to never saturate*)
-guarantee every cache can hold the whole in-flight working
-set, so admission can never be refused for lack of an evictable
-slot. The prefetcher never stalls a stage waiting on the
-watermark.
+The cache-size floors (see *Ordinal-range pinning, sized to never
+saturate*) guarantee every cache can hold the whole in-flight
+working set plus the staging lag, so under a validated config
+admission is never refused for lack of an evictable slot, and the
+prefetcher never stalls a stage in normal operation.
+
+If saturation is ever hit anyway, the cache returns `DAMACY_AGAIN`
+and the prefetcher applies back-pressure: an array_meta stall holds
+the popped sample and replays it next tick; a shard_index /
+chunk_layout stall keeps the slot in its current stage and retries.
+Both clear once the watermark advances. This is a recoverable
+degradation, not a crash.
 
 The single thing that could violate the shard_index sizing —
 a sample that intersects more shards than `max_shards_per_sample`

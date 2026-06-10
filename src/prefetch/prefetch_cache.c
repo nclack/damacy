@@ -457,20 +457,19 @@ prefetch_cache_request_result(struct prefetch_cache* self,
     // lru_put has already called lru_slot_destroy on s.
     //
     // Saturation: every slot is pinned (max_owner_id >= watermark), so no
-    // entry could be evicted to make room. This is impossible by
-    // construction — damacy_config sizes each metadata cache to hold the
-    // full in-flight working set and the prefetcher caps per-sample shard
-    // count — so reaching here is a library invariant violation, not a
-    // recoverable budget condition. Abort with a message naming the knob.
-    log_fatal("prefetch_cache invariant violated: %s (capacity=%u) saturated "
-              "— every entry is pinned. This cache must be sized to hold the "
-              "whole in-flight working set (raise %s); validation should have "
-              "prevented this.",
-              self->knob_name ? self->knob_name : "(cache)",
-              (unsigned)self->capacity,
-              self->knob_name ? self->knob_name : "the cache capacity");
+    // entry could be evicted. The config floors make this unreachable in
+    // normal operation, but the floor only bounds the *steady-state* pin
+    // set — a transient overshoot (watermark lagging next_consume_seq) or a
+    // caller that bypassed validation could still land here. Return
+    // DAMACY_AGAIN so the prefetcher stalls and retries once the scheduler
+    // advances the watermark, rather than crashing the process.
+    log_warn("prefetch_cache %s (capacity=%u) saturated: every entry pinned. "
+             "Stalling; raise %s if this recurs.",
+             self->knob_name ? self->knob_name : "(cache)",
+             (unsigned)self->capacity,
+             self->knob_name ? self->knob_name : "the cache capacity");
     platform_mutex_unlock(self->lock);
-    abort();
+    return (struct prefetch_request_result){ .status = DAMACY_AGAIN };
   }
   s->lru_ent = ent;
   lru_entry_acquire_locked(ent);

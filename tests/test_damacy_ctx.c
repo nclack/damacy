@@ -45,11 +45,11 @@ mk_cfg(const char* root, int64_t sy, int64_t sx)
   c.tuning = damacy_tuning_defaults();
   c.tuning.n_io_threads = 1;
   c.tuning.metadata_io_concurrency = 1;
+  // Floor = lookahead_samples + 2*samples_per_batch = 2 + 2 = 4; shard floor
+  // scales by max_shards_per_sample (4 * 2 = 8). 1 shard/sample fixtures.
   c.tuning.n_array_meta_cache = 4;
-  c.tuning.n_shard_index_cache = 4;
+  c.tuning.n_shard_index_cache = 8;
   c.tuning.n_chunk_layout_cache = 4;
-  // lookahead_samples=2; shard floor = 2 * max_shards_per_sample must fit
-  // n_shard_index_cache=4 → max_shards=2 (1 shard/sample fixtures).
   c.tuning.max_shards_per_sample = 2;
   c.tuning.max_gpu_memory_bytes = 1ull << 30;
   c.sample_shape[0] = sy;

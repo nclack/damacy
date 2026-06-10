@@ -97,37 +97,53 @@ validate_config(const struct damacy_config* cfg)
   CHECK_SILENT(Invalid, cfg->tuning.n_shard_index_cache > 0);
   CHECK_SILENT(Invalid, cfg->tuning.n_chunk_layout_cache > 0);
   CHECK_SILENT(Invalid, cfg->tuning.max_shards_per_sample > 0);
-  // Metadata-cache floors: each cache must hold the entire in-flight
-  // working set (bounded by lookahead_samples) so pin-saturation is
-  // impossible by construction. Messages name the knob, observed vs
-  // required value, and the concrete fix.
-  if (cfg->tuning.n_array_meta_cache < cfg->lookahead_samples) {
-    log_error("n_array_meta_cache=%u is too small: requires >= "
-              "lookahead_samples(%u). Raise n_array_meta_cache to >= %u.",
-              (unsigned)cfg->tuning.n_array_meta_cache,
-              (unsigned)cfg->lookahead_samples,
-              (unsigned)cfg->lookahead_samples);
-    goto Invalid;
-  }
-  if (cfg->tuning.n_chunk_layout_cache < cfg->lookahead_samples) {
-    log_error("n_chunk_layout_cache=%u is too small: requires >= "
-              "lookahead_samples(%u). Raise n_chunk_layout_cache to >= %u.",
-              (unsigned)cfg->tuning.n_chunk_layout_cache,
-              (unsigned)cfg->lookahead_samples,
-              (unsigned)cfg->lookahead_samples);
-    goto Invalid;
-  }
+  // Metadata-cache floors: each cache pins every sample seq in
+  // [watermark, pushed_samples). Push back-pressure bounds
+  // pushed_samples - next_consume_seq <= lookahead_samples, and the watermark
+  // lags next_consume_seq by the staging window (<= 2*samples_per_batch, the
+  // planning_capacity cap), so the worst-case pinned set per cache is
+  // lookahead_samples + 2*samples_per_batch. Sizing each cache to that floor
+  // keeps pin-saturation out of normal operation; the cache also degrades to
+  // DAMACY_AGAIN (retry) rather than crashing if it is ever hit. Messages
+  // name the knob, observed vs required value, and the fix. See
+  // dev/metadata_prefetch.md.
   {
-    uint64_t shard_floor = (uint64_t)cfg->lookahead_samples *
-                           (uint64_t)cfg->tuning.max_shards_per_sample;
+    uint64_t meta_floor =
+      (uint64_t)cfg->lookahead_samples + 2ull * (uint64_t)cfg->samples_per_batch;
+    if ((uint64_t)cfg->tuning.n_array_meta_cache < meta_floor) {
+      log_error("n_array_meta_cache=%u is too small: requires >= "
+                "lookahead_samples(%u) + 2*samples_per_batch(%u) = %llu. Raise "
+                "n_array_meta_cache to >= %llu.",
+                (unsigned)cfg->tuning.n_array_meta_cache,
+                (unsigned)cfg->lookahead_samples,
+                (unsigned)cfg->samples_per_batch,
+                (unsigned long long)meta_floor,
+                (unsigned long long)meta_floor);
+      goto Invalid;
+    }
+    if ((uint64_t)cfg->tuning.n_chunk_layout_cache < meta_floor) {
+      log_error("n_chunk_layout_cache=%u is too small: requires >= "
+                "lookahead_samples(%u) + 2*samples_per_batch(%u) = %llu. Raise "
+                "n_chunk_layout_cache to >= %llu.",
+                (unsigned)cfg->tuning.n_chunk_layout_cache,
+                (unsigned)cfg->lookahead_samples,
+                (unsigned)cfg->samples_per_batch,
+                (unsigned long long)meta_floor,
+                (unsigned long long)meta_floor);
+      goto Invalid;
+    }
+    uint64_t shard_floor =
+      meta_floor * (uint64_t)cfg->tuning.max_shards_per_sample;
     if ((uint64_t)cfg->tuning.n_shard_index_cache < shard_floor) {
       log_error(
         "n_shard_index_cache=%u is too small: requires >= "
-        "lookahead_samples(%u) * max_shards_per_sample(%u) = %llu. Raise "
-        "n_shard_index_cache to >= %llu, or lower lookahead_samples / "
+        "(lookahead_samples(%u) + 2*samples_per_batch(%u)) * "
+        "max_shards_per_sample(%u) = %llu. Raise n_shard_index_cache to >= "
+        "%llu, or lower lookahead_samples / samples_per_batch / "
         "max_shards_per_sample.",
         (unsigned)cfg->tuning.n_shard_index_cache,
         (unsigned)cfg->lookahead_samples,
+        (unsigned)cfg->samples_per_batch,
         (unsigned)cfg->tuning.max_shards_per_sample,
         (unsigned long long)shard_floor,
         (unsigned long long)shard_floor);

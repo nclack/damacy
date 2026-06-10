@@ -491,11 +491,13 @@ class Config:
         n_io_threads: Bulk data IO worker threads (>= 1). Defaults to 64.
         metadata_io_concurrency: Async metadata request concurrency (>= 1).
         n_array_meta_cache: LRU cap for zarr-metadata entries. Must be
-            ``>= lookahead_samples`` so the in-flight working set fits.
+            ``>= lookahead_samples + 2 * samples_per_batch`` so the in-flight
+            working set plus the staging lag fits.
         n_shard_index_cache: LRU cap for shard-index entries. Must be
-            ``>= lookahead_samples * max_shards_per_sample``.
+            ``>= (lookahead_samples + 2 * samples_per_batch)
+            * max_shards_per_sample``.
         n_chunk_layout_cache: LRU cap for per-array blosc1 chunk-layout entries.
-            Must be ``>= lookahead_samples``.
+            Must be ``>= lookahead_samples + 2 * samples_per_batch``.
         max_shards_per_sample: Declared upper bound on the number of shards
             a single sample's AABB may intersect (>= 1). Sizes the
             ``n_shard_index_cache`` floor so metadata-cache saturation cannot
@@ -641,9 +643,10 @@ class Config:
                 f"[1, {_native.HARD_MAX_SUBSTREAMS_PER_CHUNK}] "
                 f"(got {max_substreams_per_chunk})"
             )
-        # Cache floor validation (n_*_cache >= lookahead_samples and
-        # n_shard_index_cache >= lookahead_samples * max_shards_per_sample)
-        # plus the > 0 checks are enforced by the C config validator, which
+        # Cache floor validation (n_*_cache >= lookahead_samples +
+        # 2*samples_per_batch; n_shard_index_cache scales by
+        # max_shards_per_sample) plus the > 0 checks are enforced by the C
+        # config validator, which
         # surfaces an actionable message via InvalidArgument from Pipeline().
         # Not duplicated here so a single source of truth owns the floors.
         if pop_timeout_s is not None and pop_timeout_s <= 0:

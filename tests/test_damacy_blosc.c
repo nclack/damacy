@@ -61,8 +61,10 @@ mk_cfg(const char* root, uint32_t samples_per_batch, int64_t sy, int64_t sx)
   c.tuning = damacy_tuning_defaults();
   c.tuning.n_io_threads = 1;
   c.tuning.metadata_io_concurrency = 1;
-  // Cache floors (#134): shard==array shape here (1 shard/sample) so
-  // max_shards=1; 16 covers every lookahead used (<= 8).
+  // Cache floors (#134): n_*_cache >= lookahead_samples + 2*samples_per_batch
+  // (shard cache scales by max_shards). shard==array shape here (1
+  // shard/sample) so max_shards=1; 16 covers every floor used (max
+  // lookahead=8 + 2*4 = 16).
   c.tuning.n_array_meta_cache = 16;
   c.tuning.n_shard_index_cache = 16;
   c.tuning.n_chunk_layout_cache = 16;

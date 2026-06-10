@@ -28,9 +28,9 @@
     "metadata_io_concurrency": 32,
     "max_gpu_memory_mb": 512,
     "max_chunk_uncompressed_mb": 1,
-    "n_array_meta_cache": 16,
-    "n_shard_index_cache": 128,
-    "n_chunk_layout_cache": 16,
+    "n_array_meta_cache": 24,
+    "n_shard_index_cache": 192,
+    "n_chunk_layout_cache": 24,
     "max_shards_per_sample": 8
   }
 }

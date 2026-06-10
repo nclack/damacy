@@ -117,14 +117,15 @@ extern "C"
   // return DAMACY_OOM. gate may be NULL.
   //
   // Saturation (every entry pinned: max_owner_id >= watermark, so no slot is
-  // evictable) is impossible by construction: damacy_config validation sizes
-  // each metadata cache to hold the entire in-flight working set
-  // (n_array_meta_cache / n_chunk_layout_cache >= lookahead_samples;
-  // n_shard_index_cache >= lookahead_samples * max_shards_per_sample) and the
-  // prefetcher rejects samples that intersect more than max_shards_per_sample
-  // shards. If saturation is ever observed it is a library invariant
-  // violation and aborts with a fatal log naming the sizing knob — it is no
-  // longer a recoverable DAMACY_BUDGET return.
+  // evictable) returns DAMACY_AGAIN. The damacy_config floors size each cache
+  // to hold the whole in-flight working set *plus* the staging lag between
+  // next_consume_seq and the watermark (n_array_meta_cache /
+  // n_chunk_layout_cache >= lookahead_samples + 2*samples_per_batch;
+  // n_shard_index_cache scales by max_shards_per_sample), so saturation should
+  // not occur under a validated config. AGAIN is a defense-in-depth safety
+  // net: the prefetcher stalls the request and retries on a later tick once
+  // the scheduler advances the watermark, degrading gracefully instead of
+  // crashing if a residual overshoot or an unvalidated caller ever hits it.
   struct prefetch_request_result prefetch_cache_request_result(
     struct prefetch_cache* c,
     uint64_t key_hash,

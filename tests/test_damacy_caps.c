@@ -68,14 +68,13 @@ mk_cfg(const char* root, uint32_t samples_per_batch, int64_t sy, int64_t sx)
   c.tuning = damacy_tuning_defaults();
   c.tuning.n_io_threads = 1;
   c.tuning.metadata_io_concurrency = 1;
-  c.tuning.n_array_meta_cache = 4;
-  c.tuning.n_shard_index_cache = 4;
-  c.tuning.n_chunk_layout_cache = 4;
-  // lookahead_samples=2*samples_per_batch; caps at 4. Keep the shard floor
-  // (lookahead * max_shards_per_sample) within n_shard_index_cache=4: for
-  // samples_per_batch=1 (lookahead=2) max_shards=2 fits; callers with a
-  // larger batch override this.
+  // Metadata-cache floor = lookahead_samples + 2*samples_per_batch (the
+  // staging lag); shard floor scales by max_shards_per_sample.
   c.tuning.max_shards_per_sample = 2;
+  uint32_t meta_floor = c.lookahead_samples + 2u * samples_per_batch;
+  c.tuning.n_array_meta_cache = meta_floor;
+  c.tuning.n_chunk_layout_cache = meta_floor;
+  c.tuning.n_shard_index_cache = meta_floor * c.tuning.max_shards_per_sample;
   c.tuning.max_gpu_memory_bytes = 1ull << 30;
   c.sample_shape[0] = sy;
   c.sample_shape[1] = sx;
@@ -256,12 +255,12 @@ test_pool_reserve_fits_default_budget(void)
   cfg.tuning = damacy_tuning_defaults();
   cfg.tuning.n_io_threads = 1;
   cfg.tuning.metadata_io_concurrency = 1;
-  // lookahead_samples=40: metadata caches must clear the floor
-  // (>= lookahead_samples; shard cache >= lookahead*max_shards). The shard
-  // grid here is 1 shard/sample, so max_shards_per_sample=1.
-  cfg.tuning.n_array_meta_cache = 40;
-  cfg.tuning.n_shard_index_cache = 40;
-  cfg.tuning.n_chunk_layout_cache = 40;
+  // Metadata caches must clear the floor (lookahead_samples +
+  // 2*samples_per_batch = 40 + 40 = 80; shard cache scales by max_shards).
+  // The shard grid here is 1 shard/sample, so max_shards_per_sample=1.
+  cfg.tuning.n_array_meta_cache = 80;
+  cfg.tuning.n_shard_index_cache = 80;
+  cfg.tuning.n_chunk_layout_cache = 80;
   cfg.tuning.max_shards_per_sample = 1;
   cfg.tuning.max_gpu_memory_bytes = 1ull << 30;
   struct damacy* d = NULL;
@@ -313,11 +312,12 @@ test_pool_exceeds_budget_rejected_at_create(void)
   cfg.tuning = damacy_tuning_defaults();
   cfg.tuning.n_io_threads = 1;
   cfg.tuning.metadata_io_concurrency = 1;
-  // Caches clear the floor so create reaches the pool-reserve branch (the
-  // path under test) rather than failing config validation first.
-  cfg.tuning.n_array_meta_cache = 40;
-  cfg.tuning.n_shard_index_cache = 40;
-  cfg.tuning.n_chunk_layout_cache = 40;
+  // Caches clear the floor (lookahead_samples + 2*samples_per_batch = 40 + 40
+  // = 80) so create reaches the pool-reserve branch (the path under test)
+  // rather than failing config validation first.
+  cfg.tuning.n_array_meta_cache = 80;
+  cfg.tuning.n_shard_index_cache = 80;
+  cfg.tuning.n_chunk_layout_cache = 80;
   cfg.tuning.max_shards_per_sample = 1;
   cfg.tuning.max_gpu_memory_bytes = 32ull << 20;
   struct damacy* d = NULL;
@@ -420,13 +420,13 @@ test_metadata_cache_floor_rejected_at_create(void)
   char root[64];
   EXPECT(mkdtemp_root(root, sizeof root) == 0);
 
-  // samples_per_batch=2 → lookahead_samples=4. n_array_meta_cache=1 is below
-  // the lookahead floor; create must fail with DAMACY_INVAL (see the
-  // n_array_meta_cache diagnostic in damacy_config.c).
+  // samples_per_batch=2 → lookahead_samples=4, floor = 4 + 2*2 = 8.
+  // n_array_meta_cache=1 is below the floor; create must fail with
+  // DAMACY_INVAL (see the n_array_meta_cache diagnostic in damacy_config.c).
   struct damacy_config cfg = mk_cfg(root, 2, 8, 16);
   cfg.tuning.n_array_meta_cache = 1;
-  cfg.tuning.n_shard_index_cache = 4;
-  cfg.tuning.n_chunk_layout_cache = 4;
+  cfg.tuning.n_shard_index_cache = 8;
+  cfg.tuning.n_chunk_layout_cache = 8;
   cfg.tuning.max_shards_per_sample = 1;
 
   struct damacy* d = NULL;
@@ -439,50 +439,50 @@ test_metadata_cache_floor_rejected_at_create(void)
 
 // The three config-time cache floors each reject at create with
 // DAMACY_INVAL: n_array_meta_cache / n_chunk_layout_cache below
-// lookahead_samples, and n_shard_index_cache below
-// lookahead_samples * max_shards_per_sample. A floor-satisfying config of
-// the same shape comes up clean.
+// lookahead_samples + 2*samples_per_batch, and n_shard_index_cache below
+// that floor * max_shards_per_sample. A floor-satisfying config of the same
+// shape comes up clean.
 static int
 test_cache_floors_validated_at_create(void)
 {
   char root[64];
   EXPECT(mkdtemp_root(root, sizeof root) == 0);
 
-  // mk_cfg(samples_per_batch=4) → lookahead_samples=8.
+  // mk_cfg(samples_per_batch=4) → lookahead_samples=8; floor = 8 + 2*4 = 16.
   struct damacy_config base = mk_cfg(root, 4, 8, 16);
-  base.tuning.max_shards_per_sample = 4; // shard floor = 8 * 4 = 32
+  base.tuning.max_shards_per_sample = 4; // shard floor = 16 * 4 = 64
 
   struct damacy* d = NULL;
 
-  // n_array_meta_cache below lookahead_samples(8).
+  // n_array_meta_cache below the floor(16).
   struct damacy_config c = base;
   c.tuning.n_array_meta_cache = 4;
-  c.tuning.n_chunk_layout_cache = 8;
-  c.tuning.n_shard_index_cache = 32;
+  c.tuning.n_chunk_layout_cache = 16;
+  c.tuning.n_shard_index_cache = 64;
   EXPECT(damacy_create(&c, &d) == DAMACY_INVAL);
   EXPECT(d == NULL);
 
-  // n_chunk_layout_cache below lookahead_samples(8).
+  // n_chunk_layout_cache below the floor(16).
   c = base;
-  c.tuning.n_array_meta_cache = 8;
+  c.tuning.n_array_meta_cache = 16;
   c.tuning.n_chunk_layout_cache = 4;
-  c.tuning.n_shard_index_cache = 32;
+  c.tuning.n_shard_index_cache = 64;
   EXPECT(damacy_create(&c, &d) == DAMACY_INVAL);
   EXPECT(d == NULL);
 
-  // n_shard_index_cache below lookahead_samples(8)*max_shards_per_sample(4).
+  // n_shard_index_cache below floor(16)*max_shards_per_sample(4) = 64.
   c = base;
-  c.tuning.n_array_meta_cache = 8;
-  c.tuning.n_chunk_layout_cache = 8;
-  c.tuning.n_shard_index_cache = 16; // < 32
+  c.tuning.n_array_meta_cache = 16;
+  c.tuning.n_chunk_layout_cache = 16;
+  c.tuning.n_shard_index_cache = 32; // < 64
   EXPECT(damacy_create(&c, &d) == DAMACY_INVAL);
   EXPECT(d == NULL);
 
   // max_shards_per_sample must be > 0.
   c = base;
-  c.tuning.n_array_meta_cache = 8;
-  c.tuning.n_chunk_layout_cache = 8;
-  c.tuning.n_shard_index_cache = 32;
+  c.tuning.n_array_meta_cache = 16;
+  c.tuning.n_chunk_layout_cache = 16;
+  c.tuning.n_shard_index_cache = 64;
   c.tuning.max_shards_per_sample = 0;
   EXPECT(damacy_create(&c, &d) == DAMACY_INVAL);
   EXPECT(d == NULL);
@@ -494,9 +494,9 @@ test_cache_floors_validated_at_create(void)
   EXPECT(fixture_write_zarr_codec(
            p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
   c = base;
-  c.tuning.n_array_meta_cache = 8;
-  c.tuning.n_chunk_layout_cache = 8;
-  c.tuning.n_shard_index_cache = 32;
+  c.tuning.n_array_meta_cache = 16;
+  c.tuning.n_chunk_layout_cache = 16;
+  c.tuning.n_shard_index_cache = 64;
   EXPECT(damacy_create(&c, &d) == DAMACY_OK);
   EXPECT(d != NULL);
   damacy_destroy(d);
@@ -520,8 +520,8 @@ test_oversized_sample_shard_count_rejected(void)
   EXPECT(fixture_write_zarr_codec(
            p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
 
-  // sample = full 32x32 extent → 16 shards. lookahead=2, cap=4 → shard
-  // floor 2*4=8 fits n_shard_index_cache=16; the runtime cap is what trips.
+  // sample = full 32x32 extent → 16 shards. floor = (2 + 2*1) * 4 = 16 fits
+  // n_shard_index_cache=16; the runtime cap is what trips.
   struct damacy_config cfg = mk_cfg(root, 1, 32, 32);
   cfg.tuning.max_shards_per_sample = 4;
   cfg.tuning.n_shard_index_cache = 16;

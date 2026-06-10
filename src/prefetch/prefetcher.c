@@ -56,6 +56,7 @@ struct prefetcher_slot
   struct prefetch_handle* h_shards;
   uint64_t* shard_coords; // flat [n_shards][rank]
   uint32_t n_shards;
+  uint32_t n_shards_requested; // resume cursor when a shard_index request AGAINs
   struct prefetch_handle h_layout;
 };
 
@@ -89,6 +90,12 @@ struct prefetcher
 
   // Closes the drain TOCTOU between lookahead_pop and admit_locked.
   _Atomic uint32_t in_transit;
+
+  // A popped sample whose array_meta admission stalled (cache transiently
+  // saturated). Retried at the top of each tick before new work is popped;
+  // counted in in_transit so drain waits for it.
+  struct damacy_sample_slot stalled;
+  int has_stalled;
 
   uint64_t submitted;
   uint64_t ready;
@@ -264,10 +271,55 @@ format_aabb(const struct damacy_aabb* a)
   return buf;
 }
 
+// Issue shard_index requests for coords [n_shards_requested, n_shards),
+// resuming where a prior AGAIN left off. Returns DAMACY_AGAIN if a request
+// stalled (caller stays in pending_meta and retries next tick); each coord is
+// requested exactly once across retries, so the gate is never double-counted.
+static enum damacy_status
+request_remaining_shards(struct prefetcher* p,
+                         struct prefetcher_slot* s,
+                         uint8_t rank)
+{
+  struct shard_index_key probe = { .uri = s->uri, .rank = rank };
+  while (s->n_shards_requested < s->n_shards) {
+    uint32_t i = s->n_shards_requested;
+    memcpy(probe.shard_coord,
+           &s->shard_coords[(size_t)i * rank],
+           (size_t)rank * sizeof(uint64_t));
+    struct prefetch_request_result req =
+      prefetch_cache_request_result(p->shard_index_cache,
+                                    shard_index_key_hash(&probe),
+                                    &probe,
+                                    s->sample_seq,
+                                    s->gate);
+    if (req.status == DAMACY_AGAIN)
+      return DAMACY_AGAIN;
+    s->h_shards[i] = req.handle;
+    if (req.status != DAMACY_OK)
+      return req.status;
+    s->n_shards_requested++;
+  }
+  return DAMACY_OK;
+}
+
 static void
 advance_from_meta(struct prefetcher* p, struct prefetcher_slot* s)
 {
   int err = 0;
+
+  // Resume path: coords already enumerated, finish (re)issuing shard requests.
+  if (s->h_shards) {
+    enum damacy_status rs = request_remaining_shards(p, s, s->aabb.rank);
+    if (rs == DAMACY_AGAIN)
+      return;
+    if (rs != DAMACY_OK) {
+      err = rs;
+      goto Bad;
+    }
+    slot_set_state(s, &state_pending_shards);
+    return;
+  }
+
   const void* value = NULL;
   enum prefetch_state st =
     prefetch_cache_query(p->array_meta_cache, s->h_meta, &value, &err);
@@ -314,6 +366,8 @@ advance_from_meta(struct prefetcher* p, struct prefetcher_slot* s)
   if (n == 0) {
     s->n_shards = 0;
     struct prefetch_request_result layout_req = request_chunk_layout(p, s);
+    if (layout_req.status == DAMACY_AGAIN)
+      return;
     s->h_layout = layout_req.handle;
     if (layout_req.status != DAMACY_OK) {
       err = layout_req.status;
@@ -336,31 +390,22 @@ advance_from_meta(struct prefetcher* p, struct prefetcher_slot* s)
     goto Bad;
   }
 
-  struct shard_index_key probe = { .uri = s->uri, .rank = meta->rank };
-  uint32_t i = 0;
-  while (sample_shard_iterator_next(&it, probe.shard_coord)) {
-    memcpy(&s->shard_coords[(size_t)i * meta->rank],
-           probe.shard_coord,
-           (size_t)meta->rank * sizeof(uint64_t));
-    struct prefetch_request_result req =
-      prefetch_cache_request_result(p->shard_index_cache,
-                                    shard_index_key_hash(&probe),
-                                    &probe,
-                                    s->sample_seq,
-                                    s->gate);
-    s->h_shards[i] = req.handle;
-    if (req.status != DAMACY_OK) {
-      // The K successful requests already registered the gate as a waiter
-      // (for PENDING/new slots). Their cache workers will dec_pending when
-      // they resolve. owner_try_free_locked gates the entry on
-      // gate_pending == 0, so recycling waits naturally.
-      s->n_shards = i;
-      err = req.status;
-      goto Bad;
-    }
-    i++;
-  }
+  // Enumerate every coord up front so the request loop is resumable on AGAIN
+  // without re-running the iterator.
+  for (uint32_t i = 0;
+       i < n && sample_shard_iterator_next(
+                  &it, &s->shard_coords[(size_t)i * meta->rank]);
+       ++i)
+    ;
   s->n_shards = (uint32_t)n;
+
+  enum damacy_status rs = request_remaining_shards(p, s, meta->rank);
+  if (rs == DAMACY_AGAIN)
+    return;
+  if (rs != DAMACY_OK) {
+    err = rs;
+    goto Bad;
+  }
   slot_set_state(s, &state_pending_shards);
   return;
 Bad:
@@ -386,6 +431,10 @@ advance_from_shard(struct prefetcher* p, struct prefetcher_slot* s)
   }
 
   struct prefetch_request_result layout_req = request_chunk_layout(p, s);
+  // AGAIN = the chunk_layout cache is transiently saturated. Stay in
+  // pending_shards and retry next tick; the watermark advance will free a pin.
+  if (layout_req.status == DAMACY_AGAIN)
+    return;
   s->h_layout = layout_req.handle;
   if (layout_req.status != DAMACY_OK) {
     err = layout_req.status;
@@ -458,7 +507,9 @@ emit_error_slot_locked(struct prefetcher* p,
   slot_fail(p, slot, err_code);
 }
 
-static void
+// DAMACY_AGAIN means the array_meta cache was transiently saturated; the
+// caller must retain `popped` and retry. Any other return consumes `popped`.
+static enum damacy_status
 admit_locked(struct prefetcher* p,
              struct prefetcher_slot* slot,
              struct damacy_sample_slot* popped)
@@ -471,7 +522,7 @@ admit_locked(struct prefetcher* p,
     // gate=NULL: no owner entry allocated. The ERROR slot still preserves
     // sample_seq ordering for the ready-prefix consumer.
     emit_error_slot_locked(p, slot, popped, NULL, DAMACY_BUDGET);
-    return;
+    return DAMACY_OK;
   }
   struct prefetch_gate* gate = &owner->gate;
   struct prefetch_request_result req =
@@ -480,10 +531,16 @@ admit_locked(struct prefetcher* p,
                                   popped->uri,
                                   popped->sample_seq,
                                   gate);
+  if (req.status == DAMACY_AGAIN) {
+    // Drop the owner ref taken above; the retry re-takes it. The sample stays
+    // un-admitted and is replayed next tick once the watermark frees a pin.
+    owner_unref_entry_locked(owner);
+    return DAMACY_AGAIN;
+  }
   if (req.status != DAMACY_OK) {
     // ERROR slot retains the owner ref; pop releases it like a normal slot.
     emit_error_slot_locked(p, slot, popped, gate, req.status);
-    return;
+    return DAMACY_OK;
   }
   *slot = (struct prefetcher_slot){
     .uri = popped->uri,
@@ -494,10 +551,11 @@ admit_locked(struct prefetcher* p,
   };
   slot_set_state(slot, &state_pending_meta);
   p->submitted++;
-  return;
+  return DAMACY_OK;
 Drop:
   free(popped->uri);
   p->errored++;
+  return DAMACY_OK;
 }
 
 static void
@@ -515,7 +573,12 @@ worker_fn(void* arg)
 
     struct damacy_sample_slot popped = { 0 };
     int popped_ok = 0;
-    if (slot) {
+    // Replay a stalled admission before popping new work; in_transit already
+    // counts it.
+    if (slot && p->has_stalled) {
+      popped = p->stalled;
+      popped_ok = 1;
+    } else if (slot) {
       int has_queued_work = lookahead_size(p->lookahead) > 0;
       if (has_queued_work) {
         atomic_fetch_add_explicit(&p->in_transit, 1, memory_order_acq_rel);
@@ -531,10 +594,18 @@ worker_fn(void* arg)
 
     if (popped_ok) {
       platform_mutex_lock(p->lock);
-      // scan_slots_locked only signals popped_ok when a FREE slot exists.
-      admit_locked(p, slot, &popped);
-      atomic_fetch_sub_explicit(&p->in_transit, 1, memory_order_acq_rel);
+      // scan_slots_locked only signals a FREE slot exists.
+      enum damacy_status as = admit_locked(p, slot, &popped);
       platform_mutex_unlock(p->lock);
+      if (as == DAMACY_AGAIN) {
+        // Hold the sample; retry next tick. in_transit stays incremented.
+        p->stalled = popped;
+        p->has_stalled = 1;
+        platform_sleep_ns(1000000);
+      } else {
+        p->has_stalled = 0;
+        atomic_fetch_sub_explicit(&p->in_transit, 1, memory_order_acq_rel);
+      }
     } else if (slot) {
       (void)lookahead_wait_nonempty_timeout(p->lookahead,
                                             has_in_flight ? 1 : -1);
@@ -589,6 +660,10 @@ prefetcher_destroy(struct prefetcher* self)
   if (!self)
     return;
   prefetcher_stop(self);
+  if (self->has_stalled) {
+    free(self->stalled.uri);
+    self->has_stalled = 0;
+  }
   if (self->slots) {
     for (uint32_t i = 0; i < self->capacity; ++i) {
       free(self->slots[i].uri);

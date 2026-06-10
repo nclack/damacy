@@ -127,10 +127,11 @@ def _base_config(dtype: str | int | damacy.Dtype = "f32") -> Config:
         lookahead_samples=2,
         n_io_threads=1,
         n_array_meta_cache=4,
-        n_shard_index_cache=4,
+        n_shard_index_cache=8,
         n_chunk_layout_cache=4,
-        # tiny_zarr: 8x16 shards → 1 shard/sample. With lookahead_samples=2,
-        # max_shards_per_sample=2 keeps n_shard_index_cache(4) >= 2*2 floor.
+        # tiny_zarr: 8x16 shards → 1 shard/sample. Floor = lookahead_samples +
+        # 2*samples_per_batch = 2 + 2 = 4; shard floor scales by
+        # max_shards_per_sample (4 * 2 = 8).
         max_shards_per_sample=2,
         sample_shape=(8, 16),
         max_gpu_memory_bytes=1 << 30,
@@ -192,17 +193,18 @@ def test_max_gpu_memory_too_small_raises_budget():
 @pytest.mark.parametrize(
     "override",
     [
-        # n_array_meta_cache below lookahead_samples.
+        # n_array_meta_cache below lookahead_samples + 2*samples_per_batch.
         dict(lookahead_samples=8, n_array_meta_cache=4),
-        # n_chunk_layout_cache below lookahead_samples.
+        # n_chunk_layout_cache below the same floor.
         dict(lookahead_samples=8, n_chunk_layout_cache=4),
-        # n_shard_index_cache below lookahead_samples * max_shards_per_sample.
+        # n_shard_index_cache below (floor) * max_shards_per_sample.
         dict(lookahead_samples=8, max_shards_per_sample=4, n_shard_index_cache=8),
     ],
 )
 def test_metadata_cache_floor_rejected_with_invalid(override):
-    """Cache-sizing floors (#134): a metadata cache below its lookahead
-    floor fails fast at create with InvalidArgument, not a stall."""
+    """Cache-sizing floors (#134): a metadata cache below its floor
+    (lookahead_samples + 2*samples_per_batch) fails fast at create with
+    InvalidArgument, not a stall."""
     # Bump the other caches clear of their floors so the targeted one trips.
     base = dict(
         n_array_meta_cache=64,
