@@ -10,7 +10,7 @@
 //   test_create_explicit_device_mismatch
 //                            — cfg.device != current ctx's device -> INVAL
 //   test_explicit_device_does_not_leak_ctx_between_calls
-//                            — push/pop/release/flush/destroy restore caller
+//                            — push/pop/release/destroy restore caller
 //   test_pop_error_path_restores_caller_ctx
 //                            — pop failing inside the guard still pops ctx
 
@@ -222,10 +222,6 @@ test_explicit_device_does_not_leak_ctx_between_calls(void)
   EXPECT(cuCtxGetCurrent(&cur) == CUDA_SUCCESS);
   EXPECT(cur == caller);
   damacy_release(d, b);
-
-  EXPECT(damacy_flush(d) == DAMACY_OK);
-  EXPECT(cuCtxGetCurrent(&cur) == CUDA_SUCCESS);
-  EXPECT(cur == caller);
 
   damacy_destroy(d);
   EXPECT(cuCtxGetCurrent(&cur) == CUDA_SUCCESS);

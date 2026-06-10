@@ -335,6 +335,29 @@ def test_push_accepts_infinite_generator(tiny_zarr):
         assert d.pending  # generator still has more
 
 
+def test_exit_cancels_undrained_work_without_flush(tiny_zarr):
+    """Exiting with batches pushed but never popped tears down, not hangs."""
+    uri = tiny_zarr
+    samples = [Sample(uri=uri, aabb=[(0, 8), (0, 16)]) for _ in range(5)]
+    with Pipeline(_base_config()) as d:
+        d.push(samples)
+    assert d._closed
+
+
+def test_exit_with_undrained_infinite_source(tiny_zarr):
+    """Exiting while an unbounded source is still feeding must not wedge."""
+    uri = tiny_zarr
+
+    def forever():
+        while True:
+            yield Sample(uri=uri, aabb=[(0, 8), (0, 16)])
+
+    with Pipeline(_base_config()) as d:
+        d.push(forever())
+        assert _drain_ids(d, 1) == [0]
+    assert d._closed
+
+
 def test_push_chains_multiple_calls(tiny_zarr):
     uri = tiny_zarr
     s = Sample(uri=uri, aabb=[(0, 8), (0, 16)])
@@ -694,15 +717,13 @@ def test_stats_io_planner_counters_advance(tiny_zarr):
         assert s.chunks_to_load <= s.chunks_planned
 
 
-# ---- explicit flush / stats_reset --------------------------------------
+# ---- stats_reset -------------------------------------------------------
 
 
-def test_flush_and_stats_reset_are_idempotent(tiny_zarr):
+def test_stats_reset_is_idempotent(tiny_zarr):
     uri = tiny_zarr
     with Pipeline(_base_config()) as d:
         d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
-        d.flush()
-        d.flush()  # idempotent
         with d.pop():
             pass
         s_before = d.stats()
@@ -712,25 +733,6 @@ def test_flush_and_stats_reset_are_idempotent(tiny_zarr):
         # buffers and stays put.
         assert s_after.batches_emitted == 0
         assert s_before.batches_emitted >= 1
-
-
-def test_flush_emits_partial_final_batch(tiny_zarr):
-    """A batch shorter than ``samples_per_batch`` is not emitted until
-    ``flush()`` seals it; ``pop()`` blocks on the partial tail rather
-    than returning, so a caller that pushes a non-multiple of
-    ``samples_per_batch`` must ``flush()`` to drain the last batch. Pins
-    the flush/pop contract for partial batches — the
-    ``samples_per_batch == 1`` tests elsewhere never exercise it."""
-    uri = tiny_zarr
-    cfg = dataclasses.replace(_base_config(), samples_per_batch=2, lookahead_samples=4)
-    samples = [Sample(uri=uri, aabb=[(0, 8), (0, 16)]) for _ in range(3)]
-    with Pipeline(cfg) as d:
-        d.push(samples)
-        with d.pop() as b:  # full batch {0, 1} emits without a flush
-            assert b.info.batch_id == 0
-        d.flush()  # seals the partial {2}; pop would otherwise block on it
-        with d.pop() as b:
-            assert b.info.batch_id == 1
 
 
 # ---- DLPack export -----------------------------------------------------
@@ -1043,8 +1045,6 @@ def test_use_after_close_raises(tiny_zarr):
         d.pop()
     with pytest.raises(damacy.ShutdownError):
         d.push([Sample(uri="x", aabb=[(0, 1), (0, 1)])])
-    with pytest.raises(damacy.ShutdownError):
-        d.flush()
     with pytest.raises(damacy.ShutdownError):
         d.stats_reset()
     with pytest.raises(damacy.ShutdownError):

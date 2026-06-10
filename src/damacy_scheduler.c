@@ -15,7 +15,7 @@ kick_input_into_free_slots(struct damacy* self, int* changed)
     int target_job = find_render_job_with_work(&self->render_jobs);
     if (target_job < 0) {
       int plan_changed = 0;
-      enum damacy_status s = plan_ready_prefetch(self, 0, &plan_changed);
+      enum damacy_status s = plan_ready_prefetch(self, &plan_changed);
       if (s != DAMACY_OK)
         return s;
       if (changed && plan_changed)

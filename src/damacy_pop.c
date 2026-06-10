@@ -166,77 +166,6 @@ Done:
   return r;
 }
 
-// --- flush ----------------------------------------------------------------
-
-enum damacy_status
-damacy_flush(struct damacy* self)
-{
-  if (!self)
-    return DAMACY_INVAL;
-
-  // plan_run below issues cuMemcpyHtoD on this thread; push the
-  // retained primary so the call lands in the right context.
-  struct ctx_guard cg = { 0 };
-  enum damacy_status r = ctx_guard_enter(self, &cg);
-  if (r != DAMACY_OK)
-    return r;
-
-  scheduler_lock(self->sched);
-  if (self->failed_status != DAMACY_OK) {
-    r = self->failed_status;
-    goto Done;
-  }
-
-  // Drain the prefetcher first so the tail count is stable: in-flight samples
-  // may still be admitted, fetched, and reach READY.
-  while ((lookahead_size(&self->lookahead) > 0 ||
-          prefetcher_in_flight(self->prefetcher) > 0) &&
-         self->failed_status == DAMACY_OK)
-    SCHEDULER_WAIT_DIAG(self->sched, 5000);
-  if (self->failed_status != DAMACY_OK) {
-    r = self->failed_status;
-    goto Done;
-  }
-  while ((prefetcher_ready_prefix_count(self->prefetcher) > 0 ||
-          find_accumulating_batch_slot(&self->batch_pool) >= 0) &&
-         self->failed_status == DAMACY_OK) {
-    while (((find_free_batch_slot(&self->batch_pool) < 0 &&
-             find_accumulating_batch_slot(&self->batch_pool) < 0) ||
-            any_batch_planning(&self->batch_pool)) &&
-           self->failed_status == DAMACY_OK)
-      SCHEDULER_WAIT_DIAG(self->sched, 5000);
-    if (self->failed_status != DAMACY_OK) {
-      r = self->failed_status;
-      goto Done;
-    }
-    r = plan_ready_prefetch(self, 1, NULL);
-    if (r != DAMACY_OK)
-      goto Done;
-  }
-
-  // any_slot_in_flight catches the SLOT_RESERVED window: input_reserve has
-  // already advanced the render-job cursor (so no job may look dispatchable)
-  // but input_submit hasn't run yet, no wave exists yet — without
-  // this check, flush would return while the worker still has unposted
-  // IO to submit. damacy_pop's AGAIN gate keeps the same invariant.
-  struct platform_clock flush_clock = { 0 };
-  platform_toc(&flush_clock);
-  while ((any_wave_in_flight(&self->wave_pool) ||
-          any_slot_in_flight(&self->wave_pool) ||
-          find_oldest_rendering_slot(&self->batch_pool) >= 0 ||
-          any_batch_planning(&self->batch_pool)) &&
-         self->failed_status == DAMACY_OK)
-    SCHEDULER_WAIT_DIAG(self->sched, 5000);
-  metric_record(
-    &self->stats.flush_wait, platform_toc(&flush_clock) * 1000.0f, 0, 0);
-  r = self->failed_status != DAMACY_OK ? self->failed_status : DAMACY_OK;
-
-Done:
-  scheduler_unlock(self->sched);
-  ctx_guard_exit(&cg);
-  return r;
-}
-
 // --- batch info / stats ---------------------------------------------------
 
 void
@@ -258,8 +187,7 @@ damacy_batch_info(const struct damacy_batch* b, struct damacy_batch_info* out)
   out->batch_id = slot->batch_id;
   for (uint8_t d = 0; d < self->batch_pool.rank; ++d)
     out->shape[d] = self->batch_pool.shape[d];
-  // shape[0] reflects actual sample count (< samples_per_batch for flushed
-  // partials).
+  // shape[0] reflects the actual sample count in the batch.
   out->shape[0] = (int64_t)slot->n_samples;
 }
 
@@ -273,7 +201,7 @@ damacy_stats_get(const struct damacy* self, struct damacy_stats* out)
     return;
   }
   // scheduler_lock guards every metric_record write; without it the
-  // struct copy below races every plan/pop_wait/flush_wait update. The
+  // struct copy below races every plan/pop_wait update. The
   // mutex doesn't change observable state, so the const cast is safe.
   struct damacy* m = (struct damacy*)self;
   scheduler_lock(m->sched);

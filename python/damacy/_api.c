@@ -1,14 +1,14 @@
 // Pipeline / Batch python bindings around the public C API.
 //
 // Pipeline(...)   → damacy_create   p.push(s)  → damacy_push
-// p.pop()         → damacy_pop      p.flush()  → damacy_flush
+// p.pop()         → damacy_pop
 // p.stats()       → damacy_stats_get → dict
 // batch.release() → damacy_release (tp_dealloc auto-releases)
 // batch.info      → dict snapshot of damacy_batch_info
 // batch.__dlpack__ → DLPack v0 (default) or v1 capsule, dispatched by
 //                     the consumer's `max_version` kwarg.
 //
-// Long-running C calls (push/pop/flush/destroy/release) drop the GIL.
+// Long-running C calls (push/pop/destroy/release) drop the GIL.
 
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
@@ -996,17 +996,6 @@ Pipeline_pop(PipelineObj* self, PyObject* Py_UNUSED(ignored))
 }
 
 static PyObject*
-Pipeline_flush(PipelineObj* self, PyObject* Py_UNUSED(ignored))
-{
-  RETURN_IF_DESTROYED(self, "Pipeline has been destroyed");
-  enum damacy_status s;
-  WITH_GIL_RELEASED(s = damacy_flush(self->handle));
-  if (s != DAMACY_OK)
-    return raise_status(s, "flush");
-  Py_RETURN_NONE;
-}
-
-static PyObject*
 metric_to_dict(const struct damacy_metric* m)
 {
   return Py_BuildValue("{s:s,s:f,s:f,s:d,s:d,s:K}",
@@ -1061,7 +1050,6 @@ Pipeline_stats(PipelineObj* self, PyObject* Py_UNUSED(ignored))
     { "assemble", &st.assemble },
     { "bind_wait", &st.bind_wait },
     { "pop_wait", &st.pop_wait },
-    { "flush_wait", &st.flush_wait },
   };
   for (size_t i = 0; i < sizeof metrics / sizeof metrics[0]; ++i)
     if (dict_set_steal(d, metrics[i].name, metric_to_dict(metrics[i].m)) < 0)
@@ -1089,7 +1077,6 @@ Pipeline_stats(PipelineObj* self, PyObject* Py_UNUSED(ignored))
     { "metadata_backend_read_active", st.metadata_backend.read_active },
     { "metadata_backend_read_max_active", st.metadata_backend.read_max_active },
     { "batches_emitted", st.batches_emitted },
-    { "batches_truncated", st.batches_truncated },
     { "waves_emitted", st.waves_emitted },
     { "worker_steps", st.worker_steps },
     { "chunks_planned", st.chunks_planned },
@@ -1144,10 +1131,6 @@ static PyMethodDef Pipeline_methods[] = {
     (PyCFunction)Pipeline_pop,
     METH_NOARGS,
     "Block until the next batch is on-device-ready. Returns a Batch." },
-  { "flush",
-    (PyCFunction)Pipeline_flush,
-    METH_NOARGS,
-    "Drain in-flight work and ready any partial last batch." },
   { "stats",
     (PyCFunction)Pipeline_stats,
     METH_NOARGS,

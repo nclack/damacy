@@ -10,7 +10,7 @@
 enum batch_slot_state
 {
   BATCH_FREE = 0,
-  BATCH_ACCUMULATING, // staged samples, waiting for full batch or flush close
+  BATCH_ACCUMULATING, // staged samples, waiting for a full batch
   BATCH_PLANNING,     // samples are sealed; run/commit pending
   BATCH_RENDERING,    // render job has emitted; waves may be in flight
   BATCH_READY,        // chunks_remaining == 0; awaiting pop
@@ -85,9 +85,9 @@ int
 find_oldest_rendering_slot(const struct damacy_batch_pool* pool);
 int
 any_batch_in_flight(const struct damacy_batch_pool* pool);
-// True if any slot is BATCH_PLANNING. Used by damacy_flush to wait for
-// a plan that has reserved a slot (drained samples) but not yet
-// committed (so find_oldest_rendering_slot doesn't yet see it).
+// True if any slot is BATCH_PLANNING: a plan has reserved a slot (drained
+// samples) but not yet committed (so find_oldest_rendering_slot doesn't yet
+// see it). The pop path uses this to gate planning capacity.
 int
 any_batch_planning(const struct damacy_batch_pool* pool);
 

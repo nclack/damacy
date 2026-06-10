@@ -93,7 +93,6 @@ def _stage_table(r: Results) -> Table:
         "decompress.parse": "green",
         "assemble": "green",
         "pop_wait": "red",
-        "flush_wait": "red",
     }
 
     # encode where each stage's time is spent in the unit column:
@@ -108,7 +107,6 @@ def _stage_table(r: Results) -> Table:
         "decode_gap": "dim",
         "assemble": "bold dim",
         "pop_wait": "dim",
-        "flush_wait": "dim",
     }
 
     for s in r.stages:
@@ -144,7 +142,6 @@ def _counters_table(r: Results) -> Table:
     rows = [
         ("samples_pushed", f"{c.samples_pushed:,}"),
         ("batches_emitted", f"{c.batches_emitted:,}"),
-        ("batches_truncated", f"{c.batches_truncated:,}"),
         ("waves_emitted", f"{c.waves_emitted:,}"),
         ("chunks_dispatched", f"{c.chunks_dispatched:,}"),
         ("chunks_planned", f"{c.chunks_planned:,}"),

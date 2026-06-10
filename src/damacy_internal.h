@@ -127,4 +127,4 @@ plan_commit(struct damacy* self,
             int* changed);
 
 enum damacy_status
-plan_ready_prefetch(struct damacy* self, int close_partial, int* changed);
+plan_ready_prefetch(struct damacy* self, int* changed);

@@ -758,7 +758,6 @@ class Stats:
     assemble: Metric
     bind_wait: Metric
     pop_wait: Metric
-    flush_wait: Metric
     array_meta_hits: int
     array_meta_misses: int
     shard_index_hits: int
@@ -776,7 +775,6 @@ class Stats:
     metadata_backend_read_active: int
     metadata_backend_read_max_active: int
     batches_emitted: int
-    batches_truncated: int
     waves_emitted: int
     chunks_planned: int
     chunks_to_load: int
@@ -798,7 +796,6 @@ class Stats:
             assemble=m(st["assemble"]),
             bind_wait=m(st["bind_wait"]),
             pop_wait=m(st["pop_wait"]),
-            flush_wait=m(st["flush_wait"]),
             array_meta_hits=st["array_meta_hits"],
             array_meta_misses=st["array_meta_misses"],
             shard_index_hits=st["shard_index_hits"],
@@ -816,7 +813,6 @@ class Stats:
             metadata_backend_read_active=st["metadata_backend_read_active"],
             metadata_backend_read_max_active=st["metadata_backend_read_max_active"],
             batches_emitted=st["batches_emitted"],
-            batches_truncated=st["batches_truncated"],
             waves_emitted=st["waves_emitted"],
             chunks_planned=st["chunks_planned"],
             chunks_to_load=st["chunks_to_load"],
@@ -1085,8 +1081,8 @@ def _warn_if_multi_gpu_implicit(cfg_device: int | None, bound: int) -> None:
 
 
 class Pipeline:
-    """Streaming GPU data pipeline. Drive :meth:`push`, :meth:`pop`,
-    :meth:`flush`. Stages are plan → host I/O → H2D copy → on-device
+    """Streaming GPU data pipeline. Drive :meth:`push`, :meth:`pop`.
+    Stages are plan → host I/O → H2D copy → on-device
     decompress → assemble; output batches are double-buffered (B=2)
     and waves are double-buffered internally.
 
@@ -1153,7 +1149,7 @@ class Pipeline:
         self._closed = False
         self._config = config
         # User-side queue of pending sample iterators. push() appends
-        # here and best-effort drains; pop()/flush() top up before
+        # here and best-effort drains; pop() tops up before
         # touching native. This makes push() consume-everything from
         # the user's perspective and lets generators flow naturally.
         # _pending_buf is the head iterator's already-pulled-but-not-yet-
@@ -1215,19 +1211,7 @@ class Pipeline:
         tb: TracebackType | None,
     ) -> None:
         del exc_type, exc, tb  # protocol-required, not consumed
-        # Drain any in-flight work so a clean shutdown doesn't drop a
-        # partial last batch silently. Pending samples that don't fit
-        # are discarded — the user is on the hook for popping
-        # everything they pushed before exiting. close() runs in
-        # finally so the native handle releases even if flush raises
-        # something we don't catch.
-        try:
-            if not self._closed:
-                self._native.flush()
-        except (DamacyError, _native.DamacyError):
-            pass  # don't mask the user's exception
-        finally:
-            self.close()
+        self.close()
 
     # ---- pipeline ----------------------------------------------------
 
@@ -1246,6 +1230,11 @@ class Pipeline:
         the pipeline is terminal — rebuild a fresh :class:`Pipeline`
         to recover. Calling :meth:`push` on a terminal pipeline raises
         :class:`ShutdownError`.
+
+        Batching is ``drop_last=True``: only complete batches of
+        ``Config.samples_per_batch`` are emitted, so trailing samples
+        beyond the last whole multiple are never returned. (Emitting
+        the ragged final batch is not yet supported — issue #139.)
         """
         self._check_open()
         self._pending.append(iter(samples))
@@ -1308,7 +1297,10 @@ class Pipeline:
         Raises :class:`PoolStarved` if no batch arrives within
         ``Config.pop_timeout_s`` seconds (default 30). Usually that
         means tensors from previous batches are still being held —
-        drop them, or ``.clone()`` if you need to keep them.
+        drop them, or ``.clone()`` if you need to keep them. It also
+        fires if you pop past the batches produced: only
+        ``len(pushed) // Config.samples_per_batch`` exist (drop_last),
+        and a further pop waits on a batch that is never sealed.
 
         Store-derived errors — :class:`NotFound`,
         :class:`DtypeMismatch`, per-array :class:`RankMismatch`,
@@ -1370,19 +1362,6 @@ class Pipeline:
             self._pop_err = exc
         finally:
             self._pop_done.set()
-
-    def flush(self) -> None:
-        """Drain pending samples into the pipeline (best-effort) and
-        ready any partial last batch for pop. Idempotent. Pending
-        samples that don't fit before flush are dropped — pop until
-        :attr:`pending` reads False if you want every queued sample to
-        emit as a batch."""
-        self._check_open()
-        self._drain_pending()
-        try:
-            self._native.flush()
-        except _native.DamacyError as exc:
-            _reraise_typed(exc)
 
     @property
     def pending(self) -> bool:
