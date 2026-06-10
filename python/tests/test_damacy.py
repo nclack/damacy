@@ -441,6 +441,11 @@ def test_infinite_generator_feeds_multi_sample_batches(tiny_zarr):
         samples_per_batch=8,
         lookahead_samples=64,
         pop_timeout_s=10.0,
+        # Metadata caches must clear the #134 floors for this geometry:
+        # lookahead + 2*samples_per_batch = 80, shard floor 80 * 2.
+        n_array_meta_cache=80,
+        n_chunk_layout_cache=80,
+        n_shard_index_cache=160,
     )
     # Old behaviour stalled around lookahead_samples/samples_per_batch == 8
     # batches; pop the window-worth and several more to prove the refill.
