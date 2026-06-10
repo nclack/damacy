@@ -1284,9 +1284,15 @@ class Pipeline:
 
         self._pending_buf = []
         if self._pending:
-            try:
-                self._pending_buf = [next(self._pending[0])]
-            except StopIteration:
+            # Refill from the head iterator with the same bounded window
+            # pull used above — a single next() here would dribble one
+            # sample per drain in steady state, starving any batch that
+            # needs samples_per_batch > 1 to seal. An empty list is the
+            # StopIteration signal that the head iterator is exhausted.
+            taken = list(itertools.islice(self._pending[0], cap))
+            if taken:
+                self._pending_buf = taken
+            else:
                 self._pending.popleft()
 
     def pop(self) -> Batch:
