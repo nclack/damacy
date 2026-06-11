@@ -30,7 +30,8 @@ struct planner
 };
 
 // `need` = pre-coalesce n_read_ops (== n_chunk_plans). The uint32
-// buffer is sized to 3*need; post-coalesce n_read_ops <= need so
+// buffer is sized to 4*need (sort perm / remap / offset_shift + the
+// interleave position map); post-coalesce n_read_ops <= need so
 // group_chunks_by_read's n_read_ops+1 slots fit in the same buffer.
 static enum damacy_status
 planner_ensure_scratch(struct planner* self, uint32_t need)
@@ -39,7 +40,7 @@ planner_ensure_scratch(struct planner* self, uint32_t need)
     free(self->scratch_u32);
     self->scratch_u32 = NULL;
     self->scratch_u32_cap = 0;
-    uint32_t* mem = (uint32_t*)malloc((size_t)need * 3u * sizeof(uint32_t));
+    uint32_t* mem = (uint32_t*)malloc((size_t)need * 4u * sizeof(uint32_t));
     if (!mem)
       return DAMACY_OOM;
     self->scratch_u32 = mem;

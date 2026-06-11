@@ -83,6 +83,33 @@ coalesce_chunks(struct planner_output* out,
     }
   }
 
+  uint32_t n_real = write;
+
+  // Spread the fused ops across shards instead of leaving each
+  // shard's ops next to each other. Simultaneous reads into one file
+  // serialize on network filesystems (measured ~2x slower bulk
+  // reads), so neighbors in the emitted order should target
+  // different files. Within a shard, offset order is kept.
+  // pos[k] = emitted position of the k-th op in sorted order.
+  uint32_t* pos = NULL;
+  if (n_real > 1) {
+    pos = u32_scratch + 3u * n;
+    uint32_t* starts = perm; // perm is dead after the fuse loop
+    uint32_t n_runs = 0;
+    for (uint32_t k = 0; k < n_real; ++k)
+      if (k == 0 || tmp[k].shard_path != tmp[k - 1].shard_path)
+        starts[n_runs++] = k;
+    uint32_t outk = 0;
+    for (uint32_t round = 0; outk < n_real; ++round) {
+      for (uint32_t ri = 0; ri < n_runs; ++ri) {
+        uint32_t k = starts[ri] + round;
+        uint32_t end = ri + 1 < n_runs ? starts[ri + 1] : n_real;
+        if (k < end)
+          pos[k] = outk++;
+      }
+    }
+  }
+
   // Fill placeholders (path empty / nbytes == 0): keep 1:1, append at
   // the end of the output. chunk_plans referencing them still find
   // their entry via remap.
@@ -95,13 +122,24 @@ coalesce_chunks(struct planner_output* out,
     write++;
   }
 
-  memcpy(out->read_ops, tmp, (size_t)write * sizeof(struct read_op));
+  if (pos) {
+    memcpy(out->read_ops + n_real,
+           tmp + n_real,
+           (size_t)(write - n_real) * sizeof(struct read_op));
+    for (uint32_t k = 0; k < n_real; ++k)
+      out->read_ops[pos[k]] = tmp[k];
+  } else {
+    memcpy(out->read_ops, tmp, (size_t)write * sizeof(struct read_op));
+  }
   out->n_read_ops = write;
 
   for (uint32_t i = 0; i < out->n_chunk_plans; ++i) {
     struct chunk_plan* cp = &out->chunk_plans[i];
     uint32_t old = cp->read_op_idx;
-    cp->read_op_idx = remap[old];
+    uint32_t m = remap[old];
+    if (pos && m < n_real)
+      m = pos[m];
+    cp->read_op_idx = m;
     if (cp->is_fill)
       continue;
     uint64_t sum = (uint64_t)cp->offset_in_read + (uint64_t)offset_shift[old];
