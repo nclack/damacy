@@ -25,8 +25,12 @@
 // one slot may be held by the caller while the other accumulates/renders.
 #define DAMACY_N_BATCH_SLOTS 2
 
-// Default input staging slot count, in waves.
-#define DAMACY_DEFAULT_HOST_BUFFER_WAVES DAMACY_N_WAVES
+// Default input staging slot count, in waves. Deeper than the device
+// pipeline (DAMACY_N_WAVES) so reads for upcoming waves are already in
+// flight while earlier waves decode: 4 measured ~+30% bulk-read
+// throughput over 2 on the cluster preset; 8 bought nothing more.
+// Costs host pinned memory only (one input slab per slot).
+#define DAMACY_DEFAULT_HOST_BUFFER_WAVES 4
 
 // Upper bound on cfg.host_buffer_waves.
 #define DAMACY_MAX_HOST_BUFFER_WAVES 8
