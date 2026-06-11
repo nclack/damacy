@@ -47,6 +47,8 @@
 // Defensive cap on damacy_tuning.metadata_io_concurrency (async request
 // depth). The default values live in damacy_tuning_defaults().
 #define DAMACY_MAX_METADATA_IO_CONCURRENCY 4096u
+// Sanity cap for blocking IO workers; they may exceed the CPU count.
+#define DAMACY_MAX_IO_THREADS 1024u
 #define DAMACY_DEFAULT_ARRAY_META_CACHE 64u
 #define DAMACY_DEFAULT_SHARD_INDEX_CACHE 256u
 #define DAMACY_DEFAULT_CHUNK_LAYOUT_CACHE 64u

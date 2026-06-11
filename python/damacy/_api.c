@@ -1254,6 +1254,7 @@ api_register_types(PyObject* m)
     { "HARD_MAX_CHUNKS_PER_WAVE", DAMACY_HARD_MAX_CHUNKS_PER_WAVE },
     { "HARD_MAX_SUBSTREAMS_PER_CHUNK", DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK },
     { "MAX_METADATA_IO_CONCURRENCY", DAMACY_MAX_METADATA_IO_CONCURRENCY },
+    { "MAX_IO_THREADS", DAMACY_MAX_IO_THREADS },
   };
   for (size_t i = 0; i < sizeof(limits) / sizeof(limits[0]); ++i) {
     if (PyModule_AddIntConstant(m, limits[i].name, limits[i].value) < 0)

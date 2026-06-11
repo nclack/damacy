@@ -45,13 +45,12 @@ cast_path_supported(enum damacy_dtype dst, enum dtype src)
 enum damacy_status
 validate_config(const struct damacy_config* cfg)
 {
-  uint32_t max_threads = (uint32_t)platform_default_thread_count();
   CHECK_SILENT(Invalid, cfg);
   CHECK_SILENT(Invalid, cfg->samples_per_batch > 0);
   CHECK_SILENT(Invalid, cfg->tuning.max_gpu_memory_bytes > 0);
   CHECK_SILENT(Invalid, cfg->lookahead_samples >= cfg->samples_per_batch);
   CHECK_SILENT(Invalid, cfg->tuning.n_io_threads > 0);
-  CHECK_SILENT(Invalid, cfg->tuning.n_io_threads <= max_threads);
+  CHECK_SILENT(Invalid, cfg->tuning.n_io_threads <= DAMACY_MAX_IO_THREADS);
   CHECK_SILENT(Invalid, cfg->tuning.metadata_io_concurrency > 0);
   CHECK_SILENT(Invalid,
                cfg->tuning.metadata_io_concurrency <=
