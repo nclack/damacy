@@ -494,6 +494,8 @@ store_fs_create(const struct store_fs_config* cfg)
   fs->q = io_queue_create(cfg->nthreads, cfg->affinity);
   CHECK_SILENT(Fail, fs->q);
 
+  // The fallback covers bare stores (tests, tools) that don't size
+  // for a read pipeline.
   fs->job_pool = pool_create(sizeof(struct fs_read_job),
                              cfg->max_inflight_reads
                                ? cfg->max_inflight_reads

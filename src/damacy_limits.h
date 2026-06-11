@@ -65,6 +65,10 @@
 // io_queue indexes via bitmask.
 #define DAMACY_IO_QUEUE_INITIAL_CAP 512u
 
+// Read-job headroom for the one-off shard-index and chunk-layout reads
+// that share the bulk-read pool.
+#define DAMACY_READ_JOB_SLACK 64u
+
 // Default for damacy_tuning.max_substreams_per_chunk. Parser rejects
 // blosc1 layouts with more sub-streams (DAMACY_DECODE).
 #define DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK 32u
