@@ -33,9 +33,8 @@ extern "C"
     // 0 → library default. Size against RLIMIT_NOFILE minus headroom for
     // non-cache fds; the cache holds one fd per entry.
     uint32_t fd_cache_capacity;
-    // 0 → library default. Bounds simultaneous read jobs; running out
-    // stalls submission and reissues a whole batch, so size for the
-    // worst case. Jobs are small (~64 bytes) — err deep.
+    // 0 → library default. Running out stalls submission and reissues
+    // a whole batch, so size for the worst case.
     uint32_t max_inflight_reads;
   };
 

@@ -494,9 +494,6 @@ store_fs_create(const struct store_fs_config* cfg)
   fs->q = io_queue_create(cfg->nthreads, cfg->affinity);
   CHECK_SILENT(Fail, fs->q);
 
-  // Running out of jobs stalls submission and reissues a whole batch
-  // (the DAMACY_AGAIN drain), so the pipeline passes its worst case;
-  // the fallback only covers bare stores (tests, tools).
   fs->job_pool = pool_create(sizeof(struct fs_read_job),
                              cfg->max_inflight_reads
                                ? cfg->max_inflight_reads
