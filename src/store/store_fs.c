@@ -494,11 +494,12 @@ store_fs_create(const struct store_fs_config* cfg)
   fs->q = io_queue_create(cfg->nthreads, cfg->affinity);
   CHECK_SILENT(Fail, fs->q);
 
-  // Sized to the io_queue ring's initial cap. The ring grows past this
-  // only under heavy burst; in that regime fs_submit fails (seq==0) and
-  // the caller drains, rather than spilling to a second allocator.
-  fs->job_pool =
-    pool_create(sizeof(struct fs_read_job), DAMACY_IO_QUEUE_INITIAL_CAP);
+  // The fallback covers bare stores (tests, tools) that don't size
+  // for a read pipeline.
+  fs->job_pool = pool_create(sizeof(struct fs_read_job),
+                             cfg->max_inflight_reads
+                               ? cfg->max_inflight_reads
+                               : DAMACY_IO_QUEUE_INITIAL_CAP);
   CHECK_SILENT(Fail, fs->job_pool);
 
   return &fs->base;

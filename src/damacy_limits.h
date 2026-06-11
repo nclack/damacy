@@ -25,8 +25,9 @@
 // one slot may be held by the caller while the other accumulates/renders.
 #define DAMACY_N_BATCH_SLOTS 2
 
-// Default input staging slot count, in waves.
-#define DAMACY_DEFAULT_HOST_BUFFER_WAVES DAMACY_N_WAVES
+// Default input staging slot count, in waves. Slots gate read-ahead:
+// 4 measured ~+30% bulk-read throughput over 2; 8 bought nothing more.
+#define DAMACY_DEFAULT_HOST_BUFFER_WAVES 4
 
 // Upper bound on cfg.host_buffer_waves.
 #define DAMACY_MAX_HOST_BUFFER_WAVES 8
@@ -63,6 +64,10 @@
 // Matches DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE. Must be a power of two —
 // io_queue indexes via bitmask.
 #define DAMACY_IO_QUEUE_INITIAL_CAP 512u
+
+// Read-job headroom for the one-off shard-index and chunk-layout reads
+// that share the bulk-read pool.
+#define DAMACY_READ_JOB_SLACK 64u
 
 // Default for damacy_tuning.max_substreams_per_chunk. Parser rejects
 // blosc1 layouts with more sub-streams (DAMACY_DECODE).

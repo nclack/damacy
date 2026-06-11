@@ -307,6 +307,11 @@ damacy_create(const struct damacy_config* cfg, struct damacy** out)
       .root = "",
       .nthreads = (int)cfg->tuning.n_io_threads,
       .affinity = &self->numa,
+      // Worst case: every staging slot full of unfused single-chunk
+      // reads, plus slack for the stray reads that share the pool.
+      .max_inflight_reads = (uint32_t)geom.host_buffer_waves *
+                              geom.max_chunks_per_wave +
+                            DAMACY_READ_JOB_SLACK,
     };
     self->store_host = store_fs_create(&sc);
     CHECK(Fail, self->store_host);
