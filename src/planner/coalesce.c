@@ -2,8 +2,6 @@
 
 #include "planner/read_op_sort.h"
 
-#include <string.h>
-
 enum damacy_status
 coalesce_chunks(struct planner_output* out,
                 uint64_t read_op_max_bytes,
@@ -87,9 +85,9 @@ coalesce_chunks(struct planner_output* out,
 
   // Simultaneous reads into one file serialize on network filesystems
   // (~2x slower bulk reads), so spread the emitted order across shards.
-  uint32_t* pos = NULL;
-  if (n_real > 1) {
-    pos = u32_scratch + 3u * n;
+  // pos[k] = output slot of tmp[k]; fills below get identity slots.
+  uint32_t* pos = u32_scratch + 3u * n;
+  {
     uint32_t* starts = perm; // perm is dead after the fuse loop
     uint32_t n_runs = 0;
     for (uint32_t k = 0; k < n_real; ++k)
@@ -115,27 +113,18 @@ coalesce_chunks(struct planner_output* out,
     tmp[write] = out->read_ops[i];
     remap[i] = write;
     offset_shift[i] = 0;
+    pos[write] = write;
     write++;
   }
 
-  if (pos) {
-    memcpy(out->read_ops + n_real,
-           tmp + n_real,
-           (size_t)(write - n_real) * sizeof(struct read_op));
-    for (uint32_t k = 0; k < n_real; ++k)
-      out->read_ops[pos[k]] = tmp[k];
-  } else {
-    memcpy(out->read_ops, tmp, (size_t)write * sizeof(struct read_op));
-  }
+  for (uint32_t k = 0; k < write; ++k)
+    out->read_ops[pos[k]] = tmp[k];
   out->n_read_ops = write;
 
   for (uint32_t i = 0; i < out->n_chunk_plans; ++i) {
     struct chunk_plan* cp = &out->chunk_plans[i];
     uint32_t old = cp->read_op_idx;
-    uint32_t m = remap[old];
-    if (pos && m < n_real)
-      m = pos[m];
-    cp->read_op_idx = m;
+    cp->read_op_idx = pos[remap[old]];
     if (cp->is_fill)
       continue;
     uint64_t sum = (uint64_t)cp->offset_in_read + (uint64_t)offset_shift[old];
