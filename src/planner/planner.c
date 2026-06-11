@@ -30,8 +30,7 @@ struct planner
 };
 
 // `need` = pre-coalesce n_read_ops (== n_chunk_plans). The uint32
-// buffer is sized to 4*need (sort perm / remap / offset_shift + the
-// interleave position map); post-coalesce n_read_ops <= need so
+// buffer is sized to 4*need; post-coalesce n_read_ops <= need so
 // group_chunks_by_read's n_read_ops+1 slots fit in the same buffer.
 static enum damacy_status
 planner_ensure_scratch(struct planner* self, uint32_t need)

@@ -85,12 +85,8 @@ coalesce_chunks(struct planner_output* out,
 
   uint32_t n_real = write;
 
-  // Spread the fused ops across shards instead of leaving each
-  // shard's ops next to each other. Simultaneous reads into one file
-  // serialize on network filesystems (measured ~2x slower bulk
-  // reads), so neighbors in the emitted order should target
-  // different files. Within a shard, offset order is kept.
-  // pos[k] = emitted position of the k-th op in sorted order.
+  // Simultaneous reads into one file serialize on network filesystems
+  // (~2x slower bulk reads), so spread the emitted order across shards.
   uint32_t* pos = NULL;
   if (n_real > 1) {
     pos = u32_scratch + 3u * n;

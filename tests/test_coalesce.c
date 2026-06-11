@@ -1,6 +1,6 @@
 // Unit tests for planner/coalesce.c: synthetic planner_output → sort +
-// fuse-with-cap + round-robin interleave. No zarr/store/cache plumbing —
-// every input read_op and chunk_plan is constructed inline.
+// fuse-with-cap + interleave. No zarr/store/cache plumbing — every
+// input read_op and chunk_plan is constructed inline.
 
 #include "damacy_limits.h"
 #include "expect.h"
@@ -299,9 +299,7 @@ test_non_overlapping_output(void)
   EXPECT(run_coalesce(&out, CAP_UNCAPPED, N) == DAMACY_OK);
   // shard/A: 3 touching reads → 1 fused; shard/B: 2 touching reads → 1 fused.
   EXPECT(out.n_read_ops == 2);
-  // Round-robin emit visits shard runs in sorted order: A precedes B;
-  // within each, offsets are non-overlapping by construction (single
-  // fused leader per shard).
+  // One fused op per shard, so the emitted order is sorted shard order.
   EXPECT(strcmp(reads[0].shard_path, "shard/A") == 0);
   EXPECT(strcmp(reads[1].shard_path, "shard/B") == 0);
   EXPECT(reads[0].file_offset == 0 && reads[0].nbytes == 12288);
@@ -309,9 +307,8 @@ test_non_overlapping_output(void)
   return 0;
 }
 
-// Fused ops alternate across shards (per-shard offset order kept);
-// chunk_plans still point at the right op afterwards, including the
-// offset shift picked up during fusion.
+// Fused ops alternate across shards; chunk_plans still point at the
+// right op afterwards.
 static int
 test_round_robin_interleave(void)
 {
@@ -338,8 +335,7 @@ test_round_robin_interleave(void)
   };
   EXPECT(run_coalesce(&out, CAP_UNCAPPED, N) == DAMACY_OK);
   EXPECT(out.n_read_ops == 4);
-  // Fuse order is A:[0..8192], A:[16384..20480], B:[0..4096],
-  // B:[8192..12288]; round-robin emit = A0, B0, A1, B1.
+  // Expect alternating emit: A0, B0, A1, B1.
   EXPECT(strcmp(reads[0].shard_path, "shard/A") == 0);
   EXPECT(reads[0].file_offset == 0 && reads[0].nbytes == 8192);
   EXPECT(strcmp(reads[1].shard_path, "shard/B") == 0);
@@ -348,7 +344,6 @@ test_round_robin_interleave(void)
   EXPECT(reads[2].file_offset == 16384 && reads[2].nbytes == 4096);
   EXPECT(strcmp(reads[3].shard_path, "shard/B") == 0);
   EXPECT(reads[3].file_offset == 8192 && reads[3].nbytes == 4096);
-  // chunk_plans follow the remap through fuse + interleave.
   EXPECT(chunks[0].read_op_idx == 0 && chunks[0].offset_in_read == 50);
   EXPECT(chunks[1].read_op_idx == 0 &&
          chunks[1].offset_in_read == 200 + 4096);
