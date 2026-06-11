@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781101976644,
+  "lastUpdate": 1781178714910,
   "repoUrl": "https://github.com/nclack/damacy",
   "entries": {
     "damacy timings": [
@@ -3423,6 +3423,88 @@ window.BENCHMARK_DATA = {
           {
             "name": "damacy/mixed/assemble.ms_avg",
             "value": 1.89509,
+            "unit": "ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Nathan Clack",
+            "username": "nclack",
+            "email": "nclack@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "ff5ad9c15b06a5d06fbae5de1b224aa61c2e9326",
+          "message": "config: n_io_threads capped by sanity limit, not host CPU count (#145)\n\n## Problem\n\n#136 set `damacy_tuning_defaults().n_io_threads = 64`, but\n`validate_config` required `n_io_threads <= host CPU count` — so any\ndefaults-built config fails `damacy_create` on a sub-64-CPU host. The\nself-hosted runner's `test` job has been red since #136\n(`test_validate_accepts_tuning_defaults`). Diagnosed while shepherding\n#144.\n\n## Fix\n\nIO workers are blocking and IO-bound; oversubscribing CPUs is\nlegitimate. Replace the host-CPU bound with an explicit sanity cap\n`DAMACY_MAX_IO_THREADS = 1024`, mirrored to Python via\n`_native.MAX_IO_THREADS`. Test updated to assert the new contract\n(over-CPU valid; over-cap invalid).\n\n## Verification\n\nL40: ctest 33/33; pytest 92 passed / 2 skipped / 1 failed — the failure\nis `test_infinite_generator_feeds_multi_sample_batches`, the\npre-existing main breakage fixed by #144 (this branch forks main without\nit). Should turn the runner's `test` job green (together with #144).\n\nCo-authored-by: Nathan Clack <nclack@biohub.org>",
+          "timestamp": "2026-06-11T00:01:13Z",
+          "url": "https://github.com/nclack/damacy/commit/ff5ad9c15b06a5d06fbae5de1b224aa61c2e9326"
+        },
+        "date": 1781178713372,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "damacy/default/init",
+            "value": 169.259,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/time_to_first_batch",
+            "value": 987.97,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/wall",
+            "value": 9268.02,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/io.ms_avg",
+            "value": 2.98898,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/input_transfer.ms_avg",
+            "value": 3.7639,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/assemble.ms_avg",
+            "value": 1.68463,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/init",
+            "value": 157.853,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/time_to_first_batch",
+            "value": 212.394,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/wall",
+            "value": 9351.03,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/io.ms_avg",
+            "value": 3.06928,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/input_transfer.ms_avg",
+            "value": 3.83522,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/assemble.ms_avg",
+            "value": 1.90133,
             "unit": "ms"
           }
         ]
