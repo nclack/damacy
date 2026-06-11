@@ -1,10 +1,13 @@
 // Coalesce step of the IO planning pipeline:
-//   filter (emit) → sort → fuse-with-cap → group-by-read.
+//   filter (emit) → sort → fuse-with-cap → interleave → group-by-read.
 //
 // Operates in place on planner_output: sorts the per-chunk
 // page-aligned read windows by (shard_path, file_offset), then
 // greedily fuses adjacent windows in the same shard into one
-// read_op, bounded by read_op_max_bytes. chunk_plan.read_op_idx and
+// read_op, bounded by read_op_max_bytes. Fused ops are emitted
+// interleaved across shards (per-shard offset order kept) because
+// simultaneous reads into one file serialize on network
+// filesystems. chunk_plan.read_op_idx and
 // chunk_plan.offset_in_read are rewritten to point at the surviving
 // read_op. Fill chunk_plans (path empty, nbytes == 0) keep their
 // 1:1 placeholder read_ops untouched.
@@ -29,7 +32,7 @@ extern "C"
 #endif
 
   // Scratch requirements:
-  //   u32_scratch:     >= 3 * out->n_read_ops uint32_t slots
+  //   u32_scratch:     >= 4 * out->n_read_ops uint32_t slots
   //   read_op_scratch: >= out->n_read_ops slots
   enum damacy_status coalesce_chunks(struct planner_output* out,
                                      uint64_t read_op_max_bytes,

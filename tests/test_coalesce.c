@@ -1,6 +1,6 @@
 // Unit tests for planner/coalesce.c: synthetic planner_output → sort +
-// fuse-with-cap. No zarr/store/cache plumbing — every input read_op
-// and chunk_plan is constructed inline.
+// fuse-with-cap + interleave. No zarr/store/cache plumbing — every
+// input read_op and chunk_plan is constructed inline.
 
 #include "damacy_limits.h"
 #include "expect.h"
@@ -59,7 +59,7 @@ mk_fill(struct read_op* r, struct chunk_plan* cp, uint32_t read_op_idx)
 static enum damacy_status
 run_coalesce(struct planner_output* out, uint64_t cap, uint32_t n_in)
 {
-  uint32_t* u32 = (uint32_t*)calloc((size_t)n_in * 3u, sizeof(uint32_t));
+  uint32_t* u32 = (uint32_t*)calloc((size_t)n_in * 4u, sizeof(uint32_t));
   struct read_op* ops = (struct read_op*)calloc(n_in, sizeof(struct read_op));
   enum damacy_status s =
     coalesce_chunks(out, cap, DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE, u32, ops);
@@ -299,12 +299,59 @@ test_non_overlapping_output(void)
   EXPECT(run_coalesce(&out, CAP_UNCAPPED, N) == DAMACY_OK);
   // shard/A: 3 touching reads → 1 fused; shard/B: 2 touching reads → 1 fused.
   EXPECT(out.n_read_ops == 2);
-  // Output is sorted by (path, offset): A precedes B; within each, offsets
-  // are non-overlapping by construction (single fused leader per shard).
+  // One fused op per shard, so the emitted order is sorted shard order.
   EXPECT(strcmp(reads[0].shard_path, "shard/A") == 0);
   EXPECT(strcmp(reads[1].shard_path, "shard/B") == 0);
   EXPECT(reads[0].file_offset == 0 && reads[0].nbytes == 12288);
   EXPECT(reads[1].file_offset == 0 && reads[1].nbytes == 8192);
+  return 0;
+}
+
+// Fused ops alternate across shards; chunk_plans still point at the
+// right op afterwards.
+static int
+test_round_robin_interleave(void)
+{
+  enum
+  {
+    N = 5
+  };
+  // shard/A: 0..4096 and 4096..8192 touch → fuse; 16384 is separate.
+  // shard/B: two non-touching reads.
+  struct read_op reads[N] = { 0 };
+  struct chunk_plan chunks[N] = { 0 };
+  mk(&reads[0], &chunks[0], "shard/A", 0, 4096, 0, 50);
+  mk(&reads[1], &chunks[1], "shard/A", 4096, 4096, 1, 200);
+  mk(&reads[2], &chunks[2], "shard/A", 16384, 4096, 2, 0);
+  mk(&reads[3], &chunks[3], "shard/B", 0, 4096, 3, 0);
+  mk(&reads[4], &chunks[4], "shard/B", 8192, 4096, 4, 0);
+  struct planner_output out = {
+    .read_ops = reads,
+    .read_ops_cap = N,
+    .n_read_ops = N,
+    .chunk_plans = chunks,
+    .chunk_plans_cap = N,
+    .n_chunk_plans = N,
+  };
+  EXPECT(run_coalesce(&out, CAP_UNCAPPED, N) == DAMACY_OK);
+  EXPECT(out.n_read_ops == 4);
+  // Expect alternating emit: A0, B0, A1, B1.
+  EXPECT(strcmp(reads[0].shard_path, "shard/A") == 0);
+  EXPECT(reads[0].file_offset == 0 && reads[0].nbytes == 8192);
+  EXPECT(strcmp(reads[1].shard_path, "shard/B") == 0);
+  EXPECT(reads[1].file_offset == 0 && reads[1].nbytes == 4096);
+  EXPECT(strcmp(reads[2].shard_path, "shard/A") == 0);
+  EXPECT(reads[2].file_offset == 16384 && reads[2].nbytes == 4096);
+  EXPECT(strcmp(reads[3].shard_path, "shard/B") == 0);
+  EXPECT(reads[3].file_offset == 8192 && reads[3].nbytes == 4096);
+  EXPECT(chunks[0].read_op_idx == 0 && chunks[0].offset_in_read == 50);
+  EXPECT(chunks[1].read_op_idx == 0 &&
+         chunks[1].offset_in_read == 200 + 4096);
+  EXPECT(chunks[2].read_op_idx == 2);
+  EXPECT(chunks[3].read_op_idx == 1);
+  EXPECT(chunks[4].read_op_idx == 3);
+  EXPECT(out.n_chunks_to_load == 5);
+  EXPECT(out.n_loads_issued == 4);
   return 0;
 }
 
@@ -388,6 +435,7 @@ main(void)
   RUN(test_cap_splits);
   RUN(test_single_over_cap);
   RUN(test_non_overlapping_output);
+  RUN(test_round_robin_interleave);
   RUN(test_chunk_count_cap);
   RUN(test_fills_passthrough);
   return 0;
