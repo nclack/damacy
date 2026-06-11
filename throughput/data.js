@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781101980547,
+  "lastUpdate": 1781178717946,
   "repoUrl": "https://github.com/nclack/damacy",
   "entries": {
     "damacy throughput": [
@@ -1183,6 +1183,38 @@ window.BENCHMARK_DATA = {
           {
             "name": "damacy/mixed/throughput",
             "value": 5758.51,
+            "unit": "MB/s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Nathan Clack",
+            "username": "nclack",
+            "email": "nclack@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "ff5ad9c15b06a5d06fbae5de1b224aa61c2e9326",
+          "message": "config: n_io_threads capped by sanity limit, not host CPU count (#145)\n\n## Problem\n\n#136 set `damacy_tuning_defaults().n_io_threads = 64`, but\n`validate_config` required `n_io_threads <= host CPU count` — so any\ndefaults-built config fails `damacy_create` on a sub-64-CPU host. The\nself-hosted runner's `test` job has been red since #136\n(`test_validate_accepts_tuning_defaults`). Diagnosed while shepherding\n#144.\n\n## Fix\n\nIO workers are blocking and IO-bound; oversubscribing CPUs is\nlegitimate. Replace the host-CPU bound with an explicit sanity cap\n`DAMACY_MAX_IO_THREADS = 1024`, mirrored to Python via\n`_native.MAX_IO_THREADS`. Test updated to assert the new contract\n(over-CPU valid; over-cap invalid).\n\n## Verification\n\nL40: ctest 33/33; pytest 92 passed / 2 skipped / 1 failed — the failure\nis `test_infinite_generator_feeds_multi_sample_batches`, the\npre-existing main breakage fixed by #144 (this branch forks main without\nit). Should turn the runner's `test` job green (together with #144).\n\nCo-authored-by: Nathan Clack <nclack@biohub.org>",
+          "timestamp": "2026-06-11T00:01:13Z",
+          "url": "https://github.com/nclack/damacy/commit/ff5ad9c15b06a5d06fbae5de1b224aa61c2e9326"
+        },
+        "date": 1781178717037,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "damacy/default/throughput",
+            "value": 5792.73,
+            "unit": "MB/s"
+          },
+          {
+            "name": "damacy/mixed/throughput",
+            "value": 5741.31,
             "unit": "MB/s"
           }
         ]
