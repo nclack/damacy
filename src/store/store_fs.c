@@ -54,11 +54,15 @@ fs_submit_state_drop(struct fs_submit_state* st)
     free(st);
 }
 
-static void
+// Returns nonzero only for the first failure: a bad shard fails every
+// job in its batch, and one warning per batch is enough.
+static int
 fs_submit_state_fail(struct fs_submit_state* st)
 {
-  if (st)
-    atomic_store_explicit(&st->status, DAMACY_IO, memory_order_release);
+  if (!st)
+    return 0;
+  return atomic_exchange_explicit(
+           &st->status, DAMACY_IO, memory_order_release) == DAMACY_OK;
 }
 
 static enum damacy_status
@@ -242,12 +246,10 @@ fs_read_job_fn(void* vctx)
   struct fs_read_job* j = (struct fs_read_job*)vctx;
   // Open here, not at submit: a cold open is a synchronous network
   // round-trip, and the submit loop feeds the whole read pipeline.
-  // Workers overlap opens with in-flight reads; after first touch the
-  // fd cache makes this a hit.
   platform_file* f = store_fs_acquire(j->fs, j->key, &j->pin);
   if (!f) {
-    log_warn("store_fs: open failed for key=%s", j->key ? j->key : "(null)");
-    fs_submit_state_fail(j->state);
+    if (fs_submit_state_fail(j->state))
+      log_warn("store_fs: open failed for key=%s", j->key ? j->key : "(null)");
     return;
   }
   atomic_fetch_add_explicit(&j->fs->read_jobs, 1, memory_order_relaxed);
@@ -257,12 +259,12 @@ fs_read_job_fn(void* vctx)
   int64_t n = platform_file_pread(f, j->dst, j->len, j->offset);
   atomic_fetch_sub_explicit(&j->fs->read_active, 1, memory_order_acq_rel);
   if (n < 0) {
-    log_warn("store_fs: read failed for key=%s off=%llu len=%zu got=%lld",
-             j->key ? j->key : "(null)",
-             (unsigned long long)j->offset,
-             j->len,
-             (long long)n);
-    fs_submit_state_fail(j->state);
+    if (fs_submit_state_fail(j->state))
+      log_warn("store_fs: read failed for key=%s off=%llu len=%zu got=%lld",
+               j->key ? j->key : "(null)",
+               (unsigned long long)j->offset,
+               j->len,
+               (long long)n);
   }
 }
 
