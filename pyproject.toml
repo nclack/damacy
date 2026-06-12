@@ -106,3 +106,20 @@ exclude_lines = [
 ]
 show_missing = true
 skip_covered = true
+
+# ---- pixi -------------------------------------------------------------
+
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[tool.pixi.pypi-dependencies]
+damacy = { path = ".", editable = true }
+
+[tool.pixi.environments]
+default = { solve-group = "default" }
+dev = { features = ["dev"], solve-group = "default" }
+docs = { features = ["docs"], solve-group = "default" }
+gpu = { features = ["gpu"], solve-group = "default" }
+
+[tool.pixi.tasks]
