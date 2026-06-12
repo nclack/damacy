@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781178717946,
+  "lastUpdate": 1781262684339,
   "repoUrl": "https://github.com/nclack/damacy",
   "entries": {
     "damacy throughput": [
@@ -1215,6 +1215,38 @@ window.BENCHMARK_DATA = {
           {
             "name": "damacy/mixed/throughput",
             "value": 5741.31,
+            "unit": "MB/s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Nathan Clack",
+            "username": "nclack",
+            "email": "nclack@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "cca3b0928dff78059f451420406a4ede908d369a",
+          "message": "bench: ceiling probe + wire-rate report (#150)\n\nRead amplification from unaligned sampling is by design, so \"how fast is\nthe bench\" needs a denominator: what could the mount deliver for this op\nstream if the pipeline were perfect? This adds that accounting end to\nend.\n\nThree pieces:\n\n1. Report: two summary lines after `throughput`, computed from fields\n   already in results.json (old archived runs re-render with them too):\n   - `read amplification` = io bytes / sample bytes — a constant per\n     sample-shape x chunk-geometry; drift flags a planner regression.\n   - `wire rate` = io bytes / wall — what the mount actually sustained.\n\n2. `bench/preadreplay`: the trace-replay harness from the 06-10/06-12\n   investigations, promoted from scratch tooling. Replays a captured op\n   stream with bare pread workers pulling from a shared cursor (mirrors\n   the io_queue), so its throughput is the mount ceiling for exactly\n   that workload. `pinned direct <trace> 64` is the canonical cold probe\n   (O_DIRECT keeps it honest on a node that already read the data).\n\n3. Capture: `DAMACY_TRACE_READS=<file>` appends one line per posted read\n   op (\"path offset len\", submission order) in store_fs submit. Opt-in,\n   off-path when unset.\n\nThe reading: `wire rate / ceiling` = pipeline efficiency;\n`ceiling / amplification` = expected peak throughput.\n\nValidated on L40 (33/33 ctest), full loop on the 42-FOV dynacell preset:\n\n    wall (steady-state)                                3.20 s\n    throughput              4.19 GB/s  (sample volume / wall)\n    read amplification       2.80x  (io bytes / sample bytes)\n    wire rate                   11.73 GB/s  (io bytes / wall)\n\n    $ build/bench/preadreplay pinned direct <captured-trace> 64\npinned direct nthreads=64 nops=30513 nfiles=1144 41.15 GB in 2.49s =\n16.52 GB/s\n\ni.e. that run: 71% of the mount that hour, expected peak 16.52 / 2.80 =\n5.9 GB/s. The fresh capture matched the canonical trace op-for-op\n(30,513 ops, 1,144 files) — the planner is deterministic under a seed.\n\nIndependent of #149 (touches adjacent but disjoint hunks in store_fs.c;\nmerges clean in either order).\n\nCo-authored-by: Nathan Clack <nclack@biohub.org>",
+          "timestamp": "2026-06-12T02:15:42Z",
+          "url": "https://github.com/nclack/damacy/commit/cca3b0928dff78059f451420406a4ede908d369a"
+        },
+        "date": 1781262682222,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "damacy/default/throughput",
+            "value": 5727.69,
+            "unit": "MB/s"
+          },
+          {
+            "name": "damacy/mixed/throughput",
+            "value": 5648.34,
             "unit": "MB/s"
           }
         ]
