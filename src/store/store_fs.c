@@ -10,11 +10,29 @@
 #include "util/prelude.h"
 #include "util/strbuf.h"
 
+#include <pthread.h>
 #include <stdatomic.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #define FS_FD_CACHE_MAX_PROBE 16u
+
+// DAMACY_TRACE_READS=<file>: append one line per posted read op, in
+// submission order: "<root>/<key> <offset> <len>". Feeds
+// bench/preadreplay, which measures what the mount can deliver for
+// exactly this op stream — the ceiling to judge the io stage against.
+static FILE* g_read_trace;
+static pthread_mutex_t g_read_trace_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_once_t g_read_trace_once = PTHREAD_ONCE_INIT;
+
+static void
+read_trace_open(void)
+{
+  const char* path = getenv("DAMACY_TRACE_READS");
+  if (path && path[0])
+    g_read_trace = fopen(path, "a");
+}
 
 struct fs_cache_entry
 {
@@ -276,6 +294,7 @@ fs_submit(struct store* s, const struct store_read* reads, size_t n)
   struct store_fs* fs = (struct store_fs*)s;
   struct store_submit_result result = { .status = DAMACY_IO };
   struct fs_submit_state* state = NULL;
+  pthread_once(&g_read_trace_once, read_trace_open);
   if (n == 0) {
     struct io_event ioev = io_queue_record(fs->q);
     result.status = DAMACY_OK;
@@ -310,6 +329,16 @@ fs_submit(struct store* s, const struct store_read* reads, size_t n)
     j->dst = reads[i].dst;
     j->offset = reads[i].offset;
     j->len = reads[i].len;
+    if (g_read_trace) {
+      pthread_mutex_lock(&g_read_trace_lock);
+      fprintf(g_read_trace,
+              "%s/%s %llu %zu\n",
+              fs->root,
+              j->key,
+              (unsigned long long)j->offset,
+              j->len);
+      pthread_mutex_unlock(&g_read_trace_lock);
+    }
     fs_submit_state_ref(state);
     if (io_queue_post(fs->q, fs_read_job_fn, j, fs_read_job_free)) {
       fs_read_job_free(j);

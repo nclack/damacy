@@ -17,3 +17,10 @@ target_link_libraries(
     metadata_store_async_bench
     PRIVATE metadata_store_async warnings Threads::Threads
 )
+
+# Mount-ceiling probe; replays DAMACY_TRACE_READS captures (see file header).
+add_executable(preadreplay preadreplay.c)
+target_link_libraries(
+    preadreplay
+    PRIVATE warnings Threads::Threads CUDA::cuda_driver
+)

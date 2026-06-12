@@ -251,6 +251,29 @@ def _summary_table(r: Results) -> Table:
     block_per_batch = tm.consumer_block / n_batches if n_batches > 0 else 0.0
     push_per_batch = tm.consumer_push / n_batches if n_batches > 0 else 0.0
     pop_wait_per_batch = tm.consumer_pop_wait / n_batches if n_batches > 0 else 0.0
+    # Distance-to-the-wall accounting: wire rate is what the mount must
+    # deliver; divide a measured mount ceiling (bench/preadreplay) by the
+    # amplification to get the expected peak throughput.
+    io_stage = next((s for s in r.stages if s.name == "io"), None)
+    sample_bytes = (
+        d.bytes_per_sample * n_batches * r.scenario.sampling.samples_per_batch
+    )
+    wire = (
+        [
+            (
+                "read amplification",
+                f"{io_stage.input_bytes / sample_bytes:.2f}x"
+                "  [dim](io bytes / sample bytes)[/dim]",
+            ),
+            (
+                "wire rate",
+                f"{io_stage.input_bytes / 1e9 / (tm.wall / 1e3):.2f} GB/s"
+                "  [dim](io bytes / wall)[/dim]",
+            ),
+        ]
+        if io_stage and io_stage.input_bytes > 0 and sample_bytes > 0 and tm.wall > 0
+        else []
+    )
     rows = [
         ("init", _fmt_ms(tm.init) + " ms"),
         ("time_to_first_batch", _fmt_ms(tm.time_to_first_batch) + " ms"),
@@ -259,6 +282,7 @@ def _summary_table(r: Results) -> Table:
             "throughput",
             f"{d.throughput_mb_s / 1e3:.2f} GB/s  [dim](sample volume / wall)[/dim]",
         ),
+        *wire,
         (
             "stage_concurrency",
             f"{d.stage_concurrency:.2f}  [dim](sum stage ms / wall ms)[/dim]",
