@@ -29,8 +29,9 @@ jobs:
             seeds: shard_index
           - name: fuzz_zarr_metadata
             seeds: zarr_metadata
-          - name: fuzz_blosc1_host
-            seeds: blosc1_host
+          # fuzz_blosc1_host was removed in #58: blosc1 parsing moved to
+          # the GPU, and fuzz builds gate out CUDA, so there is no
+          # host-side blosc1 parser left to fuzz.
 
     steps:
       - name: Checkout
