@@ -54,11 +54,15 @@ fs_submit_state_drop(struct fs_submit_state* st)
     free(st);
 }
 
-static void
+// Returns nonzero only for the first failure: a bad shard fails every
+// job in its batch, and one warning per batch is enough.
+static int
 fs_submit_state_fail(struct fs_submit_state* st)
 {
-  if (st)
-    atomic_store_explicit(&st->status, DAMACY_IO, memory_order_release);
+  if (!st)
+    return 0;
+  return atomic_exchange_explicit(
+           &st->status, DAMACY_IO, memory_order_release) == DAMACY_OK;
 }
 
 static enum damacy_status
@@ -240,8 +244,14 @@ static void
 fs_read_job_fn(void* vctx)
 {
   struct fs_read_job* j = (struct fs_read_job*)vctx;
-  platform_file* f =
-    (platform_file*)((struct fs_cache_entry*)lru_entry_value(j->pin))->file;
+  // Open here, not at submit: a cold open is a synchronous network
+  // round-trip, and the submit loop feeds the whole read pipeline.
+  platform_file* f = store_fs_acquire(j->fs, j->key, &j->pin);
+  if (!f) {
+    if (fs_submit_state_fail(j->state))
+      log_warn("store_fs: open failed for key=%s", j->key ? j->key : "(null)");
+    return;
+  }
   atomic_fetch_add_explicit(&j->fs->read_jobs, 1, memory_order_relaxed);
   uint64_t active =
     atomic_fetch_add_explicit(&j->fs->read_active, 1, memory_order_acq_rel) + 1;
@@ -249,12 +259,12 @@ fs_read_job_fn(void* vctx)
   int64_t n = platform_file_pread(f, j->dst, j->len, j->offset);
   atomic_fetch_sub_explicit(&j->fs->read_active, 1, memory_order_acq_rel);
   if (n < 0) {
-    log_warn("store_fs: read failed for key=%s off=%llu len=%zu got=%lld",
-             j->key ? j->key : "(null)",
-             (unsigned long long)j->offset,
-             j->len,
-             (long long)n);
-    fs_submit_state_fail(j->state);
+    if (fs_submit_state_fail(j->state))
+      log_warn("store_fs: read failed for key=%s off=%llu len=%zu got=%lld",
+               j->key ? j->key : "(null)",
+               (unsigned long long)j->offset,
+               j->len,
+               (long long)n);
   }
 }
 
@@ -287,18 +297,10 @@ fs_submit(struct store* s, const struct store_read* reads, size_t n)
     return result;
 
   for (size_t i = 0; i < n; ++i) {
-    struct lru_entry* pin = NULL;
-    platform_file* f = store_fs_acquire(fs, reads[i].key, &pin);
-    if (!f) {
-      log_warn("store_fs: acquire failed for key=%s; draining batch",
-               reads[i].key ? reads[i].key : "(null)");
-      goto Drain;
-    }
     struct fs_read_job* j = (struct fs_read_job*)pool_alloc(fs->job_pool);
     if (!j) {
       log_warn("store_fs: job_pool exhausted (cap=%zu); draining batch",
                pool_capacity(fs->job_pool));
-      store_fs_release(fs, pin);
       // Retriable backpressure, not a shard read/open failure.
       result.status = DAMACY_AGAIN;
       goto Drain;
@@ -306,7 +308,7 @@ fs_submit(struct store* s, const struct store_read* reads, size_t n)
     j->fs = fs;
     j->key = reads[i].key;
     j->state = state;
-    j->pin = pin;
+    j->pin = NULL;
     j->dst = reads[i].dst;
     j->offset = reads[i].offset;
     j->len = reads[i].len;

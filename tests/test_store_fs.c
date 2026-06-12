@@ -309,6 +309,37 @@ test_async_read_error_reports_io(void)
   return 0;
 }
 
+// A missing file fails at event completion, not at submit: the worker
+// does the open, so submit can't see the failure.
+static int
+test_async_open_error_reports_io(void)
+{
+  char root[] = "/tmp/damacy_store_fs_noent_XXXXXX";
+  EXPECT(mkdtemp(root));
+
+  struct store_fs_config sc = {
+    .root = root,
+    .nthreads = 1,
+    .fd_cache_capacity = CAP,
+  };
+  struct store* store = store_fs_create(&sc);
+  EXPECT(store);
+
+  char dst[4] = { 0 };
+  struct store_read read = {
+    .key = "missing",
+    .dst = dst,
+    .offset = 0,
+    .len = sizeof dst,
+  };
+  struct store_submit_result submit = store_read_submit(store, &read, 1);
+  EXPECT(submit.status == DAMACY_OK);
+  EXPECT(store_event_wait(store, submit.event) == DAMACY_IO);
+
+  store_destroy(store);
+  return 0;
+}
+
 // A burst past the fixed job_pool is retriable backpressure (DAMACY_AGAIN),
 // not the fatal DAMACY_IO the scheduler would latch.
 static int
@@ -370,6 +401,7 @@ main(void)
   RUN(test_lock_free_release_under_contention);
   RUN(test_read_job_stats);
   RUN(test_async_read_error_reports_io);
+  RUN(test_async_open_error_reports_io);
   RUN(test_job_pool_exhaustion_reports_again);
   return 0;
 }
