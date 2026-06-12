@@ -240,8 +240,16 @@ static void
 fs_read_job_fn(void* vctx)
 {
   struct fs_read_job* j = (struct fs_read_job*)vctx;
-  platform_file* f =
-    (platform_file*)((struct fs_cache_entry*)lru_entry_value(j->pin))->file;
+  // Open here, not at submit: a cold open is a synchronous network
+  // round-trip, and the submit loop feeds the whole read pipeline.
+  // Workers overlap opens with in-flight reads; after first touch the
+  // fd cache makes this a hit.
+  platform_file* f = store_fs_acquire(j->fs, j->key, &j->pin);
+  if (!f) {
+    log_warn("store_fs: open failed for key=%s", j->key ? j->key : "(null)");
+    fs_submit_state_fail(j->state);
+    return;
+  }
   atomic_fetch_add_explicit(&j->fs->read_jobs, 1, memory_order_relaxed);
   uint64_t active =
     atomic_fetch_add_explicit(&j->fs->read_active, 1, memory_order_acq_rel) + 1;
@@ -287,18 +295,10 @@ fs_submit(struct store* s, const struct store_read* reads, size_t n)
     return result;
 
   for (size_t i = 0; i < n; ++i) {
-    struct lru_entry* pin = NULL;
-    platform_file* f = store_fs_acquire(fs, reads[i].key, &pin);
-    if (!f) {
-      log_warn("store_fs: acquire failed for key=%s; draining batch",
-               reads[i].key ? reads[i].key : "(null)");
-      goto Drain;
-    }
     struct fs_read_job* j = (struct fs_read_job*)pool_alloc(fs->job_pool);
     if (!j) {
       log_warn("store_fs: job_pool exhausted (cap=%zu); draining batch",
                pool_capacity(fs->job_pool));
-      store_fs_release(fs, pin);
       // Retriable backpressure, not a shard read/open failure.
       result.status = DAMACY_AGAIN;
       goto Drain;
@@ -306,7 +306,7 @@ fs_submit(struct store* s, const struct store_read* reads, size_t n)
     j->fs = fs;
     j->key = reads[i].key;
     j->state = state;
-    j->pin = pin;
+    j->pin = NULL;
     j->dst = reads[i].dst;
     j->offset = reads[i].offset;
     j->len = reads[i].len;
