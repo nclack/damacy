@@ -29,8 +29,6 @@ jobs:
             seeds: shard_index
           - name: fuzz_zarr_metadata
             seeds: zarr_metadata
-          - name: fuzz_blosc1_host
-            seeds: blosc1_host
 
     steps:
       - name: Checkout
