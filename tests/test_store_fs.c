@@ -6,6 +6,7 @@
 #include "store/store_fs.h"
 #include "util/lru.h"
 
+#include <fcntl.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -225,6 +226,121 @@ test_lock_free_release_under_contention(void)
   return 0;
 }
 
+#define SF_THREADS 8
+
+struct sf_args
+{
+  struct store_fs* fs;
+  atomic_int* entered;
+  platform_file* file;
+  int ok;
+};
+
+static void*
+sf_worker(void* arg)
+{
+  struct sf_args* w = (struct sf_args*)arg;
+  atomic_fetch_add(w->entered, 1);
+  struct lru_entry* pin = NULL;
+  platform_file* f = store_fs_acquire(w->fs, "fifo", &pin);
+  if (f && pin) {
+    w->file = f;
+    w->ok = 1;
+    store_fs_release(w->fs, pin);
+  }
+  return NULL;
+}
+
+// The key is a FIFO, so the one claiming open blocks until this test
+// opens the write end — every other thread must take the wait path.
+// opens == 1 is the single-flight invariant: nobody opened redundantly.
+static int
+test_single_flight_one_open(void)
+{
+  char root[] = "/tmp/damacy_store_fs_sf_XXXXXX";
+  EXPECT(mkdtemp(root));
+  char p[256];
+  snprintf(p, sizeof p, "%s/fifo", root);
+  EXPECT(mkfifo(p, 0600) == 0);
+
+  struct store_fs_config sc = {
+    .root = root,
+    .nthreads = 1,
+    .fd_cache_capacity = CAP,
+  };
+  struct store* store = store_fs_create(&sc);
+  EXPECT(store);
+  struct store_fs* fs = (struct store_fs*)store;
+
+  atomic_int entered;
+  atomic_init(&entered, 0);
+  struct sf_args w[SF_THREADS] = { 0 };
+  pthread_t threads[SF_THREADS];
+  for (int t = 0; t < SF_THREADS; ++t) {
+    w[t].fs = fs;
+    w[t].entered = &entered;
+    EXPECT(pthread_create(&threads[t], NULL, sf_worker, &w[t]) == 0);
+  }
+  while (atomic_load(&entered) < SF_THREADS)
+    usleep(1000);
+  usleep(50 * 1000); // let the claimer block in open and waiters park
+
+  int wfd = open(p, O_WRONLY);
+  EXPECT(wfd >= 0);
+  for (int t = 0; t < SF_THREADS; ++t)
+    EXPECT(pthread_join(threads[t], NULL) == 0);
+  close(wfd);
+
+  struct store_fs_io_stats io;
+  store_fs_io_stats_get(fs, &io);
+  EXPECT(io.opens == 1);
+  for (int t = 0; t < SF_THREADS; ++t) {
+    EXPECT(w[t].ok);
+    EXPECT(w[t].file == w[0].file);
+  }
+
+  store_destroy(store);
+  return 0;
+}
+
+static int
+test_failed_open_retries_next_acquire(void)
+{
+  char root[] = "/tmp/damacy_store_fs_sfo_XXXXXX";
+  EXPECT(mkdtemp(root));
+
+  struct store_fs_config sc = {
+    .root = root,
+    .nthreads = 1,
+    .fd_cache_capacity = CAP,
+  };
+  struct store* store = store_fs_create(&sc);
+  EXPECT(store);
+  struct store_fs* fs = (struct store_fs*)store;
+
+  struct lru_entry* pin = NULL;
+  EXPECT(store_fs_acquire(fs, "k0", &pin) == NULL);
+  EXPECT(pin == NULL);
+
+  // The file appearing later must be visible: a failed open marks the
+  // cached entry, it doesn't poison the key.
+  char p[256];
+  snprintf(p, sizeof p, "%s/k0", root);
+  EXPECT(write_byte(p, 'a') == 0);
+
+  platform_file* f = store_fs_acquire(fs, "k0", &pin);
+  EXPECT(f);
+  EXPECT(pin);
+  store_fs_release(fs, pin);
+
+  struct store_fs_io_stats io;
+  store_fs_io_stats_get(fs, &io);
+  EXPECT(io.opens == 2);
+
+  store_destroy(store);
+  return 0;
+}
+
 static int
 test_read_job_stats(void)
 {
@@ -399,6 +515,8 @@ main(void)
   RUN(test_hit_path);
   RUN(test_pin_saturation);
   RUN(test_lock_free_release_under_contention);
+  RUN(test_single_flight_one_open);
+  RUN(test_failed_open_retries_next_acquire);
   RUN(test_read_job_stats);
   RUN(test_async_read_error_reports_io);
   RUN(test_async_open_error_reports_io);

@@ -37,7 +37,8 @@ read_trace_open(void)
 struct fs_cache_entry
 {
   char* key;
-  platform_file* file;
+  platform_file* file; // NULL while an open is in flight or failed
+  int open_failed;     // distinguishes "failed" from "in flight"
 };
 
 struct fs_submit_state
@@ -126,16 +127,58 @@ store_fs_acquire(struct store_fs* fs,
     return NULL;
 
   uint64_t hash = hash_fnv1a_str(key);
+  struct lru_entry* claim = NULL;
 
   platform_mutex_lock(fs->cache_lock);
   {
     struct lru_entry* hit = lru_get(fs->fd_cache, hash, key);
     if (hit) {
+      struct fs_cache_entry* e = (struct fs_cache_entry*)lru_entry_value(hit);
       lru_entry_acquire_locked(hit);
-      platform_file* f = ((struct fs_cache_entry*)lru_entry_value(hit))->file;
-      *pin_out = hit;
-      platform_mutex_unlock(fs->cache_lock);
-      return f;
+      if (e->open_failed) {
+        // A previous attempt failed; retry from this caller so a
+        // transient error doesn't poison the key.
+        e->open_failed = 0;
+        claim = hit;
+      } else {
+        // Open in flight: wait for it rather than opening too. A
+        // batch's first wave lands many ops for the same cold files at
+        // once, and every redundant open is a wasted network round
+        // trip. The pin keeps the entry alive across the wait;
+        // replacement can't happen either, since puts only follow a
+        // miss and this entry is a hit.
+        while (!e->file && !e->open_failed)
+          platform_cond_wait(fs->cache_cond, fs->cache_lock);
+        if (e->file) {
+          platform_file* f = e->file;
+          *pin_out = hit;
+          platform_mutex_unlock(fs->cache_lock);
+          return f;
+        }
+        // The open we waited on failed: fail this caller too. Retrying
+        // here would serialize one failing round trip per waiter; the
+        // next acquire of the key retries instead (branch above).
+        platform_mutex_unlock(fs->cache_lock);
+        lru_entry_release(hit);
+        return NULL;
+      }
+    } else {
+      // Cold key: claim it with a placeholder before the slow open so
+      // concurrent acquirers wait for this open instead of racing it.
+      struct fs_cache_entry* entry =
+        (struct fs_cache_entry*)calloc(1, sizeof(*entry));
+      if (!entry)
+        goto Fail;
+      entry->key = strdup(key);
+      if (!entry->key) {
+        free(entry);
+        goto Fail;
+      }
+      claim = lru_put(fs->fd_cache, hash, key, entry);
+      // lru_put already destroyed entry via fs_cache_destroy on failure.
+      if (!claim)
+        goto Fail;
+      lru_entry_acquire_locked(claim);
     }
   }
   platform_mutex_unlock(fs->cache_lock);
@@ -148,47 +191,30 @@ store_fs_acquire(struct store_fs* fs,
   OpenDone:
     strbuf_free(&path);
   }
-  if (!opened)
-    return NULL;
-
-  struct fs_cache_entry* entry =
-    (struct fs_cache_entry*)calloc(1, sizeof(*entry));
-  if (!entry) {
-    platform_file_close(opened);
-    return NULL;
-  }
-  entry->file = opened;
-  entry->key = strdup(key);
-  if (!entry->key) {
-    fs_cache_destroy(entry, NULL);
-    return NULL;
-  }
+  atomic_fetch_add_explicit(&fs->opens, 1, memory_order_relaxed);
 
   platform_mutex_lock(fs->cache_lock);
   {
-    struct lru_entry* existing = lru_peek(fs->fd_cache, hash, key);
-    if (existing) {
-      lru_entry_acquire_locked(existing);
-      platform_file* f =
-        ((struct fs_cache_entry*)lru_entry_value(existing))->file;
-      *pin_out = existing;
-      platform_mutex_unlock(fs->cache_lock);
-      fs_cache_destroy(entry, NULL);
-      return f;
-    }
-    struct lru_entry* inserted = lru_put(fs->fd_cache, hash, key, entry);
-    if (!inserted) {
-      // lru_put already destroyed entry via fs_cache_destroy on failure.
-      platform_mutex_unlock(fs->cache_lock);
-      return NULL;
-    }
-    lru_entry_acquire_locked(inserted);
-    platform_file* f =
-      ((struct fs_cache_entry*)lru_entry_value(inserted))->file;
-    *pin_out = inserted;
-    platform_mutex_unlock(fs->cache_lock);
-    return f;
+    struct fs_cache_entry* e = (struct fs_cache_entry*)lru_entry_value(claim);
+    e->file = opened;
+    e->open_failed = !opened;
+    platform_cond_broadcast(fs->cache_cond);
   }
+  platform_mutex_unlock(fs->cache_lock);
+
+  if (!opened) {
+    // The failed placeholder stays cached so waiters can observe it;
+    // unpinned, it ages out, and the next acquire of the key reclaims
+    // it and retries.
+    lru_entry_release(claim);
+    return NULL;
+  }
+  *pin_out = claim;
+  return opened;
+
+Fail:
+  platform_mutex_unlock(fs->cache_lock);
+  return NULL;
 }
 
 void
@@ -233,6 +259,7 @@ store_fs_io_stats_get(struct store_fs* fs, struct store_fs_io_stats* out)
     .read_active = atomic_load_explicit(&fs->read_active, memory_order_relaxed),
     .read_max_active =
       atomic_load_explicit(&fs->read_max_active, memory_order_relaxed),
+    .opens = atomic_load_explicit(&fs->opens, memory_order_relaxed),
   };
 }
 
@@ -245,6 +272,7 @@ store_fs_io_stats_reset(struct store_fs* fs)
     atomic_load_explicit(&fs->read_active, memory_order_relaxed);
   atomic_store_explicit(&fs->read_jobs, 0, memory_order_relaxed);
   atomic_store_explicit(&fs->read_max_active, active, memory_order_relaxed);
+  atomic_store_explicit(&fs->opens, 0, memory_order_relaxed);
 }
 
 struct fs_read_job
@@ -465,6 +493,7 @@ fs_destroy(struct store* s)
   }
   pool_destroy(fs->job_pool);
   lru_destroy(fs->fd_cache);
+  platform_cond_free(fs->cache_cond);
   platform_mutex_free(fs->cache_lock);
   free(fs->root);
   free(fs);
@@ -479,6 +508,7 @@ store_fs_free_partial(struct store_fs* fs)
   io_queue_destroy(fs->q);
   pool_destroy(fs->job_pool);
   lru_destroy(fs->fd_cache);
+  platform_cond_free(fs->cache_cond);
   platform_mutex_free(fs->cache_lock);
   free(fs->root);
   free(fs);
@@ -509,6 +539,8 @@ store_fs_create(const struct store_fs_config* cfg)
   fs->base.vt = &fs_vtable_host;
   fs->cache_lock = platform_mutex_new();
   CHECK_SILENT(Fail, fs->cache_lock);
+  fs->cache_cond = platform_cond_new();
+  CHECK_SILENT(Fail, fs->cache_cond);
   fs->root = strdup(cfg->root);
   CHECK_SILENT(Fail, fs->root);
 
