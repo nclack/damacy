@@ -80,7 +80,9 @@ extern "C"
   };
 
   // Submit a batch of reads. On success, result.event advances after every
-  // read in the batch has completed. Reads run on the store's io_queue.
+  // read in the batch has completed. Open and read failures surface in the
+  // event's completion status, not at submit. Reads run on the store's
+  // io_queue.
   struct store_submit_result store_read_submit(struct store* s,
                                                const struct store_read* reads,
                                                size_t n);
