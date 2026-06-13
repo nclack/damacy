@@ -23,3 +23,6 @@ dev/profiles
 .pre-commit-config.yaml
 cufile.log
 .codex
+# pixi environments
+.pixi/*
+!.pixi/config.toml

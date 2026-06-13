@@ -75,6 +75,8 @@ def _stage_table(r: Results) -> Table:
     t.add_column("stage", style="cyan", no_wrap=True)
     t.add_column("unit", style="dim", no_wrap=True)
     t.add_column("GB/s_in", justify="right")
+    t.add_column("GB/s_out", justify="right")
+    t.add_column("load%", justify="right")
     t.add_column("ms_total", justify="right")
     t.add_column("ms_avg", justify="right")
     t.add_column("ms_best", justify="right")
@@ -109,14 +111,18 @@ def _stage_table(r: Results) -> Table:
         "pop_wait": "dim",
     }
 
+    wall_ms = r.timings_ms.wall
     for s in r.stages:
         secs = s.ms_total / 1e3
         c = color.get(s.name, "white")
         u = unit_style.get(s.name, "dim")
+        load = f"{100 * s.ms_total / wall_ms:.0f}" if wall_ms > 0 else "-"
         t.add_row(
             Text(s.name, style=c),
             Text(s.unit, style=u),
             _fmt_gbps(s.input_bytes, secs),
+            _fmt_gbps(s.output_bytes, secs),
+            load,
             _fmt_ms(s.ms_total),
             _fmt_ms(s.ms_avg) if s.count else "-",
             _fmt_ms(s.ms_best) if s.count else "-",
