@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781262679420,
+  "lastUpdate": 1781345407011,
   "repoUrl": "https://github.com/nclack/damacy",
   "entries": {
     "damacy timings": [
@@ -3587,6 +3587,88 @@ window.BENCHMARK_DATA = {
           {
             "name": "damacy/mixed/assemble.ms_avg",
             "value": 1.9282,
+            "unit": "ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Nathan Clack",
+            "username": "nclack",
+            "email": "nclack@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "17239aef76f34bd78290994316fd772535f0fc1e",
+          "message": "store: single-flight fd-cache opens (#151)\n\n## Why\n\nPost-#149 trace work showed the remaining io gap concentrates in\ncold-open\nbursts: each batch's first wave lands ops for ~21 never-opened shard\nfiles at\nthe queue head together (the planner interleaves shards), and concurrent\nfd-cache missers each issued their own open. Measured on the dynacell\npreset\n(L40, 64 io threads): 1,463–1,490 opens for 1,144 distinct files (~23%\nredundant), 6.9–10.5 cumulative open-seconds per ~3s run, individual\nopens\ncosting 4.8–6.3 ms under load.\n\n## What\n\n`store_fs_acquire` now claims a cold key by inserting a placeholder\ncache\nentry *before* the slow open, under the same lock hold that observed the\nmiss.\nConcurrent acquirers find the placeholder and wait on a condition\nvariable for\nthe one open instead of racing it.\n\n- A failed open fails the callers that waited on it (same outcome as\ntoday,\nwhere each racer's open would fail too) and leaves a marked entry; the\nnext\nacquire of the key reclaims it and retries, so transient errors don't\npoison\na key. Waiters don't retry — that would serialize one failing round trip\nper\n  waiter.\n- New `opens` counter in `store_fs_io_stats` (actual platform opens\nissued),\n  so the single-flight invariant is observable.\n\n## Validation\n\nL40 (`cw-us-e4a2-l40-234-019`), same-job replay ceiling 16.08–16.35\nGB/s:\n\n- ctest 33/33, including two new tests: `test_single_flight_one_open`\n(the\nkey is a FIFO so the claiming open blocks until the test opens the write\nend — every other thread must take the wait path; asserts `opens == 1`\nfrom\n  8 concurrent acquirers) and `test_failed_open_retries_next_acquire`.\n- Bench (preset-hbw4): **opens = 1,144 = exactly one per file** in both\nreps\n  (from 1,463–1,490). Cumulative open time 3.3–3.5 s (from 6.9–10.5 s) —\n  opens are also individually cheaper (~2.9 ms) without the herd.\n- Throughput 4.79–4.96 GB/s, wire 13.4–13.9 GB/s (~85% of same-job\nceiling) —\nwithin mount-weather noise of control; the win is the measured open-side\n  mechanism, worth a few percent of wire on open-heavy access patterns.\n\nCo-authored-by: Nathan Clack <nclack@biohub.org>",
+          "timestamp": "2026-06-12T14:17:26Z",
+          "url": "https://github.com/nclack/damacy/commit/17239aef76f34bd78290994316fd772535f0fc1e"
+        },
+        "date": 1781345406008,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "damacy/default/init",
+            "value": 407.274,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/time_to_first_batch",
+            "value": 971.494,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/wall",
+            "value": 9356.89,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/io.ms_avg",
+            "value": 3.74457,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/input_transfer.ms_avg",
+            "value": 3.75779,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/assemble.ms_avg",
+            "value": 1.71207,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/init",
+            "value": 356.33,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/time_to_first_batch",
+            "value": 326.872,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/wall",
+            "value": 9501.62,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/io.ms_avg",
+            "value": 3.86134,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/input_transfer.ms_avg",
+            "value": 3.82903,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/assemble.ms_avg",
+            "value": 1.92732,
             "unit": "ms"
           }
         ]
