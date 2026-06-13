@@ -80,5 +80,6 @@ nav:
   - GPU memory budget: budget.md
   - Distributed: distributed.md
   - Async prefetch: prefetch.md
+  - Optimization & data layout: optimization.md
   - Troubleshooting: troubleshooting.md
   - API reference: api.md

@@ -86,6 +86,9 @@ documented only via its `.pyi` stub.
 - [Troubleshooting](troubleshooting.md) — common errors
   (`PoolStarved`, `BudgetExceeded`, missing CUDA context) and what
   to check first.
+- [Optimization & data layout](optimization.md) — what we learned
+  tuning the pipeline: the stages, the levers and the measurements
+  behind them, and how a dataset's on-disk layout drives throughput.
 
 ## Performance dashboards
 
