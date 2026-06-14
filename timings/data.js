@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781345407011,
+  "lastUpdate": 1781433260045,
   "repoUrl": "https://github.com/nclack/damacy",
   "entries": {
     "damacy timings": [
@@ -3669,6 +3669,88 @@ window.BENCHMARK_DATA = {
           {
             "name": "damacy/mixed/assemble.ms_avg",
             "value": 1.92732,
+            "unit": "ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Nathan Clack",
+            "username": "nclack",
+            "email": "nclack@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "96d6be8451de22f20f16757a73a07ba14506500d",
+          "message": "bench report stage in/out + load, and pixi workspace config (#156)\n\nSmall follow-up rolling up the remaining working-tree changes left out\nof #155.\n\nTwo independent changes, one commit each:\n\n- **bench: per-stage in/out throughput + load** — `bench/report.py`'s\nstage table\nnow reports `GB/s_out` and `load%` (stage `ms_total` / wall) alongside\nthe\nexisting `GB/s_in`, so each pipeline stage shows input and output\nthroughput\nand its share of the wall — making it obvious which stage bounds a run.\n- **chore: pixi workspace config** — `[tool.pixi.*]`\nworkspace/environments in\n`pyproject.toml`, `.pixi/*` ignored in `.gitignore`, and `pixi.lock`\nmerge\n  attributes in `.gitattributes`.\n\n---------\n\nCo-authored-by: Nathan Clack <nclack@biohub.org>",
+          "timestamp": "2026-06-13T15:40:22Z",
+          "url": "https://github.com/nclack/damacy/commit/96d6be8451de22f20f16757a73a07ba14506500d"
+        },
+        "date": 1781433258597,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "damacy/default/init",
+            "value": 443.329,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/time_to_first_batch",
+            "value": 1028.53,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/wall",
+            "value": 9370.47,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/io.ms_avg",
+            "value": 3.73853,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/input_transfer.ms_avg",
+            "value": 3.75849,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/assemble.ms_avg",
+            "value": 1.71486,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/init",
+            "value": 338.821,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/time_to_first_batch",
+            "value": 347.112,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/wall",
+            "value": 9502.65,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/io.ms_avg",
+            "value": 3.85331,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/input_transfer.ms_avg",
+            "value": 3.82916,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/assemble.ms_avg",
+            "value": 1.92726,
             "unit": "ms"
           }
         ]
