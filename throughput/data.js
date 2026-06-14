@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1781345409914,
+  "lastUpdate": 1781433262527,
   "repoUrl": "https://github.com/nclack/damacy",
   "entries": {
     "damacy throughput": [
@@ -1279,6 +1279,38 @@ window.BENCHMARK_DATA = {
           {
             "name": "damacy/mixed/throughput",
             "value": 5650.31,
+            "unit": "MB/s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Nathan Clack",
+            "username": "nclack",
+            "email": "nclack@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "96d6be8451de22f20f16757a73a07ba14506500d",
+          "message": "bench report stage in/out + load, and pixi workspace config (#156)\n\nSmall follow-up rolling up the remaining working-tree changes left out\nof #155.\n\nTwo independent changes, one commit each:\n\n- **bench: per-stage in/out throughput + load** — `bench/report.py`'s\nstage table\nnow reports `GB/s_out` and `load%` (stage `ms_total` / wall) alongside\nthe\nexisting `GB/s_in`, so each pipeline stage shows input and output\nthroughput\nand its share of the wall — making it obvious which stage bounds a run.\n- **chore: pixi workspace config** — `[tool.pixi.*]`\nworkspace/environments in\n`pyproject.toml`, `.pixi/*` ignored in `.gitignore`, and `pixi.lock`\nmerge\n  attributes in `.gitattributes`.\n\n---------\n\nCo-authored-by: Nathan Clack <nclack@biohub.org>",
+          "timestamp": "2026-06-13T15:40:22Z",
+          "url": "https://github.com/nclack/damacy/commit/96d6be8451de22f20f16757a73a07ba14506500d"
+        },
+        "date": 1781433261818,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "damacy/default/throughput",
+            "value": 5729.39,
+            "unit": "MB/s"
+          },
+          {
+            "name": "damacy/mixed/throughput",
+            "value": 5649.7,
             "unit": "MB/s"
           }
         ]
