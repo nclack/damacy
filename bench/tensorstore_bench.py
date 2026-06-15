@@ -237,37 +237,36 @@ def run_one(arrays: list, positions: list[tuple[int, tuple]],
 
 def summarize(name: str, rows: list[dict], pbytes: int, n_arrays: int,
               sample_shape: list[int], best: dict | None) -> str:
-    cols = [("threads", 8), ("samp/s", 10), ("GB/s", 8), ("wall_s", 8)]
-    head = "  ".join(f"{c:<{w}}" for c, w in cols)
+    patch = ",".join(str(x) for x in sample_shape)
+    best_line = (
+        f"best: {best['threads']} threads  {best['samples_s']:.1f} samp/s  "
+        f"{best['gb_s']:.3f} GB/s"
+    ) if best else "best: (no rows)"
     lines = [
-        f"scenario: {name}   arrays: {n_arrays}   patch: "
-        f"{','.join(str(x) for x in sample_shape)}   "
+        f"scenario: {name}   arrays: {n_arrays}   patch: {patch}   "
         f"patch_bytes: {pbytes}",
-        f"best: {best.get('threads', '') if best else ''} threads  "
-        f"{(best or {}).get('samples_s', 0):.1f} samp/s  "
-        f"{(best or {}).get('gb_s', 0):.3f} GB/s",
+        best_line,
         "",
-        head,
-        "  ".join("-" * w for _, w in cols),
+        f"{'threads':<8}  {'samp/s':<10}  {'GB/s':<8}  wall_s",
+        f"{'-' * 8}  {'-' * 10}  {'-' * 8}  {'-' * 8}",
     ]
     for r in rows:
-        vals = [str(r["threads"]), f"{r['samples_s']:.1f}",
-                f"{r['gb_s']:.3f}", f"{r['wall_s']:.2f}"]
-        lines.append("  ".join(f"{v:<{w}}" for v, (_, w) in zip(vals, cols)))
+        lines.append(
+            f"{r['threads']:<8}  {r['samples_s']:<10.1f}  "
+            f"{r['gb_s']:<8.3f}  {r['wall_s']:.2f}"
+        )
     return "\n".join(lines)
 
 
 def read_damacy_throughput(path: Path) -> dict:
-    """Pull GB/s + samp/s out of a damacy bench results.json for side-by-side."""
+    """Pull GB/s + samp/s off a damacy bench results.json for side-by-side. Reads
+    the headline fields by key: robust to schema drift in the rest of the file,
+    but raises (not a silent 0.0) if one of these is renamed or missing."""
     r = json.loads(path.read_text())
-    derived = r.get("derived", {})
-    timings = r.get("timings_ms", {})
-    counters = r.get("counters", {})
-    gb_s = derived.get("throughput_mb_s", 0.0) / 1000.0
-    wall_s = timings.get("wall", 0.0) / 1000.0
-    pushed = counters.get("samples_pushed", 0)
+    wall_s = r["timings_ms"]["wall"] / 1000.0
+    pushed = r["counters"]["samples_pushed"]
     return {
-        "gb_s": gb_s,
+        "gb_s": r["derived"]["throughput_mb_s"] / 1000.0,
         "samples_s": pushed / wall_s if wall_s else 0.0,
         "samples": pushed,
         "wall_s": wall_s,
@@ -331,13 +330,14 @@ def main() -> None:
     print(f"opened {len(paths)} array(s); {n_warmup_samples} warmup + "
           f"{n_samples} timed patches of {pbytes} bytes each")
 
+    rng = Xorshift64Star(seed)
+    warmup = sample_positions(rng, shapes, sample_shape, n_warmup_samples)
+    positions = sample_positions(rng, shapes, sample_shape, n_samples)
+
     rows: list[dict] = []
     for threads in thread_counts:
         ctx = concurrency_context(threads)
         run_arrays = [open_array(p, ctx) for p in paths]
-        rng = Xorshift64Star(seed)
-        warmup = sample_positions(rng, shapes, sample_shape, n_warmup_samples)
-        positions = sample_positions(rng, shapes, sample_shape, n_samples)
         if a.drop_cache:
             n, sz = drop_page_cache(paths)
             print(f"page cache dropped: {n} files, {sz / 1e9:.2f} GB hinted")
