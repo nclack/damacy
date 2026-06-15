@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import queue
 import sys
 import time
 from pathlib import Path
@@ -47,6 +48,7 @@ from scenario import (  # noqa: E402
 )
 
 DEFAULT_THREADS = [1, 2, 4, 8, 16, 32]
+DST_ITEMSIZE = {"f32": 4, "bf16": 2}
 
 
 class Xorshift64Star:
@@ -89,10 +91,13 @@ def array_dirs(sc: Scenario) -> list[Path]:
 
 
 def concurrency_context(limit: int) -> ts.Context:
+    # cache_pool 0 keeps tensorstore from caching decoded chunks, so overlapping
+    # patches pay the same per-read decode damacy does (no warm-cache skew).
     return ts.Context(
         {
             "data_copy_concurrency": {"limit": limit},
             "file_io_concurrency": {"limit": limit},
+            "cache_pool": {"total_bytes_limit": 0},
         }
     )
 
@@ -107,16 +112,14 @@ def open_array(path: Path, context: ts.Context | None = None):
     ).result()
 
 
-def open_arrays(dirs: list[Path], rank: int, sample_shape: list[int],
-                context: ts.Context | None = None):
+def open_arrays(dirs: list[Path], rank: int, sample_shape: list[int]):
     """Open each dir, keep those of matching rank and large enough for the
     patch on every axis. Mirrors damacy's filtering so the array count feeding
-    the RNG lines up. Returns (paths, arrays, shapes); reports the skip count."""
-    paths, arrays, shapes = [], [], []
+    the RNG lines up. Returns (paths, shapes); reports the skip count."""
+    paths, shapes = [], []
     skipped = 0
     for d in dirs:
-        arr = open_array(d, context)
-        shape = tuple(arr.shape)
+        shape = tuple(open_array(d).shape)
         ok = len(shape) == rank and all(
             shape[k] >= sample_shape[k] for k in range(rank)
         )
@@ -124,11 +127,10 @@ def open_arrays(dirs: list[Path], rank: int, sample_shape: list[int],
             skipped += 1
             continue
         paths.append(d)
-        arrays.append(arr)
         shapes.append(shape)
     if skipped:
         print(f"skipped {skipped} array(s) of wrong rank or too small for the patch")
-    return paths, arrays, shapes
+    return paths, shapes
 
 
 def sample_positions(rng: Xorshift64Star, shapes: list[tuple],
@@ -160,18 +162,26 @@ def read_patches(arrays: list, positions: list[tuple[int, tuple]],
             submit(z, begs).result()
         return
 
-    in_flight: list = []
-    i = 0
+    # Keep `threads` reads in flight and drain whichever finishes first, so a
+    # slow read can't stall the window. tensorstore runs the read to completion
+    # without a held reference; the callback hands the done future back.
+    done: queue.Queue = queue.Queue()
+    i = in_flight = 0
     while i < len(positions) or in_flight:
-        while i < len(positions) and len(in_flight) < threads:
+        while i < len(positions) and in_flight < threads:
             z, begs = positions[i]
-            in_flight.append(submit(z, begs))
+            submit(z, begs).add_done_callback(done.put)
+            in_flight += 1
             i += 1
-        in_flight.pop(0).result()
+        done.get().result()
+        in_flight -= 1
 
 
-def patch_bytes(arrays: list, sample_shape: list[int]) -> int:
-    n = arrays[0].dtype.numpy_dtype.itemsize
+def patch_bytes(dst_dtype: str, sample_shape: list[int]) -> int:
+    """Bytes per decoded patch at the destination dtype. damacy reports
+    throughput on pipeline.dtype (bench/main.c dtype_bpe), not the source dtype,
+    so the GB/s comparison must use the same basis."""
+    n = DST_ITEMSIZE[dst_dtype]
     for d in sample_shape:
         n *= d
     return n
@@ -301,18 +311,24 @@ def main() -> None:
     seed = samp.seed
     thread_counts = [int(t) for t in a.threads.split(",") if t.strip()]
 
+    if a.compare_with and (a.limit is not None or a.n_batches is not None
+                           or a.samples_per_batch is not None):
+        print("warn: --limit/--n-batches/--samples-per-batch change the sample "
+              "stream, so the head-to-head no longer reads the same bytes as "
+              "damacy")
+
     dirs = array_dirs(sc)
     if a.limit is not None:
         dirs = dirs[:a.limit]
 
-    paths, arrays, shapes = open_arrays(dirs, rank, sample_shape)
-    if not arrays:
+    paths, shapes = open_arrays(dirs, rank, sample_shape)
+    if not paths:
         raise SystemExit("no arrays matched the patch rank/shape")
-    pbytes = patch_bytes(arrays, sample_shape)
+    pbytes = patch_bytes(sc.pipeline.dtype, sample_shape)
 
     n_samples = n_batches * spb
     n_warmup_samples = n_warmup * spb
-    print(f"opened {len(arrays)} array(s); {n_warmup_samples} warmup + "
+    print(f"opened {len(paths)} array(s); {n_warmup_samples} warmup + "
           f"{n_samples} timed patches of {pbytes} bytes each")
 
     rows: list[dict] = []
@@ -328,7 +344,7 @@ def main() -> None:
         rows.append(run_one(run_arrays, positions, sample_shape, threads, pbytes, warmup))
 
     best = max(rows, key=lambda r: r["gb_s"]) if rows else None
-    table = summarize(name, rows, pbytes, len(arrays), sample_shape, best)
+    table = summarize(name, rows, pbytes, len(paths), sample_shape, best)
     print("\n" + table + "\n")
 
     compare = None
@@ -348,7 +364,7 @@ def main() -> None:
         "backend": "tensorstore",
         "scenario": name,
         "scenario_path": str(scenario_path),
-        "n_arrays": len(arrays),
+        "n_arrays": len(paths),
         "sample_shape": sample_shape,
         "patch_bytes": pbytes,
         "n_warmup_samples": n_warmup_samples,
