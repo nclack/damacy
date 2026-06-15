@@ -51,6 +51,18 @@ struct render_job_pool
 
 struct store_read;
 
+// Why the wave packer stopped adding groups. Lets the bench tell a wave
+// capped by a budget (more work was waiting) from one that drained the
+// batch (no more work). Probe for #154: a starved few-array run shows
+// mostly WAVE_STOP_DRAINED with few reads, not budget caps.
+enum wave_stop_reason
+{
+  WAVE_STOP_DRAINED = 0, // consumed every remaining group
+  WAVE_STOP_HOST,        // hit input_cap (host pinned buffer)
+  WAVE_STOP_CHUNKS,      // hit max_chunks_per_wave
+  WAVE_STOP_DEV,         // hit dev_decompressed_cap
+};
+
 struct wave_desc
 {
   uint16_t render_job_idx;
@@ -62,6 +74,7 @@ struct wave_desc
   uint64_t input_used_bytes;
   uint64_t io_bytes;
   uint8_t is_fill_wave;
+  uint8_t stop_reason; // enum wave_stop_reason
 };
 
 struct wave_pack_limits

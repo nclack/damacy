@@ -203,17 +203,24 @@ wave_dispatcher_reserve(struct render_job* job,
   struct read_op_group_iterator it;
   read_op_group_iterator_init(
     &it, job->read_op_groups, job->n_read_op_groups, job->n_groups_dispatched);
+  out->stop_reason = WAVE_STOP_DRAINED;
   struct read_op_group g;
   while (read_op_group_iterator_next(&it, &g)) {
     struct read_op* r = &job->read_ops[g.read_op_idx];
     int is_fill_group = job->chunk_plans[g.first_chunk].is_fill;
     uint64_t host_add = is_fill_group ? 0 : r->nbytes;
-    if (host_cursor + host_add > limits->input_cap)
+    if (host_cursor + host_add > limits->input_cap) {
+      out->stop_reason = WAVE_STOP_HOST;
       break;
-    if (take + g.n_chunks > limits->max_chunks_per_wave)
+    }
+    if (take + g.n_chunks > limits->max_chunks_per_wave) {
+      out->stop_reason = WAVE_STOP_CHUNKS;
       break;
-    if (dev_cursor + g.total_decompressed > limits->dev_decompressed_cap)
+    }
+    if (dev_cursor + g.total_decompressed > limits->dev_decompressed_cap) {
+      out->stop_reason = WAVE_STOP_DEV;
       break;
+    }
 
     uint64_t reserved_host_off = host_cursor;
     if (!is_fill_group) {
