@@ -1,0 +1,34 @@
+{
+  "name": "array-starve",
+  "dataset": {
+    "store_root": "/mnt/main0/home/nclack/data/damacy/array-starve",
+    "n_zarrs": 32,
+    "uri_fmt": "z%03u/scale0/image",
+    "zarr_shape": [256, 2048, 2048],
+    "chunk_shape": [16, 256, 256],
+    "shard_shape": [128, 2048, 2048],
+    "dtypes": ["u16"],
+    "codecs": ["zstd"],
+    "clevel": 3,
+    "entropy": 0.5,
+    "seed": 42
+  },
+  "sampling": {
+    "sample_shape": [64, 256, 256],
+    "n_batches": 60,
+    "n_warmup_batches": 10,
+    "samples_per_batch": 128,
+    "seed": 1234
+  },
+  "pipeline": {
+    "dtype": "f32",
+    "lookahead_samples": 512,
+    "n_io_threads": 64,
+    "metadata_io_concurrency": 64,
+    "max_gpu_memory_mb": 24576,
+    "n_array_meta_cache": 8192,
+    "n_shard_index_cache": 32768,
+    "n_chunk_layout_cache": 8192,
+    "max_shards_per_sample": 16
+  }
+}

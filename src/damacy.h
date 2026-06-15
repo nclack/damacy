@@ -363,6 +363,20 @@ extern "C"
     uint64_t reads_issued;   // real read_ops after coalesce
     uint64_t worker_steps;   // scheduler ticks (proxy for worker CPU)
 
+    // Per-wave dispatch shape (probe for #154: does in-flight read
+    // concurrency track array/shard count instead of the io pool size?).
+    // Means are the sum divided by waves_emitted. distinct_shards_sum
+    // counts unique shard files within each wave's reads — the width the
+    // coalescer's round-robin spreads io across; a starved few-array run
+    // shows this far below n_io_threads. stop_* count why each wave
+    // stopped packing (see enum wave_stop_reason).
+    uint64_t wave_reads_sum;
+    uint64_t wave_distinct_shards_sum;
+    uint64_t wave_stop_drained;
+    uint64_t wave_stop_host;
+    uint64_t wave_stop_chunks;
+    uint64_t wave_stop_dev;
+
     // Total GPU bytes currently committed to wave-resident buffers and
     // batch-output pools, counted against max_gpu_memory_bytes. Grows from
     // wave-init to the first damacy_pop (lazy batch pool sizing) and stays

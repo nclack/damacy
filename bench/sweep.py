@@ -111,6 +111,9 @@ def main(
     t.add_column("ttfb s", justify="right")
     t.add_column("wall s", justify="right")
     t.add_column("throughput GB/s", justify="right")
+    t.add_column("reads/wave", justify="right")
+    t.add_column("shards/wave", justify="right")
+    t.add_column("stop d/h/c/v", justify="right")
     t.add_column("lat max active", justify="right")
     t.add_column("lat sleep s", justify="right")
     t.add_column("meta read jobs", justify="right")
@@ -130,6 +133,18 @@ def main(
             if input_transfer["ms_total"] > 0
             else 0.0
         )
+        waves = c.get("waves_emitted", 0) or 1
+        reads_per_wave = c.get("wave_reads_sum", 0) / waves
+        shards_per_wave = c.get("wave_distinct_shards_sum", 0) / waves
+        stops = "/".join(
+            str(c.get(k, 0))
+            for k in (
+                "wave_stop_drained",
+                "wave_stop_host",
+                "wave_stop_chunks",
+                "wave_stop_dev",
+            )
+        )
         t.add_row(
             str(v),
             f"{gb_in:.2f}",
@@ -140,6 +155,9 @@ def main(
             f"{tm['time_to_first_batch'] / 1000.0:.2f}",
             f"{wall_ms / 1000.0:.2f}",
             f"{d['derived']['throughput_mb_s'] / 1e3:.2f}",
+            f"{reads_per_wave:.1f}",
+            f"{shards_per_wave:.1f}",
+            stops,
             f"{c.get('metadata_latency_max_active', 0):,}",
             f"{c.get('metadata_latency_total_sleep_ns', 0) / 1e9:.2f}",
             f"{c.get('metadata_backend_read_jobs', 0):,}",

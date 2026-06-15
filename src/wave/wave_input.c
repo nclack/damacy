@@ -3,6 +3,78 @@
 #include "log/log.h"
 #include "wave_pool.h"
 
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+// DAMACY_TRACE_WAVES=<file>: append one line per reserved wave:
+// "<batch_id> <render_job_idx> <n_reads> <distinct_shards> <n_chunks>
+//  <input_bytes> <stop_reason>". Probe for #154 — distinct_shards is the
+// io width the coalescer's round-robin achieves for this wave.
+static FILE* g_wave_trace;
+static pthread_mutex_t g_wave_trace_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_once_t g_wave_trace_once = PTHREAD_ONCE_INIT;
+
+static void
+wave_trace_open(void)
+{
+  const char* path = getenv("DAMACY_TRACE_WAVES");
+  if (path && path[0])
+    g_wave_trace = fopen(path, "a");
+}
+
+// Unique shard files among a wave's reads. The reads carry interned
+// shard_path pointers (coalesce interns + round-robins them), so pointer
+// identity is shard identity. O(n^2), but n_reads is small — and smallest
+// exactly in the starved case this probe is chasing.
+static uint32_t
+wave_distinct_shards(const struct store_read* reads, uint32_t n)
+{
+  uint32_t distinct = 0;
+  for (uint32_t i = 0; i < n; ++i) {
+    int seen = 0;
+    for (uint32_t j = 0; j < i; ++j)
+      if (reads[j].key == reads[i].key) {
+        seen = 1;
+        break;
+      }
+    distinct += !seen;
+  }
+  return distinct;
+}
+
+static void
+wave_account(struct wave_pool* wp,
+             const struct input_slot* slot,
+             uint64_t batch_id,
+             const struct wave_desc* desc)
+{
+  uint32_t distinct = wave_distinct_shards(slot->store_reads, desc->n_reads);
+  wp->stats->wave_reads_sum += desc->n_reads;
+  wp->stats->wave_distinct_shards_sum += distinct;
+  switch (desc->stop_reason) {
+    case WAVE_STOP_HOST: wp->stats->wave_stop_host++; break;
+    case WAVE_STOP_CHUNKS: wp->stats->wave_stop_chunks++; break;
+    case WAVE_STOP_DEV: wp->stats->wave_stop_dev++; break;
+    default: wp->stats->wave_stop_drained++; break;
+  }
+
+  pthread_once(&g_wave_trace_once, wave_trace_open);
+  if (g_wave_trace) {
+    pthread_mutex_lock(&g_wave_trace_lock);
+    fprintf(g_wave_trace,
+            "%llu %u %u %u %u %llu %u\n",
+            (unsigned long long)batch_id,
+            (unsigned)desc->render_job_idx,
+            (unsigned)desc->n_reads,
+            (unsigned)distinct,
+            (unsigned)desc->n_chunks,
+            (unsigned long long)desc->input_used_bytes,
+            (unsigned)desc->stop_reason);
+    pthread_mutex_unlock(&g_wave_trace_lock);
+  }
+}
+
 static void
 mark_changed(int* changed)
 {
@@ -93,6 +165,7 @@ wave_input_reserve(struct wave_pool* wp,
   input_slot_begin_reservation(slot, &desc);
   wp->stats->waves_emitted++;
   wp->stats->chunks_dispatched += desc.n_chunks;
+  wave_account(wp, slot, job->batch_id, &desc);
 
   out->has_slot = 1;
   out->input_slot_idx = input_slot_idx;

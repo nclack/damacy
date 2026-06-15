@@ -929,6 +929,18 @@ emit_results(const struct scenario* sc, const struct run_metrics* rm, FILE* out)
   jw_uint(&jw, rm->stats.chunks_to_load);
   jw_key(&jw, "reads_issued");
   jw_uint(&jw, rm->stats.reads_issued);
+  jw_key(&jw, "wave_reads_sum");
+  jw_uint(&jw, rm->stats.wave_reads_sum);
+  jw_key(&jw, "wave_distinct_shards_sum");
+  jw_uint(&jw, rm->stats.wave_distinct_shards_sum);
+  jw_key(&jw, "wave_stop_drained");
+  jw_uint(&jw, rm->stats.wave_stop_drained);
+  jw_key(&jw, "wave_stop_host");
+  jw_uint(&jw, rm->stats.wave_stop_host);
+  jw_key(&jw, "wave_stop_chunks");
+  jw_uint(&jw, rm->stats.wave_stop_chunks);
+  jw_key(&jw, "wave_stop_dev");
+  jw_uint(&jw, rm->stats.wave_stop_dev);
   jw_key(&jw, "distinct_zarrs");
   jw_uint(&jw, rm->stats.array_meta.misses);
   jw_key(&jw, "distinct_shards");
