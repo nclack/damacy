@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786176252473,
+  "lastUpdate": 1786262722627,
   "repoUrl": "https://github.com/nclack/damacy",
   "entries": {
     "damacy throughput": [
@@ -2687,6 +2687,38 @@ window.BENCHMARK_DATA = {
           {
             "name": "damacy/mixed/throughput",
             "value": 5784.79,
+            "unit": "MB/s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Nathan Clack",
+            "username": "nclack",
+            "email": "nclack@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "dee3e660c58009a1ae22a3774c963e16c9e086db",
+          "message": "bench: tensorstore CPU vs damacy GPU read+decode comparison (#155)\n\nAdds `bench/tensorstore_bench.py`, a scenario-driven CPU read+decode\nbenchmark\nusing tensorstore, so the GPU (damacy) vs CPU (tensorstore) tradeoff for\nzarr v3\nread+decode can be measured on identical data, chunking, and patch\nsampling.\n\n- Consumes the existing `Scenario` JSON schema via `bench/scenario.py`\n(same as\n`run.py`), handling both the synthetic path (`uris is None`, arrays\nenumerated\n  from `uri_fmt`/`array_path`/`n_zarrs`) and explicit `uris`.\n- Opens arrays with tensorstore's zarr3 driver; skips\nwrong-rank/too-small arrays\n  with the same filtering as the bench so array counts line up.\n- Ports `bench/main.c`'s xorshift64* RNG and draw order (array index,\nthen\nper-axis start), so with a shared seed the sampled patches match\ndamacy's\n  bit-for-bit and both read the same bytes.\n- `--threads` concurrency sweep (default 1,2,4,8,16,32) via tensorstore\ncontext\nlimits + a bounded in-flight read window, reporting samples/s and GB/s\nper\nthread count and the best point — the CPU thread pool is the real\ncomparison\n  point against a single GPU decode stream.\n- `--drop-cache` mirrors `run.py`'s page-cache drop for cold-read\nmeasurement;\n  `--compare-with <damacy results.json>` prints a head-to-head line.\n- Emits a table plus a JSON summary shaped like the existing bench\noutput.\n\ntensorstore fuses read+decode, so only total throughput is reported (no\nper-stage\nsplit). Smoke-tested on a synthetic scenario and a uris scenario on a\nlogin node;\nthe full cold sweep runs on a compute node.\n\nCloses #153.\n\n---------\n\nCo-authored-by: Nathan Clack <nclack@biohub.org>",
+          "timestamp": "2026-06-15T04:47:38Z",
+          "url": "https://github.com/nclack/damacy/commit/dee3e660c58009a1ae22a3774c963e16c9e086db"
+        },
+        "date": 1786262721826,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "damacy/default/throughput",
+            "value": 5877.3,
+            "unit": "MB/s"
+          },
+          {
+            "name": "damacy/mixed/throughput",
+            "value": 5768.17,
             "unit": "MB/s"
           }
         ]
