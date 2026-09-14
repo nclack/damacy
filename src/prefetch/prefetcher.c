@@ -50,6 +50,7 @@ struct prefetcher_slot
   int err_code;
   char* uri;
   struct damacy_aabb aabb;
+  struct query_axis axes[DAMACY_MAX_RANK];
   uint64_t sample_seq;
   struct prefetch_gate* gate;
   struct prefetch_handle h_meta;
@@ -331,17 +332,15 @@ advance_from_meta(struct prefetcher* p, struct prefetcher_slot* s)
   const struct zarr_metadata* meta = (const struct zarr_metadata*)value;
   CHECK(Bad, meta);
 
-  struct sample_shard_iterator it;
-  CHECK(Bad, sample_shard_iterator_init(&it, meta, &s->aabb) == 0);
-
-  uint64_t n = 1;
-  err = DAMACY_INVAL; // a shard-count overflow below fails the sample as
-                      // an oversized (invalid) sample
-  for (uint8_t d = 0; d < it.rank; ++d) {
-    uint64_t span = it.shard_end[d] - it.shard_beg[d];
-    CHECK_MUL_OVERFLOW(Bad, n, span, UINT64_MAX);
-    n *= span;
-  }
+  struct sample_shard_iterator bounds;
+  err = DAMACY_INVAL;
+  CHECK(Bad, sample_shard_iterator_init(&bounds, meta, &s->aabb) == 0);
+  struct selection_grid it;
+  CHECK(Bad,
+        selection_grid_init(
+          &it, &s->aabb, s->axes, meta->shard_shape, NULL, NULL, UINT64_MAX) ==
+          DAMACY_OK);
+  uint64_t n = it.count;
   err = 0;
 
   // Per-sample shard cap. The shard_index cache is sized at config time
@@ -398,8 +397,8 @@ advance_from_meta(struct prefetcher* p, struct prefetcher_slot* s)
   // Enumerate every coord up front so the request loop is resumable on AGAIN
   // without re-running the iterator.
   for (uint32_t i = 0;
-       i < n && sample_shard_iterator_next(
-                  &it, &s->shard_coords[(size_t)i * meta->rank]);
+       i < n &&
+       selection_grid_next(&it, &s->shard_coords[(size_t)i * meta->rank]);
        ++i)
     ;
   s->n_shards = (uint32_t)n;
@@ -513,6 +512,7 @@ emit_error_slot_locked(struct prefetcher* p,
     .sample_seq = popped->sample_seq,
     .gate = gate,
   };
+  memcpy(slot->axes, popped->axes, sizeof(slot->axes));
   slot_fail(p, slot, err_code);
 }
 
@@ -558,6 +558,7 @@ admit_locked(struct prefetcher* p,
     .gate = gate,
     .h_meta = req.handle,
   };
+  memcpy(slot->axes, popped->axes, sizeof(slot->axes));
   slot_set_state(slot, &state_pending_meta);
   p->submitted++;
   return DAMACY_OK;
@@ -772,6 +773,7 @@ pop_terminal_slot_idx_locked(struct prefetcher* self,
     .n_shards = s->n_shards,
     .h_layout = s->h_layout,
   };
+  memcpy(out->axes, s->axes, sizeof(out->axes));
   uint64_t owner_id = s->sample_seq;
   free(s->shard_coords);
   slot_reset_free(s);

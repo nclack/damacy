@@ -15,9 +15,9 @@ Both paths support raw bytes, zstd, and Blosc-zstd and return contiguous,
 DLPack-compatible tensors. CPU builds have no CUDA or nvCOMP dependency.
 
 Source URIs identify concrete Zarr v3 arrays, including arrays inside
-[NGFF](https://ngff.openmicroscopy.org/) multiscale images. Queries currently
-select rectangular regions in array coordinates. Index queries, transformed
-crops, and automatic NGFF level selection are planned extensions.
+[NGFF](https://ngff.openmicroscopy.org/) multiscale images. Queries select
+rectangular regions or ordered index arrays along each dimension. Transformed
+crops and automatic NGFF level selection are planned extensions.
 
 ## CPU quick start
 
@@ -66,6 +66,23 @@ with the Linux dependencies `liburing`, `libzstd`, and `libblosc` installed:
 ```sh
 pip install . --config-settings=cmake.define.DAMACY_CUDA=OFF
 ```
+
+## Indexed queries
+
+Use `IndexQuery` to mix index arrays and contiguous slices:
+
+```python
+query = damacy.IndexQuery(
+    uri="/data/image.zarr/0",
+    selection=([7, 2, 7], slice(16, 80), [100, 3, 40, 3]),
+)
+assert query.shape == (3, 64, 4)
+```
+
+Choose `BatchSpec` with that sample shape and pass the query to `pipeline.push`.
+Each axis is independent: all combinations of its selected indices appear in
+the output. Order and duplicates are preserved. Both CPU and CUDA support the
+same queries; see [query semantics](docs/pipeline.md#indexed-queries).
 
 ## CUDA quick start
 

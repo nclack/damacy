@@ -739,6 +739,7 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                          "metadata_latency_lognormal_sigma_ln_ns",
                          "metadata_latency_cap_ns",
                          "metadata_latency_seed",
+                         "max_index_bytes",
                          NULL };
   struct damacy_tuning td = damacy_tuning_defaults();
   unsigned int samples_per_batch = 0;
@@ -746,6 +747,7 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   PyObject* dtype_obj = NULL;
   unsigned int max_chunk_uncompressed = td.max_chunk_uncompressed_bytes;
   unsigned long long max_gpu_bytes = 0;
+  unsigned long long max_index_bytes = td.max_index_bytes;
   unsigned int n_io = td.n_io_threads;
   unsigned int metadata_io_concurrency = td.metadata_io_concurrency;
   unsigned int n_array_meta = DAMACY_DEFAULT_ARRAY_META_CACHE;
@@ -770,7 +772,7 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   unsigned long long metadata_latency_seed = 0;
   if (!PyArg_ParseTupleAndKeywords(args,
                                    kw,
-                                   "IIOIKIIIIIIO|IIIKiiiipKddKK",
+                                   "IIOIKIIIIIIO|IIIKiiiipKddKKK",
                                    kws,
                                    &samples_per_batch,
                                    &lookahead,
@@ -797,7 +799,8 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
                                    &metadata_latency_lognormal_mu_ln_ns,
                                    &metadata_latency_lognormal_sigma_ln_ns,
                                    &metadata_latency_cap_ns,
-                                   &metadata_latency_seed))
+                                   &metadata_latency_seed,
+                                   &max_index_bytes))
     return -1;
 
   if (enable_gds != DAMACY_GDS_AUTO && enable_gds != DAMACY_GDS_ON &&
@@ -833,6 +836,7 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
     .device = device,
     .tuning = {
       .max_gpu_memory_bytes = (uint64_t)max_gpu_bytes,
+      .max_index_bytes = (uint64_t)max_index_bytes,
       .max_chunk_uncompressed_bytes = max_chunk_uncompressed,
       .max_read_op_bytes = (uint64_t)max_read_op_bytes,
       .host_buffer_waves = (uint8_t)host_buffer_waves,
@@ -960,7 +964,55 @@ parse_sample(PyObject* obj, struct damacy_sample* out)
     out->aabb.dims[i].beg = (int64_t)beg;
     out->aabb.dims[i].end = (int64_t)end;
   }
+  PyObject* axes = PyDict_GetItemString(obj, "indices");
+  if (axes && axes != Py_None) {
+    if ((!PyList_Check(axes) && !PyTuple_Check(axes)) ||
+        PySequence_Fast_GET_SIZE(axes) != n) {
+      PyErr_SetString(PyExc_ValueError, "indices must have one entry per axis");
+      return -1;
+    }
+    for (Py_ssize_t d = 0; d < n; ++d) {
+      PyObject* item = PySequence_Fast_GET_ITEM(axes, d);
+      if (item == Py_None)
+        continue;
+      PyObject* sequence =
+        PySequence_Fast(item, "index array must be iterable");
+      if (!sequence)
+        return -1;
+      Py_ssize_t count = PySequence_Fast_GET_SIZE(sequence);
+      if (!count || (uint64_t)count > UINT32_MAX ||
+          (size_t)count > SIZE_MAX / sizeof(int64_t)) {
+        Py_DECREF(sequence);
+        PyErr_SetString(PyExc_ValueError, "index array size is out of range");
+        return -1;
+      }
+      int64_t* values = PyMem_Malloc((size_t)count * sizeof(*values));
+      if (!values) {
+        Py_DECREF(sequence);
+        PyErr_NoMemory();
+        return -1;
+      }
+      out->indices[d] = (struct damacy_index_array){ values, (uint32_t)count };
+      for (Py_ssize_t i = 0; i < count; ++i) {
+        values[i] = PyLong_AsLongLong(PySequence_Fast_GET_ITEM(sequence, i));
+        if (PyErr_Occurred()) {
+          Py_DECREF(sequence);
+          return -1;
+        }
+      }
+      Py_DECREF(sequence);
+    }
+  }
   return 0;
+}
+
+static void
+free_samples(struct damacy_sample* samples, Py_ssize_t count)
+{
+  for (Py_ssize_t i = 0; i < count; ++i)
+    for (uint8_t d = 0; d < samples[i].aabb.rank; ++d)
+      PyMem_Free((void*)samples[i].indices[d].values);
+  PyMem_Free(samples);
 }
 
 static PyObject*
@@ -983,7 +1035,7 @@ Pipeline_push(PipelineObj* self, PyObject* arg)
   for (Py_ssize_t i = 0; i < n; ++i) {
     PyObject* item = PySequence_Fast_GET_ITEM(arg, i);
     if (parse_sample(item, &buf[i]) != 0) {
-      PyMem_Free(buf);
+      free_samples(buf, n);
       return NULL;
     }
   }
@@ -993,7 +1045,7 @@ Pipeline_push(PipelineObj* self, PyObject* arg)
   WITH_GIL_RELEASED(r = damacy_push(self->handle, slice));
 
   Py_ssize_t consumed = (Py_ssize_t)(r.unconsumed.beg - buf);
-  PyMem_Free(buf);
+  free_samples(buf, n);
 
   // OK / AGAIN are not errors at this layer — return the consumed count
   // and the integer status so the caller can detect back-pressure. Any
@@ -1302,6 +1354,7 @@ api_register_types(PyObject* m)
   } limits[] = {
     { "DEFAULT_CHUNK_UNCOMPRESSED_BYTES", d.max_chunk_uncompressed_bytes },
     { "DEFAULT_READ_OP_MAX_BYTES", d.max_read_op_bytes },
+    { "DEFAULT_MAX_INDEX_BYTES", d.max_index_bytes },
     { "DEFAULT_HOST_BUFFER_WAVES", d.host_buffer_waves },
     { "DEFAULT_MAX_CHUNKS_PER_WAVE", d.max_chunks_per_wave },
     { "DEFAULT_MAX_SUBSTREAMS_PER_CHUNK", d.max_substreams_per_chunk },
@@ -1311,6 +1364,7 @@ api_register_types(PyObject* m)
     { "DEFAULT_SHARD_INDEX_CACHE", d.n_shard_index_cache },
     { "DEFAULT_CHUNK_LAYOUT_CACHE", d.n_chunk_layout_cache },
     { "DEFAULT_MAX_SHARDS_PER_SAMPLE", d.max_shards_per_sample },
+    { "MAX_RANK", DAMACY_MAX_RANK },
     { "MAX_CHUNK_BYTES", DAMACY_MAX_CHUNK_BYTES },
     { "MAX_READ_OP_BYTES", UINT32_MAX },
     { "N_WAVES", DAMACY_N_WAVES },

@@ -47,6 +47,7 @@ extern "C"
     uint8_t shuffle_typesize;          // 1, 2, 4, 8; 0 if NONE
     uint8_t is_fill;                   // 1 = broadcast sample.fill_value
     uint32_t chunk_d[DAMACY_MAX_RANK]; // chunk grid position within sample
+    struct gather_dim gather[DAMACY_MAX_RANK];
   };
 
   // Launch the assemble kernel on `stream`. Inputs (device-resident
@@ -84,6 +85,8 @@ extern "C"
   // Compute blocks-per-chunk for a sample given its dims and the kernel's
   // block-tile shape. Host-side helper used by wave orchestration when
   // packing the wave's metadata. Returns 0 for unsupported ranks.
+  uint32_t assemble_gather_blocks(uint64_t elements);
+
   uint32_t assemble_blocks_per_chunk(uint8_t rank,
                                      const struct sample_dim* dims);
 

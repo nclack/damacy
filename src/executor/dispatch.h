@@ -18,10 +18,25 @@ extern "C"
     uint32_t nbytes;
   };
 
+  struct gather_index
+  {
+    uint32_t source;
+    uint32_t output;
+  };
+
+  struct gather_dim
+  {
+    uint32_t begin;
+    uint32_t count;
+    uint64_t output_begin;
+  };
+
   struct sample_dim
   {
     uint32_t chunk_shape;
     uint32_t chunk_grid_extent;
+    uint32_t index_offset;
+    uint32_t index_count;
     int64_t aabb_lo_relative;
     int64_t aabb_extent;
     int64_t dst_stride;
@@ -34,6 +49,8 @@ extern "C"
     uint16_t sample_idx_in_batch;
     uint8_t rank;
     uint8_t src_dtype;
+    uint8_t indexed;
+    const struct gather_index* indices;
     struct sample_dim dims[DAMACY_MAX_RANK];
     int64_t sample_dst_off_elems;
 
@@ -58,6 +75,7 @@ extern "C"
     uint8_t codec_id;
     uint8_t is_fill;
     uint32_t chunk_d[DAMACY_MAX_RANK];
+    struct gather_dim gather[DAMACY_MAX_RANK];
   };
 
   struct read_op_group
@@ -96,6 +114,9 @@ extern "C"
     struct read_op_group* read_op_groups;
     uint32_t read_op_groups_cap;
     uint32_t n_read_op_groups;
+    struct gather_index* indices;
+    uint32_t indices_cap;
+    uint32_t n_indices;
     struct path_intern* paths;
     uint32_t n_chunks_to_load;
     uint32_t n_loads_issued;
@@ -108,6 +129,8 @@ extern "C"
     struct chunk_plan* chunks;
     uint32_t capacity;
   };
+
+  uint32_t dispatch_index_capacity(const struct damacy_config* config);
 
   enum damacy_status dispatch_plan_build(const struct prepared_plan* plan,
                                          uint16_t slot,

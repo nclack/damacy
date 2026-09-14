@@ -64,7 +64,8 @@ planner_plan_segment(struct planner* self,
     int64_t hi = samples[0].aabb.dims[d].end;
     if (lo < 0 || hi <= lo)
       return DAMACY_INVAL;
-    output.sample_shape[d] = hi - lo;
+    output.sample_shape[d] =
+      samples[0].axes[d].count ? samples[0].axes[d].count : hi - lo;
   }
   struct damacy_plan_limits limits = {
     .max_chunks = out->chunk_plans_cap < out->read_ops_cap

@@ -1,9 +1,9 @@
 # CPU pipeline and query architecture
 
 The CPU milestone introduces a shared preparation stage and separate CPU and
-CUDA executors. Both support the existing rectangular queries. A CPU build
-returns results in ordinary RAM and has no CUDA dependency. Index queries,
-spatial resampling, and NGFF level selection remain later features.
+CUDA executors. Both support rectangular and indexed queries. A CPU build
+returns results in ordinary RAM and has no CUDA dependency. Spatial resampling
+and NGFF level selection remain later features.
 
 The public construction and lifetime contracts are in
 [Pipeline composition](../docs/pipeline.md). The C factory API is
@@ -16,7 +16,7 @@ existing callers.
 | Component | Responsibility | Implementation |
 | --- | --- | --- |
 | Metadata reader/provider | Zarr descriptions, shard indexes, asynchronous metadata I/O, cache capacities. | `FileMetadataReader`, `ZarrMetadata`; active caches in `pipeline/zarr_planner.c`. |
-| Planner | Validate rectangular requests and publish owned source/result plans. | `ChunkPlanner`, `planner/plan_builder.c`. |
+| Planner | Validate requests, enumerate selected chunks, and publish owned source/result plans. | `ChunkPlanner`, `planner/plan_builder.c`. |
 | Executor | Read encoded data, prepare codecs, decode, assemble, manage output storage. | `executor/cpu_executor.c`, `executor/cuda_executor.c`. |
 | Pipeline | Bound preparation, preserve batch order, retry backpressure, publish failures, coordinate shutdown. | `damacy_plan.c`, `damacy_scheduler.c`, `damacy_pop.c`. |
 
@@ -104,20 +104,27 @@ buffer saturation report retriable backpressure, not a storage error. Closing
 a pipeline stops preparation, wakes blocked pops, joins execution, and releases
 queued work before its dependencies can disappear.
 
-## Next: index queries
+## Indexed queries
 
-An index query should accept ordered index vectors along selected dimensions,
-with ordinary contiguous ranges along the others. Preserve caller order and
-repeated indices. Multiple indexed dimensions should use a Cartesian product,
-matching MATLAB's per-dimension indexing; this differs from paired-coordinate
-point queries. A stencil can generate an index vector, so no separate stencil
-query type is needed.
+`IndexQuery` supplies ordered index vectors along selected dimensions and
+contiguous slices along the others. Multiple indexed dimensions form a Cartesian
+product. Order and repeated indices survive gathering; output shape is independent
+of the bounding range. A stencil can generate an index vector without a separate
+query type.
 
-Extend logical result operations with compact index vectors and group chunk
-uses during preparation. Keep output shape independent of the source bounding
-range. Bound owned index storage along with query/plan storage. CPU assembly can
-start with gather operations; CUDA can select an appropriate gather kernel.
-Do not create one planning record per output voxel.
+`query/selection.c` copies and sorts each vector by source position while retaining
+its output position. Preparation enumerates only touched grid cells, first for
+shard metadata and then for inner chunks. A chunk has one use per sample even if
+many selected positions, including duplicates, fall within it. `PLAN_GATHER`
+regions own sorted index records along with the rest of the plan. Storage grows
+with the sum of index-vector lengths and selected chunk uses.
+
+CPU assembly intersects each axis with a decoded chunk, then writes the Cartesian
+product of selected positions to the specified output positions. Contiguous
+trailing axes retain row copies. CUDA dispatch produces per-chunk selection spans
+and uploads compact source/output index pairs, reusing the existing read, decode,
+fill, shuffle, and cast paths. Index buffers are bounded by `max_index_bytes` and
+included in the GPU budget before wave sizing.
 
 ## Next: spatial resampling and NGFF
 
@@ -147,7 +154,7 @@ the private interfaces leave room to add that resolution stage.
 Resampling needs output tiles with all contributing source chunks available.
 Keep decoded data until dependent tiles finish, and give each output tile one
 writer. The shared plan already separates chunks from their uses, but the
-current chunk-at-a-time rectangular executor will need this additional mode.
+current chunk-at-a-time copy/gather executor will need this additional mode.
 Boundary extension and filter halos must use the selected level's coordinates;
 voxel-center conventions and downsampling quality need explicit tests.
 

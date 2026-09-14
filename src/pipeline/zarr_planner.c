@@ -9,6 +9,7 @@
 #include "store/metadata_store_async.h"
 
 #include <stdlib.h>
+#include <string.h>
 
 struct zarr_planner
 {
@@ -156,22 +157,10 @@ zarr_push(struct damacy_planner* base, struct damacy_sample_slice samples)
       result.status = DAMACY_AGAIN;
       return result;
     }
-    if (!sample->uri) {
-      result.status = DAMACY_INVAL;
+    result.status =
+      query_validate(sample, &self->output, self->limits.max_plan_bytes);
+    if (result.status != DAMACY_OK)
       return result;
-    }
-    if (sample->aabb.rank != self->output.sample_rank) {
-      result.status = DAMACY_RANK;
-      return result;
-    }
-    for (uint8_t d = 0; d < sample->aabb.rank; ++d) {
-      int64_t lo = sample->aabb.dims[d].beg;
-      int64_t hi = sample->aabb.dims[d].end;
-      if (lo < 0 || hi <= lo || hi - lo != self->output.sample_shape[d]) {
-        result.status = DAMACY_INVAL;
-        return result;
-      }
-    }
     if (lookahead_push_with_sample_seq(
           &self->lookahead, sample, self->pushed)) {
       result.status = DAMACY_OOM;
@@ -204,6 +193,8 @@ zarr_next(struct damacy_planner* base, struct prepared_plan** out)
                                .h_meta = ready.h_meta,
                                .h_shards = ready.h_shards,
                                .n_shards = ready.n_shards };
+    memcpy(
+      self->samples[self->staged - 1].axes, ready.axes, sizeof(ready.axes));
     self->watermark = ready.sample_seq + 1;
   }
   enum damacy_status status = prepared_plan_build(self->arrays,
