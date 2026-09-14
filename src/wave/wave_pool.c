@@ -713,7 +713,8 @@ decode_anchor_reserve(struct wave_pool* wp,
 {
   size_t prev_idx = wp->decode_done_ring_idx;
   *anchor_idx = (prev_idx + 1) % countof(wp->decode_done_ring);
-  wave->prev_decode_anchor = wp->decode_done_ring[prev_idx];
+  wave->prev_decode_anchor =
+    wp->decode_done_recorded ? wp->decode_done_ring[prev_idx] : NULL;
   return wp->decode_done_ring[*anchor_idx];
 }
 
@@ -721,6 +722,7 @@ static void
 decode_anchor_commit(struct wave_pool* wp, size_t anchor_idx)
 {
   wp->decode_done_ring_idx = (uint8_t)anchor_idx;
+  wp->decode_done_recorded = 1;
 }
 
 static enum damacy_status
