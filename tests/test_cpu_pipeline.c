@@ -433,9 +433,46 @@ test_bfloat_rounding_and_fill(void)
   return 0;
 }
 
+static int
+test_index_arrays_copied(void)
+{
+  char root[] = "/tmp/damacy_indices_XXXXXX";
+  EXPECT(mkdtemp(root));
+  char uri[256];
+  snprintf(uri, sizeof(uri), "%s/array", root);
+  int64_t shape[] = { 5, 11 }, chunks[] = { 2, 4 }, shards[] = { 4, 8 };
+  EXPECT(fixture_write_zarr_codec(
+           uri, shape, chunks, shards, 2, "float32", 0, "none") == 0);
+  struct components c = { 0 };
+  EXPECT(create_components(&c) == 0);
+  EXPECT(start_pipeline(&c, DAMACY_F32, 3, 4, 1) == 0);
+  int64_t rows[] = { 4, 0, 4 }, cols[] = { 10, 0, 3, 10 };
+  struct damacy_sample query = { .uri = uri,
+                                 .aabb = { .rank = 2 },
+                                 .indices = { { rows, 3 }, { cols, 4 } } };
+  struct damacy_push_result pushed =
+    damacy_push(c.pipeline, (struct damacy_sample_slice){ &query, &query + 1 });
+  EXPECT(pushed.status == DAMACY_OK && pushed.unconsumed.beg == &query + 1);
+  memset(rows, 0, sizeof(rows));
+  memset(cols, 0, sizeof(cols));
+  memset(uri, 0, sizeof(uri));
+  struct damacy_batch* batch = NULL;
+  EXPECT(damacy_pop(c.pipeline, &batch) == DAMACY_OK);
+  destroy_components(&c);
+  struct damacy_batch_info info;
+  damacy_batch_info(batch, &info);
+  const float expected[] = { 54, 44, 47, 54, 10, 0, 3, 10, 54, 44, 47, 54 };
+  EXPECT(info.shape[0] == 1 && info.shape[1] == 3 && info.shape[2] == 4);
+  EXPECT(!memcmp(info.data, expected, sizeof(expected)));
+  damacy_batch_release(batch);
+  fixture_rm_tree(root);
+  return 0;
+}
+
 int
 main(void)
 {
+  RUN(test_index_arrays_copied);
   RUN(test_codecs_and_types);
   RUN(test_owned_plan);
   RUN(test_shared_metadata);

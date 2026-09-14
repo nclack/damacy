@@ -1,6 +1,7 @@
 #pragma once
 
 #include "damacy_pipeline.h"
+#include "query/selection.h"
 #include "zarr/zarr_metadata.h"
 
 struct plan_array
@@ -24,6 +25,7 @@ struct plan_chunk
 enum plan_operation
 {
   PLAN_COPY,
+  PLAN_GATHER,
 };
 
 struct plan_region
@@ -32,6 +34,7 @@ struct plan_region
   uint32_t array;
   uint32_t sample;
   struct damacy_aabb source;
+  struct query_axis axes[DAMACY_MAX_RANK];
 };
 
 struct plan_use

@@ -30,6 +30,12 @@ resolve_wave_geometry(const struct damacy_config* cfg,
   out->input =
     out->want_gds ? input_transfer_gds() : input_transfer_host_staging();
 
+  uint64_t index_bytes =
+    2ull * dispatch_index_capacity(cfg) * sizeof(struct gather_index);
+  if (index_bytes > resolver_budget)
+    return DAMACY_BUDGET;
+  resolver_budget -= index_bytes;
+
   const struct input_transfer_resources min_input =
     input_transfer_resources(out->input, out->host_buffer_waves, 0);
   enum damacy_status s =
@@ -47,6 +53,7 @@ resolve_wave_geometry(const struct damacy_config* cfg,
     return s;
   }
 
+  out->sizing.worst_case_total_bytes += index_bytes;
   const struct input_transfer_resources input_resources =
     input_transfer_resources(
       out->input, out->host_buffer_waves, out->sizing.input_staging_per_wave);

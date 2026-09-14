@@ -7,6 +7,8 @@ from typing import Any, Final
 
 __version__: Final[str]
 CUDA_ENABLED: Final[int]
+MAX_RANK: Final[int]
+DEFAULT_MAX_INDEX_BYTES: Final[int]
 
 # ---- log-level constants (mirror damacy_log.h) --------------------------
 
@@ -154,13 +156,14 @@ class Pipeline:
         metadata_latency_lognormal_sigma_ln_ns: float = 0.0,
         metadata_latency_cap_ns: int = 0,
         metadata_latency_seed: int = 0,
+        max_index_bytes: int = 64 << 20,
     ) -> None: ...
     @property
     def device(self) -> int: ...
     def push(
         self, samples: list[dict[str, Any]] | tuple[dict[str, Any], ...]
     ) -> dict[str, Any]:
-        """Push a sequence of {uri, aabb} dicts.
+        """Push {uri, aabb, indices?} dicts; indexed axes override their intervals.
         Returns {consumed: int, status: int}. Raises DamacyError for
         anything other than OK / AGAIN."""
 
@@ -235,6 +238,7 @@ def create_cuda_executor(
     numa_strategy: int,
     numa_node: int,
     gds: int,
+    max_index_bytes: int,
     /,
 ) -> object: ...
 def compose_pipeline(

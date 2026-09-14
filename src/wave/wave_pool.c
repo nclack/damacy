@@ -652,6 +652,7 @@ set_assemble_chunk_base(struct assemble_chunk* out,
   out->sample_idx_in_batch = c->sample_idx_in_batch;
   out->is_fill = c->is_fill | force_fill;
   memcpy(out->chunk_d, c->chunk_d, spatial_rank * sizeof(*c->chunk_d));
+  memcpy(out->gather, c->gather, spatial_rank * sizeof(*c->gather));
 }
 
 static uint64_t
@@ -661,6 +662,10 @@ chunk_output_elements(const struct chunk_plan* c,
 {
   uint64_t out = 1;
   for (uint8_t d = 0; d < spatial_rank; ++d) {
+    if (sp->indexed) {
+      out *= c->gather[d].count;
+      continue;
+    }
     int64_t chunk_shape = (int64_t)sp->dims[d].chunk_shape;
     int64_t origin =
       (int64_t)c->chunk_d[d] * chunk_shape - sp->dims[d].aabb_lo_relative;
@@ -687,12 +692,14 @@ build_assemble_meta(const struct wave_pool* wp, struct damacy_wave* wave)
     set_assemble_chunk_base(
       &wave->h_assemble_chunks[i], c, spatial_rank, wp->bypass_decode);
 
-    uint32_t bpc = assemble_blocks_per_chunk(spatial_rank, sp->dims);
+    uint64_t elements = chunk_output_elements(c, sp, spatial_rank);
+    uint32_t bpc = sp->indexed
+                     ? assemble_gather_blocks(elements)
+                     : assemble_blocks_per_chunk(spatial_rank, sp->dims);
     if (bpc > max_bpc)
       max_bpc = bpc;
 
-    wave->assemble_out_bytes +=
-      chunk_output_elements(c, sp, spatial_rank) * (uint64_t)bpe;
+    wave->assemble_out_bytes += elements * (uint64_t)bpe;
   }
   if (max_bpc == 0)
     max_bpc = 1;

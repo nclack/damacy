@@ -1,5 +1,7 @@
 #pragma once
 
+#include "query/selection.h"
+
 #include "damacy.h"
 #include "prefetch/prefetch_cache.h"
 
@@ -61,6 +63,7 @@ extern "C"
     int err_code; // damacy_status when result == PREFETCHER_RESULT_ERROR
     char* uri;
     struct damacy_aabb aabb;
+    struct query_axis axes[DAMACY_MAX_RANK];
     uint64_t sample_seq;
     struct prefetch_handle h_meta;
     // On ERROR mid-shard-allocation, h_shards may be non-NULL with n_shards

@@ -199,6 +199,71 @@ src_bpe(uint8_t src_dtype)
   }
 }
 
+__device__ __forceinline__ float
+load_chunk_value(const struct sample_plan& s,
+                 const struct assemble_chunk& c,
+                 const uint8_t* arena_base,
+                 uint64_t source)
+{
+  if (c.is_fill)
+    return load_src_as_float(s.fill_value, s.src_dtype);
+  const uint8_t* chunk_base = arena_base + c.src_base_byte_off;
+  switch ((enum assemble_shuffle_mode)c.shuffle_mode) {
+    case ASSEMBLE_SHUFFLE_BYTE:
+      return load_src_as_float_unshuffled(chunk_base,
+                                          source,
+                                          c.shuffle_typesize,
+                                          c.shuffle_blocksize,
+                                          s.src_dtype);
+    case ASSEMBLE_SHUFFLE_BIT:
+      return load_src_as_float_bitunshuffled(chunk_base,
+                                             source,
+                                             c.shuffle_typesize,
+                                             c.shuffle_blocksize,
+                                             s.src_dtype);
+    default:
+      return load_src_as_float(chunk_base + source * src_bpe(s.src_dtype),
+                               s.src_dtype);
+  }
+}
+
+template<typename dst_t>
+__device__ __forceinline__ void
+gather_body(int rank,
+            const struct sample_plan& s,
+            const struct assemble_chunk& c,
+            const uint8_t* arena_base,
+            uint8_t* output_base)
+{
+  uint64_t elements = 1;
+  for (int d = 0; d < rank; ++d)
+    elements *= c.gather[d].count;
+  for (uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+       i < elements;
+       i += (uint64_t)gridDim.x * blockDim.x) {
+    uint64_t remaining = i;
+    uint64_t source = 0;
+    uint64_t destination = s.sample_dst_off_elems;
+#pragma unroll
+    for (int d = rank - 1; d >= 0; --d) {
+      const struct gather_dim dim = c.gather[d];
+      uint32_t position = (uint32_t)(remaining % dim.count);
+      remaining /= dim.count;
+      uint32_t src = dim.begin + position;
+      uint64_t dst = dim.output_begin + position;
+      if (s.dims[d].index_count) {
+        const struct gather_index index = s.indices[src];
+        src = index.source;
+        dst = index.output;
+      }
+      source += (uint64_t)src * s.dims[d].src_stride;
+      destination += dst * s.dims[d].dst_stride;
+    }
+    ((dst_t*)output_base)[destination] =
+      cast_to_dst<dst_t>(load_chunk_value(s, c, arena_base, source));
+  }
+}
+
 // Per-thread copy. The decode of blockIdx.x → tile-in-chunk and the
 // per-dim accumulation of src/dst offsets and bounds fuse into one
 // reverse loop: the accumulators commute across d, so the row-major
@@ -238,42 +303,7 @@ assemble_body(int rank,
 
   dst_t* dst = (dst_t*)(output_base + dst_off_elems * (int64_t)sizeof(dst_t));
 
-  // Fill-mode chunks: read the broadcast value from the sample's
-  // fill_value (an array-level zarr property) instead of the arena.
-  if (c.is_fill) {
-    float v = load_src_as_float(s.fill_value, s.src_dtype);
-    *dst = cast_to_dst<dst_t>(v);
-    return;
-  }
-
-  const uint32_t sbpe = src_bpe(s.src_dtype);
-  const uint8_t* chunk_base = arena_base + c.src_base_byte_off;
-
-  // Each block handles one chunk, so the shuffle switch is uniform
-  // across the block — no warp divergence.
-  float v;
-  switch ((enum assemble_shuffle_mode)c.shuffle_mode) {
-    case ASSEMBLE_SHUFFLE_BYTE:
-      v = load_src_as_float_unshuffled(chunk_base,
-                                       src_off_elems,
-                                       c.shuffle_typesize,
-                                       c.shuffle_blocksize,
-                                       s.src_dtype);
-      break;
-    case ASSEMBLE_SHUFFLE_BIT:
-      v = load_src_as_float_bitunshuffled(chunk_base,
-                                          src_off_elems,
-                                          c.shuffle_typesize,
-                                          c.shuffle_blocksize,
-                                          s.src_dtype);
-      break;
-    case ASSEMBLE_SHUFFLE_NONE:
-    default:
-      v = load_src_as_float(chunk_base + src_off_elems * (int64_t)sbpe,
-                            s.src_dtype);
-      break;
-  }
-  *dst = cast_to_dst<dst_t>(v);
+  *dst = cast_to_dst<dst_t>(load_chunk_value(s, c, arena_base, src_off_elems));
 }
 
 // Single kernel template covering both the templated-rank fast path
@@ -285,10 +315,13 @@ assemble_kernel(const struct sample_plan* __restrict__ d_samples,
                 const uint8_t* __restrict__ arena_base,
                 uint8_t* __restrict__ output_base)
 {
-  const struct assemble_chunk c = d_chunks[blockIdx.y];
+  const struct assemble_chunk& c = d_chunks[blockIdx.y];
   const struct sample_plan& s = d_samples[c.sample_idx_in_batch];
   const int rank = (RANK_TPL == 0) ? (int)s.rank : RANK_TPL;
-  assemble_body<dst_t>(rank, s, c, arena_base, output_base);
+  if (s.indexed)
+    gather_body<dst_t>(rank, s, c, arena_base, output_base);
+  else
+    assemble_body<dst_t>(rank, s, c, arena_base, output_base);
 }
 
 // Dispatch kernel launch over destination dtype. RANK_TPL_VAL == 0
@@ -381,4 +414,11 @@ assemble_blocks_per_chunk(uint8_t rank, const struct sample_dim* dims)
   for (int d = 0; d < (int)rank; ++d)
     bpc *= ceil_div_u32(dims[d].chunk_shape, tile_T((int)rank, d));
   return bpc;
+}
+
+extern "C" uint32_t
+assemble_gather_blocks(uint64_t elements)
+{
+  uint64_t blocks = elements / kBlockSize + (elements % kBlockSize != 0);
+  return (uint32_t)(blocks > 65535 ? 65535 : blocks);
 }

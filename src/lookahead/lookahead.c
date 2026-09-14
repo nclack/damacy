@@ -13,9 +13,7 @@ sample_slot_clear(struct damacy_sample_slot* slot)
   if (!slot)
     return;
   free(slot->uri);
-  slot->uri = NULL;
-  memset(&slot->aabb, 0, sizeof(slot->aabb));
-  slot->sample_seq = 0;
+  *slot = (struct damacy_sample_slot){ 0 };
 }
 
 int
@@ -73,10 +71,8 @@ lookahead_push_with_sample_seq(struct damacy_lookahead* la,
   if (la->size == la->cap)
     goto Unlock;
   struct damacy_sample_slot* slot = &la->slots[la->tail];
-  slot->uri = strdup(sample->uri);
-  if (!slot->uri)
+  if (query_copy(sample, &slot->uri, &slot->aabb, slot->axes) != DAMACY_OK)
     goto Unlock;
-  slot->aabb = sample->aabb;
   slot->sample_seq = sample_seq;
   la->tail = (la->tail + 1) % la->cap;
   la->size++;

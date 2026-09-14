@@ -74,11 +74,20 @@ extern "C"
     uint8_t rank;
   };
 
-  // One sample request.
+  struct damacy_index_array
+  {
+    const int64_t* values;
+    uint32_t count;
+  };
+
+  // Index arrays override their AABB axis and preserve order and duplicates.
+  // Axes combine as a Cartesian product. Accepted samples own a copy.
+  // Unused index arrays must be {NULL, 0}.
   struct damacy_sample
   {
     const char* uri; // null-terminated; copied internally
     struct damacy_aabb aabb;
+    struct damacy_index_array indices[DAMACY_MAX_RANK];
   };
 
   // Caller-owned slice of samples to push.
@@ -96,6 +105,7 @@ extern "C"
     // Required — no default; a value too small for the requested
     // geometry returns DAMACY_BUDGET from damacy_create.
     uint64_t max_gpu_memory_bytes;
+    uint64_t max_index_bytes;
     // Required: must be in [1, DAMACY_MAX_CHUNK_BYTES].
     uint32_t max_chunk_uncompressed_bytes;
     // Required: must be in [1, UINT32_MAX] (read_op.nbytes is uint32_t).

@@ -209,6 +209,7 @@ damacy_create(const struct damacy_config* config, struct damacy** out)
     &(struct damacy_cuda_config){
       .device = config->device,
       .max_gpu_memory_bytes = tuning->max_gpu_memory_bytes,
+      .max_index_bytes = tuning->max_index_bytes,
       .max_chunk_bytes = tuning->max_chunk_uncompressed_bytes,
       .max_read_bytes = tuning->max_read_op_bytes,
       .max_chunks_per_wave = tuning->max_chunks_per_wave,

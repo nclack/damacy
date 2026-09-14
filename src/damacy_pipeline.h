@@ -54,6 +54,7 @@ extern "C"
   {
     int device;
     uint64_t max_gpu_memory_bytes;
+    uint64_t max_index_bytes;
     uint32_t max_chunk_bytes;
     uint64_t max_read_bytes;
     uint32_t max_chunks_per_wave;

@@ -243,6 +243,73 @@ source_value(const void* source, enum dtype dtype, uint64_t index)
 }
 
 static uint64_t
+gather_chunk(struct cpu_executor* self,
+             struct cpu_slot* slot,
+             const struct plan_chunk* chunk,
+             const struct plan_region* region,
+             const struct zarr_metadata* meta,
+             const void* decoded,
+             float fill)
+{
+  struct selection_span spans[DAMACY_MAX_RANK];
+  uint64_t origin[DAMACY_MAX_RANK];
+  uint64_t position[DAMACY_MAX_RANK] = { 0 };
+  uint64_t elements = 1;
+  for (uint8_t d = 0; d < meta->rank; ++d) {
+    origin[d] = chunk->coordinate[d] * meta->inner_chunk_shape[d];
+    spans[d] = query_chunk_span(&region->axes[d],
+                                region->source.dims[d],
+                                origin[d],
+                                meta->inner_chunk_shape[d]);
+    elements *= spans[d].count;
+  }
+  if (!elements)
+    return 0;
+  uint8_t last = meta->rank - 1;
+  uint64_t width = region->axes[last].count ? 1 : spans[last].count;
+  for (;;) {
+    uint64_t source = 0;
+    uint64_t destination = (uint64_t)region->sample * self->strides[0];
+    for (uint8_t d = 0; d < meta->rank; ++d) {
+      const struct query_axis* axis = &region->axes[d];
+      uint64_t p = spans[d].begin + position[d];
+      uint64_t coordinate = axis->count ? (uint64_t)axis->indices[p].source : p;
+      uint64_t output = axis->count
+                          ? axis->indices[p].output
+                          : coordinate - (uint64_t)region->source.dims[d].beg;
+      source = source * meta->inner_chunk_shape[d] + coordinate - origin[d];
+      destination += output * (uint64_t)self->strides[d + 1];
+    }
+    if (!chunk->missing && meta->dtype == dtype_f32 &&
+        self->output.dtype == DAMACY_F32)
+      memcpy((float*)slot->buffer->data + destination,
+             (const float*)decoded + source,
+             width * sizeof(float));
+    else {
+      for (uint64_t j = 0; j < width; ++j) {
+        float value = chunk->missing
+                        ? fill
+                        : source_value(decoded, meta->dtype, source + j);
+        if (self->output.dtype == DAMACY_F32)
+          ((float*)slot->buffer->data)[destination + j] = value;
+        else
+          ((uint16_t*)slot->buffer->data)[destination + j] =
+            float_to_bfloat(value);
+      }
+    }
+    int d = region->axes[last].count ? last : (int)last - 1;
+    for (; d >= 0; --d) {
+      if (++position[d] < spans[d].count)
+        break;
+      position[d] = 0;
+    }
+    if (d < 0)
+      break;
+  }
+  return elements * damacy_dtype_bpe(self->output.dtype);
+}
+
+static uint64_t
 assemble_chunk(struct cpu_executor* self,
                struct cpu_slot* slot,
                const struct plan_chunk* chunk,
@@ -254,6 +321,11 @@ assemble_chunk(struct cpu_executor* self,
   uint64_t output_bytes = 0;
   for (uint32_t u = chunk->first_use; u != UINT32_MAX; u = plan->uses[u].next) {
     const struct plan_region* region = &plan->regions[plan->uses[u].region];
+    if (region->operation == PLAN_GATHER) {
+      output_bytes +=
+        gather_chunk(self, slot, chunk, region, meta, decoded, fill);
+      continue;
+    }
     uint64_t lo[DAMACY_MAX_RANK], hi[DAMACY_MAX_RANK];
     uint64_t origin[DAMACY_MAX_RANK], coordinate[DAMACY_MAX_RANK];
     uint64_t region_bytes = damacy_dtype_bpe(self->output.dtype);

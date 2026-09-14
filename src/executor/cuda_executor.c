@@ -151,6 +151,7 @@ cuda_start(struct damacy_executor* base,
     .samples_per_batch = output->samples_per_batch,
     .device = self->config.device,
     .tuning = { .max_gpu_memory_bytes = self->config.max_gpu_memory_bytes,
+                .max_index_bytes = self->config.max_index_bytes,
                 .max_chunk_uncompressed_bytes = self->config.max_chunk_bytes,
                 .max_read_op_bytes = self->config.max_read_bytes,
                 .host_buffer_waves = self->config.host_buffer_waves,
@@ -247,7 +248,9 @@ cuda_start(struct damacy_executor* base,
   numa_scope_enter(&self->numa, &saved);
   int failed = 0;
   for (unsigned i = 0; i < DAMACY_N_BATCH_SLOTS && !failed; ++i)
-    failed = render_job_init(&self->jobs.jobs[i], output->samples_per_batch);
+    failed = render_job_init(&self->jobs.jobs[i],
+                             output->samples_per_batch,
+                             dispatch_index_capacity(&self->cfg));
   if (!failed)
     failed = wave_pool_init(&self->waves,
                             &self->batches,
@@ -580,6 +583,8 @@ damacy_cuda_executor_create(struct damacy_reader* reader,
   *out = NULL;
   if (!reader || !config || config->device < -1 ||
       !config->max_gpu_memory_bytes || !config->chunk_layout_entries ||
+      config->max_index_bytes >
+        (uint64_t)UINT32_MAX * sizeof(struct gather_index) ||
       !config->max_chunk_bytes || !config->max_read_bytes ||
       config->max_read_bytes > UINT32_MAX || !config->max_chunks_per_wave ||
       config->max_chunks_per_wave > DAMACY_HARD_MAX_CHUNKS_PER_WAVE ||

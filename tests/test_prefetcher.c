@@ -788,9 +788,45 @@ test_missing_shard_reaches_ready(void)
   return 0;
 }
 
+static int
+test_sparse_indices_survive_prefetch(void)
+{
+  struct fixture fx = { 0 };
+  int64_t shape[] = { 32, 32 }, chunks[] = { 4, 4 }, shards[] = { 8, 8 };
+  EXPECT(fixture_setup_layout(&fx, "none", shape, chunks, shards) == 0);
+  int64_t rows[] = { 31, 0, 31 }, cols[] = { 31, 0 };
+  struct damacy_sample sample = { .uri = "foo",
+                                  .aabb = { .rank = 2 },
+                                  .indices = { { rows, 3 }, { cols, 2 } } };
+  EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &sample, 0) == 0);
+  memset(rows, 0, sizeof(rows));
+  memset(cols, 0, sizeof(cols));
+  EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
+  struct prefetch_cache_stats stats;
+  prefetch_cache_stats_get(fx.shard_index_cache, &stats);
+  EXPECT(stats.size == 4);
+  struct prefetcher_ready ready = { 0 };
+  EXPECT(prefetcher_pop_ready(fx.p, &ready));
+  EXPECT(ready.result == PREFETCHER_RESULT_READY && ready.n_shards == 4);
+  fixture_teardown(&fx);
+  EXPECT(ready.aabb.dims[0].beg == 0 && ready.aabb.dims[0].end == 32);
+  EXPECT(ready.axes[0].count == 3 && ready.axes[1].count == 2);
+  EXPECT(ready.axes[0].indices[0].source == 0 &&
+         ready.axes[0].indices[0].output == 1);
+  EXPECT(ready.axes[0].indices[1].source == 31 &&
+         ready.axes[0].indices[1].output == 0);
+  EXPECT(ready.axes[0].indices[2].source == 31 &&
+         ready.axes[0].indices[2].output == 2);
+  EXPECT(ready.axes[1].indices[1].source == 31 &&
+         ready.axes[1].indices[1].output == 0);
+  prefetcher_ready_free(&ready);
+  return 0;
+}
+
 int
 main(void)
 {
+  RUN(test_sparse_indices_survive_prefetch);
   RUN(test_single_sample_walks_all_stages);
   RUN(test_dedup_across_samples);
   RUN(test_error_propagates);

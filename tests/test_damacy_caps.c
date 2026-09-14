@@ -266,7 +266,7 @@ test_pool_reserve_fits_default_budget(void)
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 
-  struct damacy_sample samples[20];
+  struct damacy_sample samples[20] = { 0 };
   for (int i = 0; i < 20; ++i) {
     samples[i].uri = p;
     samples[i].aabb.rank = 4;
