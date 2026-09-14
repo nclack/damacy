@@ -52,7 +52,7 @@ from 2.016 GiB with one worker to 2.255 GiB with sixteen, including conservative
 codec workspace allowances. That reservation excludes metadata, plans, reader
 queues, thread stacks, and allocator overhead; it is not a process RSS limit.
 
-## CUDA comparison and remaining performance issue
+## CUDA comparison and uncertainty
 
 | Pair | Baseline GB/s | Refactor GB/s |
 | ---: | ---: | ---: |
@@ -61,21 +61,23 @@ queues, thread stacks, and allocator overhead; it is not a process RSS limit.
 | 3 | 12.409 | 11.646 |
 | Median | 12.409 | 11.684 |
 
-Median useful throughput is **5.8% lower** after the refactor. This is an
-open performance regression on this workload; CUDA throughput parity has not
-been established. The lower first baseline result is retained in the table.
-Three runs do not characterize all filesystem or scheduling variability.
+Median useful throughput is **5.8% lower** in the refactor runs. Baseline
+throughput ranges from 11.834 to 12.516 GB/s, a spread of about 6%. With only
+three pairs and uncontrolled shared NFS traffic, these results do not establish
+whether the difference comes from code changes or storage variability.
+Performance parity has also not been established.
 
 The measured decode kernels take about 2.515 seconds in both versions. The
 additional time appears between decode waves, with substantial gaps at batch
 boundaries. A separate timing trace recorded approximately 45 ms of shared
 planning and 44 ms of CUDA dispatch preparation across 35 batches including
-warmup. These measurements narrow the follow-up to host preparation and
-scheduling; they do not establish one root cause.
+warmup. These timings do not identify how much of the throughput difference
+comes from storage waits, host preparation, or scheduling.
 
-Correctness and retained-result lifetimes pass on CUDA. Further work on CUDA
-preparation and scheduling should preserve the owned-plan boundary and be
-measured separately from the future query features.
+Correctness and retained-result lifetimes pass on CUDA. Before attributing a
+performance difference to code, a follow-up should randomize the order within
+pairs and collect more repetitions under controlled storage conditions. A
+comparison using local storage could help isolate NFS effects.
 
 ## Checks
 

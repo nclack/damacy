@@ -159,9 +159,10 @@ work items.
 ## Validation
 
 Measured results and build evidence are recorded in
-[CPU pipeline validation](cpu-pipeline-validation.md). The current L40
-comparison shows about 6% lower CUDA throughput; further scheduling work is
-needed before claiming performance parity.
+[CPU pipeline validation](cpu-pipeline-validation.md). The L40 comparison
+shows 5.8% lower median CUDA throughput across three pairs on shared NFS.
+The small sample and uncontrolled storage traffic do not establish a code
+regression; a controlled comparison is needed to attribute the difference.
 
 The CPU milestone checks independent crop values across codecs and source
 dtypes, missing fills, bfloat16 conversion, duplicate chunk use, corrupt input,
