@@ -8,7 +8,7 @@
 
 #include "damacy.h"
 #include "damacy_limits.h"
-#include "planner/planner.h"
+#include "executor/dispatch.h"
 #include "util/path_intern.h"
 
 #include <stdint.h>
@@ -111,17 +111,17 @@ render_job_pool_get_const(const struct render_job_pool* pool,
 void
 render_job_reset(struct render_job* job);
 
-struct planner_output
-render_job_planner_output(struct render_job* job, uint32_t samples_per_batch);
+struct dispatch_output
+render_job_dispatch_output(struct render_job* job, uint32_t samples_per_batch);
 
 enum damacy_status
-render_job_upload_sample_plans(struct render_job* job);
+render_job_upload_sample_plans(struct render_job* job, void* stream);
 
 void
 render_job_commit_plan(struct render_job* job,
                        uint16_t batch_pool_slot,
                        uint64_t batch_id,
-                       const struct planner_output* out);
+                       const struct dispatch_output* out);
 
 int
 render_job_has_work(const struct render_job* job);

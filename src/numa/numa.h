@@ -17,8 +17,6 @@
 #include "damacy.h"
 #include "platform/numa.h"
 
-#include <cuda.h>
-
 #ifdef __cplusplus
 extern "C"
 {
@@ -32,13 +30,6 @@ extern "C"
     int node;
     struct platform_cpu_mask cpu_mask;
   };
-
-  // Resolve the GPU's host-NUMA node and populate `out`. Logs once at
-  // INFO if NUMA is unavailable; that log line is silenced thereafter.
-  void numa_init(enum damacy_numa_strategy strategy,
-                 int override_node,
-                 CUdevice cu_device,
-                 struct numa_resolved* out);
 
   // Temporarily pin the calling thread to the resolved node's CPU set,
   // saving the prior mask in `*saved`. Pair with numa_scope_exit. No-op

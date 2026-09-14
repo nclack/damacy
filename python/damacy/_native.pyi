@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Any, Final
 
 __version__: Final[str]
+CUDA_ENABLED: Final[int]
 
 # ---- log-level constants (mirror damacy_log.h) --------------------------
 
@@ -107,11 +108,11 @@ class Batch:
         - ``(1, 0)`` or higher → v1.0 ``"dltensor_versioned"`` capsule.
           CuPy and array-API-spec consumers ask for this.
 
-        ``dl_device`` is accepted for protocol compatibility but ignored;
-        the producer always emits on the assembling device."""
+        ``dl_device`` must match the batch device. CPU tensors require
+        ``stream=None``."""
 
     def __dlpack_device__(self) -> tuple[int, int]:
-        """Returns (kDLCUDA=2, ordinal)."""
+        """Returns (kDLCPU=1, 0) or (kDLCUDA=2, ordinal)."""
 
 class Pipeline:
     """Native streaming-pipeline handle.
@@ -169,3 +170,74 @@ class Pipeline:
 
     def stats(self) -> dict[str, Any]: ...
     def stats_reset(self) -> None: ...
+    def shutdown(self) -> None: ...
+
+DEFAULT_CHUNK_UNCOMPRESSED_BYTES: Final[int]
+DEFAULT_READ_OP_MAX_BYTES: Final[int]
+DEFAULT_HOST_BUFFER_WAVES: Final[int]
+DEFAULT_MAX_CHUNKS_PER_WAVE: Final[int]
+DEFAULT_MAX_SUBSTREAMS_PER_CHUNK: Final[int]
+DEFAULT_METADATA_IO_CONCURRENCY: Final[int]
+DEFAULT_IO_THREADS: Final[int]
+DEFAULT_ARRAY_META_CACHE: Final[int]
+DEFAULT_SHARD_INDEX_CACHE: Final[int]
+DEFAULT_CHUNK_LAYOUT_CACHE: Final[int]
+DEFAULT_MAX_SHARDS_PER_SAMPLE: Final[int]
+MAX_CHUNK_BYTES: Final[int]
+MAX_READ_OP_BYTES: Final[int]
+N_WAVES: Final[int]
+MAX_HOST_BUFFER_WAVES: Final[int]
+HARD_MAX_CHUNKS_PER_WAVE: Final[int]
+HARD_MAX_SUBSTREAMS_PER_CHUNK: Final[int]
+MAX_METADATA_IO_CONCURRENCY: Final[int]
+MAX_IO_THREADS: Final[int]
+
+def create_reader(workers: int, max_inflight_reads: int, /) -> object: ...
+def create_metadata_reader(
+    concurrency: int,
+    baseline_ns: int,
+    mu: float,
+    sigma: float,
+    cap_ns: int,
+    seed: int,
+    /,
+) -> object: ...
+def create_metadata(
+    reader: object, array_entries: int, shard_entries: int, /
+) -> object: ...
+def create_planner(
+    metadata: object,
+    max_chunks: int,
+    max_chunk_bytes: int,
+    max_shards: int,
+    max_plan_bytes: int,
+    /,
+) -> object: ...
+def create_cpu_executor(
+    reader: object, workers: int, max_encoded: int, max_decoded: int, max_memory: int, /
+) -> object: ...
+def create_cuda_executor(
+    reader: object,
+    device: int,
+    max_memory: int,
+    max_chunk: int,
+    max_read: int,
+    max_chunks: int,
+    max_substreams: int,
+    host_waves: int,
+    chunk_layout_entries: int,
+    numa_strategy: int,
+    numa_node: int,
+    gds: int,
+    /,
+) -> object: ...
+def compose_pipeline(
+    planner: object,
+    executor: object,
+    shape: tuple[int, ...],
+    samples: int,
+    dtype: int,
+    lookahead: int,
+    prepared_batches: int,
+    /,
+) -> Pipeline: ...

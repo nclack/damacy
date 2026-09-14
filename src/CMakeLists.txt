@@ -13,7 +13,7 @@ add_src_lib(log SOURCES log/log.h log/log.c ${PROJECT_SOURCE_DIR}/src/damacy_log
 # in libFuzzer). The .c is always in the source list (gives the static
 # lib a linker language); its body is #if-gated on DAMACY_NVTX_ENABLED.
 add_cuda_lib(damacy_nvtx SOURCES nvtx/nvtx.h nvtx/nvtx.c LINKS CUDA::cuda_driver platform)
-if(NOT DAMACY_FUZZ AND DAMACY_NVTX_ENABLED)
+if(DAMACY_CUDA AND DAMACY_NVTX_ENABLED)
     target_link_libraries(damacy_nvtx PUBLIC CUDA::nvtx3)
     target_compile_definitions(damacy_nvtx PUBLIC DAMACY_NVTX_ENABLED=1)
 endif()
@@ -45,7 +45,10 @@ add_platform_sources(platform platform/numa)
 # CUDA-side GPU→host-NUMA-node resolution + scope/affinity wrappers over
 # the platform NUMA primitives. CUDA::cuda_driver for cuDeviceGetAttribute
 # (HOST_NUMA_ID) and the BDF sysfs fallback.
-add_cuda_lib(numa SOURCES numa/numa.h numa/numa.c LINKS log platform CUDA::cuda_driver)
+add_src_lib(numa SOURCES numa/numa.h numa/affinity.c LINKS log platform)
+add_cuda_lib(numa_cuda SOURCES numa/numa_cuda.h numa/numa.c
+    LINKS numa log platform CUDA::cuda_driver
+)
 
 add_src_lib(platform_io SOURCES platform/platform_io.h LINKS platform)
 add_platform_sources(platform_io platform/platform_io)
@@ -112,13 +115,13 @@ add_cuda_lib(gpu_budget SOURCES gpu_budget/gpu_budget.h gpu_budget/gpu_budget.c
 # Two-slot batch state machine + lazy device-tensor pool. Owns the
 # caller-visible minibatch lifetime; render_job owns planner scratch.
 add_cuda_lib(batch_pool SOURCES batch_pool/batch_pool.h batch_pool/batch_pool.c
-    LINKS planner path_intern log CUDA::cuda_driver
+    LINKS dispatch_utils path_intern log CUDA::cuda_driver
 )
 
 # Planner output plus dispatch cursor for one sealed batch. V1 keeps
 # one render job per batch slot.
 add_cuda_lib(render_job SOURCES render_job/render_job.h render_job/render_job.c
-    LINKS planner path_intern store log CUDA::cuda_driver
+    LINKS dispatch_utils path_intern store log CUDA::cuda_driver
 )
 
 # Input staging slot pool.
@@ -143,7 +146,7 @@ add_cuda_lib(fanout SOURCES wave/fanout.h wave/fanout.c
 # cuStreamSynchronize.
 add_cuda_lib(wave_budget
     SOURCES wave/input_transfer.h wave/wave_budget.h wave/wave_budget.c
-    LINKS input_transfer decoder fanout planner assemble gpu_budget
+    LINKS input_transfer decoder fanout dispatch_utils assemble gpu_budget
           damacy_config log
           CUDA::cuda_driver
 )
@@ -164,7 +167,7 @@ add_cuda_lib(wave SOURCES wave/wave.h wave/wave.c
 add_cuda_lib(wave_pool
     SOURCES wave/input_transfer.h wave/wave_input.h wave/wave_input.c wave/wave_pool.h wave/wave_pool.c
     LINKS wave input_slot input_transfer fanout wave_budget gpu_budget
-          batch_pool decoder assemble planner render_job store damacy_stats
+          batch_pool decoder assemble dispatch_utils render_job store damacy_stats
           damacy_config damacy_nvtx log CUDA::cuda_driver
 )
 
@@ -177,7 +180,7 @@ add_src_lib(store
             store/store_latency.h store/store_latency.c
     LINKS io_queue platform_io strbuf log lru pool hash m
 )
-if(NOT DAMACY_FUZZ AND DAMACY_ENABLE_GDS)
+if(DAMACY_CUDA AND DAMACY_ENABLE_GDS)
     target_sources(store PRIVATE store/store_fs_gds.h store/store_fs_gds.c)
     target_include_directories(store PRIVATE ${CuFile_INCLUDE_DIR})
     target_link_libraries(store PRIVATE CUDA::cuda_driver ${CMAKE_DL_LIBS})
@@ -214,16 +217,15 @@ add_src_lib(zarr_chunk_layout SOURCES zarr/zarr_chunk_layout.h zarr/zarr_chunk_l
     LINKS zarr store log
 )
 
-# Planner: samples + cached metadata → page-aligned read_ops + chunk_plans.
-# coalesce + group_chunks are the post-emit steps of the IO planning
-# pipeline (filter → sort → fuse-with-cap → group-by-read).
-add_src_lib(planner
-    SOURCES planner/planner.h planner/planner.c
-            planner/coalesce.h planner/coalesce.c
-            planner/group_chunks.h planner/group_chunks.c
-            planner/read_op_sort.h planner/read_op_sort.c
-    LINKS prefetch_cache shard_index zarr dtype platform strbuf
-          path_intern log damacy_config
+add_src_lib(dispatch_utils
+    SOURCES executor/coalesce.h executor/coalesce.c
+            executor/group_chunks.h executor/group_chunks.c
+            executor/read_op_sort.h executor/read_op_sort.c
+    LINKS path_intern log damacy_config
+)
+
+add_src_lib(planner SOURCES planner/planner.h planner/planner.c
+    LINKS plan_builder execution_plan prefetch_cache log
 )
 
 # GPU pieces — add_cuda_lib is a no-op under DAMACY_FUZZ.
@@ -237,7 +239,7 @@ add_cuda_lib(decoder
             decoder/launch_check.h decoder/launch_check.cu
             decoder/status_reduce.h decoder/status_reduce.cu
     LINKS CUDA::cudart_static CUDA::cuda_driver nvcomp::nvcomp log zarr
-          planner assemble zarr_chunk_layout
+          dispatch_utils assemble zarr_chunk_layout
 )
 
 # Bytewise gather kernel: chunk windows → output batch tensor.
@@ -248,19 +250,44 @@ add_cuda_lib(assemble SOURCES assemble/assemble.h assemble/assemble.cu
     LINKS CUDA::cudart_static CUDA::cuda_driver log
 )
 
-# Public damacy surface. The API implementation uses the CUDA driver API
-# (cuMem*, cuStream*, cuEvent*); the runtime API is only pulled in
-# transitively via decoder/assemble (nvcomp's headers + the kernel
-# launch in assemble.cu).
-add_cuda_lib(damacy
-    SOURCES damacy.h damacy_internal.h
-            damacy_lifecycle.c damacy_push.c damacy_plan.c damacy_pop.c
-            damacy_scheduler.c damacy_status.c
-    LINKS platform planner zarr store
-          decoder assemble dtype log lookahead gpu_budget
-          batch_pool render_job wave_pool wave_budget damacy_stats damacy_config
-          damacy_nvtx strbuf scheduler io_queue metadata_store_async
-          prefetch_cache prefetcher
-          array_meta shard_index chunk_layout
-          CUDA::cuda_driver
+add_src_lib(prepared_plan SOURCES planner/plan.h planner/plan.c)
+
+add_src_lib(plan_builder SOURCES planner/plan_builder.h planner/plan_builder.c
+    LINKS prepared_plan prefetch_cache shard_index zarr damacy_config strbuf hash
 )
+
+add_src_lib(execution_plan SOURCES executor/dispatch.h executor/dispatch.c
+    LINKS dispatch_utils prepared_plan path_intern
+)
+
+if(NOT DAMACY_FUZZ)
+    add_src_lib(pipeline_components SOURCES pipeline/components.h pipeline/components.c damacy_status.c
+        LINKS damacy_config store platform log
+    )
+    add_src_lib(metadata_planner SOURCES pipeline/zarr_planner.c
+        LINKS pipeline_components plan_builder prefetcher array_meta shard_index
+              metadata_store_async lookahead
+    )
+    add_src_lib(cpu_executor SOURCES executor/cpu_executor.c
+        LINKS pipeline_components prepared_plan threadpool damacy_stats
+              PkgConfig::ZSTD PkgConfig::BLOSC
+    )
+    add_src_lib(damacy
+        SOURCES damacy.h damacy_pipeline.h damacy_internal.h
+                damacy_lifecycle.c damacy_push.c damacy_plan.c damacy_pop.c
+                damacy_scheduler.c
+        LINKS pipeline_components metadata_planner cpu_executor scheduler damacy_stats
+    )
+    if(DAMACY_CUDA)
+        add_cuda_lib(cuda_executor
+            SOURCES executor/cuda_executor.h executor/cuda_executor.c executor/cuda_geometry.inc
+            LINKS pipeline_components execution_plan numa_cuda gpu_budget batch_pool
+                  render_job wave_pool wave_budget damacy_config zarr_chunk_layout
+                  CUDA::cuda_driver
+        )
+        target_link_libraries(damacy PUBLIC cuda_executor)
+        target_compile_definitions(damacy PUBLIC DAMACY_HAS_CUDA=1)
+    else()
+        target_sources(damacy PRIVATE executor/cuda_stub.c)
+    endif()
+endif()

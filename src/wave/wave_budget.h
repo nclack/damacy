@@ -64,6 +64,7 @@ wave_pool_resolve_sizing(uint32_t max_chunks_per_wave,
                          uint32_t max_substreams_per_chunk,
                          uint8_t input_device_staging_buffers,
                          uint64_t max_gpu_memory_bytes,
+                         uint64_t max_read_op_bytes,
                          uint64_t max_chunk_uncompressed_bytes,
                          uint32_t samples_per_batch,
                          struct wave_pool_sizing* out);

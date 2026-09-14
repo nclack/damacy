@@ -1,0 +1,40 @@
+name: cpu
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  cpu:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build pkg-config liburing-dev libzstd-dev libblosc-dev
+          python -m pip install uv pytest pytest-cov numpy
+      - name: Build without CUDA
+        run: |
+          cmake --preset cpu -DDAMACY_PYTHON=ON -DPython_EXECUTABLE="$(command -v python)" -DCMAKE_DISABLE_FIND_PACKAGE_CUDAToolkit=ON
+          cmake --build build -j2
+      - name: Test
+        run: ctest --test-dir build --output-on-failure --timeout 180 -j2
+      - name: Check native dependencies
+        env:
+          PYTHONPATH: build/python
+        run: |
+          python - <<'PY'
+          import subprocess
+          from damacy import _native
+          assert not _native.CUDA_ENABLED
+          dependencies = subprocess.check_output(['ldd', _native.__file__], text=True).lower()
+          print(dependencies)
+          assert all(name not in dependencies for name in ('libcuda', 'libcudart', 'libnvcomp'))
+          PY

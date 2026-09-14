@@ -1,11 +1,11 @@
-// Unit tests for planner/coalesce.c: synthetic planner_output → sort +
+// Unit tests for executor/coalesce.c: synthetic dispatch_output → sort +
 // fuse-with-cap + interleave. No zarr/store/cache plumbing — every
 // input read_op and chunk_plan is constructed inline.
 
 #include "damacy_limits.h"
+#include "executor/coalesce.h"
+#include "executor/dispatch.h"
 #include "expect.h"
-#include "planner/coalesce.h"
-#include "planner/planner.h"
 #include "util/path_intern.h"
 
 #include <stdint.h>
@@ -57,7 +57,7 @@ mk_fill(struct read_op* r, struct chunk_plan* cp, uint32_t read_op_idx)
 
 // Allocate scratch sized for n input read_ops and call coalesce.
 static enum damacy_status
-run_coalesce(struct planner_output* out, uint64_t cap, uint32_t n_in)
+run_coalesce(struct dispatch_output* out, uint64_t cap, uint32_t n_in)
 {
   uint32_t* u32 = (uint32_t*)calloc((size_t)n_in * 4u, sizeof(uint32_t));
   struct read_op* ops = (struct read_op*)calloc(n_in, sizeof(struct read_op));
@@ -72,7 +72,7 @@ run_coalesce(struct planner_output* out, uint64_t cap, uint32_t n_in)
 static int
 test_empty(void)
 {
-  struct planner_output out = { 0 };
+  struct dispatch_output out = { 0 };
   struct read_op r = { 0 };
   struct chunk_plan c = { 0 };
   out.read_ops = &r;
@@ -94,7 +94,7 @@ test_single_chunk_passthrough(void)
   struct read_op reads[1] = { 0 };
   struct chunk_plan chunks[1] = { 0 };
   mk(&reads[0], &chunks[0], "shard/0", 4096, 4096, 0, 100);
-  struct planner_output out = {
+  struct dispatch_output out = {
     .read_ops = reads,
     .read_ops_cap = 1,
     .n_read_ops = 1,
@@ -121,7 +121,7 @@ test_touching_fuses(void)
   struct chunk_plan chunks[2] = { 0 };
   mk(&reads[0], &chunks[0], "shard/0", 0, 4096, 0, 50);
   mk(&reads[1], &chunks[1], "shard/0", 4096, 4096, 1, 200);
-  struct planner_output out = {
+  struct dispatch_output out = {
     .read_ops = reads,
     .read_ops_cap = 2,
     .n_read_ops = 2,
@@ -150,7 +150,7 @@ test_overlapping_fuses(void)
   struct chunk_plan chunks[2] = { 0 };
   mk(&reads[0], &chunks[0], "shard/0", 0, 8192, 0, 100);
   mk(&reads[1], &chunks[1], "shard/0", 4096, 4096, 1, 50);
-  struct planner_output out = {
+  struct dispatch_output out = {
     .read_ops = reads,
     .read_ops_cap = 2,
     .n_read_ops = 2,
@@ -175,7 +175,7 @@ test_gap_no_fusion(void)
   struct chunk_plan chunks[2] = { 0 };
   mk(&reads[0], &chunks[0], "shard/0", 0, 4096, 0, 0);
   mk(&reads[1], &chunks[1], "shard/0", 8192, 4096, 1, 0);
-  struct planner_output out = {
+  struct dispatch_output out = {
     .read_ops = reads,
     .read_ops_cap = 2,
     .n_read_ops = 2,
@@ -197,7 +197,7 @@ test_different_paths_no_fusion(void)
   struct chunk_plan chunks[2] = { 0 };
   mk(&reads[0], &chunks[0], "shard/0", 0, 4096, 0, 0);
   mk(&reads[1], &chunks[1], "shard/1", 0, 4096, 1, 0);
-  struct planner_output out = {
+  struct dispatch_output out = {
     .read_ops = reads,
     .read_ops_cap = 2,
     .n_read_ops = 2,
@@ -228,7 +228,7 @@ test_cap_splits(void)
        4096,
        i,
        /*offset_in_read*/ 0);
-  struct planner_output out = {
+  struct dispatch_output out = {
     .read_ops = reads,
     .read_ops_cap = N,
     .n_read_ops = N,
@@ -257,7 +257,7 @@ test_single_over_cap(void)
   struct read_op reads[1] = { 0 };
   struct chunk_plan chunks[1] = { 0 };
   mk(&reads[0], &chunks[0], "shard/0", 0, 1u << 20, 0, 0); // 1 MB
-  struct planner_output out = {
+  struct dispatch_output out = {
     .read_ops = reads,
     .read_ops_cap = 1,
     .n_read_ops = 1,
@@ -288,7 +288,7 @@ test_non_overlapping_output(void)
   mk(&reads[2], &chunks[2], "shard/A", 0, 4096, 2, 0);
   mk(&reads[3], &chunks[3], "shard/B", 0, 4096, 3, 0);
   mk(&reads[4], &chunks[4], "shard/A", 4096, 4096, 4, 0);
-  struct planner_output out = {
+  struct dispatch_output out = {
     .read_ops = reads,
     .read_ops_cap = N,
     .n_read_ops = N,
@@ -325,7 +325,7 @@ test_round_robin_interleave(void)
   mk(&reads[2], &chunks[2], "shard/A", 16384, 4096, 2, 0);
   mk(&reads[3], &chunks[3], "shard/B", 0, 4096, 3, 0);
   mk(&reads[4], &chunks[4], "shard/B", 8192, 4096, 4, 0);
-  struct planner_output out = {
+  struct dispatch_output out = {
     .read_ops = reads,
     .read_ops_cap = N,
     .n_read_ops = N,
@@ -345,8 +345,7 @@ test_round_robin_interleave(void)
   EXPECT(strcmp(reads[3].shard_path, "shard/B") == 0);
   EXPECT(reads[3].file_offset == 8192 && reads[3].nbytes == 4096);
   EXPECT(chunks[0].read_op_idx == 0 && chunks[0].offset_in_read == 50);
-  EXPECT(chunks[1].read_op_idx == 0 &&
-         chunks[1].offset_in_read == 200 + 4096);
+  EXPECT(chunks[1].read_op_idx == 0 && chunks[1].offset_in_read == 200 + 4096);
   EXPECT(chunks[2].read_op_idx == 2);
   EXPECT(chunks[3].read_op_idx == 1);
   EXPECT(chunks[4].read_op_idx == 3);
@@ -368,7 +367,7 @@ test_chunk_count_cap(void)
   EXPECT(reads && chunks);
   for (uint32_t i = 0; i < n; ++i)
     mk(&reads[i], &chunks[i], "shard/0", (uint64_t)i * step, step, i, 0);
-  struct planner_output out = {
+  struct dispatch_output out = {
     .read_ops = reads,
     .read_ops_cap = n,
     .n_read_ops = n,
@@ -402,7 +401,7 @@ test_fills_passthrough(void)
   mk(&reads[0], &chunks[0], "shard/0", 0, 4096, 0, 0);
   mk_fill(&reads[1], &chunks[1], 1);
   mk(&reads[2], &chunks[2], "shard/0", 4096, 4096, 2, 0);
-  struct planner_output out = {
+  struct dispatch_output out = {
     .read_ops = reads,
     .read_ops_cap = 3,
     .n_read_ops = 3,

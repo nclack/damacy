@@ -7,6 +7,7 @@
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define THREADPOOL_SPIN_ITERS 10000u
 #define THREADPOOL_CACHELINE 64u
@@ -122,8 +123,9 @@ threadpool_new(int nthreads)
   struct threadpool* p = NULL;
 
   CHECK_SILENT(Fail, nthreads >= 0);
-  p = (struct threadpool*)calloc(1, sizeof(*p));
+  p = aligned_alloc(alignof(struct threadpool), sizeof(*p));
   CHECK_SILENT(Fail, p);
+  memset(p, 0, sizeof(*p));
 
   p->nworkers = nthreads;
   atomic_store_explicit(&p->epoch, 0, memory_order_relaxed);

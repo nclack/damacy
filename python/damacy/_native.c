@@ -13,7 +13,9 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 
+#ifdef DAMACY_HAS_CUDA
 #include <cuda.h>
+#endif
 
 #include "damacy.h"
 #include "damacy_limits.h"
@@ -126,6 +128,7 @@ py_cuda_device_count(PyObject* self, PyObject* args)
 {
   (void)self;
   (void)args;
+#ifdef DAMACY_HAS_CUDA
   CUresult r;
   int count = 0;
   if ((r = cuInit(0)) != CUDA_SUCCESS)
@@ -133,6 +136,9 @@ py_cuda_device_count(PyObject* self, PyObject* args)
   if ((r = cuDeviceGetCount(&count)) != CUDA_SUCCESS)
     return PyLong_FromLong(0);
   return PyLong_FromLong((long)count);
+#else
+  return PyLong_FromLong(0);
+#endif
 }
 
 static PyObject*
@@ -156,6 +162,7 @@ py_cuda_init_primary(PyObject* self, PyObject* args, PyObject* kw)
   if (!PyArg_ParseTupleAndKeywords(args, kw, "|i", kws, &device))
     return NULL;
 
+#ifdef DAMACY_HAS_CUDA
   CUresult r;
   if ((r = cuInit(0)) != CUDA_SUCCESS) {
     PyErr_Format(PyExc_RuntimeError, "cuInit failed (%d)", (int)r);
@@ -178,6 +185,10 @@ py_cuda_init_primary(PyObject* self, PyObject* args, PyObject* kw)
     return NULL;
   }
   Py_RETURN_NONE;
+#else
+  PyErr_SetString(PyExc_RuntimeError, "CUDA support is disabled in this build");
+  return NULL;
+#endif
 }
 
 static PyMethodDef methods[] = {
@@ -247,8 +258,15 @@ module_exec(PyObject* m)
     PyErr_SetString(PyExc_RuntimeError, "failed to install damacy log sink");
     return -1;
   }
-  if (api_register_types(m) != 0)
+  if (api_register_types(m) != 0 || components_register(m) != 0)
     return -1;
+#ifdef DAMACY_HAS_CUDA
+  if (PyModule_AddIntConstant(m, "CUDA_ENABLED", 1) < 0)
+    return -1;
+#else
+  if (PyModule_AddIntConstant(m, "CUDA_ENABLED", 0) < 0)
+    return -1;
+#endif
   return 0;
 }
 

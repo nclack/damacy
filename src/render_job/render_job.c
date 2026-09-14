@@ -22,9 +22,12 @@ render_job_init(struct render_job* job, uint32_t samples_per_batch_cap)
   job->read_op_groups = (struct read_op_group*)calloc(
     DAMACY_MAX_CHUNKS_PER_BATCH, sizeof(struct read_op_group));
   CHECK(Error, job->read_op_groups);
-  job->sample_plans = (struct sample_plan*)calloc(samples_per_batch_cap,
-                                                  sizeof(struct sample_plan));
-  CHECK(Error, job->sample_plans);
+  size_t sample_bytes =
+    (size_t)samples_per_batch_cap * sizeof(struct sample_plan);
+  if (cuMemHostAlloc((void**)&job->sample_plans, sample_bytes, 0) !=
+      CUDA_SUCCESS)
+    goto Error;
+  memset(job->sample_plans, 0, sample_bytes);
   CUdeviceptr dptr = 0;
   if (cuMemAlloc(&dptr,
                  (size_t)samples_per_batch_cap * sizeof(struct sample_plan)) !=
@@ -45,7 +48,8 @@ render_job_destroy(struct render_job* job, int cuda_skip)
   free(job->read_ops);
   free(job->chunk_plans);
   free(job->read_op_groups);
-  free(job->sample_plans);
+  if (!cuda_skip && job->sample_plans)
+    cuMemFreeHost(job->sample_plans);
   path_intern_free(&job->paths);
   if (!cuda_skip && job->d_sample_plans)
     cuMemFree(CUDPTR(job->d_sample_plans));
@@ -109,10 +113,10 @@ render_job_reset(struct render_job* job)
   job->n_groups_dispatched = 0;
 }
 
-struct planner_output
-render_job_planner_output(struct render_job* job, uint32_t samples_per_batch)
+struct dispatch_output
+render_job_dispatch_output(struct render_job* job, uint32_t samples_per_batch)
 {
-  return (struct planner_output){
+  return (struct dispatch_output){
     .read_ops = job->read_ops,
     .read_ops_cap = DAMACY_MAX_CHUNKS_PER_BATCH,
     .chunk_plans = job->chunk_plans,
@@ -126,14 +130,15 @@ render_job_planner_output(struct render_job* job, uint32_t samples_per_batch)
 }
 
 enum damacy_status
-render_job_upload_sample_plans(struct render_job* job)
+render_job_upload_sample_plans(struct render_job* job, void* stream)
 {
   if (job->n_sample_plans == 0)
     return DAMACY_OK;
-  return cuMemcpyHtoD(CUDPTR(job->d_sample_plans),
-                      job->sample_plans,
-                      (size_t)job->n_sample_plans *
-                        sizeof(struct sample_plan)) == CUDA_SUCCESS
+  return cuMemcpyHtoDAsync(CUDPTR(job->d_sample_plans),
+                           job->sample_plans,
+                           (size_t)job->n_sample_plans *
+                             sizeof(struct sample_plan),
+                           (CUstream)stream) == CUDA_SUCCESS
            ? DAMACY_OK
            : DAMACY_CUDA;
 }
@@ -142,7 +147,7 @@ void
 render_job_commit_plan(struct render_job* job,
                        uint16_t batch_pool_slot,
                        uint64_t batch_id,
-                       const struct planner_output* out)
+                       const struct dispatch_output* out)
 {
   job->batch_pool_slot = batch_pool_slot;
   job->batch_id = batch_id;

@@ -58,6 +58,7 @@ def _mk_cfg() -> Config:
     )
 
 
+@pytest.mark.usefixtures("cuda_ctx")
 def test_release_event_none_falls_back_to_immediate(one_zarr):
     """``release(event=None)`` is the same as ``release()``."""
     with Pipeline(_mk_cfg()) as d:
@@ -67,6 +68,7 @@ def test_release_event_none_falls_back_to_immediate(one_zarr):
         b.release()  # idempotent
 
 
+@pytest.mark.usefixtures("cuda_ctx")
 def test_release_event_rejects_bad_type(one_zarr):
     with Pipeline(_mk_cfg()) as d:
         d.push([Sample(uri=one_zarr, aabb=[(0, 8), (0, 16)])])

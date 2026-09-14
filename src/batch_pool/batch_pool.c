@@ -1,7 +1,8 @@
 #include "batch_pool.h"
 
+#include "executor/dispatch.h"
 #include "log/log.h"
-#include "planner/planner.h"
+#include "planner/plan_builder.h"
 #include "util/cuda_check.h" // CU + CUDPTR
 #include "util/prelude.h"
 

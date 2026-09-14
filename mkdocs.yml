@@ -1,5 +1,5 @@
 site_name: damacy
-site_description: High-speed streamed assembly of tensors from zarr sources to GPU.
+site_description: Streamed assembly of tensors from Zarr sources into RAM or GPU memory.
 site_url: https://nclack.github.io/damacy/
 repo_url: https://github.com/nclack/damacy
 repo_name: nclack/damacy
@@ -77,6 +77,7 @@ markdown_extensions:
 
 nav:
   - Home: index.md
+  - Pipeline composition: pipeline.md
   - GPU memory budget: budget.md
   - Distributed: distributed.md
   - Async prefetch: prefetch.md

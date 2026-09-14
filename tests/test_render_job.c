@@ -21,7 +21,7 @@ wire_job_storage(struct render_job* job,
 }
 
 static int
-test_planner_output_borrows_job_storage(void)
+test_dispatch_output_borrows_job_storage(void)
 {
   struct render_job job;
   struct read_op reads[2];
@@ -30,7 +30,7 @@ test_planner_output_borrows_job_storage(void)
   struct read_op_group groups[2];
   wire_job_storage(&job, reads, chunks, samples, groups);
 
-  struct planner_output out = render_job_planner_output(&job, 2);
+  struct dispatch_output out = render_job_dispatch_output(&job, 2);
   EXPECT(out.read_ops == reads);
   EXPECT(out.chunk_plans == chunks);
   EXPECT(out.sample_plans == samples);
@@ -45,7 +45,7 @@ test_commit_and_find_oldest_work(void)
 {
   struct render_job_pool pool;
   memset(&pool, 0, sizeof(pool));
-  struct planner_output out = {
+  struct dispatch_output out = {
     .n_chunk_plans = 3,
     .n_chunks_to_load = 2,
     .n_loads_issued = 1,
@@ -75,7 +75,7 @@ test_commit_and_find_oldest_work(void)
 int
 main(void)
 {
-  RUN(test_planner_output_borrows_job_storage);
+  RUN(test_dispatch_output_borrows_job_storage);
   RUN(test_commit_and_find_oldest_work);
   printf("all render_job tests passed\n");
   return 0;

@@ -1,194 +1,81 @@
-#include "damacy.h"
-
 #include "damacy_internal.h"
+
 #include "damacy_stats.h"
-#include "log/log.h"
-#include "nvtx/nvtx.h"
-#include "platform/platform.h"
-#include "util/prelude.h"
 
-#include <cuda.h>
 #include <string.h>
-
-static void
-release_slot_now(struct damacy_batch_slot* slot, struct render_job* job)
-{
-  batch_slot_reset_for_reuse(slot);
-  render_job_reset(job);
-}
-
-static void
-release_slot_after_event(struct damacy_batch_slot* slot, struct render_job* job)
-{
-  release_slot_now(slot, job);
-  slot->deferred_reuse_pending = 1;
-}
 
 enum damacy_status
 damacy_pop(struct damacy* self, struct damacy_batch** out)
 {
-  CHECK_SILENT(InvalidArg, self);
-  CHECK_SILENT(InvalidArg, out);
+  if (!out)
+    return DAMACY_INVAL;
   *out = NULL;
-
-  // No ctx_guard: pop only touches batch-slot state. CUDA stays on the worker.
-  damacy_nvtx_range_push("damacy_pop");
-  enum damacy_status r;
+  if (!self)
+    return DAMACY_INVAL;
+  if (self->stopped)
+    return DAMACY_SHUTDOWN;
+  enum damacy_status status;
   scheduler_lock(self->sched);
+  ++self->pop_calls;
   for (;;) {
+    if (self->stopping) {
+      status = DAMACY_SHUTDOWN;
+      break;
+    }
     if (self->failed_status != DAMACY_OK) {
-      r = self->failed_status;
-      goto Done;
+      status = self->failed_status;
+      break;
     }
-    int slot_idx = find_oldest_ready_slot(&self->batch_pool);
-    if (slot_idx >= 0) {
-      struct damacy_batch_slot* slot = &self->batch_pool.slots[slot_idx];
-      slot->state = BATCH_HELD;
-      self->handle.slot_idx = (uint16_t)slot_idx;
-      self->handle.batch_id = slot->batch_id;
-      self->stats.batches_emitted++;
-      *out = &self->handle;
-      r = DAMACY_OK;
-      goto Done;
+    status = self->executor->ops->take(self->executor, out);
+    if (status != DAMACY_AGAIN) {
+      if (status == DAMACY_OK) {
+        (*out)->owner = self;
+        ++self->stats.batches_emitted;
+      }
+      break;
     }
-    if (!any_wave_in_flight(&self->wave_pool) &&
-        !any_slot_in_flight(&self->wave_pool) &&
-        !any_batch_in_flight(&self->batch_pool) &&
-        lookahead_size(&self->lookahead) == 0 &&
-        prefetcher_in_flight(self->prefetcher) == 0 &&
-        !prefetcher_has_ready(self->prefetcher)) {
-      r = DAMACY_AGAIN;
-      goto Done;
-    }
-    struct platform_clock wait_clock = { 0 };
-    platform_toc(&wait_clock);
+    if (!self->plan_count && !self->planner->ops->pending(self->planner) &&
+        !self->executor->ops->busy(self->executor))
+      break;
+    struct platform_clock clock = { 0 };
+    platform_toc(&clock);
     SCHEDULER_WAIT_DIAG(self->sched, 5000);
-    metric_record(
-      &self->stats.pop_wait, platform_toc(&wait_clock) * 1000.0f, 0, 0);
+    metric_record(&self->stats.pop_wait, platform_toc(&clock) * 1000, 0, 0);
   }
-
-Done:
+  --self->pop_calls;
+  scheduler_broadcast(self->sched);
   scheduler_unlock(self->sched);
-  damacy_nvtx_range_pop();
-  return r;
-
-InvalidArg:
-  return DAMACY_INVAL;
+  return status;
 }
 
 void
-damacy_release(struct damacy* self, struct damacy_batch* b)
+damacy_release(struct damacy* self, struct damacy_batch* batch)
 {
-  if (!self || !b)
-    return;
-  if (b != &self->handle) {
-    log_warn("damacy_release: foreign handle (not the active batch)");
-    return;
-  }
-  uint16_t s = b->slot_idx;
-  if (s >= DAMACY_N_BATCH_SLOTS) {
-    log_warn("damacy_release: slot_idx=%u out of range", (unsigned)s);
-    return;
-  }
-  struct render_job* job =
-    render_job_pool_for_batch_slot(&self->render_jobs, s);
-  if (!job)
-    return;
-  scheduler_lock(self->sched);
-  if (self->batch_pool.slots[s].state != BATCH_HELD) {
-    log_warn("damacy_release: slot %u not HELD (state=%d); double release?",
-             (unsigned)s,
-             (int)self->batch_pool.slots[s].state);
-    scheduler_unlock(self->sched);
-    return;
-  }
-  release_slot_now(&self->batch_pool.slots[s], job);
-  scheduler_unlock(self->sched);
+  if (batch && batch->owner == self)
+    damacy_batch_release(batch);
 }
 
 enum damacy_status
-damacy_release_event(struct damacy* self, struct damacy_batch* b, void* event)
+damacy_release_event(struct damacy* self,
+                     struct damacy_batch* batch,
+                     void* event)
 {
-  // NULL event → degenerate to the immediate-release path.
+  if (!self || !batch || batch->owner != self)
+    return DAMACY_INVAL;
   if (!event) {
-    damacy_release(self, b);
+    damacy_batch_release(batch);
     return DAMACY_OK;
   }
-  if (!self || !b)
-    return DAMACY_INVAL;
-  if (b != &self->handle) {
-    log_warn("damacy_release_event: foreign handle (not the active batch)");
-    return DAMACY_INVAL;
-  }
-  uint16_t s = b->slot_idx;
-  if (s >= DAMACY_N_BATCH_SLOTS) {
-    log_warn("damacy_release_event: slot_idx=%u out of range", (unsigned)s);
-    return DAMACY_INVAL;
-  }
-  struct render_job* job =
-    render_job_pool_for_batch_slot(&self->render_jobs, s);
-  if (!job)
-    return DAMACY_INVAL;
-
-  // Push the retained-primary context so cuStreamWaitEvent / cuEventRecord
-  // land on the right device when the caller is on another thread.
-  struct ctx_guard cg = { 0 };
-  enum damacy_status r = ctx_guard_enter(self, &cg);
-  if (r != DAMACY_OK)
-    return r;
-
   scheduler_lock(self->sched);
-  struct damacy_batch_slot* slot = &self->batch_pool.slots[s];
-  if (slot->state != BATCH_HELD) {
-    log_warn(
-      "damacy_release_event: slot %u not HELD (state=%d); double release?",
-      (unsigned)s,
-      (int)slot->state);
-    r = DAMACY_INVAL;
-    goto Done;
-  }
-
-  // Reuse waits on the caller's event.
-  if (cuStreamWaitEvent(self->wave_pool.stream_post, (CUevent)event, 0) !=
-      CUDA_SUCCESS) {
-    // Without the wait, release immediately and report the CUDA error.
-    release_slot_now(slot, job);
-    r = DAMACY_CUDA;
-    goto Done;
-  }
-
-  release_slot_after_event(slot, job);
-  r = DAMACY_OK;
-
-Done:
+  int stopping = self->stopping;
+  enum damacy_status status = DAMACY_INVAL;
+  if (!stopping)
+    status = self->executor->ops->wait_event(self->executor, event);
   scheduler_unlock(self->sched);
-  ctx_guard_exit(&cg);
-  return r;
-}
-
-// --- batch info / stats ---------------------------------------------------
-
-void
-damacy_batch_info(const struct damacy_batch* b, struct damacy_batch_info* out)
-{
-  if (!out)
-    return;
-  memset(out, 0, sizeof(*out));
-  if (!b || !b->d || b->slot_idx >= DAMACY_N_BATCH_SLOTS)
-    return;
-  const struct damacy* self = b->d;
-  const struct damacy_batch_slot* slot = &self->batch_pool.slots[b->slot_idx];
-  if (slot->state != BATCH_HELD)
-    return;
-  out->device_ptr = slot->dev_ptr;
-  out->rank = self->batch_pool.rank;
-  out->dtype = self->cfg.dtype;
-  out->ready_stream = (void*)self->wave_pool.stream_post;
-  out->batch_id = slot->batch_id;
-  for (uint8_t d = 0; d < self->batch_pool.rank; ++d)
-    out->shape[d] = self->batch_pool.shape[d];
-  // shape[0] reflects the actual sample count in the batch.
-  out->shape[0] = (int64_t)slot->n_samples;
+  if (stopping && batch->buffer->wait_event)
+    status = batch->buffer->wait_event(batch->buffer, event);
+  damacy_batch_release(batch);
+  return status;
 }
 
 void
@@ -200,69 +87,29 @@ damacy_stats_get(const struct damacy* self, struct damacy_stats* out)
     memset(out, 0, sizeof(*out));
     return;
   }
-  // scheduler_lock guards every metric_record write; without it the
-  // struct copy below races every plan/pop_wait update. The
-  // mutex doesn't change observable state, so the const cast is safe.
-  struct damacy* m = (struct damacy*)self;
-  scheduler_lock(m->sched);
-  *out = m->stats;
-  out->gpu_bytes_committed = gpu_budget_committed(m->budget);
-  scheduler_unlock(m->sched);
-  if (m->array_meta_cache) {
-    struct prefetch_cache_stats cs;
-    prefetch_cache_stats_get(m->array_meta_cache, &cs);
-    out->array_meta.hits = cs.counters.hits;
-    out->array_meta.misses = cs.counters.misses;
+  if (self->stopped) {
+    *out = self->stats;
+    return;
   }
-  if (m->shard_index_cache) {
-    struct prefetch_cache_stats cs;
-    prefetch_cache_stats_get(m->shard_index_cache, &cs);
-    out->shard_index.hits = cs.counters.hits;
-    out->shard_index.misses = cs.counters.misses;
+  struct damacy* mutable = (struct damacy*)self;
+  scheduler_lock(mutable->sched);
+  *out = self->stats;
+  if (!self->stopping) {
+    mutable->planner->ops->stats(mutable->planner, out);
+    mutable->executor->ops->stats(mutable->executor, out);
   }
-  if (m->chunk_layout_cache) {
-    struct prefetch_cache_stats cs;
-    prefetch_cache_stats_get(m->chunk_layout_cache, &cs);
-    out->chunk_layout.hits = cs.counters.hits;
-    out->chunk_layout.misses = cs.counters.misses;
-  }
-  if (m->store_meta_async) {
-    struct metadata_store_async_latency_stats ls;
-    metadata_store_async_latency_stats_get(m->store_meta_async, &ls);
-    out->metadata_latency.ops = ls.ops;
-    out->metadata_latency.stat_ops = ls.stat_ops;
-    out->metadata_latency.submit_ops = ls.submit_ops;
-    out->metadata_latency.active = ls.active;
-    out->metadata_latency.max_active = ls.max_active;
-    out->metadata_latency.total_sleep_ns = ls.total_sleep_ns;
-    out->metadata_latency.max_sleep_ns = ls.max_sleep_ns;
-    struct metadata_store_async_backend_stats fs;
-    metadata_store_async_backend_stats_get(m->store_meta_async, &fs);
-    out->metadata_backend.read_jobs = fs.read_jobs;
-    out->metadata_backend.read_active = fs.read_active;
-    out->metadata_backend.read_max_active = fs.read_max_active;
-    struct metadata_store_async_op_latency_stats os;
-    metadata_store_async_op_latency_stats_get(m->store_meta_async, &os);
-    for (unsigned k = 0; k < DAMACY_METADATA_OP_LATENCY_NKINDS; ++k) {
-      out->metadata_op_latency[k].count = os.kinds[k].count;
-      out->metadata_op_latency[k].sum_ns = os.kinds[k].sum_ns;
-      out->metadata_op_latency[k].max_ns = os.kinds[k].max_ns;
-      for (unsigned b = 0; b < DAMACY_METADATA_OP_LATENCY_NBUCKETS; ++b)
-        out->metadata_op_latency[k].buckets[b] = os.kinds[k].buckets[b];
-    }
-  }
+  scheduler_unlock(mutable->sched);
 }
 
 void
 damacy_stats_reset(struct damacy* self)
 {
-  if (!self)
+  if (!self || self->stopped)
     return;
-  // Lock so this reset doesn't race the worker's stat writes (see stats_get).
   scheduler_lock(self->sched);
-  stats_init(&self->stats);
+  if (!self->stopping) {
+    stats_init(&self->stats);
+    self->planner->ops->reset_stats(self->planner);
+  }
   scheduler_unlock(self->sched);
-  metadata_store_async_latency_stats_reset(self->store_meta_async);
-  metadata_store_async_backend_stats_reset(self->store_meta_async);
-  metadata_store_async_op_latency_stats_reset(self->store_meta_async);
 }

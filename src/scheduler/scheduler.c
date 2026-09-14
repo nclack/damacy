@@ -12,6 +12,7 @@ struct scheduler
   struct platform_mutex* m;
   struct platform_cond* cv;
   scheduler_step_fn step;
+  struct scheduler_hooks hooks;
   void* arg;
   int64_t idle_ns;
   int shutdown; // protected by m
@@ -24,10 +25,18 @@ worker_main(void* p)
 {
   struct scheduler* s = (struct scheduler*)p;
   numa_apply_thread_affinity(&s->affinity, "scheduler_worker");
+  if (s->hooks.enter) {
+    platform_mutex_lock(s->m);
+    s->hooks.enter(s->arg);
+    platform_cond_broadcast(s->cv);
+    platform_mutex_unlock(s->m);
+  }
   for (;;) {
     platform_mutex_lock(s->m);
     if (s->shutdown) {
       platform_mutex_unlock(s->m);
+      if (s->hooks.leave)
+        s->hooks.leave(s->arg);
       return;
     }
     int ready = s->step(s->arg);
@@ -42,7 +51,8 @@ struct scheduler*
 scheduler_create(scheduler_step_fn step,
                  void* arg,
                  int64_t idle_ns,
-                 const struct numa_resolved* affinity)
+                 const struct numa_resolved* affinity,
+                 const struct scheduler_hooks* hooks)
 {
   if (!step || idle_ns <= 0) {
     log_error("scheduler: invalid arguments (step=%d idle_ns=%lld)",
@@ -56,6 +66,8 @@ scheduler_create(scheduler_step_fn step,
     return NULL;
   }
   s->step = step;
+  if (hooks)
+    s->hooks = *hooks;
   s->arg = arg;
   s->idle_ns = idle_ns;
   // Copy unconditionally; numa_apply_thread_affinity no-ops when
@@ -82,16 +94,24 @@ scheduler_create(scheduler_step_fn step,
 }
 
 void
+scheduler_stop(struct scheduler* s)
+{
+  if (!s || !s->thread)
+    return;
+  platform_mutex_lock(s->m);
+  s->shutdown = 1;
+  platform_cond_broadcast(s->cv);
+  platform_mutex_unlock(s->m);
+  platform_thread_join(s->thread);
+  s->thread = NULL;
+}
+
+void
 scheduler_destroy(struct scheduler* s)
 {
   if (!s)
     return;
-  if (s->thread) {
-    platform_mutex_lock(s->m);
-    s->shutdown = 1;
-    platform_mutex_unlock(s->m);
-    platform_thread_join(s->thread);
-  }
+  scheduler_stop(s);
   platform_cond_free(s->cv);
   platform_mutex_free(s->m);
   free(s);

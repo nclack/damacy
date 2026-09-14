@@ -22,7 +22,6 @@
 
 #include "cuda_init.h"
 #include "damacy.h"
-#include "damacy_internal.h"
 #include "fixture.h"
 #include "platform/platform.h"
 #include "spin_kernel.h"
@@ -113,7 +112,8 @@ run_one(struct damacy* d,
   damacy_batch_info(b, &info);
   EXPECT(info.rank == 3);
   EXPECT(info.dtype == DAMACY_F32);
-  EXPECT(info.ready_stream == (void*)d->wave_pool.stream_post);
+  EXPECT(info.ready_stream != NULL);
+  EXPECT(info.device_type == DAMACY_DEVICE_CUDA);
   EXPECT(info.shape[0] == 1);
   size_t n_elements = (size_t)info.shape[1] * (size_t)info.shape[2];
   EXPECT(n_elements <= out_capacity_elements);

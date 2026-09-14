@@ -12,6 +12,34 @@ The full public surface of the `damacy` package.
 
 ::: damacy.Batch
 
+## Components
+
+::: damacy.FileMetadataReader
+
+::: damacy.ZarrMetadata
+
+::: damacy.ChunkPlanner
+
+::: damacy.FileReader
+
+::: damacy.CpuExecutor
+
+::: damacy.CudaExecutor
+
+## Output and limits
+
+::: damacy.BatchSpec
+
+::: damacy.QueueLimits
+
+::: damacy.MetadataCache
+
+::: damacy.PlanLimits
+
+::: damacy.CpuLimits
+
+::: damacy.CudaLimits
+
 ## Value types
 
 ::: damacy.BatchInfo
@@ -21,6 +49,8 @@ The full public surface of the `damacy` package.
 ::: damacy.Stats
 
 ## Enums
+
+::: damacy.DeviceType
 
 ::: damacy.Dtype
 
@@ -35,6 +65,8 @@ The full public surface of the `damacy` package.
 ::: damacy.InvalidArgument
 
 ::: damacy.NotFound
+
+::: damacy.DeviceType
 
 ::: damacy.DtypeMismatch
 

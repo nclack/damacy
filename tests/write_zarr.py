@@ -19,7 +19,7 @@ import argparse
 import sys
 
 import numpy as np
-from zarr.codecs import BloscCname, BloscCodec, BloscShuffle, ZstdCodec
+from zarr.codecs import BloscCodec, ZstdCodec
 
 import zarr
 
@@ -28,7 +28,7 @@ def parse_shape(s: str) -> tuple[int, ...]:
     return tuple(int(x) for x in s.split(","))
 
 
-def make_compressors(codec: str, dtype: np.dtype):
+def make_compressors(codec: str, dtype: np.dtype, shuffle: str):
     if codec == "none":
         return []
     if codec == "zstd":
@@ -45,9 +45,9 @@ def make_compressors(codec: str, dtype: np.dtype):
             raise SystemExit(f"unknown --codec {codec!r}")
         return [
             BloscCodec(
-                cname=BloscCname.zstd,
+                cname="zstd",
                 clevel=clevel,
-                shuffle=BloscShuffle.shuffle,
+                shuffle=shuffle,
                 typesize=int(dtype.itemsize),
             )
         ]
@@ -82,6 +82,9 @@ def main() -> int:
         default="zstd",
         help="inner codec: none | zstd | blosc-zstd | blosc-zstd-l<N>",
     )
+    ap.add_argument(
+        "--shuffle", choices=["noshuffle", "shuffle", "bitshuffle"], default="shuffle"
+    )
     args = ap.parse_args()
 
     if not (len(args.shape) == len(args.inner) == len(args.shard)):
@@ -109,7 +112,7 @@ def main() -> int:
         dtype=np_dtype,
         chunks=args.inner,
         shards=args.shard,
-        compressors=make_compressors(args.codec, np_dtype),
+        compressors=make_compressors(args.codec, np_dtype, args.shuffle),
     )
     arr[...] = data
     return 0
