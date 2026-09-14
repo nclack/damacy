@@ -157,9 +157,13 @@ test_single_sample_walks_all_stages(void)
   struct fixture fx = { 0 };
   EXPECT(fixture_setup(&fx, "blosc-zstd") == 0);
 
-  struct damacy_sample s = { .uri = "foo", .aabb = { .rank = 2 } };
-  s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
-  s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
+  struct damacy_sample s = { .uri = "foo", .rank = 2 };
+  s.axes[0] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 16 } };
+  s.axes[1] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 32 } };
 
   EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 0) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
@@ -189,9 +193,13 @@ test_dedup_across_samples(void)
   struct fixture fx = { 0 };
   EXPECT(fixture_setup(&fx, "blosc-zstd") == 0);
 
-  struct damacy_sample s = { .uri = "foo", .aabb = { .rank = 2 } };
-  s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
-  s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
+  struct damacy_sample s = { .uri = "foo", .rank = 2 };
+  s.axes[0] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 16 } };
+  s.axes[1] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 32 } };
 
   for (int i = 0; i < 4; ++i)
     EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, (uint64_t)i) == 0);
@@ -220,9 +228,13 @@ test_error_propagates(void)
   struct fixture fx = { 0 };
   EXPECT(fixture_setup(&fx, "blosc-zstd") == 0);
 
-  struct damacy_sample s = { .uri = "missing", .aabb = { .rank = 2 } };
-  s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
-  s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
+  struct damacy_sample s = { .uri = "missing", .rank = 2 };
+  s.axes[0] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 16 } };
+  s.axes[1] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 32 } };
 
   EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 0) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
@@ -259,9 +271,13 @@ test_multi_shard_sample_warms_all_shards(void)
   int64_t shard[2] = { 16, 32 };
   EXPECT(fixture_setup_layout(&fx, "blosc-zstd", shape, inner, shard) == 0);
 
-  struct damacy_sample s = { .uri = "foo", .aabb = { .rank = 2 } };
-  s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 32 };
-  s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 64 };
+  struct damacy_sample s = { .uri = "foo", .rank = 2 };
+  s.axes[0] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 32 } };
+  s.axes[1] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 64 } };
 
   EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 0) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
@@ -290,9 +306,13 @@ test_pop_ready_returns_completed_sample(void)
   struct fixture fx = { 0 };
   EXPECT(fixture_setup(&fx, "blosc-zstd") == 0);
 
-  struct damacy_sample s = { .uri = "foo", .aabb = { .rank = 2 } };
-  s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
-  s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
+  struct damacy_sample s = { .uri = "foo", .rank = 2 };
+  s.axes[0] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 16 } };
+  s.axes[1] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 32 } };
 
   EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 0) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
@@ -320,9 +340,13 @@ test_pop_ready_surfaces_error_state(void)
   struct fixture fx = { 0 };
   EXPECT(fixture_setup(&fx, "blosc-zstd") == 0);
 
-  struct damacy_sample s = { .uri = "missing", .aabb = { .rank = 2 } };
-  s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
-  s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
+  struct damacy_sample s = { .uri = "missing", .rank = 2 };
+  s.axes[0] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 16 } };
+  s.axes[1] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 32 } };
 
   EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 0) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
@@ -344,9 +368,13 @@ test_pop_ready_recycles_slot(void)
   struct fixture fx = { 0 };
   EXPECT(fixture_setup(&fx, "blosc-zstd") == 0);
 
-  struct damacy_sample s = { .uri = "foo", .aabb = { .rank = 2 } };
-  s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
-  s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
+  struct damacy_sample s = { .uri = "foo", .rank = 2 };
+  s.axes[0] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 16 } };
+  s.axes[1] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 32 } };
 
   for (int round = 0; round < 3; ++round) {
     EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, (uint64_t)round) ==
@@ -385,9 +413,13 @@ test_sample_gate_ready_after_drain(void)
   struct fixture fx = { 0 };
   EXPECT(fixture_setup(&fx, "blosc-zstd") == 0);
 
-  struct damacy_sample s = { .uri = "foo", .aabb = { .rank = 2 } };
-  s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
-  s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
+  struct damacy_sample s = { .uri = "foo", .rank = 2 };
+  s.axes[0] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 16 } };
+  s.axes[1] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 32 } };
   EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 0) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
 
@@ -407,9 +439,13 @@ test_sample_gate_error_on_failed_sample(void)
   struct fixture fx = { 0 };
   EXPECT(fixture_setup(&fx, "blosc-zstd") == 0);
 
-  struct damacy_sample s = { .uri = "missing", .aabb = { .rank = 2 } };
-  s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
-  s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
+  struct damacy_sample s = { .uri = "missing", .rank = 2 };
+  s.axes[0] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 16 } };
+  s.axes[1] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 32 } };
   EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 0) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
 
@@ -428,9 +464,13 @@ test_distinct_samples_get_separate_gates(void)
   struct fixture fx = { 0 };
   EXPECT(fixture_setup(&fx, "blosc-zstd") == 0);
 
-  struct damacy_sample s = { .uri = "foo", .aabb = { .rank = 2 } };
-  s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
-  s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
+  struct damacy_sample s = { .uri = "foo", .rank = 2 };
+  s.axes[0] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 16 } };
+  s.axes[1] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 32 } };
   EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 0) == 0);
   EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 1) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
@@ -451,9 +491,13 @@ test_pop_drops_sample_gate(void)
   struct fixture fx = { 0 };
   EXPECT(fixture_setup(&fx, "blosc-zstd") == 0);
 
-  struct damacy_sample s = { .uri = "foo", .aabb = { .rank = 2 } };
-  s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
-  s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
+  struct damacy_sample s = { .uri = "foo", .rank = 2 };
+  s.axes[0] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 16 } };
+  s.axes[1] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 32 } };
   EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 0) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
 
@@ -474,9 +518,13 @@ test_sample_gate_lives_until_pop(void)
   struct fixture fx = { 0 };
   EXPECT(fixture_setup(&fx, "blosc-zstd") == 0);
 
-  struct damacy_sample s = { .uri = "foo", .aabb = { .rank = 2 } };
-  s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
-  s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
+  struct damacy_sample s = { .uri = "foo", .rank = 2 };
+  s.axes[0] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 16 } };
+  s.axes[1] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 32 } };
   EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 0) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
 
@@ -500,9 +548,13 @@ test_admit_fail_releases_batch_entry(void)
   struct fixture fx = { 0 };
   EXPECT(fixture_setup(&fx, "blosc-zstd") == 0);
 
-  struct damacy_sample s = { .aabb = { .rank = 2 } };
-  s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
-  s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
+  struct damacy_sample s = { .rank = 2 };
+  s.axes[0] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 16 } };
+  s.axes[1] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 32 } };
 
   for (int i = 0; i < 8; ++i) {
     char uri[16];
@@ -555,9 +607,13 @@ test_take_wave_yields_ticket(void)
   EXPECT(prefetcher_in_flight(fx.p) == 0);
   EXPECT(prefetcher_ready_prefix_count(fx.p) == 0);
 
-  struct damacy_sample s = { .uri = "foo", .aabb = { .rank = 2 } };
-  s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
-  s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
+  struct damacy_sample s = { .uri = "foo", .rank = 2 };
+  s.axes[0] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 16 } };
+  s.axes[1] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 32 } };
 
   EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 0) == 0);
   EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 1) == 0);
@@ -597,9 +653,13 @@ test_take_wave_caps_to_ready_prefix(void)
   struct fixture fx = { 0 };
   EXPECT(fixture_setup(&fx, "blosc-zstd") == 0);
 
-  struct damacy_sample s = { .uri = "foo", .aabb = { .rank = 2 } };
-  s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
-  s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
+  struct damacy_sample s = { .uri = "foo", .rank = 2 };
+  s.axes[0] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 16 } };
+  s.axes[1] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 32 } };
 
   EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 0) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
@@ -624,9 +684,13 @@ test_ready_wave_waits_for_prefix(void)
   struct fixture fx = { 0 };
   EXPECT(fixture_setup(&fx, "blosc-zstd") == 0);
 
-  struct damacy_sample s = { .uri = "foo", .aabb = { .rank = 2 } };
-  s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
-  s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
+  struct damacy_sample s = { .uri = "foo", .rank = 2 };
+  s.axes[0] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 16 } };
+  s.axes[1] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 32 } };
 
   EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 1) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
@@ -685,9 +749,13 @@ test_owner_capacity_saturation_surfaces_error(void)
   struct fixture fx = { 0 };
   EXPECT(fixture_setup(&fx, "blosc-zstd") == 0);
 
-  struct damacy_sample s = { .uri = "foo", .aabb = { .rank = 2 } };
-  s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
-  s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
+  struct damacy_sample s = { .uri = "foo", .rank = 2 };
+  s.axes[0] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 16 } };
+  s.axes[1] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 32 } };
 
   for (uint64_t i = 0; i < 8; ++i)
     EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, i) == 0);
@@ -722,9 +790,13 @@ test_owner_table_recycles_after_pop(void)
   struct fixture fx = { 0 };
   EXPECT(fixture_setup(&fx, "blosc-zstd") == 0);
 
-  struct damacy_sample s = { .uri = "foo", .aabb = { .rank = 2 } };
-  s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
-  s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
+  struct damacy_sample s = { .uri = "foo", .rank = 2 };
+  s.axes[0] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 16 } };
+  s.axes[1] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 32 } };
 
   for (uint64_t i = 0; i < 8; ++i)
     EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, i) == 0);
@@ -766,9 +838,13 @@ test_missing_shard_reaches_ready(void)
   snprintf(shard_path, sizeof shard_path, "%s/foo/c/0/0", fx.root);
   EXPECT(unlink(shard_path) == 0);
 
-  struct damacy_sample s = { .uri = "foo", .aabb = { .rank = 2 } };
-  s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 16 };
-  s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 32 };
+  struct damacy_sample s = { .uri = "foo", .rank = 2 };
+  s.axes[0] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 16 } };
+  s.axes[1] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 32 } };
   EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &s, 0) == 0);
   EXPECT(prefetcher_drain(fx.p) == DAMACY_OK);
 
@@ -795,9 +871,12 @@ test_sparse_indices_survive_prefetch(void)
   int64_t shape[] = { 32, 32 }, chunks[] = { 4, 4 }, shards[] = { 8, 8 };
   EXPECT(fixture_setup_layout(&fx, "none", shape, chunks, shards) == 0);
   int64_t rows[] = { 31, 0, 31 }, cols[] = { 31, 0 };
-  struct damacy_sample sample = { .uri = "foo",
-                                  .aabb = { .rank = 2 },
-                                  .indices = { { rows, 3 }, { cols, 2 } } };
+  struct damacy_sample sample = {
+    .uri = "foo",
+    .rank = 2,
+    .axes = { { .kind = DAMACY_AXIS_INDICES, .indices = { rows, 3 } },
+              { .kind = DAMACY_AXIS_INDICES, .indices = { cols, 2 } } }
+  };
   EXPECT(lookahead_push_with_sample_seq(&fx.lookahead, &sample, 0) == 0);
   memset(rows, 0, sizeof(rows));
   memset(cols, 0, sizeof(cols));

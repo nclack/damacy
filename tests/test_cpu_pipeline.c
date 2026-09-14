@@ -87,7 +87,9 @@ sample(const char* uri, int y, int x, int rows, int cols)
 {
   return (struct damacy_sample){
     .uri = uri,
-    .aabb = { .rank = 2, .dims = { { y, y + rows }, { x, x + cols } } }
+    .rank = 2,
+    .axes = { { .kind = DAMACY_AXIS_INTERVAL, .interval = { y, y + rows } },
+              { .kind = DAMACY_AXIS_INTERVAL, .interval = { x, x + cols } } }
   };
 }
 
@@ -344,6 +346,26 @@ test_bfloat_rounding_and_fill(void)
 }
 
 static int
+test_invalid_axes_rejected(void)
+{
+  struct components c = { 0 };
+  EXPECT(create_components(&c) == 0);
+  EXPECT(start_pipeline(&c, DAMACY_F32, 2, 2, 1) == 0);
+  struct damacy_sample query = sample("unused", 0, 0, 2, 2);
+  int kinds[] = { 0, -1, 3 };
+  for (size_t i = 0; i < sizeof(kinds) / sizeof(*kinds); ++i) {
+    query.axes[1].kind = (enum damacy_axis_kind)kinds[i];
+    struct damacy_push_result pushed = damacy_push(
+      c.pipeline, (struct damacy_sample_slice){ &query, &query + 1 });
+    EXPECT(pushed.status == DAMACY_INVAL);
+    EXPECT(pushed.unconsumed.beg == &query &&
+           pushed.unconsumed.end == &query + 1);
+  }
+  destroy_components(&c);
+  return 0;
+}
+
+static int
 test_index_arrays_copied(void)
 {
   char root[] = "/tmp/damacy_indices_XXXXXX";
@@ -357,9 +379,12 @@ test_index_arrays_copied(void)
   EXPECT(create_components(&c) == 0);
   EXPECT(start_pipeline(&c, DAMACY_F32, 3, 4, 1) == 0);
   int64_t rows[] = { 4, 0, 4 }, cols[] = { 10, 0, 3, 10 };
-  struct damacy_sample query = { .uri = uri,
-                                 .aabb = { .rank = 2 },
-                                 .indices = { { rows, 3 }, { cols, 4 } } };
+  struct damacy_sample query = {
+    .uri = uri,
+    .rank = 2,
+    .axes = { { .kind = DAMACY_AXIS_INDICES, .indices = { rows, 3 } },
+              { .kind = DAMACY_AXIS_INDICES, .indices = { cols, 4 } } }
+  };
   struct damacy_push_result pushed =
     damacy_push(c.pipeline, (struct damacy_sample_slice){ &query, &query + 1 });
   EXPECT(pushed.status == DAMACY_OK && pushed.unconsumed.beg == &query + 1);
@@ -382,6 +407,7 @@ test_index_arrays_copied(void)
 int
 main(void)
 {
+  RUN(test_invalid_axes_rejected);
   RUN(test_index_arrays_copied);
   RUN(test_codecs_and_types);
   RUN(test_owned_plan);

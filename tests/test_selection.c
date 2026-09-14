@@ -9,9 +9,12 @@ test_sparse_grid(void)
 {
   int64_t rows[] = { INT64_C(1) << 40, 3, 3, 8 };
   int64_t cols[] = { 9, 0, 9 };
-  struct damacy_sample sample = { .uri = "array",
-                                  .aabb = { .rank = 2 },
-                                  .indices = { { rows, 4 }, { cols, 3 } } };
+  struct damacy_sample sample = {
+    .uri = "array",
+    .rank = 2,
+    .axes = { { .kind = DAMACY_AXIS_INDICES, .indices = { rows, 4 } },
+              { .kind = DAMACY_AXIS_INDICES, .indices = { cols, 3 } } }
+  };
   struct damacy_batch_spec output = { .sample_rank = 2,
                                       .sample_shape = { 4, 3 },
                                       .samples_per_batch = 1 };
@@ -64,8 +67,9 @@ test_invalid_indices(void)
 {
   int64_t values[] = { 0, 1 };
   struct damacy_sample sample = { .uri = "array",
-                                  .aabb = { .rank = 1 },
-                                  .indices = { { values, 2 } } };
+                                  .rank = 1,
+                                  .axes = { { .kind = DAMACY_AXIS_INDICES,
+                                              .indices = { values, 2 } } } };
   struct damacy_batch_spec output = { .sample_rank = 1, .sample_shape = { 2 } };
   EXPECT(query_validate(&sample, &output, 1024) == DAMACY_OK);
   values[0] = -1;
@@ -73,11 +77,58 @@ test_invalid_indices(void)
   values[0] = INT64_MAX;
   EXPECT(query_validate(&sample, &output, 1024) == DAMACY_INVAL);
   values[0] = 0;
-  sample.indices[0].count = 0;
+  sample.axes[0].indices.count = 0;
   EXPECT(query_validate(&sample, &output, 1024) == DAMACY_INVAL);
-  sample.indices[0] = (struct damacy_index_array){ NULL, 2 };
+  sample.axes[0].indices = (struct damacy_index_array){ NULL, 2 };
   EXPECT(query_validate(&sample, &output, 1024) == DAMACY_INVAL);
-  sample.indices[0] = (struct damacy_index_array){ values, 1 };
+  sample.axes[0].indices = (struct damacy_index_array){ values, 1 };
+  EXPECT(query_validate(&sample, &output, 1024) == DAMACY_INVAL);
+  return 0;
+}
+
+static int
+test_invalid_axis_selections(void)
+{
+  int64_t values[] = { 1, 0 };
+  struct damacy_axis_selection invalid[] = {
+    { .interval = { 3, 5 } },
+    { .kind = (enum damacy_axis_kind) - 1, .interval = { 3, 5 } },
+    { .kind = (enum damacy_axis_kind)3, .interval = { 3, 5 } },
+    { .kind = DAMACY_AXIS_INDICES },
+    { .kind = DAMACY_AXIS_INDICES, .indices = { NULL, 2 } },
+    { .kind = DAMACY_AXIS_INDICES, .indices = { values, 0 } },
+    { .kind = DAMACY_AXIS_INTERVAL, .interval = { 2, 2 } },
+    { .kind = DAMACY_AXIS_INTERVAL, .interval = { 3, 2 } },
+    { .kind = DAMACY_AXIS_INTERVAL, .interval = { -1, 1 } },
+  };
+  struct damacy_sample sample = { .uri = "array", .rank = 1 };
+  struct damacy_batch_spec output = { .sample_rank = 1, .sample_shape = { 2 } };
+  struct damacy_aabb bounds;
+  struct query_axis axes[DAMACY_MAX_RANK];
+  char* storage = NULL;
+  for (size_t i = 0; i < sizeof(invalid) / sizeof(*invalid); ++i) {
+    sample.axes[0] = invalid[i];
+    EXPECT(query_validate(&sample, &output, 1024) == DAMACY_INVAL);
+    EXPECT(query_copy(&sample, &storage, &bounds, axes) == DAMACY_INVAL);
+    EXPECT(!storage);
+  }
+  sample.axes[0] = (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                                   .interval = { 3, 5 } };
+  EXPECT(query_validate(&sample, &output, 0) == DAMACY_OK);
+  EXPECT(query_copy(&sample, &storage, &bounds, axes) == DAMACY_OK);
+  EXPECT(bounds.rank == 1 && bounds.dims[0].beg == 3 &&
+         bounds.dims[0].end == 5);
+  EXPECT(!axes[0].indices && !axes[0].count);
+  free(storage);
+  sample.rank = 0;
+  EXPECT(query_validate(&sample, &output, 1024) == DAMACY_RANK);
+  sample.rank = DAMACY_MAX_RANK + 1;
+  EXPECT(query_validate(&sample, &output, 1024) == DAMACY_RANK);
+  sample.rank = 1;
+  output.sample_rank = 2;
+  EXPECT(query_validate(&sample, &output, 1024) == DAMACY_RANK);
+  output.sample_rank = 1;
+  output.sample_shape[0] = 3;
   EXPECT(query_validate(&sample, &output, 1024) == DAMACY_INVAL);
   return 0;
 }
@@ -86,10 +137,12 @@ static int
 test_mixed_grid(void)
 {
   int64_t values[] = { 10, 1, 10 };
-  struct damacy_sample sample = { .uri = "array",
-                                  .aabb = { .rank = 2,
-                                            .dims = { { 0, 0 }, { 3, 9 } } },
-                                  .indices = { { values, 3 } } };
+  struct damacy_sample sample = {
+    .uri = "array",
+    .rank = 2,
+    .axes = { { .kind = DAMACY_AXIS_INDICES, .indices = { values, 3 } },
+              { .kind = DAMACY_AXIS_INTERVAL, .interval = { 3, 9 } } }
+  };
   struct damacy_aabb bounds;
   struct query_axis axes[DAMACY_MAX_RANK];
   char* storage = NULL;
@@ -119,6 +172,7 @@ main(void)
 {
   RUN(test_sparse_grid);
   RUN(test_invalid_indices);
+  RUN(test_invalid_axis_selections);
   RUN(test_mixed_grid);
   return 0;
 }

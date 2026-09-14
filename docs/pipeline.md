@@ -137,23 +137,31 @@ The planner enumerates only selected shards and chunks, including when indices
 span large gaps. `max_chunks` counts each selected chunk once per sample;
 repeated indices inside that chunk do not consume extra chunk entries.
 
-The C API extends `damacy_sample` with optional per-axis arrays. Rebuild C
-callers against the updated headers and zero-initialize the struct before
-assigning individual fields. A designated initializer also zeroes omitted fields:
+The C API uses `damacy_sample.rank` and one tagged `damacy_axis_selection`
+per axis. C callers must rebuild against the updated headers and explicitly
+set every active axis to `DAMACY_AXIS_INTERVAL` or `DAMACY_AXIS_INDICES`:
 
 ```c
 int64_t rows[] = {7, 2, 7};
 struct damacy_sample query = {
     .uri = "/data/image.zarr/0",
-    .aabb = {.rank = 2, .dims = {{0, 0}, {4, 8}}},
-    .indices = {{.values = rows, .count = 3}},
+    .rank = 2,
+    .axes = {
+        {.kind = DAMACY_AXIS_INDICES, .indices = {.values = rows, .count = 3}},
+        {.kind = DAMACY_AXIS_INTERVAL, .interval = {.beg = 4, .end = 8}},
+    },
 };
 ```
 
-This requests a `(3, 4)` sample. A nonempty index array overrides its AABB
-interval. `{NULL, 0}` uses the AABB interval; other empty or missing index arrays
-are invalid. `damacy_push` copies the URI and index values for its consumed
-prefix. The unconsumed suffix remains caller-owned and can be retried.
+This requests a `(3, 4)` sample. The union's `kind` selects its active member;
+there is no default kind. A zero or unknown tag, a null or empty index array,
+or an interval with negative, empty, or reversed bounds returns `DAMACY_INVAL`
+from `damacy_push`. Each axis's length must match the configured sample shape.
+Only `axes[0..rank)` are active, in the Zarr array's stored axis order. Preparation
+derives the bounding AABB from these selections.
+
+`damacy_push` copies the URI and index values for its consumed prefix. The
+unconsumed suffix remains caller-owned and can be retried.
 
 ## Limits and backpressure
 
