@@ -45,6 +45,7 @@ RUN apt-get update \
         ca-certificates \
         curl \
         xz-utils \
+        util-linux \
         cmake \
         ninja-build \
         pkg-config \

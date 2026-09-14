@@ -46,4 +46,5 @@ jobs:
             --security-opt seccomp=unconfined \
             -e TSAN_OPTIONS="suppressions=/workspace/damacy/tests/tsan-suppressions.txt halt_on_error=1 second_deadlock_stack=1" \
             "$IMAGE" \
+            setarch --addr-no-randomize \
             ctest --test-dir build -L tsan --output-on-failure
