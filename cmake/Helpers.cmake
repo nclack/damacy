@@ -25,7 +25,7 @@ endfunction()
 # Same as add_src_lib but a no-op under DAMACY_FUZZ (fuzz mode doesn't
 # enable CUDA, so any CUDA-linking target would fail to configure).
 function(add_cuda_lib TARGET)
-    if(DAMACY_FUZZ)
+    if(NOT DAMACY_CUDA)
         return()
     endif()
     add_src_lib(${TARGET} ${ARGN})

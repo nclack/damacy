@@ -11,6 +11,7 @@ python_add_library(
     damacy/_native.c
     damacy/_log_sink.c
     damacy/_api.c
+    damacy/_components.c
 )
 
 target_link_libraries(_native PRIVATE damacy log warnings)
@@ -20,29 +21,44 @@ target_link_libraries(_native PRIVATE damacy log warnings)
 # wheel; the extension goes alongside the package's __init__.py.
 install(TARGETS _native LIBRARY DESTINATION damacy)
 
-# --cov-fail-under floor matches codecov.yml's patch target so the two
-# gates (project-total here, per-PR-patch on codecov) read the same number.
+set_target_properties(
+    _native
+    PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/damacy"
+)
+configure_file(damacy/__init__.py damacy/__init__.py COPYONLY)
+
 if(BUILD_TESTING)
-    find_program(UV_EXECUTABLE uv)
-    if(UV_EXECUTABLE)
+    execute_process(
+        COMMAND "${Python_EXECUTABLE}" -c "import pytest, pytest_cov"
+        RESULT_VARIABLE PYTEST_AVAILABLE
+        OUTPUT_QUIET
+        ERROR_QUIET
+    )
+    if(PYTEST_AVAILABLE EQUAL 0)
+        set(PYTHON_COVERAGE_ARGS
+            --cov=damacy
+            --cov-report=term-missing:skip-covered
+        )
+        if(DAMACY_CUDA)
+            list(APPEND PYTHON_COVERAGE_ARGS --cov-fail-under=70)
+        endif()
         add_test(
             NAME python_pytest
             COMMAND
-                ${UV_EXECUTABLE} run --extra dev pytest -v --color=yes
-                --cov=damacy --cov-report=term-missing:skip-covered
-                --cov-fail-under=70 "${CMAKE_CURRENT_SOURCE_DIR}/tests"
+                "${Python_EXECUTABLE}" -m pytest -v ${PYTHON_COVERAGE_ARGS}
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests"
             WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
         )
         set_tests_properties(
             python_pytest
             PROPERTIES
                 ENVIRONMENT
-                    "WRITE_ZARR_SCRIPT=${PROJECT_SOURCE_DIR}/tests/write_zarr.py"
+                    "WRITE_ZARR_SCRIPT=${PROJECT_SOURCE_DIR}/tests/write_zarr.py;PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}"
         )
     else()
         message(
             STATUS
-            "damacy: uv not on PATH; skipping python_pytest registration"
+            "damacy: install pytest and pytest-cov to enable python_pytest"
         )
     endif()
 endif()

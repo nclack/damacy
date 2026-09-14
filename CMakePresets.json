@@ -7,7 +7,15 @@
       "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "DAMACY_CUDA": "ON"
+      }
+    },
+    {
+      "name": "cpu",
+      "inherits": "default",
+      "cacheVariables": {
+        "DAMACY_CUDA": "OFF"
       }
     },
     {

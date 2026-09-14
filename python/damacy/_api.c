@@ -17,7 +17,9 @@
 #include "_api.h"
 #include "damacy.h"
 
+#ifdef DAMACY_HAS_CUDA
 #include <cuda.h>
+#endif
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
@@ -216,7 +218,8 @@ raise_status(enum damacy_status s, const char* what)
 
 typedef struct
 {
-  PyObject_HEAD struct damacy* handle; // strong ref while not destroyed
+  PyObject_HEAD struct damacy* handle;
+  PyObject* dependencies;
 } PipelineObj;
 
 typedef struct
@@ -315,9 +318,15 @@ Batch_info(BatchObj* self, void* Py_UNUSED(closure))
     PyTuple_SET_ITEM(shape, i, v);
   }
 
-  return Py_BuildValue("{s:K,s:N,s:s,s:K,s:K}",
+  return Py_BuildValue("{s:K,s:K,s:i,s:i,s:N,s:s,s:K,s:K}",
+                       "data",
+                       (unsigned long long)(uintptr_t)info.data,
                        "device_ptr",
-                       (unsigned long long)(uintptr_t)info.device_ptr,
+                       (unsigned long long)(uintptr_t)info.data,
+                       "device_type",
+                       (int)info.device_type,
+                       "device_id",
+                       info.device_id,
                        "shape",
                        shape,
                        "dtype",
@@ -356,21 +365,16 @@ struct dlpack_payload
   DLManagedTensor mt_v0;
   DLManagedTensorVersioned mt_v1;
   int64_t shape[DAMACY_MAX_RANK + 1]; // referenced by dl_tensor.shape
-  PyObject* batch;                    // strong ref; dropped by deleter
+  struct damacy_batch* handle;
 };
 
-// Drop the batch ref and free the payload under the GIL. Shared by both
-// v0 and v1 deleters. PyMem_Free uses pymalloc which itself requires the
-// GIL, so the free stays inside the GIL window.
 static void
 dlpack_payload_free(struct dlpack_payload* p)
 {
   if (!p)
     return;
-  PyGILState_STATE g = PyGILState_Ensure();
-  Py_XDECREF(p->batch);
-  PyMem_Free(p);
-  PyGILState_Release(g);
+  damacy_batch_release(p->handle);
+  free(p);
 }
 
 static void
@@ -409,6 +413,7 @@ dlpack_capsule_destructor(PyObject* capsule)
   }
 }
 
+#ifdef DAMACY_HAS_CUDA
 static int
 sync_streams_for_consumer(void* producer_stream_v, PyObject* stream_obj)
 {
@@ -481,6 +486,8 @@ sync_streams_for_consumer(void* producer_stream_v, PyObject* stream_obj)
   return 0;
 }
 
+#endif
+
 // Parse max_version per the array-API DLPack protocol. Returns 0 on
 // success, -1 on error (PyErr set). *out_major / *out_minor land at the
 // requested version, or (0,0) when the consumer didn't specify one.
@@ -539,7 +546,6 @@ Batch_dlpack(BatchObj* self, PyObject* args, PyObject* kw)
   if (!PyArg_ParseTupleAndKeywords(
         args, kw, "|OOOO", kws, &stream_obj, &max_version, &dl_device, &copy))
     return NULL;
-  (void)dl_device;
   if (copy != Py_None && PyObject_IsTrue(copy)) {
     PyErr_SetString(PyExc_BufferError,
                     "damacy DLPack: copy=True not supported");
@@ -568,30 +574,43 @@ Batch_dlpack(BatchObj* self, PyObject* args, PyObject* kw)
   }
   (void)bpe;
 
-  // Resolve device id from the device pointer.
-  int dev_id = 0;
-  unsigned int ord = 0;
-  if (cuPointerGetAttribute(&ord,
-                            CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL,
-                            (CUdeviceptr)info.device_ptr) == CUDA_SUCCESS)
-    dev_id = (int)ord;
-
-  if (sync_streams_for_consumer(info.ready_stream, stream_obj) != 0)
+  if (dl_device != Py_None) {
+    int requested_type, requested_id;
+    if (!PyArg_ParseTuple(dl_device, "ii", &requested_type, &requested_id))
+      return NULL;
+    if (requested_type != (int)info.device_type ||
+        requested_id != info.device_id) {
+      PyErr_SetString(PyExc_BufferError,
+                      "requested device differs from the batch device");
+      return NULL;
+    }
+  }
+  if (info.device_type == DAMACY_DEVICE_CPU) {
+    if (stream_obj != Py_None) {
+      PyErr_SetString(PyExc_ValueError, "CPU tensors require stream=None");
+      return NULL;
+    }
+  }
+#ifdef DAMACY_HAS_CUDA
+  else if (info.ready_stream &&
+           sync_streams_for_consumer(info.ready_stream, stream_obj) != 0)
     return NULL;
+#endif
 
-  struct dlpack_payload* p = PyMem_Calloc(1, sizeof *p);
+  struct dlpack_payload* p = calloc(1, sizeof *p);
   if (!p)
     return PyErr_NoMemory();
 
   for (int i = 0; i < info.rank; ++i)
     p->shape[i] = info.shape[i];
 
-  Py_INCREF(self);
-  p->batch = (PyObject*)self;
+  p->handle = self->handle;
+  damacy_batch_retain(p->handle);
 
   DLTensor dl = {
-    .data = info.device_ptr,
-    .device = (DLDevice){ .device_type = kDLCUDA, .device_id = dev_id },
+    .data = info.data,
+    .device = (DLDevice){ .device_type = info.device_type,
+                          .device_id = info.device_id },
     .ndim = (int32_t)info.rank,
     .dtype = dlt,
     .shape = p->shape,
@@ -615,8 +634,7 @@ Batch_dlpack(BatchObj* self, PyObject* args, PyObject* kw)
     cap = PyCapsule_New(&p->mt_v0, "dltensor", dlpack_capsule_destructor);
   }
   if (!cap) {
-    Py_DECREF(self);
-    PyMem_Free(p);
+    dlpack_payload_free(p);
     return NULL;
   }
   return cap;
@@ -628,22 +646,16 @@ Batch_dlpack_device(BatchObj* self, PyObject* Py_UNUSED(ignored))
   RETURN_IF_DESTROYED(self, "Batch has been released");
   struct damacy_batch_info info;
   damacy_batch_info(self->handle, &info);
-  unsigned int ord = 0;
-  if (cuPointerGetAttribute(&ord,
-                            CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL,
-                            (CUdeviceptr)info.device_ptr) != CUDA_SUCCESS)
-    ord = 0;
-  return Py_BuildValue("(ii)", (int)kDLCUDA, (int)ord);
+  return Py_BuildValue("(ii)", (int)info.device_type, info.device_id);
 }
 
 static PyMethodDef Batch_methods[] = {
   { "release",
     (PyCFunction)(void (*)(void))Batch_release,
     METH_VARARGS | METH_KEYWORDS,
-    "release(event=None): return the slot to the pool. With event=None "
-    "(default), release is immediate. With event set to an integer CUevent "
-    "handle, damacy stream-waits on it before reusing the slot's buffer — "
-    "the host returns immediately. Idempotent." },
+    "release(event=None): release this batch reference. DLPack consumers "
+    "keep the buffer alive. A CUDA event delays reuse until that event "
+    "completes. Idempotent." },
   { "__dlpack__",
     (PyCFunction)(void (*)(void))Batch_dlpack,
     METH_VARARGS | METH_KEYWORDS,
@@ -654,7 +666,7 @@ static PyMethodDef Batch_methods[] = {
   { "__dlpack_device__",
     (PyCFunction)Batch_dlpack_device,
     METH_NOARGS,
-    "DLPack device tuple: (kDLCUDA=2, ordinal)." },
+    "DLPack device tuple: (1, 0) for CPU or (2, ordinal) for CUDA." },
   { NULL, NULL, 0, NULL },
 };
 
@@ -695,6 +707,10 @@ batch_new(PipelineObj* parent, struct damacy_batch* handle)
 static int
 Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
 {
+  if (self->handle) {
+    PyErr_SetString(PyExc_RuntimeError, "Pipeline is already initialized");
+    return -1;
+  }
   // kws[] / format string / variable list mirror struct damacy_config —
   // keep all three in sync when adding a field.
   static char* kws[] = { "samples_per_batch",
@@ -739,7 +755,8 @@ Pipeline_init(PipelineObj* self, PyObject* args, PyObject* kw)
   PyObject* sample_shape_obj = NULL;
   unsigned int host_buffer_waves = DAMACY_DEFAULT_HOST_BUFFER_WAVES;
   unsigned int max_chunks_per_wave = DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE;
-  unsigned int max_substreams_per_chunk = DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK;
+  unsigned int max_substreams_per_chunk =
+    DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK;
   unsigned long long max_read_op_bytes = td.max_read_op_bytes;
   int device = -1;
   int enable_gds = DAMACY_GDS_AUTO;
@@ -896,6 +913,7 @@ Pipeline_dealloc(PipelineObj* self)
     self->handle = NULL;
     WITH_GIL_RELEASED(damacy_destroy(d));
   }
+  Py_XDECREF(self->dependencies);
   Py_TYPE(self)->tp_free((PyObject*)self);
 }
 
@@ -996,7 +1014,11 @@ Pipeline_pop(PipelineObj* self, PyObject* Py_UNUSED(ignored))
   WITH_GIL_RELEASED(s = damacy_pop(self->handle, &b));
   if (s != DAMACY_OK)
     return raise_status(s, "pop");
-  return (PyObject*)batch_new(self, b);
+  BatchObj* batch = batch_new(self, b);
+  if (!batch) {
+    WITH_GIL_RELEASED(damacy_batch_release(b));
+  }
+  return (PyObject*)batch;
 }
 
 static PyObject*
@@ -1088,6 +1110,7 @@ Pipeline_stats(PipelineObj* self, PyObject* Py_UNUSED(ignored))
     { "chunks_dispatched", st.chunks_dispatched },
     { "reads_issued", st.reads_issued },
     { "gpu_bytes_committed", st.gpu_bytes_committed },
+    { "host_bytes_committed", st.host_bytes_committed },
   };
   for (size_t i = 0; i < sizeof counters / sizeof counters[0]; ++i)
     if (dict_set_steal(d,
@@ -1125,7 +1148,19 @@ static PyGetSetDef Pipeline_getset[] = {
   { NULL, NULL, NULL, NULL, NULL },
 };
 
+static PyObject*
+Pipeline_shutdown(PipelineObj* self, PyObject* Py_UNUSED(ignored))
+{
+  RETURN_IF_DESTROYED(self, "Pipeline has been destroyed");
+  WITH_GIL_RELEASED(damacy_shutdown(self->handle));
+  Py_RETURN_NONE;
+}
+
 static PyMethodDef Pipeline_methods[] = {
+  { "shutdown",
+    (PyCFunction)Pipeline_shutdown,
+    METH_NOARGS,
+    "Stop work and retain exported buffers." },
   { "push",
     (PyCFunction)Pipeline_push,
     METH_O,
@@ -1159,6 +1194,35 @@ PyTypeObject PipelineType = {
   .tp_methods = Pipeline_methods,
   .tp_getset = Pipeline_getset,
 };
+
+PyObject*
+api_raise_status(enum damacy_status status, const char* what)
+{
+  return raise_status(status, what);
+}
+
+PyObject*
+api_pipeline_from_components(struct damacy_planner* planner,
+                             struct damacy_executor* executor,
+                             const struct damacy_batch_spec* output,
+                             const struct damacy_queue_limits* queues,
+                             PyObject* dependencies)
+{
+  PipelineObj* self = (PipelineObj*)PipelineType.tp_alloc(&PipelineType, 0);
+  if (!self)
+    return NULL;
+  Py_INCREF(dependencies);
+  self->dependencies = dependencies;
+  enum damacy_status status;
+  Py_BEGIN_ALLOW_THREADS status =
+    damacy_pipeline_create(planner, executor, output, queues, &self->handle);
+  Py_END_ALLOW_THREADS if (status != DAMACY_OK)
+  {
+    Py_DECREF(self);
+    return raise_status(status, "create");
+  }
+  return (PyObject*)self;
+}
 
 // ---------- registration ----------
 

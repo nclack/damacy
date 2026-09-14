@@ -13,7 +13,6 @@ import ctypes
 import dataclasses
 import shutil
 import subprocess
-import sys
 import warnings
 
 import damacy
@@ -256,12 +255,14 @@ def test_dtype_string_form_accepted(tiny_zarr, dtype):
     _ = tiny_zarr
     with Pipeline(_base_config(dtype=dtype)) as d:
         assert isinstance(d, Pipeline)
+        assert d.config is not None
         assert d.config.dtype is damacy.Dtype.coerce(dtype)
 
 
 def test_dtype_int_form_accepted(tiny_zarr):
     _ = tiny_zarr
     with Pipeline(_base_config(dtype=damacy.Dtype.BF16)) as d:
+        assert d.config is not None
         assert d.config.dtype is damacy.Dtype.BF16
 
 
@@ -614,9 +615,7 @@ def test_config_validates_eagerly():
 
 def test_config_tuning_defaults_are_explicit():
     cfg = Config(samples_per_batch=1, sample_shape=(8, 16), max_gpu_memory_bytes=1)
-    assert (
-        cfg.max_chunk_uncompressed_bytes == _native.DEFAULT_CHUNK_UNCOMPRESSED_BYTES
-    )
+    assert cfg.max_chunk_uncompressed_bytes == _native.DEFAULT_CHUNK_UNCOMPRESSED_BYTES
     assert cfg.max_read_op_bytes == _native.DEFAULT_READ_OP_MAX_BYTES
     assert cfg.host_buffer_waves == _native.DEFAULT_HOST_BUFFER_WAVES
     assert cfg.max_chunks_per_wave == _native.DEFAULT_MAX_CHUNKS_PER_WAVE
@@ -1052,26 +1051,36 @@ def test_batch_dlpack_after_release_raises(tiny_zarr):
             batch.__dlpack_device__()
 
 
-def test_batch_dlpack_capsule_holds_batch_alive(tiny_zarr):
-    """The capsule's Py_INCREF lands on the C-side BatchObj
-    (``batch._native``), not on the Python-level wrapper — the wrapper
-    just delegates. Dropping the capsule must run the deleter and
-    decrement that native reference back to its baseline."""
-    uri = tiny_zarr
-    with Pipeline(_base_config()) as d:
-        d.push([Sample(uri=uri, aabb=[(0, 8), (0, 16)])])
+@pytest.mark.parametrize("version", [(0, 8), (1, 0)])
+def test_batch_dlpack_capsule_retains_data_after_shutdown(tiny_zarr, version):
+    driver = ctypes.CDLL("libcuda.so.1")
+    copy = driver.cuMemcpyDtoH_v2
+    copy.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_size_t]
+    copy.restype = ctypes.c_int
+    config = dataclasses.replace(_base_config(), sample_shape=(4, 8))
+    with Pipeline(config) as d:
+        d.push([Sample(uri=tiny_zarr, aabb=[(0, 4), (0, 8)])])
         batch = d.pop()
-        try:
-            native = batch._native
-            rc_before = sys.getrefcount(native)
-            cap = batch.__dlpack__(stream=None)
-            rc_held = sys.getrefcount(native)
-            assert rc_held > rc_before, "capsule should incref the native batch"
-            del cap
-            rc_after = sys.getrefcount(native)
-            assert rc_after == rc_before, "capsule deleter should decref it"
-        finally:
-            batch.release()
+        cap = batch.__dlpack__(stream=None, max_version=version)
+        name, layout = (
+            (b"dltensor", _DLManagedTensor)
+            if version[0] == 0
+            else (b"dltensor_versioned", _DLManagedTensorVersioned)
+        )
+        tensor = _capsule_as(cap, name, layout).dl_tensor
+        before = (ctypes.c_float * 32)()
+        assert copy(before, tensor.data, ctypes.sizeof(before)) == 0
+        batch.release()
+        for _ in range(3):
+            d.push([Sample(uri=tiny_zarr, aabb=[(4, 8), (8, 16)])])
+            with d.pop():
+                pass
+    del d, batch
+    after = (ctypes.c_float * 32)()
+    assert copy(after, tensor.data, ctypes.sizeof(after)) == 0
+    assert list(after) == list(before)
+    assert [tensor.shape[i] for i in range(tensor.ndim)] == [1, 4, 8]
+    del cap
 
 
 def test_batch_dlpack_stream_kwargs_accepted(tiny_zarr):

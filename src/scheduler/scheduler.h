@@ -17,15 +17,23 @@ extern "C"
   // to have the scheduler broadcast its cond.
   typedef int (*scheduler_step_fn)(void* arg);
 
+  struct scheduler_hooks
+  {
+    void (*enter)(void*);
+    void (*leave)(void*);
+  };
+
   // Spawn the worker. idle_ns must be > 0. `affinity` is the resolved
   // NUMA placement plan from numa_init; pass NULL (or a struct with
   // node<0) to skip affinity. Returns NULL on failure.
   struct scheduler* scheduler_create(scheduler_step_fn step,
                                      void* arg,
                                      int64_t idle_ns,
-                                     const struct numa_resolved* affinity);
+                                     const struct numa_resolved* affinity,
+                                     const struct scheduler_hooks* hooks);
 
   // Signal shutdown, join, free. NULL-safe.
+  void scheduler_stop(struct scheduler* s);
   void scheduler_destroy(struct scheduler* s);
 
   void scheduler_lock(struct scheduler* s);

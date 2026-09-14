@@ -284,13 +284,6 @@ test_multi_wave_per_batch(void)
       0);
   }
 
-  // Tight max_gpu_memory_bytes + small chunk cap drives the resolver
-  // to pick the minimum per-wave geometry (one chunk per wave). With
-  // max_chunk_uncompressed_bytes = 4 KiB and a budget just barely big
-  // enough to fit total_min, dev_decompressed_per_wave lands near
-  // 4 KiB. input_dispatch_wave's per-chunk read_op is page-aligned (typically
-  // 4 KiB), so the 16-chunk batch spills into ≥2 waves of the same
-  // batch slot.
   struct damacy_config cfg = {
     .samples_per_batch = 4,
     .lookahead_samples = 8,
@@ -307,8 +300,8 @@ test_multi_wave_per_batch(void)
   cfg.tuning.n_chunk_layout_cache = 16;
   cfg.tuning.max_shards_per_sample = 1;
   cfg.tuning.max_chunk_uncompressed_bytes = 4ull << 10;
-  // Resolver minimum so the 16-chunk batch spills into ≥2 waves.
   cfg.tuning.max_gpu_memory_bytes = 116ull << 20;
+  cfg.tuning.max_chunks_per_wave = 4;
   struct damacy* d = NULL;
   EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
 

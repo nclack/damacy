@@ -1,9 +1,9 @@
-#include "planner/group_chunks.h"
+#include "executor/group_chunks.h"
 
 #include <string.h>
 
 enum damacy_status
-group_chunks_by_read(struct planner_output* out,
+group_chunks_by_read(struct dispatch_output* out,
                      uint32_t* u32_scratch,
                      struct chunk_plan* chunk_plan_scratch)
 {
@@ -52,7 +52,9 @@ group_chunks_by_read(struct planner_output* out,
       uint32_t r = out->chunk_plans[i].read_op_idx;
       chunk_plan_scratch[head[r]++] = out->chunk_plans[i];
     }
-    memcpy(out->chunk_plans, chunk_plan_scratch, (size_t)n * sizeof(*chunk_plan_scratch));
+    memcpy(out->chunk_plans,
+           chunk_plan_scratch,
+           (size_t)n * sizeof(*chunk_plan_scratch));
   }
 
   for (uint32_t g = 0; g < g_out; ++g) {

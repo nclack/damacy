@@ -378,7 +378,7 @@ test_single_chunk_aligned(void)
   struct read_op reads[8] = { 0 };
   struct chunk_plan chunks[8] = { 0 };
   struct sample_plan samples[4] = { 0 };
-  struct planner_output out = {
+  struct dispatch_output out = {
     .read_ops = reads,
     .read_ops_cap = 8,
     .chunk_plans = chunks,
@@ -453,7 +453,7 @@ test_multi_chunk_partial(void)
   struct read_op reads[8] = { 0 };
   struct chunk_plan chunks[8] = { 0 };
   struct sample_plan samples[4] = { 0 };
-  struct planner_output out = {
+  struct dispatch_output out = {
     .read_ops = reads,
     .read_ops_cap = 8,
     .chunk_plans = chunks,
@@ -520,7 +520,7 @@ test_two_samples_indices(void)
   struct read_op reads[8] = { 0 };
   struct chunk_plan chunks[8] = { 0 };
   struct sample_plan samples[4] = { 0 };
-  struct planner_output out = {
+  struct dispatch_output out = {
     .read_ops = reads,
     .read_ops_cap = 8,
     .chunk_plans = chunks,
@@ -568,7 +568,7 @@ test_empty_chunk_becomes_fill(void)
   struct read_op reads[8] = { 0 };
   struct chunk_plan chunks[8] = { 0 };
   struct sample_plan samples[4] = { 0 };
-  struct planner_output out = {
+  struct dispatch_output out = {
     .read_ops = reads,
     .read_ops_cap = 8,
     .chunk_plans = chunks,
@@ -620,7 +620,7 @@ test_fill_value_int16_neg1(void)
   struct read_op reads[8] = { 0 };
   struct chunk_plan chunks[8] = { 0 };
   struct sample_plan samples[4] = { 0 };
-  struct planner_output out = {
+  struct dispatch_output out = {
     .read_ops = reads,
     .read_ops_cap = 8,
     .chunk_plans = chunks,
@@ -663,7 +663,7 @@ test_fill_value_f32_nan(void)
   struct read_op reads[8] = { 0 };
   struct chunk_plan chunks[8] = { 0 };
   struct sample_plan samples[4] = { 0 };
-  struct planner_output out = {
+  struct dispatch_output out = {
     .read_ops = reads,
     .read_ops_cap = 8,
     .chunk_plans = chunks,
@@ -708,7 +708,7 @@ test_missing_shard_becomes_fill(void)
   struct read_op reads[8] = { 0 };
   struct chunk_plan chunks[8] = { 0 };
   struct sample_plan samples[4] = { 0 };
-  struct planner_output out = {
+  struct dispatch_output out = {
     .read_ops = reads,
     .read_ops_cap = 8,
     .chunk_plans = chunks,
@@ -749,7 +749,7 @@ test_page_alignment(void)
   struct read_op reads[8] = { 0 };
   struct chunk_plan chunks[8] = { 0 };
   struct sample_plan samples[4] = { 0 };
-  struct planner_output out = {
+  struct dispatch_output out = {
     .read_ops = reads,
     .read_ops_cap = 8,
     .chunk_plans = chunks,
@@ -806,7 +806,7 @@ run_blosc_codec_id_case(const char* cname, uint8_t expected_codec_id)
   struct read_op reads[8] = { 0 };
   struct chunk_plan chunks[8] = { 0 };
   struct sample_plan samples[4] = { 0 };
-  struct planner_output out = {
+  struct dispatch_output out = {
     .read_ops = reads,
     .read_ops_cap = 8,
     .chunk_plans = chunks,
@@ -848,7 +848,7 @@ run_blosc_lz4_rejected_case(const char* cname)
   struct read_op reads[8] = { 0 };
   struct chunk_plan chunks[8] = { 0 };
   struct sample_plan samples[4] = { 0 };
-  struct planner_output out = {
+  struct dispatch_output out = {
     .read_ops = reads,
     .read_ops_cap = 8,
     .chunk_plans = chunks,
@@ -901,7 +901,7 @@ test_codec_id_none(void)
   struct read_op reads[8] = { 0 };
   struct chunk_plan chunks[8] = { 0 };
   struct sample_plan samples[4] = { 0 };
-  struct planner_output out = {
+  struct dispatch_output out = {
     .read_ops = reads,
     .read_ops_cap = 8,
     .chunk_plans = chunks,
@@ -980,7 +980,7 @@ test_unsupported_source_dtype(void)
   struct read_op reads[8] = { 0 };
   struct chunk_plan chunks[8] = { 0 };
   struct sample_plan samples[4] = { 0 };
-  struct planner_output out = {
+  struct dispatch_output out = {
     .read_ops = reads,
     .read_ops_cap = 8,
     .chunk_plans = chunks,
@@ -1082,7 +1082,7 @@ test_unsharded_single_chunk(void)
   struct read_op reads[8] = { 0 };
   struct chunk_plan chunks[8] = { 0 };
   struct sample_plan samples[4] = { 0 };
-  struct planner_output out = {
+  struct dispatch_output out = {
     .read_ops = reads,
     .read_ops_cap = 8,
     .chunk_plans = chunks,
@@ -1131,7 +1131,7 @@ test_unsharded_multi_chunk(void)
   struct read_op reads[8] = { 0 };
   struct chunk_plan chunks[8] = { 0 };
   struct sample_plan samples[4] = { 0 };
-  struct planner_output out = {
+  struct dispatch_output out = {
     .read_ops = reads,
     .read_ops_cap = 8,
     .chunk_plans = chunks,
@@ -1203,7 +1203,7 @@ test_sharded_index_start(void)
   struct read_op reads[8] = { 0 };
   struct chunk_plan chunks[8] = { 0 };
   struct sample_plan samples[4] = { 0 };
-  struct planner_output out = {
+  struct dispatch_output out = {
     .read_ops = reads,
     .read_ops_cap = 8,
     .chunk_plans = chunks,
@@ -1248,7 +1248,7 @@ test_coalesce_adjacent_pages(void)
   struct read_op reads[8] = { 0 };
   struct chunk_plan chunks[8] = { 0 };
   struct sample_plan samples[4] = { 0 };
-  struct planner_output out = {
+  struct dispatch_output out = {
     .read_ops = reads,
     .read_ops_cap = 8,
     .chunk_plans = chunks,
@@ -1295,7 +1295,7 @@ test_coalesce_gap_blocks_fusion(void)
   struct read_op reads[8] = { 0 };
   struct chunk_plan chunks[8] = { 0 };
   struct sample_plan samples[4] = { 0 };
-  struct planner_output out = {
+  struct dispatch_output out = {
     .read_ops = reads,
     .read_ops_cap = 8,
     .chunk_plans = chunks,
@@ -1343,7 +1343,7 @@ test_coalesce_fill_does_not_block_fusion(void)
   struct read_op reads[8] = { 0 };
   struct chunk_plan chunks[8] = { 0 };
   struct sample_plan samples[4] = { 0 };
-  struct planner_output out = {
+  struct dispatch_output out = {
     .read_ops = reads,
     .read_ops_cap = 8,
     .chunk_plans = chunks,
@@ -1405,7 +1405,7 @@ test_coalesce_non_monotonic_shard(void)
   struct read_op reads[8] = { 0 };
   struct chunk_plan chunks[8] = { 0 };
   struct sample_plan samples[4] = { 0 };
-  struct planner_output out = {
+  struct dispatch_output out = {
     .read_ops = reads,
     .read_ops_cap = 8,
     .chunk_plans = chunks,
@@ -1452,7 +1452,7 @@ test_coalesce_cross_sample(void)
   struct read_op reads[8] = { 0 };
   struct chunk_plan chunks[8] = { 0 };
   struct sample_plan samples[4] = { 0 };
-  struct planner_output out = {
+  struct dispatch_output out = {
     .read_ops = reads,
     .read_ops_cap = 8,
     .chunk_plans = chunks,

@@ -1,81 +1,51 @@
-#include "damacy.h"
-
 #include "damacy_internal.h"
-#include "nvtx/nvtx.h"
-#include "wave/wave_input.h"
 
-#include <cuda.h>
-
-// Drains sealed render jobs into free input_slots, planning a fresh batch
-// when no render job has work ready.
-static enum damacy_status
-kick_input_into_free_slots(struct damacy* self, int* changed)
+void
+damacy_scheduler_enter(void* arg)
 {
-  for (;;) {
-    int target_job = find_render_job_with_work(&self->render_jobs);
-    if (target_job < 0) {
-      int plan_changed = 0;
-      enum damacy_status s = plan_ready_prefetch(self, &plan_changed);
-      if (s != DAMACY_OK)
-        return s;
-      if (changed && plan_changed)
-        *changed = 1;
-      if (plan_changed)
-        continue;
-      break;
-    }
-
-    struct wave_input_reservation t = { 0 };
-    enum damacy_status s =
-      wave_input_reserve(&self->wave_pool, (uint16_t)target_job, &t);
-    if (s != DAMACY_OK)
-      return s;
-    if (!wave_input_reservation_has_slot(&t))
-      break;
-    damacy_nvtx_range_pushf("input/slot%d",
-                            wave_input_reservation_slot_index(&t));
-    scheduler_unlock(self->sched);
-    struct store_submit_result submit = wave_input_submit(&self->wave_pool, &t);
-    scheduler_lock(self->sched);
-    s = wave_input_commit(&self->wave_pool, &t, submit, changed);
-    damacy_nvtx_range_pop();
-    if (s != DAMACY_OK)
-      return s;
-    if (!any_slot_free(&self->wave_pool))
-      break;
-  }
-  return DAMACY_OK;
+  struct damacy* self = arg;
+  if (self->executor->ops->enter_thread)
+    self->failed_status = self->executor->ops->enter_thread(self->executor);
 }
 
-// One scheduler tick, under scheduler_lock. Lazy ctx push on first call.
-// *changed contract (authoritative): every transition site
-// (wave_pool_advance, plan_ready_prefetch/plan_commit,
-// wave_input_commit) OR-sets it on a real state transition; the worker
-// broadcasts iff non-zero.
+void
+damacy_scheduler_leave(void* arg)
+{
+  struct damacy* self = arg;
+  if (self->executor->ops->leave_thread)
+    self->executor->ops->leave_thread(self->executor);
+}
+
 int
 damacy_scheduler_step(void* arg)
 {
-  struct damacy* self = (struct damacy*)arg;
-  if (!self->worker_ctx_pushed) {
-    if (self->worker_ctx)
-      cuCtxPushCurrent(self->worker_ctx);
-    self->worker_ctx_pushed = 1;
-  }
-  self->stats.worker_steps++;
-  // Wake any pop waiter so it can observe the latched error.
-  if (self->failed_status != DAMACY_OK)
-    return 1;
-
+  struct damacy* self = arg;
+  if (self->stopping || self->failed_status != DAMACY_OK)
+    return 0;
+  ++self->stats.worker_steps;
   int changed = 0;
-  enum damacy_status r = wave_pool_advance(&self->wave_pool, &changed);
-  if (r == DAMACY_OK && self->failed_status == DAMACY_OK)
-    r = kick_input_into_free_slots(self, &changed);
-  // Retriable backpressure: the reservation was already rolled back, so
-  // retry next tick rather than latching a fatal error.
-  if (r == DAMACY_AGAIN)
-    return changed;
-  if (r != DAMACY_OK && self->failed_status == DAMACY_OK) {
-    self->failed_status = r;
+  enum damacy_status status =
+    self->executor->ops->step(self->executor, &changed);
+  if (status == DAMACY_AGAIN)
+    status = DAMACY_OK;
+  if (status == DAMACY_OK)
+    status = pipeline_prepare(self, &changed);
+  while (status == DAMACY_OK && self->plan_count) {
+    struct prepared_plan* plan = self->plans[self->plan_head];
+    status =
+      self->executor->ops->submit(self->executor, plan, self->next_batch_id);
+    if (status == DAMACY_AGAIN)
+      return changed;
+    if (status != DAMACY_OK)
+      break;
+    self->plans[self->plan_head] = NULL;
+    self->plan_head = (self->plan_head + 1) % self->queues.prepared_batches;
+    --self->plan_count;
+    ++self->next_batch_id;
+    changed = 1;
+  }
+  if (status != DAMACY_OK) {
+    self->failed_status = status;
     return 1;
   }
   return changed;

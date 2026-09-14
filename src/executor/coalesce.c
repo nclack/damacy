@@ -1,9 +1,9 @@
-#include "planner/coalesce.h"
+#include "executor/coalesce.h"
 
-#include "planner/read_op_sort.h"
+#include "executor/read_op_sort.h"
 
 enum damacy_status
-coalesce_chunks(struct planner_output* out,
+coalesce_chunks(struct dispatch_output* out,
                 uint64_t read_op_max_bytes,
                 uint32_t max_chunks_per_wave,
                 uint32_t* u32_scratch,

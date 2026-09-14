@@ -3,10 +3,6 @@
 # unsynchronized access to shared state surfaces as a TSan report rather than
 # a flaky hang.
 #
-# The test itself is pure C, but the test binary links transitively
-# against libcuda via the shared test fixture / zarr / store libs, so
-# it needs the NVIDIA driver visible at load time. Uses
-# --device=nvidia.com/gpu=all.
 
 name: tsan
 

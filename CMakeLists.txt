@@ -15,11 +15,16 @@ include(Warnings)
 include(Helpers)
 include(Fuzz) # declares DAMACY_FUZZ and applies fuzz-mode flags
 
+option(DAMACY_CUDA "Build the CUDA executor" ON)
+if(DAMACY_FUZZ)
+    set(DAMACY_CUDA OFF)
+endif()
+
 find_package(Threads REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBURING REQUIRED IMPORTED_TARGET liburing)
 
-if(NOT DAMACY_FUZZ)
+if(DAMACY_CUDA)
     if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
         set(CMAKE_CUDA_ARCHITECTURES
             "75-real;80-real;86-real;89-real;90-real;90-virtual"
@@ -48,6 +53,12 @@ option(
 # inline no-ops via static inlines in src/nvtx/nvtx.h. Defaults ON for
 # non-fuzz builds; src/CMakeLists.txt forces OFF under DAMACY_FUZZ.
 option(DAMACY_NVTX_ENABLED "Enable NVTX timeline instrumentation" ON)
+if(NOT DAMACY_CUDA)
+    set(DAMACY_NVTX_ENABLED OFF)
+    if(DAMACY_ENABLE_GDS)
+        message(FATAL_ERROR "DAMACY_ENABLE_GDS requires DAMACY_CUDA")
+    endif()
+endif()
 
 # DAMACY_ENABLE_GDS — gates the cuFile/GDS reader backend
 # (src/store/store_fs_gds.c). Defaults OFF so developers/CI without
@@ -57,7 +68,7 @@ option(DAMACY_ENABLE_GDS "Build cuFile/GDS reader backend" OFF)
 # cufile.h is needed at compile time for typedefs; libcufile.so.0 is
 # dlopen'd at runtime (see src/store/store_fs_gds.c), not linked. Gated
 # on DAMACY_ENABLE_GDS so non-GDS builds don't require cufile.h.
-if(NOT DAMACY_FUZZ AND DAMACY_ENABLE_GDS)
+if(DAMACY_CUDA AND DAMACY_ENABLE_GDS)
     find_package(CuFile REQUIRED)
 endif()
 
@@ -87,6 +98,11 @@ if(DAMACY_TSAN AND NOT DAMACY_FUZZ)
     target_link_options(warnings INTERFACE -fsanitize=thread)
 endif()
 
+if(NOT DAMACY_FUZZ)
+    pkg_check_modules(ZSTD REQUIRED IMPORTED_TARGET libzstd)
+    pkg_check_modules(BLOSC REQUIRED IMPORTED_TARGET blosc)
+endif()
+
 add_subdirectory(src)
 add_subdirectory(bench)
 
@@ -95,7 +111,7 @@ add_subdirectory(bench)
 # `cmake --build build --target asmbench` etc. The directory may be
 # pruned from build contexts that don't ship experiments (e.g. Docker).
 if(
-    NOT DAMACY_FUZZ
+    DAMACY_CUDA
     AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/experiments/asm/CMakeLists.txt"
 )
     add_subdirectory(experiments/asm)

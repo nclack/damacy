@@ -2,6 +2,7 @@
 
 Common errors and what to check first. For multi-GPU specifics,
 see [Distributed → Common failures](distributed.md#common-failures).
+CPU construction and limits are described in [Pipeline composition](pipeline.md).
 
 ## `InvalidArgument: no CUcontext is current`
 
@@ -14,18 +15,16 @@ the calling thread yet. Two fixes:
 - Or prime a context implicitly before constructing the pipeline:
   `torch.empty(1, device="cuda")` is enough.
 
-## `InvalidArgument` at `Pipeline(cfg)` from metadata I/O setup
+## Pipeline construction fails during metadata I/O setup
 
-The Linux metadata path uses io_uring for zarr metadata, shard-index, and
-chunk-layout reads. At construction damacy requires kernel support for
+The CPU and CUDA metadata paths use io_uring for Zarr metadata and shard indexes. At construction damacy requires kernel support for
 `IORING_OP_STATX`, `IORING_OP_OPENAT2`, `IORING_OP_READ`, and
 `IORING_OP_CLOSE`. If ring creation or the operation probe fails,
-`Pipeline(cfg)` raises `InvalidArgument` rather than falling back to a legacy
-thread pool. Check the native log for the exact io_uring failure.
+pipeline construction fails without a thread-pool fallback. Check the native log for the exact io_uring failure.
 
 On supported kernels, an unusually high `metadata_io_concurrency` can also
 stress process file-descriptor limits because each in-flight metadata read can
-hold an open fd. The default is 32; for much deeper settings, check
+hold an open fd. The default is 64; for much deeper settings, check
 `ulimit -n` and remember to multiply by ranks per node.
 
 ## `BudgetExceeded` at `Pipeline(cfg)`
@@ -39,9 +38,10 @@ the usual answer is to raise the cap.
 ## `BudgetExceeded` mid-stream
 
 A chunk's actual uncompressed size exceeds
-`Config.max_chunk_uncompressed_bytes` (default 512 KiB). Raise
+`PlanLimits.max_chunk_bytes` or `Config.max_chunk_uncompressed_bytes` (default 2 MiB). Raise
 that cap to fit the dataset, and raise `max_gpu_memory_bytes`
-along with it if needed. See
+along with it if needed. CPU executors also enforce `CpuLimits` for encoded
+chunks, decoded chunks, and total executor buffers. See
 [GPU memory budget](budget.md#when-the-budget-refuses).
 
 ## `NotFound` or `DtypeMismatch` from `pop()` (not `push()`)
@@ -72,7 +72,7 @@ The pool was empty for longer than `Config.pop_timeout_s`
 from previous batches — for example, stashing them in a list —
 which prevents damacy from reusing the underlying slot. Drop the
 references before the next `pop()`, or `.clone()` if you
-genuinely need to keep them.
+need to keep them. For a NumPy CPU view, use `.copy()`.
 
 ## `pop()` blocks forever
 

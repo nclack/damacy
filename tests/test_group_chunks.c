@@ -1,9 +1,9 @@
-// Unit tests for planner/group_chunks.c: stable counting-sort of
+// Unit tests for executor/group_chunks.c: stable counting-sort of
 // chunk_plans by read_op_idx. Synthetic inputs only.
 
+#include "executor/dispatch.h"
+#include "executor/group_chunks.h"
 #include "expect.h"
-#include "planner/group_chunks.h"
-#include "planner/planner.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -26,10 +26,10 @@ mk_cp(struct chunk_plan* cp,
 }
 
 static enum damacy_status
-run_group(struct planner_output* out)
+run_group(struct dispatch_output* out)
 {
-  uint32_t* u32 = (uint32_t*)calloc((size_t)out->n_read_ops + 1u,
-                                    sizeof(uint32_t));
+  uint32_t* u32 =
+    (uint32_t*)calloc((size_t)out->n_read_ops + 1u, sizeof(uint32_t));
   struct chunk_plan* tmp = (struct chunk_plan*)calloc(
     out->n_chunk_plans ? out->n_chunk_plans : 1, sizeof(struct chunk_plan));
   if (!out->read_op_groups && out->n_read_ops > 0) {
@@ -47,7 +47,7 @@ run_group(struct planner_output* out)
 static int
 test_empty(void)
 {
-  struct planner_output out = { 0 };
+  struct dispatch_output out = { 0 };
   struct chunk_plan c = { 0 };
   out.chunk_plans = &c;
   out.chunk_plans_cap = 1;
@@ -62,7 +62,7 @@ test_single_chunk(void)
 {
   struct chunk_plan chunks[1];
   mk_cp(&chunks[0], 0, 100, 0, 42);
-  struct planner_output out = {
+  struct dispatch_output out = {
     .chunk_plans = chunks,
     .chunk_plans_cap = 1,
     .n_chunk_plans = 1,
@@ -83,7 +83,7 @@ test_already_sorted(void)
   mk_cp(&chunks[1], 0, 4096, 0, 101);
   mk_cp(&chunks[2], 1, 0, 0, 200);
   mk_cp(&chunks[3], 1, 4096, 0, 201);
-  struct planner_output out = {
+  struct dispatch_output out = {
     .chunk_plans = chunks,
     .chunk_plans_cap = 4,
     .n_chunk_plans = 4,
@@ -111,7 +111,7 @@ test_interleaved_groups(void)
   mk_cp(&chunks[3], 2, 0, 2, 300);
   mk_cp(&chunks[4], 1, 100, 1, 201);
   mk_cp(&chunks[5], 0, 200, 0, 102);
-  struct planner_output out = {
+  struct dispatch_output out = {
     .chunk_plans = chunks,
     .chunk_plans_cap = 6,
     .n_chunk_plans = 6,
@@ -139,7 +139,7 @@ test_sparse_read_op(void)
   mk_cp(&chunks[0], 2, 0, 0, 1);
   mk_cp(&chunks[1], 2, 100, 0, 2);
   mk_cp(&chunks[2], 2, 200, 0, 3);
-  struct planner_output out = {
+  struct dispatch_output out = {
     .chunk_plans = chunks,
     .chunk_plans_cap = 3,
     .n_chunk_plans = 3,
@@ -159,7 +159,7 @@ test_invalid_read_op_idx(void)
   struct chunk_plan chunks[2];
   mk_cp(&chunks[0], 0, 0, 0, 1);
   mk_cp(&chunks[1], 5, 0, 0, 2); // out of range
-  struct planner_output out = {
+  struct dispatch_output out = {
     .chunk_plans = chunks,
     .chunk_plans_cap = 2,
     .n_chunk_plans = 2,
@@ -180,7 +180,7 @@ test_sample_distribution_preserved(void)
   mk_cp(&chunks[2], 1, 100, /*sample*/ 7, 3);
   mk_cp(&chunks[3], 0, 100, /*sample*/ 4, 4);
   mk_cp(&chunks[4], 0, 200, /*sample*/ 0, 5);
-  struct planner_output out = {
+  struct dispatch_output out = {
     .chunk_plans = chunks,
     .chunk_plans_cap = 5,
     .n_chunk_plans = 5,
@@ -221,7 +221,7 @@ test_groups_emitted(void)
   chunks[3].decompressed_nbytes = 40;
   chunks[4].decompressed_nbytes = 50;
   chunks[5].decompressed_nbytes = 60;
-  struct planner_output out = {
+  struct dispatch_output out = {
     .chunk_plans = chunks,
     .chunk_plans_cap = 6,
     .n_chunk_plans = 6,
@@ -257,7 +257,7 @@ test_groups_skip_sparse(void)
   chunks[0].decompressed_nbytes = 7;
   chunks[1].decompressed_nbytes = 7;
   chunks[2].decompressed_nbytes = 7;
-  struct planner_output out = {
+  struct dispatch_output out = {
     .chunk_plans = chunks,
     .chunk_plans_cap = 3,
     .n_chunk_plans = 3,
@@ -278,9 +278,18 @@ static int
 test_iterator_walk(void)
 {
   struct read_op_group groups[3] = {
-    { .read_op_idx = 0, .first_chunk = 0, .n_chunks = 2, .total_decompressed = 10 },
-    { .read_op_idx = 1, .first_chunk = 2, .n_chunks = 1, .total_decompressed = 20 },
-    { .read_op_idx = 2, .first_chunk = 3, .n_chunks = 4, .total_decompressed = 30 },
+    { .read_op_idx = 0,
+      .first_chunk = 0,
+      .n_chunks = 2,
+      .total_decompressed = 10 },
+    { .read_op_idx = 1,
+      .first_chunk = 2,
+      .n_chunks = 1,
+      .total_decompressed = 20 },
+    { .read_op_idx = 2,
+      .first_chunk = 3,
+      .n_chunks = 4,
+      .total_decompressed = 30 },
   };
   struct read_op_group_iterator it;
   read_op_group_iterator_init(&it, groups, 3, 1);

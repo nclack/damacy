@@ -37,6 +37,7 @@ import contextlib
 import itertools
 import logging
 import math
+import operator
 import os
 import threading
 import warnings
@@ -55,21 +56,33 @@ if TYPE_CHECKING:  # avoid runtime import; only used for type hints
 __all__ = [
     "Batch",
     "BatchInfo",
+    "BatchSpec",
     "BudgetExceeded",
+    "ChunkPlanner",
     "Config",
+    "CpuExecutor",
+    "CpuLimits",
+    "CudaExecutor",
+    "CudaLimits",
     "DamacyError",
     "DecodeError",
+    "DeviceType",
     "Dtype",
     "DtypeMismatch",
+    "FileMetadataReader",
+    "FileReader",
     "InvalidArgument",
     "LatencyModel",
+    "MetadataCache",
     "Metric",
     "NativeCudaError",
     "NotFound",
     "NumaStrategy",
     "OutOfMemory",
     "Pipeline",
+    "PlanLimits",
     "PoolStarved",
+    "QueueLimits",
     "RankMismatch",
     "Sample",
     "ShutdownError",
@@ -77,6 +90,7 @@ __all__ = [
     "Status",
     "StorageError",
     "TryAgain",
+    "ZarrMetadata",
     "max_concurrency",
     "set_log_level",
     "set_log_quiet",
@@ -94,8 +108,7 @@ def max_concurrency() -> int:
 
 
 class Dtype(IntEnum):
-    """Destination dtype for assembled batches. Sources may differ; the
-    assemble kernel casts each element to this type."""
+    """Destination dtype for assembled batches. Sources are cast to this type."""
 
     F32 = _native.DTYPE_F32
     BF16 = _native.DTYPE_BF16
@@ -722,15 +735,278 @@ class Config:
         )
 
 
+def _positive_int(value: int, name: str, maximum: int = (1 << 32) - 1) -> int:
+    value = operator.index(value)
+    if not 1 <= value <= maximum:
+        raise ValueError(f"{name} must be in [1, {maximum}]")
+    return value
+
+
+def _component(factory: Any, *args: Any) -> Any:
+    try:
+        return factory(*args)
+    except _native.DamacyError as exc:
+        _reraise_typed(exc)
+
+
+class DeviceType(IntEnum):
+    """DLPack memory location for a batch."""
+
+    CPU = 1
+    CUDA = 2
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class BatchSpec:
+    """Fixed output tensor geometry, independent of the source metadata."""
+
+    samples: int
+    shape: tuple[int, ...]
+    dtype: Dtype = Dtype.F32
+
+    def __init__(
+        self, samples: int, shape: Sequence[int], dtype: Dtype | str | int = Dtype.F32
+    ) -> None:
+        object.__setattr__(self, "samples", _positive_int(samples, "samples", 65535))
+        dimensions = tuple(
+            _positive_int(x, "shape extent", (1 << 63) - 1) for x in shape
+        )
+        if not 1 <= len(dimensions) <= 31:
+            raise ValueError("shape must have between 1 and 31 dimensions")
+        object.__setattr__(self, "shape", dimensions)
+        object.__setattr__(self, "dtype", Dtype.coerce(dtype))
+
+
+@dataclass(frozen=True, slots=True)
+class QueueLimits:
+    """Bounds for pending samples and complete plans awaiting execution."""
+
+    lookahead_samples: int
+    prepared_batches: int = 2
+
+    def __post_init__(self) -> None:
+        _positive_int(self.lookahead_samples, "lookahead_samples", (1 << 32) - 5)
+        _positive_int(self.prepared_batches, "prepared_batches", 1024)
+
+
+@dataclass(frozen=True, slots=True)
+class MetadataCache:
+    """Cache capacities used by a metadata provider."""
+
+    array_entries: int = 256
+    shard_index_entries: int = 8192
+
+    def __post_init__(self) -> None:
+        _positive_int(self.array_entries, "array_entries")
+        _positive_int(self.shard_index_entries, "shard_index_entries")
+
+
+@dataclass(frozen=True, slots=True)
+class PlanLimits:
+    """Per-batch planning limits; max_chunks counts uses before deduplication."""
+
+    max_chunks: int = 16384
+    max_chunk_bytes: int = 2 << 20
+    max_shards_per_sample: int = 64
+    max_plan_bytes: int = 64 << 20
+
+    def __post_init__(self) -> None:
+        _positive_int(self.max_chunks, "max_chunks", 16384)
+        _positive_int(self.max_chunk_bytes, "max_chunk_bytes")
+        _positive_int(self.max_shards_per_sample, "max_shards_per_sample")
+        _positive_int(self.max_plan_bytes, "max_plan_bytes", (1 << 64) - 1)
+
+
+@dataclass(frozen=True, slots=True)
+class CpuLimits:
+    """Bound input, decoded data, codec workspace, and output storage."""
+
+    max_memory_bytes: int
+    decode_workers: int = 8
+    max_encoded_chunk_bytes: int = 4 << 20
+    max_decoded_chunk_bytes: int = 2 << 20
+
+    def __post_init__(self) -> None:
+        _positive_int(self.max_memory_bytes, "max_memory_bytes", (1 << 64) - 1)
+        _positive_int(self.decode_workers, "decode_workers", _native.MAX_IO_THREADS)
+        _positive_int(self.max_encoded_chunk_bytes, "max_encoded_chunk_bytes")
+        _positive_int(self.max_decoded_chunk_bytes, "max_decoded_chunk_bytes")
+
+
+@dataclass(frozen=True, slots=True)
+class CudaLimits:
+    """GPU buffer limits, wave geometry, and codec-layout cache capacity."""
+
+    max_gpu_memory_bytes: int
+    chunk_layout_entries: int = 256
+    max_chunk_bytes: int = _native.DEFAULT_CHUNK_UNCOMPRESSED_BYTES
+    max_read_bytes: int = _native.DEFAULT_READ_OP_MAX_BYTES
+    host_buffer_waves: int = _native.DEFAULT_HOST_BUFFER_WAVES
+    max_chunks_per_wave: int = _native.DEFAULT_MAX_CHUNKS_PER_WAVE
+    max_substreams_per_chunk: int = _native.DEFAULT_MAX_SUBSTREAMS_PER_CHUNK
+
+    def __post_init__(self) -> None:
+        _positive_int(self.chunk_layout_entries, "chunk_layout_entries")
+        _positive_int(self.max_gpu_memory_bytes, "max_gpu_memory_bytes", (1 << 64) - 1)
+        _positive_int(self.max_chunk_bytes, "max_chunk_bytes")
+        _positive_int(self.max_read_bytes, "max_read_bytes")
+        _positive_int(
+            self.host_buffer_waves, "host_buffer_waves", _native.MAX_HOST_BUFFER_WAVES
+        )
+        if self.host_buffer_waves < _native.N_WAVES:
+            raise ValueError(f"host_buffer_waves must be at least {_native.N_WAVES}")
+        _positive_int(
+            self.max_chunks_per_wave,
+            "max_chunks_per_wave",
+            _native.HARD_MAX_CHUNKS_PER_WAVE,
+        )
+        _positive_int(
+            self.max_substreams_per_chunk,
+            "max_substreams_per_chunk",
+            _native.HARD_MAX_SUBSTREAMS_PER_CHUNK,
+        )
+
+
+class FileReader:
+    """Read bulk encoded chunk data through a bounded filesystem I/O queue."""
+
+    __slots__ = ("_native",)
+
+    def __init__(self, *, workers: int = 8, max_inflight_reads: int = 4096) -> None:
+        self._native = _component(
+            _native.create_reader,
+            _positive_int(workers, "workers", _native.MAX_IO_THREADS),
+            _positive_int(max_inflight_reads, "max_inflight_reads"),
+        )
+
+
+class FileMetadataReader:
+    """Configure a separate asynchronous queue for filesystem metadata reads."""
+
+    __slots__ = ("_native",)
+
+    def __init__(
+        self, *, concurrency: int = 64, latency: LatencyModel | None = None
+    ) -> None:
+        latency = latency or LatencyModel()
+        if not isinstance(latency, LatencyModel):
+            raise TypeError("latency must be a LatencyModel")
+        self._native = _component(
+            _native.create_metadata_reader,
+            _positive_int(concurrency, "concurrency", 4096),
+            latency.baseline_ns,
+            latency.lognormal_mu_ln_ns,
+            latency.lognormal_sigma_ln_ns,
+            latency.cap_ns,
+            latency.seed,
+        )
+
+
+class ZarrMetadata:
+    """Provide Zarr v3 array metadata and shard indexes for sample URIs."""
+
+    __slots__ = ("_native", "cache", "reader")
+
+    def __init__(self, *, reader: FileMetadataReader, cache: MetadataCache) -> None:
+        self.reader = reader
+        self.cache = cache
+        self._native = _component(
+            _native.create_metadata,
+            reader._native,
+            cache.array_entries,
+            cache.shard_index_entries,
+        )
+
+
+class ChunkPlanner:
+    """Prepare owned chunk plans from rectangular queries and Zarr metadata."""
+
+    __slots__ = ("_native", "limits", "metadata")
+
+    def __init__(
+        self, *, metadata: ZarrMetadata, limits: PlanLimits | None = None
+    ) -> None:
+        limits = limits if limits is not None else PlanLimits()
+        self.metadata = metadata
+        self.limits = limits
+        self._native = _component(
+            _native.create_planner,
+            metadata._native,
+            limits.max_chunks,
+            limits.max_chunk_bytes,
+            limits.max_shards_per_sample,
+            limits.max_plan_bytes,
+        )
+
+
+class CpuExecutor:
+    """Decode and assemble batches in ordinary RAM without using CUDA."""
+
+    __slots__ = ("_native", "limits", "reader")
+
+    def __init__(self, *, reader: FileReader, limits: CpuLimits) -> None:
+        self.reader = reader
+        self.limits = limits
+        self._native = _component(
+            _native.create_cpu_executor,
+            reader._native,
+            limits.decode_workers,
+            limits.max_encoded_chunk_bytes,
+            limits.max_decoded_chunk_bytes,
+            limits.max_memory_bytes,
+        )
+
+
+class CudaExecutor:
+    """Decode and assemble batches on a CUDA device."""
+
+    __slots__ = ("_native", "device", "limits", "reader")
+
+    def __init__(
+        self,
+        *,
+        reader: FileReader,
+        limits: CudaLimits,
+        device: int | None = None,
+        numa_strategy: NumaStrategy | str | int = NumaStrategy.AUTO,
+        numa_node: int = -1,
+        enable_gds: bool | None = None,
+    ) -> None:
+        self.reader = reader
+        self.limits = limits
+        self.device = device
+        self._native = _component(
+            _native.create_cuda_executor,
+            reader._native,
+            -1 if device is None else operator.index(device),
+            limits.max_gpu_memory_bytes,
+            limits.max_chunk_bytes,
+            limits.max_read_bytes,
+            limits.max_chunks_per_wave,
+            limits.max_substreams_per_chunk,
+            limits.host_buffer_waves,
+            limits.chunk_layout_entries,
+            int(NumaStrategy.coerce(numa_strategy)),
+            numa_node,
+            _gds_to_native(enable_gds),
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class BatchInfo:
-    """Snapshot of the on-device batch geometry."""
+    """Batch geometry and memory location. CPU data is ready for host access."""
 
     device_ptr: int
     shape: tuple[int, ...]
     dtype: Dtype
     ready_stream: int
     batch_id: int
+    device_type: DeviceType = DeviceType.CUDA
+    device_id: int = 0
+
+    @property
+    def data(self) -> int:
+        return self.device_ptr
 
     @classmethod
     def _from_native(cls, info: dict[str, Any]) -> BatchInfo:
@@ -740,6 +1016,8 @@ class BatchInfo:
             dtype=Dtype.coerce(info["dtype"]),
             ready_stream=info["ready_stream"],
             batch_id=info["batch_id"],
+            device_type=DeviceType(info["device_type"]),
+            device_id=info["device_id"],
         )
 
 
@@ -804,6 +1082,7 @@ class Stats:
     reads_issued: int
     worker_steps: int
     gpu_bytes_committed: int
+    host_bytes_committed: int = 0
 
     @classmethod
     def _from_native(cls, st: dict[str, Any]) -> Stats:
@@ -842,6 +1121,7 @@ class Stats:
             reads_issued=st["reads_issued"],
             worker_steps=st["worker_steps"],
             gpu_bytes_committed=st["gpu_bytes_committed"],
+            host_bytes_committed=st["host_bytes_committed"],
         )
 
 
@@ -919,29 +1199,23 @@ def _coerce_cuda_event_handle(event: object) -> int | None:
 
 
 class Batch:
-    """A batch of samples on the device, ready for consumption.
+    """A contiguous batch in CPU or CUDA memory, ready for consumption.
 
-    Use as a context manager to release the slot back to the pool::
+    Use a context manager to release the batch reference::
 
-        with d.pop() as batch:
-            x = torch.from_dlpack(batch)
+        with pipeline.pop() as batch:
+            tensor = torch.from_dlpack(batch)
 
-    The DLPack capsule (``batch.__dlpack__()``) keeps the underlying
-    storage alive as long as the consumer holds it; releasing the
-    Batch object while a tensor still views it is safe.
+    A DLPack consumer retains the storage independently. Its view stays valid
+    after batch release and pipeline close; the pool cannot reuse that buffer
+    until all consumers release it.
 
-    **Deferred release.** If the consumer kicks off an async D2D copy on
-    a side stream, the default ``with`` block forces a host-side
-    ``cuStreamSynchronize`` on the producer stream before the slot is
-    reused. To avoid that block, call :meth:`release` explicitly with
-    the consumer's stream or event — damacy will stream-wait on it
-    before re-assembling into the slot's buffer::
+    For asynchronous CUDA work on a side stream, release with the consumer's
+    stream or event so subsequent output writes wait for that work::
 
-        batch = d.pop()
-        tensor = torch.empty_like(...)  # on side_stream
-        with torch.cuda.stream(side_stream):
-            tensor.copy_(torch.from_dlpack(batch))
-        batch.release(event=side_stream)  # no host sync
+        batch.release(event=side_stream)
+
+    CPU batches accept only immediate release (``event=None``).
     """
 
     __slots__ = ("_native",)
@@ -951,7 +1225,7 @@ class Batch:
 
     @property
     def info(self) -> BatchInfo:
-        """Snapshot of the on-device batch geometry. Raises after release."""
+        """Snapshot of batch geometry and device. Raises after release."""
         return BatchInfo._from_native(self._native.info)
 
     def release(
@@ -959,12 +1233,12 @@ class Batch:
         *,
         event: object | None = None,
     ) -> None:
-        """Return the slot to the pool. Idempotent.
+        """Release this handle. Exported tensors keep their buffers. Idempotent.
 
         Args:
-            event: If ``None`` (default), the slot is freed immediately;
-                damacy may reuse the buffer right away, so callers must
-                have host-synced any work that reads it. Otherwise the
+            event: If ``None`` (default), storage becomes reusable when the
+                last exported tensor and batch handle are released. Callers
+                must finish work reading the buffer before then. Otherwise the
                 slot reuse waits on the supplied CUDA event before
                 damacy's assemble kernel writes the buffer again — the
                 host returns at once. Accepted forms:
@@ -1103,28 +1377,24 @@ def _warn_if_multi_gpu_implicit(cfg_device: int | None, bound: int) -> None:
 
 
 class Pipeline:
-    """Streaming GPU data pipeline. Drive :meth:`push`, :meth:`pop`.
-    Stages are plan → host I/O → H2D copy → on-device
-    decompress → assemble; output batches are double-buffered (B=2)
-    and waves are double-buffered internally.
+    """Load batches using an injected planner and CPU or CUDA executor.
 
-    A CUcontext must be current on the calling thread when this is
-    constructed; PyTorch sets one up implicitly. For bare-Python use,
-    call :func:`damacy._native.cuda_init_primary` once first.
+    ``planner`` resolves source metadata into owned chunk plans. ``executor``
+    reads, decodes, and assembles them. ``output`` defines the batch tensor;
+    ``queues`` bounds preparation. Components serve one active pipeline and
+    may be reused after it closes. Exported tensors retain their storage.
 
-    Constructed from a :class:`Config`::
-
-        cfg = damacy.Config(samples_per_batch=8, ...)
-        with damacy.Pipeline(cfg) as p:
-            ...
-
-    Resource caps are fixed at construction; nothing grows after that.
+    ``Pipeline(Config(...))`` composes the CUDA pipeline for existing callers.
+    For CUDA, pass an explicit executor device or make a CUDA context current
+    before constructing the pipeline. CPU execution requires neither.
     """
 
     __slots__ = (
         "_closed",
+        "_components",
         "_config",
         "_native",
+        "_output",
         "_pending",
         "_pending_buf",
         "_pop_done",
@@ -1132,43 +1402,84 @@ class Pipeline:
         "_pop_lock",
         "_pop_result",
         "_pop_thread",
+        "_pop_timeout_s",
+        "_queues",
     )
 
-    def __init__(self, config: Config) -> None:
-        try:
-            self._native = _native.Pipeline(
-                samples_per_batch=config.samples_per_batch,
-                lookahead_samples=config.lookahead_samples,
-                dtype=int(config.dtype),  # already coerced by Config.__init__
-                max_chunk_uncompressed_bytes=config.max_chunk_uncompressed_bytes,
-                max_read_op_bytes=config.max_read_op_bytes,
-                max_gpu_memory_bytes=config.max_gpu_memory_bytes,
-                host_buffer_waves=config.host_buffer_waves,
-                max_chunks_per_wave=config.max_chunks_per_wave,
-                max_substreams_per_chunk=config.max_substreams_per_chunk,
-                n_io_threads=config.n_io_threads,
-                metadata_io_concurrency=config.metadata_io_concurrency,
-                n_array_meta_cache=config.n_array_meta_cache,
-                n_shard_index_cache=config.n_shard_index_cache,
-                n_chunk_layout_cache=config.n_chunk_layout_cache,
-                max_shards_per_sample=config.max_shards_per_sample,
-                sample_shape=tuple(config.sample_shape),
-                device=-1 if config.device is None else int(config.device),
-                enable_gds=_gds_to_native(config.enable_gds),
-                numa_strategy=int(config.numa_strategy),
-                numa_node=config.numa_node,
-                metadata_latency_baseline_ns=config.metadata_latency.baseline_ns,
-                metadata_latency_lognormal_mu_ln_ns=(
-                    config.metadata_latency.lognormal_mu_ln_ns
-                ),
-                metadata_latency_lognormal_sigma_ln_ns=(
-                    config.metadata_latency.lognormal_sigma_ln_ns
-                ),
-                metadata_latency_cap_ns=config.metadata_latency.cap_ns,
-                metadata_latency_seed=config.metadata_latency.seed,
+    def __init__(
+        self,
+        config: Config | None = None,
+        *,
+        planner: ChunkPlanner | None = None,
+        executor: CpuExecutor | CudaExecutor | None = None,
+        output: BatchSpec | None = None,
+        queues: QueueLimits | None = None,
+        pop_timeout_s: float | None = 30.0,
+    ) -> None:
+        if config is not None:
+            if any(x is not None for x in (planner, executor, output, queues)):
+                raise TypeError("supply either Config or pipeline components")
+            output = BatchSpec(
+                config.samples_per_batch, config.sample_shape, config.dtype
             )
+            queues = QueueLimits(config.lookahead_samples)
+            pop_timeout_s = config.pop_timeout_s
+        elif planner is None or executor is None or output is None or queues is None:
+            raise TypeError("planner, executor, output, and queues are required")
+        if pop_timeout_s is not None and (
+            not math.isfinite(pop_timeout_s) or pop_timeout_s <= 0
+        ):
+            raise ValueError("pop_timeout_s must be positive and finite, or None")
+        try:
+            if config is not None:
+                self._native = _native.Pipeline(
+                    samples_per_batch=config.samples_per_batch,
+                    lookahead_samples=config.lookahead_samples,
+                    dtype=int(config.dtype),  # already coerced by Config.__init__
+                    max_chunk_uncompressed_bytes=config.max_chunk_uncompressed_bytes,
+                    max_read_op_bytes=config.max_read_op_bytes,
+                    max_gpu_memory_bytes=config.max_gpu_memory_bytes,
+                    host_buffer_waves=config.host_buffer_waves,
+                    max_chunks_per_wave=config.max_chunks_per_wave,
+                    max_substreams_per_chunk=config.max_substreams_per_chunk,
+                    n_io_threads=config.n_io_threads,
+                    metadata_io_concurrency=config.metadata_io_concurrency,
+                    n_array_meta_cache=config.n_array_meta_cache,
+                    n_shard_index_cache=config.n_shard_index_cache,
+                    n_chunk_layout_cache=config.n_chunk_layout_cache,
+                    max_shards_per_sample=config.max_shards_per_sample,
+                    sample_shape=tuple(config.sample_shape),
+                    device=-1 if config.device is None else int(config.device),
+                    enable_gds=_gds_to_native(config.enable_gds),
+                    numa_strategy=int(config.numa_strategy),
+                    numa_node=config.numa_node,
+                    metadata_latency_baseline_ns=config.metadata_latency.baseline_ns,
+                    metadata_latency_lognormal_mu_ln_ns=(
+                        config.metadata_latency.lognormal_mu_ln_ns
+                    ),
+                    metadata_latency_lognormal_sigma_ln_ns=(
+                        config.metadata_latency.lognormal_sigma_ln_ns
+                    ),
+                    metadata_latency_cap_ns=config.metadata_latency.cap_ns,
+                    metadata_latency_seed=config.metadata_latency.seed,
+                )
+            else:
+                assert planner is not None and executor is not None
+                self._native = _native.compose_pipeline(
+                    planner._native,
+                    executor._native,
+                    output.shape,
+                    output.samples,
+                    int(output.dtype),
+                    queues.lookahead_samples,
+                    queues.prepared_batches,
+                )
         except _native.DamacyError as exc:
             _reraise_typed(exc)
+        self._output = output
+        self._queues = queues
+        self._pop_timeout_s = pop_timeout_s
+        self._components = (planner, executor)
         self._closed = False
         self._config = config
         # User-side queue of pending sample iterators. push() appends
@@ -1188,19 +1499,35 @@ class Pipeline:
         self._pop_result: _native.Batch | None = None
         self._pop_err: BaseException | None = None
         bound = self._native.device
-        if not _warn_if_local_rank_disagrees(config.device, bound):
-            _warn_if_multi_gpu_implicit(config.device, bound)
+        if bound >= 0:
+            configured_device = (
+                config.device
+                if config is not None
+                else executor.device
+                if isinstance(executor, CudaExecutor)
+                else None
+            )
+            if not _warn_if_local_rank_disagrees(configured_device, bound):
+                _warn_if_multi_gpu_implicit(configured_device, bound)
 
     @property
     def device(self) -> int:
-        """CUDA device index this pipeline is bound to."""
+        """CUDA device index, or -1 for CPU execution."""
         self._check_open()
         return int(self._native.device)
 
     @property
-    def config(self) -> Config:
+    def config(self) -> Config | None:
         """The :class:`Config` this loader was built from."""
         return self._config
+
+    @property
+    def output(self) -> BatchSpec:
+        return self._output
+
+    @property
+    def queues(self) -> QueueLimits:
+        return self._queues
 
     # ---- lifecycle ---------------------------------------------------
 
@@ -1218,11 +1545,17 @@ class Pipeline:
         on the pipeline raise :class:`ShutdownError`."""
         if not self._closed:
             self._closed = True
-            del self._native
+            self._native.shutdown()
             t = self._pop_thread
             if t is not None:
-                t.join()  # damacy_destroy already woke it with SHUTDOWN
+                t.join()
                 self._pop_thread = None
+            self._pop_result = None
+            self._pop_err = None
+            self._pending.clear()
+            self._pending_buf.clear()
+            del self._native
+            self._components = (None, None)
 
     def __enter__(self) -> Self:
         return self
@@ -1243,7 +1576,7 @@ class Pipeline:
         generator, infinite generator, …); large or unbounded sources
         are pulled lazily as :meth:`pop` frees space.
 
-        Local validation (shape/rank against ``Config.sample_shape``)
+        Local validation (shape/rank against ``Pipeline.output.shape``)
         raises the matching :class:`DamacyError` subclass here and
         discards the offending iterator. Errors that depend on store
         contents — :class:`NotFound`, :class:`DtypeMismatch`,
@@ -1255,7 +1588,7 @@ class Pipeline:
         :class:`ShutdownError`.
 
         Batching is ``drop_last=True``: only complete batches of
-        ``Config.samples_per_batch`` are emitted, so trailing samples
+        ``Pipeline.output.samples`` are emitted, so trailing samples
         beyond the last whole multiple are never returned. (Emitting
         the ragged final batch is not yet supported — issue #139.)
         """
@@ -1272,7 +1605,7 @@ class Pipeline:
         a single head iterator), not re-wrapped onto ``self._pending[0]``
         — successive backpressure events leave the buffer flat instead
         of nesting ``itertools.chain`` layers."""
-        cap = self._config.lookahead_samples
+        cap = self._queues.lookahead_samples
         # Top up buffer from the head iterator. Buffer is only ever
         # filled from one iterator at a time, so on push failure we know
         # exactly which iterator to drop. Each refill pulls at most one
@@ -1322,7 +1655,7 @@ class Pipeline:
                 self._pending.popleft()
 
     def pop(self) -> Batch:
-        """Block until the next batch is on-device-ready. Returns a
+        """Block until the next batch is ready. Returns a
         :class:`Batch` you can hand to ``torch.from_dlpack`` (or any
         DLPack consumer) — preferably inside a ``with`` block.
 
@@ -1345,7 +1678,7 @@ class Pipeline:
         # not the secondary SHUTDOWN raised by re-pushing into a terminal.
         with contextlib.suppress(ShutdownError):
             self._drain_pending()
-        timeout = self._config.pop_timeout_s
+        timeout = self._pop_timeout_s
         if timeout is None:
             try:
                 return Batch(self._native.pop())
@@ -1403,7 +1736,7 @@ class Pipeline:
 
     def batches(self, n: int) -> Iterator[Batch]:
         """Pop *n* batches as an iterator. Each call to :meth:`pop`
-        blocks until that batch is on-device-ready.
+        blocks until that batch is ready.
 
         Pair with a ``with`` block so the slot is released::
 

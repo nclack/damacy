@@ -12,8 +12,8 @@
 // the result back.
 #pragma once
 
-#include "damacy.h"          // damacy_status
-#include "planner/planner.h" // planner_output, chunk_plan
+#include "damacy.h"            // damacy_status
+#include "executor/dispatch.h" // dispatch_output, chunk_plan
 
 #include <stdint.h>
 
@@ -25,7 +25,7 @@ extern "C"
   // Scratch: u32_scratch >= n_read_ops+1, chunk_plan_scratch >= n_chunk_plans.
   // out->read_op_groups must be sized >= out->n_read_ops.
   enum damacy_status group_chunks_by_read(
-    struct planner_output* out,
+    struct dispatch_output* out,
     uint32_t* u32_scratch,
     struct chunk_plan* chunk_plan_scratch);
 

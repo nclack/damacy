@@ -108,6 +108,8 @@
             man-pages
             man-pages-posix
             liburing
+            zstd
+            c-blosc
           ]);
 
           CUDA_PATH = "${cudaPkgs.cudatoolkit}";

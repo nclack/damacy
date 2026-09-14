@@ -1,6 +1,6 @@
-#include "planner/read_op_sort.h"
+#include "executor/read_op_sort.h"
 
-#include "planner/planner.h" // struct read_op
+#include "executor/dispatch.h" // struct read_op
 
 #include <string.h>
 

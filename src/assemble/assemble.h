@@ -12,7 +12,7 @@
 
 #include "damacy.h" // enum damacy_dtype (destination)
 #include "damacy_limits.h"
-#include "planner/planner.h"
+#include "executor/dispatch.h"
 
 #include <stddef.h>
 #include <stdint.h>
