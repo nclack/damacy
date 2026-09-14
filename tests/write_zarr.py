@@ -19,7 +19,7 @@ import argparse
 import sys
 
 import numpy as np
-from zarr.codecs import BloscCname, BloscCodec, BloscShuffle, ZstdCodec
+from zarr.codecs import BloscCodec, ZstdCodec
 
 import zarr
 
@@ -45,9 +45,9 @@ def make_compressors(codec: str, dtype: np.dtype, shuffle: str):
             raise SystemExit(f"unknown --codec {codec!r}")
         return [
             BloscCodec(
-                cname=BloscCname.zstd,
+                cname="zstd",
                 clevel=clevel,
-                shuffle=BloscShuffle[shuffle],
+                shuffle=shuffle,
                 typesize=int(dtype.itemsize),
             )
         ]
