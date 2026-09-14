@@ -11,9 +11,9 @@ mk_sample(const char* uri, int64_t lo, int64_t hi)
 {
   struct damacy_sample s = { 0 };
   s.uri = uri;
-  s.aabb.rank = 1;
-  s.aabb.dims[0].beg = lo;
-  s.aabb.dims[0].end = hi;
+  s.rank = 1;
+  s.axes[0] = (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                              .interval = { lo, hi } };
   return s;
 }
 

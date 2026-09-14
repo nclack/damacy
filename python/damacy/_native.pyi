@@ -163,7 +163,8 @@ class Pipeline:
     def push(
         self, samples: list[dict[str, Any]] | tuple[dict[str, Any], ...]
     ) -> dict[str, Any]:
-        """Push {uri, aabb, indices?} dicts; indexed axes override their intervals.
+        """Push {uri, axes} dicts. Each axis is ("interval", (beg, end))
+        or ("indices", values). Unknown kinds and extra fields are rejected.
         Returns {consumed: int, status: int}. Raises DamacyError for
         anything other than OK / AGAIN."""
 

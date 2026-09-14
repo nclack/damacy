@@ -211,9 +211,13 @@ test_explicit_device_does_not_leak_ctx_between_calls(void)
   EXPECT(cuCtxGetCurrent(&cur) == CUDA_SUCCESS);
   EXPECT(cur == caller);
 
-  struct damacy_sample s = { .uri = p, .aabb = { .rank = 2 } };
-  s.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 4 };
-  s.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 8 };
+  struct damacy_sample s = { .uri = p, .rank = 2 };
+  s.axes[0] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 4 } };
+  s.axes[1] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 8 } };
   struct damacy_sample_slice slice = { .beg = &s, .end = &s + 1 };
   struct damacy_push_result pr = damacy_push(d, slice);
   EXPECT(pr.status == DAMACY_OK);
@@ -272,9 +276,13 @@ test_pop_error_path_restores_caller_ctx(void)
 
   // Push succeeds (shape matches cfg), pop's planner rejects the AABB
   // with DAMACY_INVAL after ctx_guard_enter.
-  struct damacy_sample oob = { .uri = p, .aabb = { .rank = 2 } };
-  oob.aabb.dims[0] = (struct damacy_interval){ .beg = 0, .end = 4 };
-  oob.aabb.dims[1] = (struct damacy_interval){ .beg = 0, .end = 9999 };
+  struct damacy_sample oob = { .uri = p, .rank = 2 };
+  oob.axes[0] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 4 } };
+  oob.axes[1] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = 0, .end = 9999 } };
   struct damacy_sample_slice slice = { .beg = &oob, .end = &oob + 1 };
   struct damacy_push_result pr = damacy_push(d, slice);
   EXPECT(pr.status == DAMACY_OK);

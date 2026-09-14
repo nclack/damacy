@@ -75,9 +75,13 @@ mk_cfg(const char* root, uint32_t samples_per_batch, int64_t sy, int64_t sx)
 static struct damacy_sample
 mk_sample(const char* uri, int64_t y0, int64_t y1, int64_t x0, int64_t x1)
 {
-  struct damacy_sample s = { .uri = uri, .aabb = { .rank = 2 } };
-  s.aabb.dims[0] = (struct damacy_interval){ .beg = y0, .end = y1 };
-  s.aabb.dims[1] = (struct damacy_interval){ .beg = x0, .end = x1 };
+  struct damacy_sample s = { .uri = uri, .rank = 2 };
+  s.axes[0] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = y0, .end = y1 } };
+  s.axes[1] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = x0, .end = x1 } };
   return s;
 }
 

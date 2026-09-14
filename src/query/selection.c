@@ -3,6 +3,25 @@
 #include <stdlib.h>
 #include <string.h>
 
+static enum damacy_status
+axis_length(const struct damacy_axis_selection* axis, uint64_t* length)
+{
+  switch (axis->kind) {
+    case DAMACY_AXIS_INTERVAL:
+      if (axis->interval.beg < 0 || axis->interval.end <= axis->interval.beg)
+        return DAMACY_INVAL;
+      *length = (uint64_t)(axis->interval.end - axis->interval.beg);
+      return DAMACY_OK;
+    case DAMACY_AXIS_INDICES:
+      if (!axis->indices.values || !axis->indices.count)
+        return DAMACY_INVAL;
+      *length = axis->indices.count;
+      return DAMACY_OK;
+    default:
+      return DAMACY_INVAL;
+  }
+}
+
 enum damacy_status
 query_validate(const struct damacy_sample* sample,
                const struct damacy_batch_spec* output,
@@ -10,28 +29,27 @@ query_validate(const struct damacy_sample* sample,
 {
   if (!sample || !sample->uri || !output)
     return DAMACY_INVAL;
-  if (!sample->aabb.rank || sample->aabb.rank > DAMACY_MAX_RANK ||
-      sample->aabb.rank != output->sample_rank)
+  if (!sample->rank || sample->rank > DAMACY_MAX_RANK ||
+      sample->rank != output->sample_rank)
     return DAMACY_RANK;
   uint64_t bytes = 0;
-  for (uint8_t d = 0; d < sample->aabb.rank; ++d) {
-    const struct damacy_index_array* axis = &sample->indices[d];
-    if (axis->values || axis->count) {
-      if (!axis->values || !axis->count ||
-          axis->count != (uint64_t)output->sample_shape[d])
-        return DAMACY_INVAL;
-      uint64_t size = (uint64_t)axis->count * sizeof(struct query_index);
+  for (uint8_t d = 0; d < sample->rank; ++d) {
+    const struct damacy_axis_selection* axis = &sample->axes[d];
+    uint64_t length;
+    enum damacy_status status = axis_length(axis, &length);
+    if (status != DAMACY_OK)
+      return status;
+    if (length != (uint64_t)output->sample_shape[d])
+      return DAMACY_INVAL;
+    if (axis->kind == DAMACY_AXIS_INDICES) {
+      uint64_t size =
+        (uint64_t)axis->indices.count * sizeof(struct query_index);
       if (size > max_index_bytes || bytes > max_index_bytes - size)
         return DAMACY_BUDGET;
       bytes += size;
-      for (uint32_t i = 0; i < axis->count; ++i)
-        if (axis->values[i] < 0 || axis->values[i] == INT64_MAX)
+      for (uint32_t i = 0; i < axis->indices.count; ++i)
+        if (axis->indices.values[i] < 0 || axis->indices.values[i] == INT64_MAX)
           return DAMACY_INVAL;
-    } else {
-      int64_t lo = sample->aabb.dims[d].beg;
-      int64_t hi = sample->aabb.dims[d].end;
-      if (lo < 0 || hi <= lo || hi - lo != output->sample_shape[d])
-        return DAMACY_INVAL;
     }
   }
   return DAMACY_OK;
@@ -53,35 +71,41 @@ query_copy(const struct damacy_sample* sample,
            struct damacy_aabb* bounds,
            struct query_axis* axes)
 {
-  if (!sample || !sample->uri || !sample->aabb.rank ||
-      sample->aabb.rank > DAMACY_MAX_RANK)
+  if (!sample || !sample->uri || !sample->rank ||
+      sample->rank > DAMACY_MAX_RANK)
     return DAMACY_INVAL;
-  size_t length = strlen(sample->uri) + 1;
+  size_t uri_bytes = strlen(sample->uri) + 1;
   size_t alignment = _Alignof(struct query_index);
-  if (length > SIZE_MAX - alignment + 1)
+  if (uri_bytes > SIZE_MAX - alignment + 1)
     return DAMACY_BUDGET;
-  size_t offset = (length + alignment - 1) / alignment * alignment;
+  size_t offset = (uri_bytes + alignment - 1) / alignment * alignment;
   uint64_t count = 0;
-  for (uint8_t d = 0; d < sample->aabb.rank; ++d) {
-    if (!!sample->indices[d].values != !!sample->indices[d].count)
-      return DAMACY_INVAL;
-    count += sample->indices[d].count;
+  for (uint8_t d = 0; d < sample->rank; ++d) {
+    uint64_t length;
+    enum damacy_status status = axis_length(&sample->axes[d], &length);
+    if (status != DAMACY_OK)
+      return status;
+    if (sample->axes[d].kind == DAMACY_AXIS_INDICES)
+      count += length;
   }
   if (count > (SIZE_MAX - offset) / sizeof(struct query_index))
     return DAMACY_BUDGET;
   char* storage = malloc(offset + (size_t)count * sizeof(struct query_index));
   if (!storage)
     return DAMACY_OOM;
-  memcpy(storage, sample->uri, length);
-  *bounds = sample->aabb;
+  memcpy(storage, sample->uri, uri_bytes);
+  *bounds = (struct damacy_aabb){ .rank = sample->rank };
   memset(axes, 0, DAMACY_MAX_RANK * sizeof(*axes));
   struct query_index* cursor = (void*)(storage + offset);
-  for (uint8_t d = 0; d < sample->aabb.rank; ++d) {
-    uint32_t n = sample->indices[d].count;
-    if (!n)
+  for (uint8_t d = 0; d < sample->rank; ++d) {
+    const struct damacy_axis_selection* axis = &sample->axes[d];
+    if (axis->kind == DAMACY_AXIS_INTERVAL) {
+      bounds->dims[d] = axis->interval;
       continue;
+    }
+    uint32_t n = axis->indices.count;
     for (uint32_t i = 0; i < n; ++i) {
-      int64_t value = sample->indices[d].values[i];
+      int64_t value = axis->indices.values[i];
       if (value < 0 || value == INT64_MAX) {
         free(storage);
         return DAMACY_INVAL;

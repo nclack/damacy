@@ -134,6 +134,37 @@ def raw_chunks(path, values, chunks, *, fill=0, missing=()):
     return str(path)
 
 
+def test_native_axes_reject_malformed_queries(tmp_path):
+    values = np.arange(16, dtype=np.float32).reshape(4, 4)
+    uri = raw_chunks(tmp_path / "array", values, (2, 2))
+    invalid = [
+        (("unknown", (1, 3)), ValueError),
+        ((None, (1, 3)), TypeError),
+        ((), ValueError),
+        (("interval", (1, 3), "indices"), ValueError),
+        (("interval", (1, 2, 3)), ValueError),
+        (("interval", None), ValueError),
+        (("indices", ()), ValueError),
+        (("indices", None), TypeError),
+        (("indices", (1, 1.5)), TypeError),
+    ]
+    with pipeline(shape=(2, 2)) as p:
+        for axis, error in invalid:
+            with pytest.raises(error):
+                p._native.push([{"uri": uri, "axes": [("indices", (3, 1)), axis]}])
+        with pytest.raises(ValueError, match="only 'uri' and 'axes'"):
+            p._native.push(
+                [{"uri": uri, "axes": [("interval", (0, 2))] * 2, "aabb": [(0, 2)] * 2}]
+            )
+        with pytest.raises(KeyError, match="requires 'uri' and 'axes'"):
+            p._native.push(
+                [{"uri": uri, "aabb": [(0, 2)] * 2, "indices": [(1, 0)] * 2}]
+            )
+        p.push([damacy.IndexQuery(uri, ([3, 1], slice(1, 3)))])
+        with p.pop() as batch:
+            np.testing.assert_array_equal(read_batch(batch)[0], values[[3, 1], 1:3])
+
+
 def test_query_copies_and_normalises_inputs():
     rows = np.array([7, 2, 7], dtype=np.int32)
     q = damacy.IndexQuery("a", (rows, slice(None, 4)))

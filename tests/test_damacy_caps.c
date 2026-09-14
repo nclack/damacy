@@ -84,9 +84,13 @@ mk_cfg(const char* root, uint32_t samples_per_batch, int64_t sy, int64_t sx)
 static struct damacy_sample
 mk_sample(const char* uri, int64_t y0, int64_t y1, int64_t x0, int64_t x1)
 {
-  struct damacy_sample s = { .uri = uri, .aabb = { .rank = 2 } };
-  s.aabb.dims[0] = (struct damacy_interval){ .beg = y0, .end = y1 };
-  s.aabb.dims[1] = (struct damacy_interval){ .beg = x0, .end = x1 };
+  struct damacy_sample s = { .uri = uri, .rank = 2 };
+  s.axes[0] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = y0, .end = y1 } };
+  s.axes[1] =
+    (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                    .interval = { .beg = x0, .end = x1 } };
   return s;
 }
 
@@ -269,11 +273,19 @@ test_pool_reserve_fits_default_budget(void)
   struct damacy_sample samples[20] = { 0 };
   for (int i = 0; i < 20; ++i) {
     samples[i].uri = p;
-    samples[i].aabb.rank = 4;
-    samples[i].aabb.dims[0] = (struct damacy_interval){ 0, 16 };
-    samples[i].aabb.dims[1] = (struct damacy_interval){ 0, 1 };
-    samples[i].aabb.dims[2] = (struct damacy_interval){ 0, 256 };
-    samples[i].aabb.dims[3] = (struct damacy_interval){ 0, 256 };
+    samples[i].rank = 4;
+    samples[i].axes[0] =
+      (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                      .interval = { 0, 16 } };
+    samples[i].axes[1] =
+      (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                      .interval = { 0, 1 } };
+    samples[i].axes[2] =
+      (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                      .interval = { 0, 256 } };
+    samples[i].axes[3] =
+      (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
+                                      .interval = { 0, 256 } };
   }
   struct damacy_sample_slice slice = { .beg = samples, .end = samples + 20 };
   EXPECT(damacy_push(d, slice).status == DAMACY_OK);

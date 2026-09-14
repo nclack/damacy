@@ -80,14 +80,29 @@ extern "C"
     uint32_t count;
   };
 
-  // Index arrays override their AABB axis and preserve order and duplicates.
-  // Axes combine as a Cartesian product. Accepted samples own a copy.
-  // Unused index arrays must be {NULL, 0}.
+  enum damacy_axis_kind
+  {
+    DAMACY_AXIS_INTERVAL = 1,
+    DAMACY_AXIS_INDICES = 2,
+  };
+
+  struct damacy_axis_selection
+  {
+    enum damacy_axis_kind kind;
+    union
+    {
+      struct damacy_interval interval;
+      struct damacy_index_array indices;
+    };
+  };
+
+  // Axes combine as a Cartesian product, preserving index order and duplicates.
+  // Accepted samples own a copy of the URI and index values.
   struct damacy_sample
   {
-    const char* uri; // null-terminated; copied internally
-    struct damacy_aabb aabb;
-    struct damacy_index_array indices[DAMACY_MAX_RANK];
+    const char* uri;
+    uint8_t rank;
+    struct damacy_axis_selection axes[DAMACY_MAX_RANK];
   };
 
   // Caller-owned slice of samples to push.
@@ -179,7 +194,7 @@ extern "C"
     // Destination dtype of assembled batches.
     enum damacy_dtype dtype;
     // Per-sample output extents (in voxels) along the zarr's axis order — same
-    // layout damacy_sample.aabb uses. sample_rank must be in
+    // axis order damacy_sample.axes uses. sample_rank must be in
     // [1, DAMACY_MAX_RANK]; every sample_shape[d] must be > 0.
     int64_t sample_shape[DAMACY_MAX_RANK];
     uint8_t sample_rank;

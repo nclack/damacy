@@ -454,7 +454,10 @@ class Sample:
         )
 
     def _to_native(self) -> dict[str, Any]:
-        return {"uri": self.uri, "aabb": list(self.aabb)}
+        return {
+            "uri": self.uri,
+            "axes": [("interval", bounds) for bounds in self.aabb],
+        }
 
 
 @dataclass(init=False, frozen=True, slots=True)
@@ -520,7 +523,13 @@ class IndexQuery:
         )
 
     def _to_native(self) -> dict[str, Any]:
-        return {"uri": self.uri, "aabb": self.aabb, "indices": self.indices}
+        return {
+            "uri": self.uri,
+            "axes": [
+                ("indices", indices) if indices is not None else ("interval", bounds)
+                for bounds, indices in zip(self.aabb, self.indices, strict=True)
+            ],
+        }
 
 
 @dataclass(init=False, frozen=True, slots=True)
