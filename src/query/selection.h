@@ -17,13 +17,19 @@ struct query_axis
 struct selection_grid_axis
 {
   const struct query_index* indices;
-  uint64_t extent;
-  uint64_t begin;
-  uint64_t end;
-  uint64_t cell;
-  uint32_t first;
-  uint32_t last;
-  uint32_t position;
+  uint64_t cell_size_index;
+  struct
+  {
+    uint64_t beg;
+    uint64_t end;
+  } span_cell;
+  uint64_t current_cell;
+  struct
+  {
+    uint32_t beg;
+    uint32_t end;
+  } span_entry;
+  uint32_t current_entry;
 };
 
 struct selection_grid
@@ -62,12 +68,12 @@ query_chunk_span(const struct query_axis* axis,
 
 enum damacy_status
 selection_grid_init(struct selection_grid* grid,
-                    const struct damacy_aabb* bounds,
+                    const struct damacy_aabb* bounds_index,
                     const struct query_axis* axes,
-                    const uint64_t* shape,
-                    const uint64_t* clip_begin,
-                    const uint64_t* clip_end,
+                    const uint64_t* cell_shape_index,
+                    const uint64_t* clip_beg_cell,
+                    const uint64_t* clip_end_cell,
                     uint64_t max_cells);
 
 int
-selection_grid_next(struct selection_grid* grid, uint64_t* coordinate);
+selection_grid_next(struct selection_grid* grid, uint64_t* coordinate_cell);
