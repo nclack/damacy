@@ -28,6 +28,8 @@ damacy_status_str(enum damacy_status s)
       return "configured budget too small";
     case DAMACY_SHUTDOWN:
       return "shutdown";
+    case DAMACY_UNSUPPORTED:
+      return "unsupported operation";
   }
   return "unknown";
 }

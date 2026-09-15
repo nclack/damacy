@@ -78,6 +78,7 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Pipeline composition: pipeline.md
+  - Spatial queries: spatial.md
   - GPU memory budget: budget.md
   - Distributed: distributed.md
   - Async prefetch: prefetch.md

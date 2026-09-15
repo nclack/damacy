@@ -28,6 +28,24 @@ The full public surface of the `damacy` package.
 
 ::: damacy.CudaExecutor
 
+## Spatial queries
+
+::: damacy.NgffImage
+
+::: damacy.NgffAxis
+
+::: damacy.NgffLevel
+
+::: damacy.SpatialResolver
+
+::: damacy.SpatialQuery
+
+::: damacy.ResolvedSpatialQuery
+
+::: damacy.Sampler
+
+::: damacy.NgffLimits
+
 ## Output and limits
 
 ::: damacy.BatchSpec
@@ -83,6 +101,8 @@ The full public surface of the `damacy` package.
 ::: damacy.OutOfMemory
 
 ::: damacy.BudgetExceeded
+
+::: damacy.UnsupportedOperation
 
 ::: damacy.ShutdownError
 

@@ -64,6 +64,8 @@ add_damacy_test(test_scheduler scheduler platform log)
 # requires `uv` on PATH at test time (provided by flake.nix devShell).
 if(NOT DAMACY_FUZZ)
     add_damacy_test(test_damacy_plan damacy)
+    add_damacy_test(test_spatial damacy test_fixture)
+    set_tests_properties(test_spatial PROPERTIES LABELS tsan TIMEOUT 120)
     add_damacy_test(test_cpu_pipeline damacy test_fixture Threads::Threads)
     set_tests_properties(test_cpu_pipeline PROPERTIES TIMEOUT 120)
 endif()

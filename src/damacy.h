@@ -55,6 +55,7 @@ extern "C"
     DAMACY_OOM,      // host allocation failed (calloc/malloc returned null)
     DAMACY_BUDGET,   // a configured cap is too small to satisfy the request
     DAMACY_SHUTDOWN, // pipeline destroyed or in failed state
+    DAMACY_UNSUPPORTED,
   };
 
   // Human-readable name for a status code; safe for log/error messages.
