@@ -15,58 +15,117 @@ struct damacy_spatial_resolution
   struct damacy_sample sample;
 };
 
-static double
-minimum_spacing(const struct damacy_ngff_image* image,
-                const struct damacy_affine* transform,
-                uint32_t level)
+static uint8_t
+spatial_matrix(const struct damacy_ngff_image* image,
+               const struct damacy_affine* transform,
+               uint32_t level,
+               double matrix[3][3])
 {
   uint8_t axes[3], rank = 0;
   for (uint8_t d = 0; d < image->info.rank; ++d)
     if (image->info.axes[d].kind == DAMACY_NGFF_SPACE)
       axes[rank++] = d;
-  double matrix[3][3] = { { 0 } }, scale = 0;
-  for (uint8_t i = 0; i < rank; ++i)
-    for (uint8_t j = 0; j < rank; ++j) {
-      double value = transform->linear[axes[i]][axes[j]] /
-                     image->levels[level].scale_to_reference[axes[i]];
-      if (!isfinite(value))
-        return NAN;
-      matrix[i][j] = value;
-      scale = fmax(scale, fabs(value));
-    }
-  if (!scale)
-    return 0;
-  double gram[3][3] = { { 0 } };
   for (uint8_t i = 0; i < rank; ++i)
     for (uint8_t j = 0; j < rank; ++j)
-      for (uint8_t k = 0; k < rank; ++k)
-        gram[i][j] += (matrix[i][k] / scale) * (matrix[j][k] / scale);
-  for (int sweep = 0; sweep < 24; ++sweep) {
-    for (uint8_t p = 0; p < rank; ++p) {
-      for (uint8_t q = p + 1; q < rank; ++q) {
-        double cross = gram[p][q];
-        if (fabs(cross) <= DBL_EPSILON * sqrt(gram[p][p] * gram[q][q]))
-          continue;
-        double tau = (gram[q][q] - gram[p][p]) / (2 * cross);
-        double t = copysign(1, tau) / (fabs(tau) + hypot(1, tau));
-        double c = 1 / hypot(1, t), s = t * c;
-        gram[p][p] -= t * cross;
-        gram[q][q] += t * cross;
-        gram[p][q] = gram[q][p] = 0;
-        for (uint8_t k = 0; k < rank; ++k) {
-          if (k == p || k == q)
-            continue;
-          double a = gram[k][p], b = gram[k][q];
-          gram[k][p] = gram[p][k] = c * a - s * b;
-          gram[k][q] = gram[q][k] = s * a + c * b;
+      matrix[i][j] = transform->linear[axes[i]][axes[j]] /
+                     image->levels[level].scale_to_reference[axes[i]];
+  return rank;
+}
+
+static int
+linear_is_invertible(const struct damacy_ngff_image* image,
+                     const struct damacy_affine* transform)
+{
+  double matrix[3][3];
+  uint8_t rank = spatial_matrix(image, transform, 0, matrix);
+  for (uint8_t i = 0; i < rank; ++i) {
+    double scale = 0;
+    for (uint8_t j = 0; j < rank; ++j)
+      scale = fmax(scale, fabs(matrix[i][j]));
+    if (!scale)
+      return 0;
+    for (uint8_t j = 0; j < rank; ++j)
+      matrix[i][j] /= scale;
+  }
+  for (uint8_t j = 0; j < rank; ++j) {
+    uint8_t pivot_row = j, pivot_column = j;
+    for (uint8_t i = j; i < rank; ++i)
+      for (uint8_t k = j; k < rank; ++k)
+        if (fabs(matrix[i][k]) > fabs(matrix[pivot_row][pivot_column])) {
+          pivot_row = i;
+          pivot_column = k;
         }
-      }
+    if (fabs(matrix[pivot_row][pivot_column]) <= 64 * DBL_EPSILON)
+      return 0;
+    for (uint8_t k = j; k < rank; ++k) {
+      double value = matrix[j][k];
+      matrix[j][k] = matrix[pivot_row][k];
+      matrix[pivot_row][k] = value;
+    }
+    for (uint8_t i = j; i < rank; ++i) {
+      double value = matrix[i][j];
+      matrix[i][j] = matrix[i][pivot_column];
+      matrix[i][pivot_column] = value;
+    }
+    for (uint8_t i = j + 1; i < rank; ++i) {
+      double factor = matrix[i][j] / matrix[j][j];
+      for (uint8_t k = j + 1; k < rank; ++k)
+        matrix[i][k] -= factor * matrix[j][k];
     }
   }
-  double minimum = gram[0][0];
-  for (uint8_t d = 1; d < rank; ++d)
-    minimum = fmin(minimum, gram[d][d]);
-  return scale * sqrt(fmax(0, minimum));
+  return 1;
+}
+
+static double
+minimum_spacing(const struct damacy_ngff_image* image,
+                const struct damacy_affine* transform,
+                uint32_t level)
+{
+  double matrix[3][3];
+  uint8_t rank = spatial_matrix(image, transform, level, matrix);
+  double scale = 0;
+  for (uint8_t i = 0; i < rank; ++i)
+    for (uint8_t j = 0; j < rank; ++j)
+      scale = fmax(scale, fabs(matrix[i][j]));
+  if (!scale)
+    return 0;
+  for (uint8_t i = 0; i < rank; ++i)
+    for (uint8_t j = 0; j < rank; ++j)
+      matrix[i][j] /= scale;
+  for (int sweep = 0; sweep < 32; ++sweep) {
+    int changed = 0;
+    for (uint8_t p = 0; p < rank; ++p) {
+      for (uint8_t q = p + 1; q < rank; ++q) {
+        double a = 0, b = 0, cross = 0;
+        for (uint8_t i = 0; i < rank; ++i) {
+          a += matrix[i][p] * matrix[i][p];
+          b += matrix[i][q] * matrix[i][q];
+          cross += matrix[i][p] * matrix[i][q];
+        }
+        if (!cross || fabs(cross) <= DBL_EPSILON * sqrt(a) * sqrt(b))
+          continue;
+        double tau = (b - a) / (2 * cross);
+        double t = copysign(1, tau) / (fabs(tau) + hypot(1, tau));
+        double c = 1 / hypot(1, t), s = t * c;
+        for (uint8_t i = 0; i < rank; ++i) {
+          double first = matrix[i][p], second = matrix[i][q];
+          matrix[i][p] = c * first - s * second;
+          matrix[i][q] = s * first + c * second;
+        }
+        changed = 1;
+      }
+    }
+    if (!changed)
+      break;
+  }
+  double minimum = INFINITY;
+  for (uint8_t j = 0; j < rank; ++j) {
+    double length = 0;
+    for (uint8_t i = 0; i < rank; ++i)
+      length = hypot(length, matrix[i][j]);
+    minimum = fmin(minimum, length);
+  }
+  return scale * minimum;
 }
 
 static enum damacy_status
@@ -115,8 +174,7 @@ validate_query(const struct damacy_ngff_image* image,
         return DAMACY_INVAL;
     }
   }
-  double spacing = minimum_spacing(image, &query->output_to_reference, 0);
-  if (!isfinite(spacing) || spacing <= 0)
+  if (!linear_is_invertible(image, &query->output_to_reference))
     return DAMACY_INVAL;
   return DAMACY_OK;
 }

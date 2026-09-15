@@ -323,6 +323,56 @@ test_metadata_limits_and_load(void)
   return 0;
 }
 
+static int
+test_collapsed_volume(void)
+{
+  struct damacy_ngff_level level = { .uri = "volume/0",
+                                     .shape = { 8, 8, 8 },
+                                     .scale_to_reference = { 1, 1, 1 } };
+  struct damacy_ngff_image image = {
+    .info = { .rank = 3,
+              .data_type = "uint16",
+              .axes = { { .name = "z", .kind = DAMACY_NGFF_SPACE },
+                        { .name = "y", .kind = DAMACY_NGFF_SPACE },
+                        { .name = "x", .kind = DAMACY_NGFF_SPACE } },
+              .level_count = 1,
+              .levels = &level },
+    .levels = &level,
+    .dtype = dtype_u16
+  };
+  struct damacy_batch_spec shape = { .dtype = DAMACY_F32,
+                                     .sample_rank = 3,
+                                     .sample_shape = { 2, 2, 2 },
+                                     .samples_per_batch = 1 };
+  struct damacy_spatial_query query = {
+    .output_to_reference = { .linear = { { 0.7854589457317591,
+                                           0.4315455905112043,
+                                           0.5705067473246884 },
+                                         { 0.2148316327537341,
+                                           0.7753842829888732,
+                                           -1.494658594462818 },
+                                         { 1.0002905784854932,
+                                           1.2069298735000775,
+                                           -0.9241518471381295 } },
+                             .offset = { 4, 4, 4 } },
+    .sampler = { .filter = DAMACY_FILTER_NEAREST,
+                 .boundary = DAMACY_BOUNDARY_CONSTANT },
+    .level = DAMACY_LEVEL_AUTO
+  };
+  struct damacy_spatial_resolution* resolved = NULL;
+  EXPECT(damacy_spatial_resolve(&image, &shape, &query, &resolved) ==
+         DAMACY_INVAL);
+  EXPECT(!resolved);
+  query.output_to_reference = (struct damacy_affine){
+    .linear = { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } }
+  };
+  EXPECT(damacy_spatial_resolve(&image, &shape, &query, &resolved) ==
+         DAMACY_OK);
+  EXPECT(!damacy_spatial_resolution_info(resolved)->requires_resampling);
+  damacy_spatial_resolution_destroy(resolved);
+  return 0;
+}
+
 int
 main(void)
 {
@@ -330,6 +380,7 @@ main(void)
   RUN(test_scale_rotation_and_shear);
   RUN(test_sampler_bounds);
   RUN(test_invalid_queries);
+  RUN(test_collapsed_volume);
   RUN(test_metadata_limits_and_load);
   return 0;
 }

@@ -106,7 +106,9 @@ require identity rows/columns and integral offsets, and must remain in bounds.
 Combining spatial resampling with indexed time/channel selections is a later
 extension; use `IndexQuery` for current arbitrary index selections.
 
-The spatial linear map must be finite and numerically nonsingular. Shapes and
+The spatial linear map must be finite and numerically nonsingular. Validation
+normalizes each spatial row by its largest coefficient and eliminates using
+the largest remaining pivot. Pivots no larger than `64 * DBL_EPSILON` fail validation. Shapes and
 transformed sample coordinates are limited to `2**52 - 1` index units so
 half-voxel centers remain representable. Rank, dtype conversion, output size,
 and every sampler parameter are validated before a resolution is returned.
