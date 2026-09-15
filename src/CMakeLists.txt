@@ -278,6 +278,10 @@ if(NOT DAMACY_FUZZ)
     add_src_lib(pipeline_components SOURCES pipeline/components.h pipeline/components.c damacy_status.c
         LINKS damacy_config store platform log
     )
+    add_src_lib(spatial_query
+        SOURCES damacy_spatial.h ngff/ngff.h ngff/metadata.c ngff/load.c query/spatial.c
+        LINKS pipeline_components metadata_store_async zarr json m
+    )
     add_src_lib(metadata_planner SOURCES pipeline/zarr_planner.c
         LINKS pipeline_components plan_builder prefetcher array_meta shard_index
               metadata_store_async lookahead
@@ -291,7 +295,7 @@ if(NOT DAMACY_FUZZ)
                 damacy_lifecycle.c damacy_push.c damacy_plan.c damacy_pop.c
                 damacy_scheduler.c
         LINKS pipeline_components metadata_planner cpu_executor scheduler damacy_stats
-              query_selection
+              query_selection spatial_query
     )
     if(DAMACY_CUDA)
         add_cuda_lib(cuda_executor

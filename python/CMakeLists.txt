@@ -12,6 +12,7 @@ python_add_library(
     damacy/_log_sink.c
     damacy/_api.c
     damacy/_components.c
+    damacy/_spatial.c
 )
 
 target_link_libraries(_native PRIVATE damacy log warnings)
@@ -26,6 +27,7 @@ set_target_properties(
     PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/damacy"
 )
 configure_file(damacy/__init__.py damacy/__init__.py COPYONLY)
+configure_file(damacy/_spatial.py damacy/_spatial.py COPYONLY)
 
 if(BUILD_TESTING)
     execute_process(

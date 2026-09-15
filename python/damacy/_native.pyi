@@ -33,6 +33,7 @@ STATUS_CUDA: Final[int]
 STATUS_OOM: Final[int]
 STATUS_BUDGET: Final[int]
 STATUS_SHUTDOWN: Final[int]
+STATUS_UNSUPPORTED: Final[int]
 
 # ---- damacy_dtype integers ----------------------------------------------
 
@@ -252,3 +253,26 @@ def compose_pipeline(
     prepared_batches: int,
     /,
 ) -> Pipeline: ...
+def ngff_load(
+    reader: object,
+    uri: str,
+    multiscale_index: int,
+    max_levels: int,
+    max_metadata_bytes: int,
+    /,
+) -> object: ...
+def ngff_info(image: object, /) -> dict[str, Any]: ...
+def spatial_resolve(
+    image: object,
+    shape: tuple[int, ...],
+    samples: int,
+    dtype: int,
+    transform: tuple[tuple[float, ...], ...],
+    filter: int,
+    boundary: int,
+    constant_value: float,
+    level: int,
+    /,
+) -> object: ...
+def spatial_info(resolution: object, /) -> dict[str, Any]: ...
+def spatial_sample(resolution: object, /) -> dict[str, Any]: ...
