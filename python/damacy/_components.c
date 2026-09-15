@@ -320,3 +320,9 @@ components_register(PyObject* module)
 {
   return PyModule_AddFunctions(module, methods);
 }
+
+struct damacy_metadata_reader*
+api_metadata_reader(PyObject* capsule)
+{
+  return component_value(capsule, METADATA_READER);
+}

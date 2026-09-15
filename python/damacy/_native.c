@@ -258,7 +258,8 @@ module_exec(PyObject* m)
     PyErr_SetString(PyExc_RuntimeError, "failed to install damacy log sink");
     return -1;
   }
-  if (api_register_types(m) != 0 || components_register(m) != 0)
+  if (api_register_types(m) != 0 || components_register(m) != 0 ||
+      spatial_register(m) != 0)
     return -1;
 #ifdef DAMACY_HAS_CUDA
   if (PyModule_AddIntConstant(m, "CUDA_ENABLED", 1) < 0)

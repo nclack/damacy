@@ -620,6 +620,17 @@ handle_statx_complete(struct metadata_store_async* s, struct metadata_job* job)
     return;
   }
 
+  if (job->stx.stx_size > job->requested_len ||
+      job->stx.stx_size > UINT32_MAX) {
+    job->status = DAMACY_BUDGET;
+    if (job->open_done) {
+      if (job->fd >= 0)
+        finish_job(s, job);
+      else
+        complete_job(s, job);
+    }
+    return;
+  }
   job->len = (size_t)job->stx.stx_size;
   if (job->open_done && job->fd < 0) {
     complete_job(s, job);
@@ -1017,7 +1028,17 @@ metadata_store_async_read_file(struct metadata_store_async* s,
                                metadata_store_read_cb cb,
                                void* user)
 {
-  return post_read(s, key, 0, 0, REQ_READ_FILE, cb, user);
+  return post_read(s, key, 0, SIZE_MAX, REQ_READ_FILE, cb, user);
+}
+
+int
+metadata_store_async_read_file_bounded(struct metadata_store_async* s,
+                                       const char* key,
+                                       size_t max_bytes,
+                                       metadata_store_read_cb cb,
+                                       void* user)
+{
+  return post_read(s, key, 0, max_bytes, REQ_READ_FILE, cb, user);
 }
 
 int
