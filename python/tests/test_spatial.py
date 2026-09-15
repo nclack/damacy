@@ -657,3 +657,38 @@ def test_duplicate_array_fields_are_rejected(tmp_path, key, value):
     path.write_text(text[:-1] + f', "{key}": {value}' + "}")
     with pytest.raises(damacy.InvalidArgument):
         load(root)
+
+
+def test_collapsed_3d_transforms_are_rejected(tmp_path):
+    root = tmp_path / "image"
+    write_image(root, shape=(16, 16, 16))
+    resolver = damacy.SpatialResolver(load(root), damacy.BatchSpec(1, (2, 2, 2)))
+    rng = np.random.default_rng(832)
+    for _ in range(128):
+        matrix = rng.normal(size=(3, 3))
+        matrix[2] = matrix[0] + matrix[1]
+        q = damacy.SpatialQuery(
+            output_to_reference=np.column_stack((matrix, [4, 4, 4])),
+            sampler=damacy.Sampler(boundary="constant"),
+        )
+        with pytest.raises(damacy.InvalidArgument):
+            resolver.resolve(q)
+
+
+@pytest.mark.parametrize("spacing,level", [(0.5, 0), (3.0, 1)])
+def test_level_selection_with_large_scale_difference(tmp_path, spacing, level):
+    root = tmp_path / "image"
+    write_image(root)
+    resolver = damacy.SpatialResolver(load(root), damacy.BatchSpec(1, (2, 2)))
+    large = 2**28
+    matrix = (
+        (large + spacing / 2, large - spacing / 2, 0),
+        (large - spacing / 2, large + spacing / 2, 0),
+    )
+    resolved = resolver.resolve(
+        damacy.SpatialQuery(
+            output_to_reference=matrix,
+            sampler=damacy.Sampler(boundary="constant"),
+        )
+    )
+    assert resolved.level == level
