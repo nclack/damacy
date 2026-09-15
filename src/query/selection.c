@@ -157,89 +157,102 @@ query_chunk_span(const struct query_axis* axis,
 }
 
 static uint64_t
-cell_start(uint64_t cell, uint64_t extent)
+cell_start_index(uint64_t cell, uint64_t cell_size_index)
 {
-  return cell > UINT64_MAX / extent ? UINT64_MAX : cell * extent;
+  return cell > UINT64_MAX / cell_size_index ? UINT64_MAX
+                                             : cell * cell_size_index;
 }
 
 enum damacy_status
 selection_grid_init(struct selection_grid* grid,
-                    const struct damacy_aabb* bounds,
+                    const struct damacy_aabb* bounds_index,
                     const struct query_axis* axes,
-                    const uint64_t* shape,
-                    const uint64_t* clip_begin,
-                    const uint64_t* clip_end,
+                    const uint64_t* cell_shape_index,
+                    const uint64_t* clip_beg_cell,
+                    const uint64_t* clip_end_cell,
                     uint64_t max_cells)
 {
-  *grid = (struct selection_grid){ .rank = bounds->rank, .count = 1 };
-  if (!bounds->rank || bounds->rank > DAMACY_MAX_RANK)
+  *grid = (struct selection_grid){ .rank = bounds_index->rank, .count = 1 };
+  if (!bounds_index->rank || bounds_index->rank > DAMACY_MAX_RANK)
     return DAMACY_RANK;
-  for (uint8_t d = 0; d < bounds->rank; ++d) {
-    if (bounds->dims[d].beg < 0 || bounds->dims[d].end <= bounds->dims[d].beg ||
-        !shape[d])
+  for (uint8_t d = 0; d < bounds_index->rank; ++d) {
+    if (bounds_index->dims[d].beg < 0 ||
+        bounds_index->dims[d].end <= bounds_index->dims[d].beg ||
+        !cell_shape_index[d])
       return DAMACY_INVAL;
     struct selection_grid_axis* axis = &grid->axes[d];
-    axis->extent = shape[d];
-    axis->begin = (uint64_t)bounds->dims[d].beg / shape[d];
-    axis->end = ((uint64_t)bounds->dims[d].end - 1) / shape[d] + 1;
-    if (clip_begin && axis->begin < clip_begin[d])
-      axis->begin = clip_begin[d];
-    if (clip_end && axis->end > clip_end[d])
-      axis->end = clip_end[d];
-    uint64_t count = axis->end > axis->begin ? axis->end - axis->begin : 0;
-    axis->cell = axis->begin;
-    if (axes[d].count && count) {
+    axis->cell_size_index = cell_shape_index[d];
+    axis->span_cell.beg =
+      (uint64_t)bounds_index->dims[d].beg / cell_shape_index[d];
+    axis->span_cell.end =
+      ((uint64_t)bounds_index->dims[d].end - 1) / cell_shape_index[d] + 1;
+    if (clip_beg_cell && axis->span_cell.beg < clip_beg_cell[d])
+      axis->span_cell.beg = clip_beg_cell[d];
+    if (clip_end_cell && axis->span_cell.end > clip_end_cell[d])
+      axis->span_cell.end = clip_end_cell[d];
+    uint64_t cell_count = axis->span_cell.end > axis->span_cell.beg
+                            ? axis->span_cell.end - axis->span_cell.beg
+                            : 0;
+    axis->current_cell = axis->span_cell.beg;
+    if (axes[d].count && cell_count) {
       axis->indices = axes[d].indices;
-      axis->first =
-        query_lower_bound(&axes[d], cell_start(axis->begin, shape[d]));
-      axis->last = query_lower_bound(&axes[d], cell_start(axis->end, shape[d]));
-      axis->position = axis->first;
-      count = 0;
-      uint64_t previous = UINT64_MAX;
-      for (uint32_t i = axis->first; i < axis->last; ++i) {
-        uint64_t cell = (uint64_t)axis->indices[i].source / shape[d];
-        count += cell != previous;
-        previous = cell;
+      axis->span_entry.beg = query_lower_bound(
+        &axes[d], cell_start_index(axis->span_cell.beg, cell_shape_index[d]));
+      axis->span_entry.end = query_lower_bound(
+        &axes[d], cell_start_index(axis->span_cell.end, cell_shape_index[d]));
+      axis->current_entry = axis->span_entry.beg;
+      cell_count = 0;
+      uint64_t previous_cell = UINT64_MAX;
+      for (uint32_t entry = axis->span_entry.beg; entry < axis->span_entry.end;
+           ++entry) {
+        uint64_t cell =
+          (uint64_t)axis->indices[entry].source / cell_shape_index[d];
+        cell_count += cell != previous_cell;
+        previous_cell = cell;
       }
-      if (count)
-        axis->cell = (uint64_t)axis->indices[axis->first].source / shape[d];
+      if (cell_count)
+        axis->current_cell =
+          (uint64_t)axis->indices[axis->span_entry.beg].source /
+          cell_shape_index[d];
     }
-    if (!count) {
+    if (!cell_count) {
       grid->count = 0;
       grid->finished = 1;
     } else {
-      if (grid->count > max_cells / count)
+      if (grid->count > max_cells / cell_count)
         return DAMACY_BUDGET;
-      grid->count *= count;
+      grid->count *= cell_count;
     }
   }
   return DAMACY_OK;
 }
 
 int
-selection_grid_next(struct selection_grid* grid, uint64_t* coordinate)
+selection_grid_next(struct selection_grid* grid, uint64_t* coordinate_cell)
 {
   if (grid->finished)
     return 0;
   for (uint8_t d = 0; d < grid->rank; ++d)
-    coordinate[d] = grid->axes[d].cell;
+    coordinate_cell[d] = grid->axes[d].current_cell;
   for (int d = grid->rank - 1; d >= 0; --d) {
     struct selection_grid_axis* axis = &grid->axes[d];
     if (axis->indices) {
-      while (++axis->position < axis->last) {
-        uint64_t cell =
-          (uint64_t)axis->indices[axis->position].source / axis->extent;
-        if (cell != axis->cell) {
-          axis->cell = cell;
+      while (++axis->current_entry < axis->span_entry.end) {
+        uint64_t cell = (uint64_t)axis->indices[axis->current_entry].source /
+                        axis->cell_size_index;
+        if (cell != axis->current_cell) {
+          axis->current_cell = cell;
           return 1;
         }
       }
-      axis->position = axis->first;
-      axis->cell = (uint64_t)axis->indices[axis->first].source / axis->extent;
+      axis->current_entry = axis->span_entry.beg;
+      axis->current_cell =
+        (uint64_t)axis->indices[axis->span_entry.beg].source /
+        axis->cell_size_index;
     } else {
-      if (++axis->cell < axis->end)
+      if (++axis->current_cell < axis->span_cell.end)
         return 1;
-      axis->cell = axis->begin;
+      axis->current_cell = axis->span_cell.beg;
     }
   }
   grid->finished = 1;
