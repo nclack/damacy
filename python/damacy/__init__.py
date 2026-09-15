@@ -71,6 +71,7 @@ __all__ = [
     "DtypeMismatch",
     "FileMetadataReader",
     "FileReader",
+    "IndexQuery",
     "InvalidArgument",
     "LatencyModel",
     "MetadataCache",
@@ -453,7 +454,82 @@ class Sample:
         )
 
     def _to_native(self) -> dict[str, Any]:
-        return {"uri": self.uri, "aabb": list(self.aabb)}
+        return {
+            "uri": self.uri,
+            "axes": [("interval", bounds) for bounds in self.aabb],
+        }
+
+
+@dataclass(init=False, frozen=True, slots=True)
+class IndexQuery:
+    """Select independent index arrays or contiguous slices along each axis.
+
+    Axes form a Cartesian product. Index order and duplicates are preserved;
+    singleton arrays keep their dimension. Indices are zero-based and must be
+    nonnegative. Slices require an explicit stop and a step of one. Empty
+    selections are rejected. Source bounds are checked when metadata arrives.
+
+    >>> q = IndexQuery("cell.zarr", selection=([7, 2, 7], slice(4, 8)))
+    >>> q.shape
+    (3, 4)
+    >>> q.indices
+    ((7, 2, 7), None)
+    """
+
+    uri: str
+    aabb: tuple[tuple[int, int], ...]
+    indices: tuple[tuple[int, ...] | None, ...]
+
+    def __init__(self, uri: str, selection: Iterable[slice | Iterable[int]]) -> None:
+        bounds: list[tuple[int, int]] = []
+        indices: list[tuple[int, ...] | None] = []
+        for axis, item in enumerate(selection):
+            if axis >= _native.MAX_RANK:
+                raise ValueError(f"selection rank must not exceed {_native.MAX_RANK}")
+            if isinstance(item, slice):
+                if item.step is not None and operator.index(item.step) != 1:
+                    raise ValueError(f"selection axis {axis}: slice step must be one")
+                if item.stop is None:
+                    raise ValueError(f"selection axis {axis}: slice stop is required")
+                start = 0 if item.start is None else operator.index(item.start)
+                stop = operator.index(item.stop)
+                if not 0 <= start < stop <= (1 << 63) - 1:
+                    raise ValueError(f"selection axis {axis}: invalid slice bounds")
+                bounds.append((start, stop))
+                indices.append(None)
+            else:
+                values = tuple(operator.index(value) for value in item)
+                if not values:
+                    raise ValueError(f"selection axis {axis}: index array is empty")
+                if len(values) > (1 << 32) - 1:
+                    raise ValueError(f"selection axis {axis}: too many indices")
+                if min(values) < 0 or max(values) >= (1 << 63) - 1:
+                    raise ValueError(
+                        f"selection axis {axis}: indices must be nonnegative int64 values"
+                    )
+                bounds.append((min(values), max(values) + 1))
+                indices.append(values)
+        if not bounds:
+            raise ValueError("selection must have at least one axis")
+        object.__setattr__(self, "uri", uri)
+        object.__setattr__(self, "aabb", tuple(bounds))
+        object.__setattr__(self, "indices", tuple(indices))
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        return tuple(
+            len(indices) if indices is not None else end - begin
+            for (begin, end), indices in zip(self.aabb, self.indices, strict=True)
+        )
+
+    def _to_native(self) -> dict[str, Any]:
+        return {
+            "uri": self.uri,
+            "axes": [
+                ("indices", indices) if indices is not None else ("interval", bounds)
+                for bounds, indices in zip(self.aabb, self.indices, strict=True)
+            ],
+        }
 
 
 @dataclass(init=False, frozen=True, slots=True)
@@ -518,6 +594,8 @@ class Config:
             intersecting more shards is rejected with :class:`InvalidArgument`.
         max_chunk_uncompressed_bytes: Largest uncompressed chunk size
             the pipeline accepts; 0 selects the C default (512 KB).
+        max_index_bytes: GPU index storage cap per batch, eight bytes per index.
+            Zero disables indexed CUDA queries. Included in the total GPU budget.
         max_read_op_bytes: Cap on the size of a single coalesced
             read issued to storage. 0 selects the C default. Tune
             against your storage tier: small values keep the queue
@@ -561,6 +639,7 @@ class Config:
     max_chunk_uncompressed_bytes: int
     max_read_op_bytes: int
     max_gpu_memory_bytes: int
+    max_index_bytes: int
     host_buffer_waves: int
     max_chunks_per_wave: int
     max_substreams_per_chunk: int
@@ -588,6 +667,7 @@ class Config:
         lookahead_samples: int | None = None,
         max_chunk_uncompressed_bytes: int = _native.DEFAULT_CHUNK_UNCOMPRESSED_BYTES,
         max_read_op_bytes: int = _native.DEFAULT_READ_OP_MAX_BYTES,
+        max_index_bytes: int = _native.DEFAULT_MAX_INDEX_BYTES,
         host_buffer_waves: int = _native.DEFAULT_HOST_BUFFER_WAVES,
         max_chunks_per_wave: int = _native.DEFAULT_MAX_CHUNKS_PER_WAVE,
         max_substreams_per_chunk: int = _native.DEFAULT_MAX_SUBSTREAMS_PER_CHUNK,
@@ -638,6 +718,7 @@ class Config:
                 "max_read_op_bytes must be in "
                 f"[1, {_native.MAX_READ_OP_BYTES}] (got {max_read_op_bytes})"
             )
+        max_index_bytes = _index_byte_limit(max_index_bytes)
         if max_gpu_memory_bytes < 1:
             raise ValueError(
                 f"max_gpu_memory_bytes must be >= 1 (got {max_gpu_memory_bytes})"
@@ -692,6 +773,7 @@ class Config:
         set_(self, "lookahead_samples", lookahead_samples)
         set_(self, "max_chunk_uncompressed_bytes", max_chunk_uncompressed_bytes)
         set_(self, "max_read_op_bytes", max_read_op_bytes)
+        set_(self, "max_index_bytes", max_index_bytes)
         set_(self, "max_gpu_memory_bytes", max_gpu_memory_bytes)
         set_(self, "host_buffer_waves", host_buffer_waves)
         set_(self, "max_chunks_per_wave", max_chunks_per_wave)
@@ -733,6 +815,13 @@ class Config:
             dtype=dtype,
             **overrides,
         )
+
+
+def _index_byte_limit(value: int) -> int:
+    value = operator.index(value)
+    if not 0 <= value <= 8 * ((1 << 32) - 1):
+        raise ValueError("max_index_bytes must be between 0 and 8 * (2**32 - 1)")
+    return value
 
 
 def _positive_int(value: int, name: str, maximum: int = (1 << 32) - 1) -> int:
@@ -835,9 +924,15 @@ class CpuLimits:
 
 @dataclass(frozen=True, slots=True)
 class CudaLimits:
-    """GPU buffer limits, wave geometry, and codec-layout cache capacity."""
+    """GPU buffer limits, wave geometry, and codec-layout cache capacity.
+
+    ``max_index_bytes`` caps index storage per batch (eight bytes per index).
+    Zero disables indexed CUDA queries. Storage also counts against the total
+    GPU budget; allocation is capped by the output shape.
+    """
 
     max_gpu_memory_bytes: int
+    max_index_bytes: int = _native.DEFAULT_MAX_INDEX_BYTES
     chunk_layout_entries: int = 256
     max_chunk_bytes: int = _native.DEFAULT_CHUNK_UNCOMPRESSED_BYTES
     max_read_bytes: int = _native.DEFAULT_READ_OP_MAX_BYTES
@@ -846,6 +941,7 @@ class CudaLimits:
     max_substreams_per_chunk: int = _native.DEFAULT_MAX_SUBSTREAMS_PER_CHUNK
 
     def __post_init__(self) -> None:
+        _index_byte_limit(self.max_index_bytes)
         _positive_int(self.chunk_layout_entries, "chunk_layout_entries")
         _positive_int(self.max_gpu_memory_bytes, "max_gpu_memory_bytes", (1 << 64) - 1)
         _positive_int(self.max_chunk_bytes, "max_chunk_bytes")
@@ -989,6 +1085,7 @@ class CudaExecutor:
             int(NumaStrategy.coerce(numa_strategy)),
             numa_node,
             _gds_to_native(enable_gds),
+            limits.max_index_bytes,
         )
 
 
@@ -1438,6 +1535,7 @@ class Pipeline:
                     dtype=int(config.dtype),  # already coerced by Config.__init__
                     max_chunk_uncompressed_bytes=config.max_chunk_uncompressed_bytes,
                     max_read_op_bytes=config.max_read_op_bytes,
+                    max_index_bytes=config.max_index_bytes,
                     max_gpu_memory_bytes=config.max_gpu_memory_bytes,
                     host_buffer_waves=config.host_buffer_waves,
                     max_chunks_per_wave=config.max_chunks_per_wave,
@@ -1489,8 +1587,8 @@ class Pipeline:
         # _pending_buf is the head iterator's already-pulled-but-not-yet-
         # pushed samples; held flat to avoid wrapping `it` in successive
         # itertools.chain() layers under sustained backpressure.
-        self._pending: deque[Iterator[Sample]] = deque()
-        self._pending_buf: list[Sample] = []
+        self._pending: deque[Iterator[Sample | IndexQuery]] = deque()
+        self._pending_buf: list[Sample | IndexQuery] = []
         # damacy_pop has no timed variant; on timeout the worker stays
         # parked inside it and the next pop() adopts the same thread.
         self._pop_lock = threading.Lock()
@@ -1571,7 +1669,7 @@ class Pipeline:
 
     # ---- pipeline ----------------------------------------------------
 
-    def push(self, samples: Iterable[Sample]) -> None:
+    def push(self, samples: Iterable[Sample | IndexQuery]) -> None:
         """Queue samples for processing. Accepts any iterable (list,
         generator, infinite generator, …); large or unbounded sources
         are pulled lazily as :meth:`pop` frees space.

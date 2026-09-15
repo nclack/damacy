@@ -33,6 +33,30 @@ scratch_reserve(struct dispatch_scratch* scratch, uint32_t count)
   return DAMACY_OK;
 }
 
+uint32_t
+dispatch_index_capacity(const struct damacy_config* config)
+{
+  if (!config || !config->samples_per_batch || !config->sample_rank ||
+      config->sample_rank > DAMACY_MAX_RANK)
+    return 0;
+  uint64_t capacity =
+    config->tuning.max_index_bytes / sizeof(struct gather_index);
+  if (capacity > UINT32_MAX)
+    capacity = UINT32_MAX;
+  uint64_t count = 0;
+  for (uint8_t d = 0; d < config->sample_rank; ++d) {
+    if (config->sample_shape[d] <= 0)
+      return 0;
+    uint64_t extent = (uint64_t)config->sample_shape[d];
+    if (extent > capacity - count)
+      return (uint32_t)capacity;
+    count += extent;
+  }
+  if (config->samples_per_batch && count > capacity / config->samples_per_batch)
+    return (uint32_t)capacity;
+  return (uint32_t)(count * config->samples_per_batch);
+}
+
 enum damacy_status
 dispatch_plan_build(const struct prepared_plan* plan,
                     uint16_t slot,
@@ -50,6 +74,7 @@ dispatch_plan_build(const struct prepared_plan* plan,
   path_intern_reset(out->paths);
   out->n_chunk_plans = out->n_read_ops = out->n_read_op_groups = 0;
   out->n_sample_plans = plan->n_regions;
+  out->n_indices = 0;
   int64_t strides[DAMACY_MAX_RANK + 1];
   strides[plan->output.sample_rank] = 1;
   for (int d = plan->output.sample_rank - 1; d >= 0; --d)
@@ -58,30 +83,45 @@ dispatch_plan_build(const struct prepared_plan* plan,
     const struct plan_region* region = &plan->regions[i];
     const struct zarr_metadata* meta = &plan->arrays[region->array].metadata;
     struct sample_plan* sample = &out->sample_plans[region->sample];
-    *sample =
-      (struct sample_plan){ .batch_pool_slot = slot,
-                            .sample_idx_in_batch = (uint16_t)region->sample,
-                            .rank = meta->rank,
-                            .src_dtype = (uint8_t)meta->dtype,
-                            .sample_dst_off_elems =
-                              (int64_t)region->sample * strides[0],
-                            .chunk_count = 1 };
+    *sample = (struct sample_plan){
+      .batch_pool_slot = slot,
+      .sample_idx_in_batch = (uint16_t)region->sample,
+      .rank = meta->rank,
+      .src_dtype = (uint8_t)meta->dtype,
+      .indexed = region->operation == PLAN_GATHER,
+      .sample_dst_off_elems = (int64_t)region->sample * strides[0],
+      .chunk_count = region->operation == PLAN_COPY ? 1 : 0
+    };
     memcpy(sample->fill_value, meta->fill_value, sizeof(sample->fill_value));
     int64_t source_stride = 1;
     for (int d = meta->rank - 1; d >= 0; --d) {
       uint64_t chunk = meta->inner_chunk_shape[d];
       uint64_t begin = (uint64_t)region->source.dims[d].beg / chunk;
       uint64_t end = ((uint64_t)region->source.dims[d].end - 1) / chunk + 1;
-      sample->dims[d] = (struct sample_dim){
-        .chunk_shape = (uint32_t)chunk,
-        .chunk_grid_extent = (uint32_t)(end - begin),
-        .aabb_lo_relative =
-          region->source.dims[d].beg - (int64_t)(begin * chunk),
-        .aabb_extent = region->source.dims[d].end - region->source.dims[d].beg,
-        .dst_stride = strides[d + 1],
-        .src_stride = source_stride
-      };
-      sample->chunk_count *= (uint32_t)(end - begin);
+      const struct query_axis* axis = &region->axes[d];
+      if (axis->count > out->indices_cap - out->n_indices)
+        return DAMACY_BUDGET;
+      if (axis->count && !out->indices)
+        return DAMACY_INVAL;
+      uint32_t index_offset = out->n_indices;
+      for (uint32_t j = 0; j < axis->count; ++j)
+        out->indices[out->n_indices++] = (struct gather_index){
+          .source = (uint32_t)((uint64_t)axis->indices[j].source % chunk),
+          .output = axis->indices[j].output
+        };
+      sample->dims[d] =
+        (struct sample_dim){ .chunk_shape = (uint32_t)chunk,
+                             .chunk_grid_extent =
+                               axis->count ? 0 : (uint32_t)(end - begin),
+                             .index_offset = index_offset,
+                             .index_count = axis->count,
+                             .aabb_lo_relative = region->source.dims[d].beg -
+                                                 (int64_t)(begin * chunk),
+                             .aabb_extent = plan->output.sample_shape[d],
+                             .dst_stride = strides[d + 1],
+                             .src_stride = source_stride };
+      if (!sample->indexed)
+        sample->chunk_count *= (uint32_t)(end - begin);
       source_stride *= (int64_t)chunk;
     }
   }
@@ -104,10 +144,31 @@ dispatch_plan_build(const struct prepared_plan* plan,
       .codec_id = chunk->missing ? CODEC_FILL : (uint8_t)meta->inner_codec.id,
       .is_fill = chunk->missing
     };
-    for (uint8_t d = 0; d < meta->rank; ++d)
-      dispatch->chunk_d[d] =
-        (uint32_t)(chunk->coordinate[d] - (uint64_t)region->source.dims[d].beg /
+    struct sample_plan* sample = &out->sample_plans[region->sample];
+    if (sample->indexed)
+      ++sample->chunk_count;
+    for (uint8_t d = 0; d < meta->rank; ++d) {
+      if (!sample->indexed) {
+        dispatch->chunk_d[d] = (uint32_t)(chunk->coordinate[d] -
+                                          (uint64_t)region->source.dims[d].beg /
                                             meta->inner_chunk_shape[d]);
+        continue;
+      }
+      uint64_t origin = chunk->coordinate[d] * meta->inner_chunk_shape[d];
+      struct selection_span span = query_chunk_span(&region->axes[d],
+                                                    region->source.dims[d],
+                                                    origin,
+                                                    meta->inner_chunk_shape[d]);
+      dispatch->gather[d] = (struct gather_dim){
+        .begin = region->axes[d].count
+                   ? sample->dims[d].index_offset + (uint32_t)span.begin
+                   : (uint32_t)(span.begin - origin),
+        .count = (uint32_t)span.count,
+        .output_begin = region->axes[d].count
+                          ? 0
+                          : span.begin - (uint64_t)region->source.dims[d].beg
+      };
+    }
     if (!chunk->missing) {
       uint64_t start = chunk->offset / alignment * alignment;
       uint64_t end = chunk->offset + chunk->encoded_bytes;

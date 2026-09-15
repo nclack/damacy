@@ -10,6 +10,8 @@ The full public surface of the `damacy` package.
 
 ::: damacy.Sample
 
+::: damacy.IndexQuery
+
 ::: damacy.Batch
 
 ## Components

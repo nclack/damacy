@@ -34,6 +34,7 @@ struct wave_pool
 
   CUevent decode_done_ring[4];
   uint8_t decode_done_ring_idx;
+  uint8_t decode_done_recorded;
 
   struct decoder_zstd* zstd_decoder;
 

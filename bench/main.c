@@ -720,13 +720,15 @@ fill_random_sample(const struct scenario* sc,
 {
   uint32_t z = (uint32_t)rng_range(rng, at->n);
   s->uri = &at->uris[(size_t)z * BENCH_MAX_URI];
-  s->aabb.rank = at->rank;
+  s->rank = at->rank;
   const int64_t* shape = &at->shapes[(size_t)z * DAMACY_MAX_RANK];
   for (uint8_t d = 0; d < at->rank; ++d) {
     int64_t span = shape[d] - sc->sample_shape[d] + 1;
     int64_t beg = (int64_t)rng_range(rng, (uint64_t)span);
-    s->aabb.dims[d].beg = beg;
-    s->aabb.dims[d].end = beg + sc->sample_shape[d];
+    s->axes[d] = (struct damacy_axis_selection){
+      .kind = DAMACY_AXIS_INTERVAL,
+      .interval = { beg, beg + sc->sample_shape[d] }
+    };
   }
 }
 

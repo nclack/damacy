@@ -32,8 +32,6 @@ sample_geometry(const struct planner_sample* sample,
                 const struct zarr_metadata* meta,
                 const struct damacy_batch_spec* output,
                 const struct damacy_plan_limits* limits,
-                uint64_t* begin,
-                uint64_t* end,
                 uint32_t* count,
                 uint32_t* bytes)
 {
@@ -41,7 +39,6 @@ sample_geometry(const struct planner_sample* sample,
     return DAMACY_RANK;
   if (!cast_path_supported(output->dtype, meta->dtype))
     return DAMACY_DTYPE;
-  uint64_t total = 1;
   uint64_t size = dtype_bpe(meta->dtype);
   for (uint8_t d = 0; d < meta->rank; ++d) {
     int64_t lo = sample->aabb.dims[d].beg;
@@ -49,18 +46,24 @@ sample_geometry(const struct planner_sample* sample,
     uint64_t chunk = meta->inner_chunk_shape[d];
     if (lo < 0 || hi <= lo || (uint64_t)hi > meta->shape[d] || !chunk)
       return DAMACY_INVAL;
-    if (hi - lo != output->sample_shape[d])
+    int64_t extent = sample->axes[d].count ? sample->axes[d].count : hi - lo;
+    if (extent != output->sample_shape[d])
       return DAMACY_INVAL;
-    begin[d] = (uint64_t)lo / chunk;
-    end[d] = ((uint64_t)hi - 1) / chunk + 1;
-    if (total > limits->max_chunks / (end[d] - begin[d]))
-      return DAMACY_BUDGET;
-    total *= end[d] - begin[d];
     if (size > limits->max_chunk_bytes / chunk)
       return DAMACY_BUDGET;
     size *= chunk;
   }
-  *count = (uint32_t)total;
+  struct selection_grid grid;
+  enum damacy_status status = selection_grid_init(&grid,
+                                                  &sample->aabb,
+                                                  sample->axes,
+                                                  meta->inner_chunk_shape,
+                                                  NULL,
+                                                  NULL,
+                                                  limits->max_chunks);
+  if (status != DAMACY_OK)
+    return status;
+  *count = (uint32_t)grid.count;
   *bytes = (uint32_t)size;
   return DAMACY_OK;
 }
@@ -105,6 +108,7 @@ prepared_plan_build(struct prefetch_cache* arrays,
   struct strbuf path = { 0 };
   uint64_t capacity = 0;
   uint64_t path_bytes = 0;
+  uint64_t index_bytes = 0;
   for (uint32_t i = 0; i < n_samples; ++i) {
     const struct zarr_metadata* meta = NULL;
     if (!samples[i].uri || samples[i].n_shards > limits->max_shards_per_sample)
@@ -112,12 +116,18 @@ prepared_plan_build(struct prefetch_cache* arrays,
     status = array_metadata(arrays, samples[i].h_meta, &meta);
     if (status != DAMACY_OK)
       return status;
-    uint64_t begin[DAMACY_MAX_RANK], end[DAMACY_MAX_RANK];
     uint32_t count, bytes;
-    status = sample_geometry(
-      &samples[i], meta, output, limits, begin, end, &count, &bytes);
+    status = sample_geometry(&samples[i], meta, output, limits, &count, &bytes);
     if (status != DAMACY_OK)
       return status;
+    for (uint8_t d = 0; d < meta->rank; ++d) {
+      uint64_t size =
+        (uint64_t)samples[i].axes[d].count * sizeof(struct query_index);
+      if (size > limits->max_plan_bytes ||
+          index_bytes > limits->max_plan_bytes - size)
+        return DAMACY_BUDGET;
+      index_bytes += size;
+    }
     capacity += count;
     if (capacity > limits->max_chunks)
       return DAMACY_BUDGET;
@@ -140,6 +150,9 @@ prepared_plan_build(struct prefetch_cache* arrays,
       (sizeof(struct plan_array) + sizeof(struct plan_region)) +
     capacity * (sizeof(struct plan_chunk) + sizeof(struct plan_use)) +
     buckets * sizeof(uint32_t) + path_bytes;
+  if (index_bytes > UINT64_MAX - storage_bytes)
+    return DAMACY_BUDGET;
+  storage_bytes += index_bytes;
   if (storage_bytes > SIZE_MAX || storage_bytes > limits->max_plan_bytes ||
       sizeof(*plan) > limits->max_plan_bytes - storage_bytes)
     return DAMACY_BUDGET;
@@ -156,7 +169,8 @@ prepared_plan_build(struct prefetch_cache* arrays,
   plan->arrays = plan->storage;
   plan->regions = (void*)(plan->arrays + n_samples);
   plan->chunks = (void*)(plan->regions + n_samples);
-  plan->uses = (void*)(plan->chunks + capacity);
+  struct query_index* indices = (void*)(plan->chunks + capacity);
+  plan->uses = (void*)((char*)indices + index_bytes);
   uint32_t* table = (void*)(plan->uses + capacity);
   char* paths = (void*)(table + buckets);
   for (uint32_t i = 0; i < n_samples; ++i) {
@@ -178,26 +192,39 @@ prepared_plan_build(struct prefetch_cache* arrays,
                                              .array = array,
                                              .sample = i,
                                              .source = sample->aabb };
+    for (uint8_t d = 0; d < meta->rank; ++d) {
+      uint32_t n = sample->axes[d].count;
+      if (!n)
+        continue;
+      memcpy(indices, sample->axes[d].indices, (size_t)n * sizeof(*indices));
+      plan->regions[i].axes[d] = (struct query_axis){ indices, n };
+      plan->regions[i].operation = PLAN_GATHER;
+      indices += n;
+    }
     ++plan->n_regions;
-    uint64_t begin[DAMACY_MAX_RANK], end[DAMACY_MAX_RANK];
     uint64_t per_shard[DAMACY_MAX_RANK];
     uint32_t count, decoded_bytes;
-    status = sample_geometry(
-      sample, meta, output, limits, begin, end, &count, &decoded_bytes);
+    status =
+      sample_geometry(sample, meta, output, limits, &count, &decoded_bytes);
     if (status != DAMACY_OK)
       goto Done;
     if (zarr_metadata_inner_per_shard(meta, per_shard, NULL)) {
       status = DAMACY_DECODE;
       goto Done;
     }
-    struct sample_shard_iterator iterator;
-    if (sample_shard_iterator_init(&iterator, meta, &sample->aabb)) {
-      status = DAMACY_INVAL;
+    struct selection_grid iterator;
+    status = selection_grid_init(&iterator,
+                                 &sample->aabb,
+                                 sample->axes,
+                                 meta->shard_shape,
+                                 NULL,
+                                 NULL,
+                                 limits->max_shards_per_sample);
+    if (status != DAMACY_OK)
       goto Done;
-    }
     uint64_t shard_coord[DAMACY_MAX_RANK];
     uint32_t shard_index = 0;
-    while (sample_shard_iterator_next(&iterator, shard_coord)) {
+    while (selection_grid_next(&iterator, shard_coord)) {
       if (shard_index >= sample->n_shards) {
         status = DAMACY_INVAL;
         goto Done;
@@ -226,13 +253,20 @@ prepared_plan_build(struct prefetch_cache* arrays,
       uint64_t lo[DAMACY_MAX_RANK], hi[DAMACY_MAX_RANK];
       uint64_t coordinate[DAMACY_MAX_RANK] = { 0 };
       for (uint8_t d = 0; d < meta->rank; ++d) {
-        uint64_t shard_lo = shard_coord[d] * per_shard[d];
-        uint64_t shard_hi = shard_lo + per_shard[d];
-        lo[d] = begin[d] > shard_lo ? begin[d] : shard_lo;
-        hi[d] = end[d] < shard_hi ? end[d] : shard_hi;
-        coordinate[d] = lo[d];
+        lo[d] = shard_coord[d] * per_shard[d];
+        hi[d] = lo[d] + per_shard[d];
       }
-      for (;;) {
+      struct selection_grid chunks;
+      status = selection_grid_init(&chunks,
+                                   &sample->aabb,
+                                   sample->axes,
+                                   meta->inner_chunk_shape,
+                                   lo,
+                                   hi,
+                                   limits->max_chunks);
+      if (status != DAMACY_OK)
+        goto Done;
+      while (selection_grid_next(&chunks, coordinate)) {
         uint64_t entry_index = 0;
         for (uint8_t d = 0; d < meta->rank; ++d)
           entry_index =
@@ -289,16 +323,6 @@ prepared_plan_build(struct prefetch_cache* arrays,
           .chunk = chunk_index, .region = i, .next = stored->first_use
         };
         stored->first_use = plan->n_uses++;
-        int finished = 1;
-        for (int d = meta->rank - 1; d >= 0; --d) {
-          if (++coordinate[d] < hi[d]) {
-            finished = 0;
-            break;
-          }
-          coordinate[d] = lo[d];
-        }
-        if (finished)
-          break;
       }
     }
     if (shard_index != sample->n_shards) {

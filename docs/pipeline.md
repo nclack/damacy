@@ -3,7 +3,7 @@
 A pipeline receives a planner, an executor, an output specification, and queue
 limits. The planner owns metadata preparation; the executor owns bulk reads,
 decoding, and output buffers. CPU and CUDA execution use the same rectangular
-queries and prepared-plan contract.
+and indexed queries and prepared-plan contract.
 
 ## Construct a CPU pipeline
 
@@ -95,10 +95,79 @@ The injected readers inherit the caller's host affinity when their workers
 start. The legacy `Config.numa_strategy` also applies while constructing those
 readers, preserving placement of the complete legacy pipeline.
 
+## Indexed queries
+
+`IndexQuery(uri, selection=...)` accepts one index array or contiguous `slice`
+per source axis. For a `(z, y, x)` array:
+
+```python
+query = damacy.IndexQuery(
+    uri="/data/image.zarr/0",
+    selection=([7, 2, 7], slice(16, 80), [100, 3, 40, 3]),
+)
+output = damacy.BatchSpec(samples=1, shape=query.shape, dtype="f32")
+assert query.shape == (3, 64, 4)
+
+with damacy.Pipeline(
+    planner=planner, executor=executor, output=output,
+    queues=damacy.QueueLimits(lookahead_samples=2),
+) as pipeline:
+    pipeline.push([query])
+    with pipeline.pop() as batch:
+        result = np.from_dlpack(batch)  # CPU executor
+        del result
+```
+
+Index arrays select independently along each dimension: their Cartesian product
+fills the tensor, matching MATLAB's per-dimension indexing or NumPy's `np.ix_`.
+Caller order and repeated indices are preserved. A singleton index array keeps
+its axis. A tuple such as `(7, 2)` is an index array in `IndexQuery`; use a slice
+for a contiguous range. `Sample.aabb` retains its existing interval syntax.
+
+Indices must be nonnegative integers below `2**63 - 1`. Slices use half-open
+bounds, require an explicit stop, and accept a step of one. A `range` object can
+supply a strided or reversed index array. Empty selections are rejected. Source
+bounds are validated when metadata arrives; out-of-bounds selections raise
+`InvalidArgument` from `pop`. Each query's result shape must match `BatchSpec`.
+Rectangular and indexed queries can share a batch when their result shapes match.
+
+Python copies index values into the immutable query at construction. Native
+admission copies accepted queries, and prepared plans own their index data.
+The planner enumerates only selected shards and chunks, including when indices
+span large gaps. `max_chunks` counts each selected chunk once per sample;
+repeated indices inside that chunk do not consume extra chunk entries.
+
+The C API uses `damacy_sample.rank` and one tagged `damacy_axis_selection`
+per axis. C callers must rebuild against the updated headers and explicitly
+set every active axis to `DAMACY_AXIS_INTERVAL` or `DAMACY_AXIS_INDICES`:
+
+```c
+int64_t rows[] = {7, 2, 7};
+struct damacy_sample query = {
+    .uri = "/data/image.zarr/0",
+    .rank = 2,
+    .axes = {
+        {.kind = DAMACY_AXIS_INDICES, .indices = {.values = rows, .count = 3}},
+        {.kind = DAMACY_AXIS_INTERVAL, .interval = {.beg = 4, .end = 8}},
+    },
+};
+```
+
+This requests a `(3, 4)` sample. The union's `kind` selects its active member;
+there is no default kind. A zero or unknown tag, a null or empty index array,
+or an interval with negative, empty, or reversed bounds returns `DAMACY_INVAL`
+from `damacy_push`. Each axis's length must match the configured sample shape.
+Only `axes[0..rank)` are active, in the Zarr array's stored axis order. Preparation
+derives the bounding AABB from these selections.
+
+`damacy_push` copies the URI and index values for its consumed prefix. The
+unconsumed suffix remains caller-owned and can be retried.
+
 ## Limits and backpressure
 
-Sizes are bytes, with positive explicit limits. Zero is invalid for these
-capacities. Defaults come from the Python value objects.
+Sizes are bytes, with positive explicit limits. `CudaLimits.max_index_bytes`
+also accepts zero to disable indexed CUDA queries. Defaults come from the
+Python value objects.
 
 | Setting | Scope |
 | --- | --- |
@@ -109,12 +178,20 @@ capacities. Defaults come from the Python value objects.
 | `PlanLimits.max_chunks` | Chunk uses per batch, including chunks used by multiple samples. |
 | `PlanLimits.max_chunk_bytes` | Decoded source bytes per chunk, before output conversion. |
 | `PlanLimits.max_shards_per_sample` | Maximum number of shard files touched by one sample. |
-| `PlanLimits.max_plan_bytes` | Owned storage per prepared plan. |
+| `PlanLimits.max_plan_bytes` | Owned storage per prepared plan, including index arrays; also caps copied index data per queued query. |
 | `CpuLimits.max_memory_bytes` | CPU executor's input, decoded, codec-workspace, and two output buffers. |
 | `CpuLimits.decode_workers` | Total decoding/assembly workers, including the calling scheduler thread. |
 | `FileReader.workers` | Bulk I/O workers, separate from decoding workers. |
 | `FileReader.max_inflight_reads` | Bulk read capacity; execution respects this bound and retries saturation. |
 | `CudaLimits` | GPU memory and execution geometry, plus the CUDA codec-layout cache capacity. |
+| `CudaLimits.max_index_bytes` | Device index storage per batch: eight bytes per index across all indexed axes and samples. Default 64 MiB. |
+
+CUDA reserves index storage for its two execution slots within
+`max_gpu_memory_bytes`. Each slot allocates the smaller of `max_index_bytes`
+and the maximum index data possible for the configured output shape. An
+identical amount of pinned host staging is allocated. A query exceeding the
+index capacity raises `BudgetExceeded`. `Config.max_index_bytes` provides the
+same setting through the CUDA convenience adapter.
 
 For injected pipelines, define `floor = queues.lookahead_samples + output.samples`.
 The metadata cache requires at least `floor` array entries and
@@ -201,9 +278,8 @@ a runtime NVIDIA driver. GDS requires a CUDA build.
 
 ## Future queries
 
-The first milestone implements rectangular copy/cast queries. Index-array
-queries can add ordered selections and repeated indices without a separate
-stencil type. Spatial queries will describe a fixed output tensor, a transform
+Rectangular and indexed queries copy or gather existing voxels. Spatial
+queries will describe a fixed output tensor, a transform
 from output coordinates to source space, and sampler settings including
 interpolation, antialiasing, and boundary handling.
 
