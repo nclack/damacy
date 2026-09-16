@@ -6,7 +6,7 @@ Metadata loading and query resolution are separate from chunk planning and decod
 ```mermaid
 flowchart LR
     reader[Metadata reader] --> image[Loaded NGFF image]
-    image --> resolver[Spatial resolver]
+    image --> resolver[Resolve query]
     query[Transform and sampler] --> resolver
     output[Fixed output shape] --> resolver
     resolver --> resolved[Source array, transform, and bounds]
@@ -39,7 +39,6 @@ image = damacy.NgffImage(
     limits=damacy.NgffLimits(max_levels=16, max_metadata_bytes=4 << 20),
 )
 output = damacy.BatchSpec(samples=1, shape=(16, 64, 64), dtype="f32")
-resolver = damacy.SpatialResolver(image=image, output=output)
 query = damacy.SpatialQuery(
     output_to_reference=(
         (1, 0, 0, 8),
@@ -48,7 +47,7 @@ query = damacy.SpatialQuery(
     ),
     sampler=damacy.Sampler(filter="nearest", boundary="error"),
 )
-resolved = resolver.resolve(query)
+resolved = image.resolve(query, shape=output.shape)
 
 planner = damacy.ChunkPlanner(
     metadata=damacy.ZarrMetadata(
@@ -73,9 +72,10 @@ with damacy.Pipeline(
 ```
 
 `NgffImage` loads the group's `zarr.json` and each level's array metadata once.
-It owns an immutable description. `SpatialResolver.resolve()` performs no I/O
-and can be called from multiple threads. A result owns its source URI and
-geometry, so it remains usable after the image and resolver are released.
+It owns an immutable description. `NgffImage.resolve(query, shape=...)` performs
+no I/O and can be called from multiple threads. A result owns its source URI
+and geometry, so it remains usable after the image is released. Python results
+contain ordinary immutable values and can be pickled for transfer between processes.
 Source metadata and data must remain unchanged while the image is in use.
 
 Loading is synchronous and uses the supplied reader exclusively for the
@@ -99,7 +99,7 @@ reference_corner = linear * output_corner + offset
 ```
 
 Rows and columns follow the metadata's array axis order, including time and
-channel dimensions. The `BatchSpec` supplies the rank and fixed output shape.
+channel dimensions. The supplied output shape determines the rank and fixed output grid.
 Output centers are the grid points `(j[0] + 0.5, ..., j[N-1] + 0.5)`.
 Only spatial axes may mix, rotate, reflect, or scale. Time and channel axes
 require identity rows/columns and integral offsets, and must remain in bounds.
@@ -110,8 +110,10 @@ The spatial linear map must be finite and numerically nonsingular. Validation
 normalizes each spatial row by its largest coefficient and eliminates using
 the largest remaining pivot. Pivots no larger than `64 * DBL_EPSILON` fail validation. Shapes and
 transformed sample coordinates are limited to `2**52 - 1` index units so
-half-voxel centers remain representable. Rank, dtype conversion, output size,
-and every sampler parameter are validated before a resolution is returned.
+half-voxel centers remain representable. Rank, shape, transforms, and sampler
+parameters are checked before a resolution is returned. Batch sizing and dtype
+conversion are validated by the downstream pipeline. Resolution allocates only
+its small description, so the shape need not fit an output buffer at this stage.
 
 ## NGFF interpretation
 
@@ -124,11 +126,18 @@ and a common dtype. Custom/unspecified axis types and transforms stored in
 external arrays are currently unsupported.
 
 Dataset transforms must have one positive scale and an optional following
-translation. Optional transforms shared by all levels follow the same rule.
+translation. Transforms shared by all levels do not affect reference-level
+coordinates and are left uninterpreted.
 Levels must have nondecreasing scales and nonincreasing shapes along each
 axis; nonspatial transforms and shapes must be unchanged. Paths must be
 relative child paths. Axis units are retained as declared; no physical-unit
 conversion or inference is needed for reference-level queries.
+
+Parsing checks the fields needed for array layout and coordinate interpretation,
+including duplicate consumed fields and finite, correctly sized transforms.
+Unselected multiscale entries and additional attributes are left uninterpreted.
+Unused subtrees and trailing content may remain unexamined; these calls do not
+perform whole-document JSON validation.
 
 NGFF uses center-origin coordinates, as described in its
 [coordinate convention](https://ngff.openmicroscopy.org/rfc/5/#coordinate-convention).
@@ -176,8 +185,8 @@ The current copy path requires the resolved linear map to equal identity,
 its offsets to be integral, and its source bounds to be inside the array.
 Fractional values are not rounded into a crop. Small floating-point differences
 in metadata can therefore make a result require resampling. `requires_resampling`
-reports this, and `as_sample()` checks it before returning an interval query.
-The pipeline still checks the resulting shape against its own `BatchSpec`.
+reports this, and `Pipeline.push()` rejects such results until a resampler is
+available. The pipeline checks the resulting shape against its own `BatchSpec`.
 
 ## Sampler and bounds
 
@@ -220,14 +229,11 @@ have matching output geometry and an executor:
 ```c
 struct damacy_metadata_reader* reader = NULL;
 struct damacy_ngff_image* image = NULL;
-struct damacy_spatial_resolution* resolved = NULL;
+struct damacy_spatial_resolution resolved = {0};
 struct damacy_ngff_limits limits = {
   .max_levels = 16, .max_metadata_bytes = 4 << 20
 };
-struct damacy_batch_spec output = {
-  .dtype = DAMACY_F32, .sample_shape = {64, 64},
-  .sample_rank = 2, .samples_per_batch = 1
-};
+const int64_t output_shape[] = {64, 64};
 struct damacy_spatial_query query = {
   .output_to_reference = {
     .linear = {{1, 0}, {0, 1}}, .offset = {16, 24}
@@ -243,15 +249,15 @@ enum damacy_status status =
 if (status == DAMACY_OK)
   status = damacy_ngff_image_load(reader, "/data/image.zarr", 0, &limits, &image);
 if (status == DAMACY_OK)
-  status = damacy_spatial_resolve(image, &output, &query, &resolved);
+  status = damacy_spatial_resolve(image, &query, 2, output_shape, &resolved);
 if (status == DAMACY_OK)
-  status = damacy_spatial_resolution_sample(resolved, &sample);
+  status = damacy_spatial_resolution_sample(&resolved, &sample);
 if (status == DAMACY_OK) {
   struct damacy_push_result pushed = damacy_push(
     pipeline, (struct damacy_sample_slice){.beg = &sample, .end = &sample + 1});
   status = pushed.status;
 }
-damacy_spatial_resolution_destroy(resolved);
+damacy_spatial_resolution_clear(&resolved);
 damacy_ngff_image_destroy(image);
 damacy_metadata_reader_destroy(reader);
 ```
@@ -259,11 +265,18 @@ damacy_metadata_reader_destroy(reader);
 A production caller must retry the unconsumed suffix when `damacy_push` returns
 `DAMACY_AGAIN`, keeping the sample's owner alive until acceptance or abandonment.
 The example releases it on return. Accepted pushes copy the URI and selectors.
-`damacy_spatial_resolution_sample()` borrows its URI from `resolved` and zeroes
-its output on failure. Image and resolution info accessors return borrowed,
-immutable views; their owners must remain alive while reading those views.
-Resolution copies the information it needs from the image. Destruction accepts
-null pointers. C affine entries outside the configured rank are unused.
+The C result is a caller-owned `damacy_spatial_resolution` value with directly
+readable fields. It owns its URI independently of the image. Treat the fields as
+read-only and call `damacy_spatial_resolution_clear()` before reusing or discarding
+the result. A plain struct copy borrows the same URI; clear only the owning
+value. Clear frees the URI and zeros the value; repeating it is safe.
+Resolution zeros its output on failure. Zero-initialized results can be cleared.
+
+`damacy_spatial_resolution_sample()` is the compatibility bridge to the existing
+C push API. Its sample borrows the result's URI and its output is zeroed on
+failure. Keep the result alive until the sample is accepted or abandoned.
+The image info accessor returns a borrowed, immutable view. C affine entries
+outside the configured rank are unused.
 
 `max_metadata_bytes` bounds the sum of input JSON file sizes; files exceeding
 the remaining budget are rejected before allocating or reading their contents.

@@ -1,19 +1,11 @@
 #include "damacy_spatial.h"
 
-#include "damacy_config.h"
 #include "ngff/ngff.h"
-#include "pipeline/components.h"
 
 #include <float.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
-
-struct damacy_spatial_resolution
-{
-  struct damacy_spatial_info info;
-  struct damacy_sample sample;
-};
 
 static uint8_t
 spatial_matrix(const struct damacy_ngff_image* image,
@@ -130,20 +122,14 @@ minimum_spacing(const struct damacy_ngff_image* image,
 
 static enum damacy_status
 validate_query(const struct damacy_ngff_image* image,
-               const struct damacy_batch_spec* output,
-               const struct damacy_spatial_query* query)
+               const struct damacy_spatial_query* query,
+               uint8_t rank,
+               const int64_t* output_shape)
 {
-  if (!image || !output || !query)
+  if (!image || !output_shape || !query)
     return DAMACY_INVAL;
-  if (output->sample_rank != image->info.rank)
+  if (rank != image->info.rank)
     return DAMACY_RANK;
-  int64_t shape[DAMACY_MAX_RANK + 1], strides[DAMACY_MAX_RANK + 1];
-  uint64_t bytes;
-  enum damacy_status status = batch_spec_layout(output, shape, strides, &bytes);
-  if (status != DAMACY_OK)
-    return status;
-  if (!cast_path_supported(output->dtype, image->dtype))
-    return DAMACY_DTYPE;
   if (query->level < DAMACY_LEVEL_AUTO ||
       (query->level >= 0 && (uint32_t)query->level >= image->info.level_count))
     return DAMACY_INVAL;
@@ -160,8 +146,8 @@ validate_query(const struct damacy_ngff_image* image,
   for (uint8_t i = 0; i < image->info.rank; ++i) {
     double offset = query->output_to_reference.offset[i];
     int space = image->info.axes[i].kind == DAMACY_NGFF_SPACE;
-    if (!isfinite(offset) ||
-        output->sample_shape[i] > INT64_C(4503599627370495))
+    if (!isfinite(offset) || output_shape[i] <= 0 ||
+        output_shape[i] > INT64_C(4503599627370495))
       return DAMACY_INVAL;
     if (!space && offset != floor(offset))
       return DAMACY_INVAL;
@@ -187,7 +173,7 @@ clamp_index(int64_t value, int64_t end)
 
 static enum damacy_status
 resolve_bounds(const struct damacy_ngff_image* image,
-               struct damacy_spatial_info* info)
+               struct damacy_spatial_resolution* info)
 {
   info->source_bounds_index.rank = info->read_bounds_index.rank = info->rank;
   for (uint8_t i = 0; i < info->rank; ++i) {
@@ -238,14 +224,15 @@ resolve_bounds(const struct damacy_ngff_image* image,
 
 enum damacy_status
 damacy_spatial_resolve(const struct damacy_ngff_image* image,
-                       const struct damacy_batch_spec* output,
                        const struct damacy_spatial_query* query,
-                       struct damacy_spatial_resolution** out)
+                       uint8_t rank,
+                       const int64_t* output_shape,
+                       struct damacy_spatial_resolution* out)
 {
   if (!out)
     return DAMACY_INVAL;
-  *out = NULL;
-  enum damacy_status status = validate_query(image, output, query);
+  *out = (struct damacy_spatial_resolution){ 0 };
+  enum damacy_status status = validate_query(image, query, rank, output_shape);
   if (status != DAMACY_OK)
     return status;
   uint32_t level_index = query->level < 0 ? 0 : (uint32_t)query->level;
@@ -255,54 +242,30 @@ damacy_spatial_resolve(const struct damacy_ngff_image* image,
           1 - 64 * DBL_EPSILON)
         level_index = i;
   const struct damacy_ngff_level* level = &image->levels[level_index];
-  struct damacy_spatial_resolution* resolution = calloc(1, sizeof(*resolution));
-  if (!resolution)
-    return DAMACY_OOM;
-  struct damacy_spatial_info* info = &resolution->info;
-  info->level = level_index;
-  info->rank = image->info.rank;
-  info->sampler = query->sampler;
-  for (uint8_t i = 0; i < info->rank; ++i) {
-    info->output_shape[i] = output->sample_shape[i];
-    info->source_shape[i] = level->shape[i];
+  struct damacy_spatial_resolution result = { .level = level_index,
+                                              .rank = rank,
+                                              .sampler = query->sampler };
+  for (uint8_t i = 0; i < rank; ++i) {
+    result.output_shape[i] = output_shape[i];
+    result.source_shape[i] = level->shape[i];
     double scale = level->scale_to_reference[i];
-    info->output_to_source.offset[i] = (query->output_to_reference.offset[i] -
-                                        level->origin_reference_index[i]) /
-                                       scale;
-    for (uint8_t j = 0; j < info->rank; ++j)
-      info->output_to_source.linear[i][j] =
+    result.output_to_source.offset[i] = (query->output_to_reference.offset[i] -
+                                         level->origin_reference_index[i]) /
+                                        scale;
+    for (uint8_t j = 0; j < rank; ++j)
+      result.output_to_source.linear[i][j] =
         query->output_to_reference.linear[i][j] / scale;
   }
-  status = resolve_bounds(image, info);
-  if (status != DAMACY_OK) {
-    free(resolution);
+  status = resolve_bounds(image, &result);
+  if (status != DAMACY_OK)
     return status;
-  }
   char* uri = malloc(strlen(level->uri) + 1);
-  if (!uri) {
-    free(resolution);
+  if (!uri)
     return DAMACY_OOM;
-  }
   strcpy(uri, level->uri);
-  info->uri = uri;
-  if (!info->requires_resampling) {
-    resolution->sample.uri = uri;
-    resolution->sample.rank = info->rank;
-    for (uint8_t i = 0; i < info->rank; ++i)
-      resolution->sample.axes[i] =
-        (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INTERVAL,
-                                        .interval =
-                                          info->source_bounds_index.dims[i] };
-  }
-  *out = resolution;
+  result.uri = uri;
+  *out = result;
   return DAMACY_OK;
-}
-
-const struct damacy_spatial_info*
-damacy_spatial_resolution_info(
-  const struct damacy_spatial_resolution* resolution)
-{
-  return resolution ? &resolution->info : NULL;
 }
 
 enum damacy_status
@@ -313,19 +276,26 @@ damacy_spatial_resolution_sample(
   if (!out)
     return DAMACY_INVAL;
   *out = (struct damacy_sample){ 0 };
-  if (!resolution)
+  if (!resolution || !resolution->uri || !resolution->rank ||
+      resolution->rank > DAMACY_MAX_RANK)
     return DAMACY_INVAL;
-  if (resolution->info.requires_resampling)
+  if (resolution->requires_resampling)
     return DAMACY_UNSUPPORTED;
-  *out = resolution->sample;
+  out->uri = resolution->uri;
+  out->rank = resolution->rank;
+  for (uint8_t i = 0; i < resolution->rank; ++i)
+    out->axes[i] = (struct damacy_axis_selection){
+      .kind = DAMACY_AXIS_INTERVAL,
+      .interval = resolution->source_bounds_index.dims[i]
+    };
   return DAMACY_OK;
 }
 
 void
-damacy_spatial_resolution_destroy(struct damacy_spatial_resolution* resolution)
+damacy_spatial_resolution_clear(struct damacy_spatial_resolution* resolution)
 {
   if (resolution) {
-    free((void*)resolution->info.uri);
-    free(resolution);
+    free((void*)resolution->uri);
+    *resolution = (struct damacy_spatial_resolution){ 0 };
   }
 }

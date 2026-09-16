@@ -5,19 +5,11 @@
 #include "damacy_spatial.h"
 
 static const char image_name[] = "damacy.NgffImage";
-static const char resolution_name[] = "damacy.SpatialResolution";
 
 static void
 image_destroy(PyObject* capsule)
 {
   damacy_ngff_image_destroy(PyCapsule_GetPointer(capsule, image_name));
-}
-
-static void
-resolution_destroy(PyObject* capsule)
-{
-  damacy_spatial_resolution_destroy(
-    PyCapsule_GetPointer(capsule, resolution_name));
 }
 
 static int
@@ -227,81 +219,8 @@ parse_transform(PyObject* object, uint8_t rank, struct damacy_affine* transform)
 }
 
 static PyObject*
-resolve_query(PyObject* self, PyObject* args)
+resolution_value(const struct damacy_spatial_resolution* info)
 {
-  (void)self;
-  PyObject *capsule, *shape_object, *transform;
-  unsigned int samples, dtype;
-  int filter, boundary, level;
-  double value;
-  if (!PyArg_ParseTuple(args,
-                        "OOIIOiidi",
-                        &capsule,
-                        &shape_object,
-                        &samples,
-                        &dtype,
-                        &transform,
-                        &filter,
-                        &boundary,
-                        &value,
-                        &level))
-    return NULL;
-  struct damacy_ngff_image* image = PyCapsule_GetPointer(capsule, image_name);
-  if (!image)
-    return NULL;
-  struct damacy_batch_spec output = { .samples_per_batch = samples,
-                                      .dtype = (enum damacy_dtype)dtype };
-  PyObject* shape = PySequence_Fast(shape_object, "shape must be a sequence");
-  if (!shape)
-    return NULL;
-  Py_ssize_t rank = PySequence_Fast_GET_SIZE(shape);
-  if (rank < 1 || rank > DAMACY_MAX_RANK) {
-    Py_DECREF(shape);
-    PyErr_SetString(PyExc_ValueError, "invalid output rank");
-    return NULL;
-  }
-  output.sample_rank = (uint8_t)rank;
-  for (Py_ssize_t i = 0; i < rank; ++i) {
-    output.sample_shape[i] =
-      PyLong_AsLongLong(PySequence_Fast_GET_ITEM(shape, i));
-    if (PyErr_Occurred()) {
-      Py_DECREF(shape);
-      return NULL;
-    }
-  }
-  Py_DECREF(shape);
-  struct damacy_spatial_query query = {
-    .sampler = { .filter = (enum damacy_filter)filter,
-                 .boundary = (enum damacy_boundary)boundary,
-                 .constant_value = value },
-    .level = level
-  };
-  if (parse_transform(
-        transform, output.sample_rank, &query.output_to_reference))
-    return NULL;
-  struct damacy_spatial_resolution* resolution = NULL;
-  enum damacy_status status;
-  Py_BEGIN_ALLOW_THREADS status =
-    damacy_spatial_resolve(image, &output, &query, &resolution);
-  Py_END_ALLOW_THREADS if (status != DAMACY_OK) return api_raise_status(
-    status, "resolve spatial query");
-  PyObject* result =
-    PyCapsule_New(resolution, resolution_name, resolution_destroy);
-  if (!result)
-    damacy_spatial_resolution_destroy(resolution);
-  return result;
-}
-
-static PyObject*
-resolution_info(PyObject* self, PyObject* capsule)
-{
-  (void)self;
-  struct damacy_spatial_resolution* resolution =
-    PyCapsule_GetPointer(capsule, resolution_name);
-  if (!resolution)
-    return NULL;
-  const struct damacy_spatial_info* info =
-    damacy_spatial_resolution_info(resolution);
   PyObject* result = PyDict_New();
   if (!result)
     return NULL;
@@ -324,36 +243,59 @@ resolution_info(PyObject* self, PyObject* capsule)
 }
 
 static PyObject*
-resolution_sample(PyObject* self, PyObject* capsule)
+resolve_query(PyObject* self, PyObject* args)
 {
   (void)self;
-  struct damacy_spatial_resolution* resolution =
-    PyCapsule_GetPointer(capsule, resolution_name);
-  if (!resolution)
+  PyObject *capsule, *shape_object, *transform;
+  int filter, boundary, level;
+  double value;
+  if (!PyArg_ParseTuple(args,
+                        "OOOiidi",
+                        &capsule,
+                        &shape_object,
+                        &transform,
+                        &filter,
+                        &boundary,
+                        &value,
+                        &level))
     return NULL;
-  struct damacy_sample sample;
-  enum damacy_status status =
-    damacy_spatial_resolution_sample(resolution, &sample);
-  if (status != DAMACY_OK)
-    return api_raise_status(status,
-                            "submit spatial query: resampling required");
-  PyObject* axes = PyList_New(sample.rank);
-  if (!axes)
+  struct damacy_ngff_image* image = PyCapsule_GetPointer(capsule, image_name);
+  if (!image)
     return NULL;
-  for (uint8_t i = 0; i < sample.rank; ++i) {
-    PyObject* axis = Py_BuildValue("(s(LL))",
-                                   "interval",
-                                   (long long)sample.axes[i].interval.beg,
-                                   (long long)sample.axes[i].interval.end);
-    if (!axis) {
-      Py_DECREF(axes);
+  int64_t output_shape[DAMACY_MAX_RANK];
+  PyObject* shape = PySequence_Fast(shape_object, "shape must be a sequence");
+  if (!shape)
+    return NULL;
+  Py_ssize_t rank = PySequence_Fast_GET_SIZE(shape);
+  if (rank < 1 || rank > DAMACY_MAX_RANK) {
+    Py_DECREF(shape);
+    PyErr_SetString(PyExc_ValueError, "invalid output rank");
+    return NULL;
+  }
+  for (Py_ssize_t i = 0; i < rank; ++i) {
+    output_shape[i] = PyLong_AsLongLong(PySequence_Fast_GET_ITEM(shape, i));
+    if (PyErr_Occurred()) {
+      Py_DECREF(shape);
       return NULL;
     }
-    PyList_SET_ITEM(axes, i, axis);
   }
-  PyObject* result =
-    Py_BuildValue("{s:s,s:O}", "uri", sample.uri, "axes", axes);
-  Py_DECREF(axes);
+  Py_DECREF(shape);
+  struct damacy_spatial_query query = {
+    .sampler = { .filter = (enum damacy_filter)filter,
+                 .boundary = (enum damacy_boundary)boundary,
+                 .constant_value = value },
+    .level = level
+  };
+  if (parse_transform(transform, (uint8_t)rank, &query.output_to_reference))
+    return NULL;
+  struct damacy_spatial_resolution resolution;
+  enum damacy_status status;
+  Py_BEGIN_ALLOW_THREADS status = damacy_spatial_resolve(
+    image, &query, (uint8_t)rank, output_shape, &resolution);
+  Py_END_ALLOW_THREADS if (status != DAMACY_OK) return api_raise_status(
+    status, "resolve spatial query");
+  PyObject* result = resolution_value(&resolution);
+  damacy_spatial_resolution_clear(&resolution);
   return result;
 }
 
@@ -361,8 +303,6 @@ static PyMethodDef methods[] = {
   { "ngff_load", load_image, METH_VARARGS, NULL },
   { "ngff_info", image_info, METH_O, NULL },
   { "spatial_resolve", resolve_query, METH_VARARGS, NULL },
-  { "spatial_info", resolution_info, METH_O, NULL },
-  { "spatial_sample", resolution_sample, METH_O, NULL },
   { NULL, NULL, 0, NULL }
 };
 

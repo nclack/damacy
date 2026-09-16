@@ -36,8 +36,6 @@ The full public surface of the `damacy` package.
 
 ::: damacy.NgffLevel
 
-::: damacy.SpatialResolver
-
 ::: damacy.SpatialQuery
 
 ::: damacy.ResolvedSpatialQuery

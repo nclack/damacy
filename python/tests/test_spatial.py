@@ -4,6 +4,7 @@ import ctypes
 import dataclasses
 import gc
 import json
+import pickle
 from concurrent.futures import ThreadPoolExecutor
 from typing import Literal
 
@@ -194,17 +195,17 @@ def test_resolved_crops_decode_at_selected_level(tmp_path, spatial_executor, lev
     reader = damacy.FileMetadataReader(concurrency=2)
     image = damacy.NgffImage(root, reader=reader, multiscale_index=0)
     output = damacy.BatchSpec(2, (4, 4))
-    resolver = damacy.SpatialResolver(image=image, output=output)
+    shape = output.shape
     factor = 2**level
-    resolved = resolver.resolve(query(factor, (factor * 2, factor * 3)))
+    resolved = image.resolve(query(factor, (factor * 2, factor * 3)), shape=shape)
     assert resolved.level == level
     assert not resolved.requires_resampling
-    assert resolved.as_sample().aabb == ((2, 6), (3, 7))
+    assert resolved.source_bounds_index == ((2, 6), (3, 7))
     assert resolved.output_to_source == ((1, 0, 2), (0, 1, 3))
-    del resolver, image
+    del image
     gc.collect()
     with pipeline(spatial_executor, output, reader) as p:
-        p.push([resolved, resolved.as_sample()])
+        p.push([resolved, pickle.loads(pickle.dumps(resolved))])
         with p.pop() as batch:
             expected = arrays[level][2:6, 3:7]
             np.testing.assert_array_equal(
@@ -218,20 +219,20 @@ def test_resampling_fails_before_decoding_and_pipeline_recovers(
     root = tmp_path / "image"
     arrays = write_image(root, data=True)
     output = damacy.BatchSpec(1, (4, 4))
-    resolver = damacy.SpatialResolver(load(root), output)
-    rotated = resolver.resolve(
+    image = load(root)
+    shape = output.shape
+    rotated = image.resolve(
         damacy.SpatialQuery(
             output_to_reference=((1, -1, 12), (1, 1, 4)),
             sampler=damacy.Sampler(filter="linear"),
-        )
+        ),
+        shape=shape,
     )
     assert rotated.requires_resampling
-    with pytest.raises(damacy.UnsupportedOperation, match="resampling required"):
-        rotated.as_sample()
     with pipeline(spatial_executor, output) as p:
         with pytest.raises(damacy.UnsupportedOperation, match="resampling required"):
             p.push([rotated])
-        p.push([resolver.resolve(query())])
+        p.push([image.resolve(query(), shape=shape)])
         with p.pop() as batch:
             np.testing.assert_array_equal(read_batch(batch)[0], arrays[0][:4, :4])
 
@@ -239,9 +240,7 @@ def test_resampling_fails_before_decoding_and_pipeline_recovers(
 def test_fixed_shape_is_checked_at_push(tmp_path, spatial_executor):
     root = tmp_path / "image"
     write_image(root)
-    resolved = damacy.SpatialResolver(load(root), damacy.BatchSpec(1, (3, 3))).resolve(
-        query()
-    )
+    resolved = load(root).resolve(query(), shape=(3, 3))
     with (
         pipeline(spatial_executor, damacy.BatchSpec(1, (4, 4))) as p,
         pytest.raises(damacy.InvalidArgument),
@@ -282,10 +281,10 @@ def test_ngff_center_offsets_stay_in_adapter(tmp_path):
     assert image.levels[0].origin_reference_index == (0, 0)
     assert image.levels[1].origin_reference_index == (0, 0)
     assert image.levels[2].origin_reference_index == (-1.5, -1.5)
-    resolver = damacy.SpatialResolver(image, damacy.BatchSpec(1, (4, 4)))
-    resolved = resolver.resolve(query(2))
+    shape = (4, 4)
+    resolved = image.resolve(query(2), shape=shape)
     assert resolved.level == 1 and not resolved.requires_resampling
-    assert resolver.resolve(query(4)).requires_resampling
+    assert image.resolve(query(4), shape=shape).requires_resampling
 
 
 def test_anisotropic_rotated_level_selection_and_time_channel_axes(tmp_path):
@@ -303,16 +302,17 @@ def test_anisotropic_rotated_level_selection_and_time_channel_axes(tmp_path):
         scales=[[1, 1, 1, 1, 1], [1, 1, 1, 2, 4]],
     )
     image = load(root)
-    resolver = damacy.SpatialResolver(image, damacy.BatchSpec(1, (1, 1, 2, 2, 2)))
+    shape = (1, 1, 2, 2, 2)
     transform = np.zeros((5, 6))
     transform[:5, :5] = np.eye(5)
     transform[:2, 5] = (1, 2)
     transform[2:5, 2:5] = np.array([[0, -1, 0], [2, 0, 0], [0, 0, 4]])
     transform[2:, 5] = (4, 4, 0)
-    resolved = resolver.resolve(
+    resolved = image.resolve(
         damacy.SpatialQuery(
             output_to_reference=transform, sampler=damacy.Sampler(filter="nearest")
-        )
+        ),
+        shape=shape,
     )
     assert resolved.level == 1
     assert resolved.output_to_source[2] == (0, 0, 0, -1, 0, 4)
@@ -320,29 +320,36 @@ def test_anisotropic_rotated_level_selection_and_time_channel_axes(tmp_path):
     assert resolved.source_bounds_index[:2] == ((1, 2), (2, 3))
     transform[2, 3] = -0.5
     assert (
-        resolver.resolve(
-            damacy.SpatialQuery(output_to_reference=transform, sampler=damacy.Sampler())
+        image.resolve(
+            damacy.SpatialQuery(
+                output_to_reference=transform, sampler=damacy.Sampler()
+            ),
+            shape=shape,
         ).level
         == 0
     )
     transform[0, 0] = 2
     with pytest.raises(damacy.InvalidArgument):
-        resolver.resolve(
-            damacy.SpatialQuery(output_to_reference=transform, sampler=damacy.Sampler())
+        image.resolve(
+            damacy.SpatialQuery(
+                output_to_reference=transform, sampler=damacy.Sampler()
+            ),
+            shape=shape,
         )
 
 
 def test_selection_uses_smallest_spacing_not_column_lengths(tmp_path):
     root = tmp_path / "image"
     write_image(root)
-    resolver = damacy.SpatialResolver(load(root), damacy.BatchSpec(1, (2, 2)))
+    image = load(root)
+    shape = (2, 2)
     q = damacy.SpatialQuery(
         output_to_reference=((3, 2, 0), (2, 3, 0)),
         sampler=damacy.Sampler(filter="nearest"),
     )
-    assert resolver.resolve(q).level == 0
+    assert image.resolve(q, shape=shape).level == 0
     forced = dataclasses.replace(q, level=1)
-    assert resolver.resolve(forced).level == 1
+    assert image.resolve(forced, shape=shape).level == 1
 
 
 @pytest.mark.parametrize(
@@ -360,11 +367,13 @@ def test_selection_uses_smallest_spacing_not_column_lengths(tmp_path):
 def test_source_and_read_bounds(tmp_path, filter, boundary, offset, source, reads):
     root = tmp_path / "image"
     write_image(root)
-    resolver = damacy.SpatialResolver(load(root), damacy.BatchSpec(1, (4, 4)))
-    resolved = resolver.resolve(
+    image = load(root)
+    shape = (4, 4)
+    resolved = image.resolve(
         query(
             offset=(offset, 0), sampler=damacy.Sampler(filter=filter, boundary=boundary)
-        )
+        ),
+        shape=shape,
     )
     assert resolved.source_bounds_index[0] == source
     assert resolved.read_bounds_index[0] == reads
@@ -384,10 +393,14 @@ def test_source_and_read_bounds(tmp_path, filter, boundary, offset, source, read
 def test_invalid_geometry(tmp_path, transform):
     root = tmp_path / "image"
     write_image(root)
-    resolver = damacy.SpatialResolver(load(root), damacy.BatchSpec(1, (4, 4)))
+    image = load(root)
+    shape = (4, 4)
     with pytest.raises(damacy.InvalidArgument):
-        resolver.resolve(
-            damacy.SpatialQuery(output_to_reference=transform, sampler=damacy.Sampler())
+        image.resolve(
+            damacy.SpatialQuery(
+                output_to_reference=transform, sampler=damacy.Sampler()
+            ),
+            shape=shape,
         )
 
 
@@ -506,11 +519,10 @@ def test_multiscale_selection_and_escaped_strings(tmp_path):
         lambda text: text.replace(
             '"scale": [1, 1]', '"scale": [1, 1], "scale": [2, 2]'
         ),
-        lambda text: text + " garbage",
         lambda text: text[:-1] + ",}",
     ],
 )
-def test_malformed_json_is_rejected(tmp_path, mutate):
+def test_invalid_consumed_metadata_is_rejected(tmp_path, mutate):
     root = tmp_path / "image"
     write_image(root)
     path = root / "zarr.json"
@@ -522,12 +534,17 @@ def test_malformed_json_is_rejected(tmp_path, mutate):
 def test_resolution_is_independent_of_files_and_can_run_in_threads(tmp_path):
     root = tmp_path / "image"
     write_image(root)
-    resolver = damacy.SpatialResolver(load(root), damacy.BatchSpec(1, (4, 4)))
+    image = load(root)
+    shape = (4, 4)
     for metadata in root.rglob("zarr.json"):
         metadata.unlink()
     with ThreadPoolExecutor(max_workers=4) as workers:
-        results = list(workers.map(resolver.resolve, [query(2)] * 16))
-    assert all(r.level == 1 and r.as_sample().aabb == ((0, 4), (0, 4)) for r in results)
+        results = list(
+            workers.map(lambda q: image.resolve(q, shape=shape), [query(2)] * 16)
+        )
+    assert all(
+        r.level == 1 and r.source_bounds_index == ((0, 4), (0, 4)) for r in results
+    )
 
 
 def test_query_values_are_copied_and_validated():
@@ -564,10 +581,12 @@ def test_anisotropic_crop_decodes_with_time_and_channel_axes(
         data=True,
     )
     output = damacy.BatchSpec(1, (1, 2, 4, 4, 4))
-    resolver = damacy.SpatialResolver(load(root), output)
+    image = load(root)
+    shape = output.shape
     transform = np.column_stack((np.diag([1, 1, 1, 2, 4]), [1, 1, 4, 4, 0]))
-    resolved = resolver.resolve(
-        damacy.SpatialQuery(output_to_reference=transform, sampler=damacy.Sampler())
+    resolved = image.resolve(
+        damacy.SpatialQuery(output_to_reference=transform, sampler=damacy.Sampler()),
+        shape=shape,
     )
     assert resolved.level == 1 and not resolved.requires_resampling
     with pipeline(spatial_executor, output) as p:
@@ -582,7 +601,8 @@ def test_automatic_level_selection_matches_singular_values(tmp_path):
     root = tmp_path / "image"
     scales = np.array([[1, 1, 1], [1, 2, 4], [2, 4, 8]])
     write_image(root, shape=(32, 32, 32), scales=scales.tolist())
-    resolver = damacy.SpatialResolver(load(root), damacy.BatchSpec(1, (2, 2, 2)))
+    image = load(root)
+    shape = (2, 2, 2)
     rng = np.random.default_rng(532)
     for _ in range(64):
         left, _ = np.linalg.qr(rng.normal(size=(3, 3)))
@@ -592,11 +612,12 @@ def test_automatic_level_selection_matches_singular_values(tmp_path):
         for level, scale in enumerate(scales):
             if np.linalg.svd(matrix / scale[:, None], compute_uv=False)[-1] >= 1:
                 expected = level
-        resolved = resolver.resolve(
+        resolved = image.resolve(
             damacy.SpatialQuery(
                 output_to_reference=np.column_stack((matrix, [8, 8, 8])),
                 sampler=damacy.Sampler(boundary="constant"),
-            )
+            ),
+            shape=shape,
         )
         assert resolved.level == expected
 
@@ -628,7 +649,7 @@ def test_native_query_validation(tmp_path):
     root = tmp_path / "image"
     write_image(root)
     image = load(root)
-    args = (image._native, (4, 4), 1, 0)
+    args = (image._native, (4, 4))
     with pytest.raises(ValueError):
         _native.spatial_resolve(*args, ((1, 0), (0, 1)), 1, 1, 0, -1)
     for filter, boundary, value, level in [
@@ -662,7 +683,8 @@ def test_duplicate_array_fields_are_rejected(tmp_path, key, value):
 def test_collapsed_3d_transforms_are_rejected(tmp_path):
     root = tmp_path / "image"
     write_image(root, shape=(16, 16, 16))
-    resolver = damacy.SpatialResolver(load(root), damacy.BatchSpec(1, (2, 2, 2)))
+    image = load(root)
+    shape = (2, 2, 2)
     rng = np.random.default_rng(832)
     for _ in range(128):
         matrix = rng.normal(size=(3, 3))
@@ -672,23 +694,61 @@ def test_collapsed_3d_transforms_are_rejected(tmp_path):
             sampler=damacy.Sampler(boundary="constant"),
         )
         with pytest.raises(damacy.InvalidArgument):
-            resolver.resolve(q)
+            image.resolve(q, shape=shape)
 
 
 @pytest.mark.parametrize("spacing,level", [(0.5, 0), (3.0, 1)])
 def test_level_selection_with_large_scale_difference(tmp_path, spacing, level):
     root = tmp_path / "image"
     write_image(root)
-    resolver = damacy.SpatialResolver(load(root), damacy.BatchSpec(1, (2, 2)))
+    image = load(root)
+    shape = (2, 2)
     large = 2**28
     matrix = (
         (large + spacing / 2, large - spacing / 2, 0),
         (large - spacing / 2, large + spacing / 2, 0),
     )
-    resolved = resolver.resolve(
+    resolved = image.resolve(
         damacy.SpatialQuery(
             output_to_reference=matrix,
             sampler=damacy.Sampler(boundary="constant"),
-        )
+        ),
+        shape=shape,
     )
     assert resolved.level == level
+
+
+@pytest.mark.parametrize("tail", [",", ", garbage", ', {"unused": [garbage,]}'])
+def test_unselected_metadata_is_not_validated(tmp_path, tail):
+    root = tmp_path / "image"
+    write_image(root)
+    path = root / "zarr.json"
+    metadata = json.loads(path.read_text())
+    entry = metadata["attributes"]["ome"]["multiscales"][0]
+    entry["coordinateTransformations"] = {"unused": ["not", "interpreted"]}
+    metadata["attributes"]["unused"] = {"arbitrary": {"nested": None}}
+    text = json.dumps(metadata)
+    position = text.rindex("]")
+    path.write_text(text[:position] + tail + text[position:] + " ignored suffix")
+    image = load(root)
+    resolved = image.resolve(query(2), shape=(4, 4))
+    assert resolved.level == 1
+    assert not resolved.requires_resampling
+
+
+def test_resolution_only_needs_output_shape(tmp_path):
+    root = tmp_path / "image"
+    write_image(root)
+    image = load(root)
+    shape = (1 << 40, 1 << 40)
+    resolved = image.resolve(
+        query(sampler=damacy.Sampler(boundary="constant")), shape=shape
+    )
+    assert resolved.shape == shape
+    assert resolved.read_bounds_index == ((0, 32), (0, 32))
+    assert resolved.requires_resampling
+    for invalid in [(), (4,), (0, 4), (-1, 4), (1 << 52, 4), (1.5, 4)]:
+        with pytest.raises((ValueError, TypeError)):
+            image.resolve(query(), shape=invalid)
+    with pytest.raises(TypeError, match=r"NgffImage\.resolve"):
+        damacy.ResolvedSpatialQuery()

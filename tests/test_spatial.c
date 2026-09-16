@@ -74,10 +74,7 @@ identity_query(void)
   };
 }
 
-static struct damacy_batch_spec output = { .dtype = DAMACY_F32,
-                                           .sample_shape = { 4, 4 },
-                                           .sample_rank = 2,
-                                           .samples_per_batch = 1 };
+static const int64_t output_shape[] = { 4, 4 };
 
 static int
 test_corner_conversion_and_copy(void)
@@ -97,32 +94,30 @@ test_corner_conversion_and_copy(void)
     EXPECT(metadata->levels[2].origin_reference_index[d] == -1.5);
   }
   struct damacy_spatial_query query = identity_query();
-  struct damacy_spatial_resolution* resolved;
-  EXPECT(damacy_spatial_resolve(image, &output, &query, &resolved) ==
+  struct damacy_spatial_resolution resolved;
+  EXPECT(damacy_spatial_resolve(image, &query, 2, output_shape, &resolved) ==
          DAMACY_OK);
-  EXPECT(damacy_spatial_resolution_info(resolved)->level == 0);
+  EXPECT(resolved.level == 0);
   struct damacy_sample sample;
-  EXPECT(damacy_spatial_resolution_sample(resolved, &sample) == DAMACY_OK);
+  EXPECT(damacy_spatial_resolution_sample(&resolved, &sample) == DAMACY_OK);
   EXPECT(sample.axes[0].interval.beg == 0 && sample.axes[0].interval.end == 4);
-  damacy_spatial_resolution_destroy(resolved);
+  damacy_spatial_resolution_clear(&resolved);
   query.output_to_reference.linear[0][0] = 2;
   query.output_to_reference.linear[1][1] = 2;
   query.output_to_reference.offset[0] = 4;
   query.output_to_reference.offset[1] = 6;
   query.sampler.filter = DAMACY_FILTER_LINEAR;
-  EXPECT(damacy_spatial_resolve(image, &output, &query, &resolved) ==
+  EXPECT(damacy_spatial_resolve(image, &query, 2, output_shape, &resolved) ==
          DAMACY_OK);
-  const struct damacy_spatial_info* info =
-    damacy_spatial_resolution_info(resolved);
-  EXPECT(info->level == 1 && !info->requires_resampling);
+  EXPECT(resolved.level == 1 && !resolved.requires_resampling);
   damacy_ngff_image_destroy(image);
   memset(&query, 0, sizeof(query));
-  EXPECT(damacy_spatial_resolution_sample(resolved, &sample) == DAMACY_OK);
+  EXPECT(damacy_spatial_resolution_sample(&resolved, &sample) == DAMACY_OK);
   EXPECT(!strcmp(sample.uri, "volume/1"));
   EXPECT(sample.rank == 2 && sample.axes[0].kind == DAMACY_AXIS_INTERVAL);
   EXPECT(sample.axes[0].interval.beg == 2 && sample.axes[0].interval.end == 6);
   EXPECT(sample.axes[1].interval.beg == 3 && sample.axes[1].interval.end == 7);
-  damacy_spatial_resolution_destroy(resolved);
+  damacy_spatial_resolution_clear(&resolved);
   return 0;
 }
 
@@ -139,42 +134,39 @@ test_scale_rotation_and_shear(void)
   query.output_to_reference.linear[0][1] = -s;
   query.output_to_reference.linear[1][0] = s;
   query.output_to_reference.linear[1][1] = s;
-  struct damacy_spatial_resolution* resolved;
-  EXPECT(damacy_spatial_resolve(image, &output, &query, &resolved) ==
+  struct damacy_spatial_resolution resolved;
+  EXPECT(damacy_spatial_resolve(image, &query, 2, output_shape, &resolved) ==
          DAMACY_OK);
-  const struct damacy_spatial_info* info =
-    damacy_spatial_resolution_info(resolved);
-  EXPECT(info->level == 1 && info->requires_resampling);
-  EXPECT(fabs(info->output_to_source.linear[0][0] - s / 2) < 1e-15);
+  EXPECT(resolved.level == 1 && resolved.requires_resampling);
+  EXPECT(fabs(resolved.output_to_source.linear[0][0] - s / 2) < 1e-15);
   struct damacy_sample sample;
-  EXPECT(damacy_spatial_resolution_sample(resolved, &sample) ==
+  EXPECT(damacy_spatial_resolution_sample(&resolved, &sample) ==
          DAMACY_UNSUPPORTED);
   EXPECT(!sample.uri && !sample.rank);
-  damacy_spatial_resolution_destroy(resolved);
+  damacy_spatial_resolution_clear(&resolved);
   query.output_to_reference.linear[0][0] = 3;
   query.output_to_reference.linear[0][1] = 2;
   query.output_to_reference.linear[1][0] = 2;
   query.output_to_reference.linear[1][1] = 3;
-  EXPECT(damacy_spatial_resolve(image, &output, &query, &resolved) ==
+  EXPECT(damacy_spatial_resolve(image, &query, 2, output_shape, &resolved) ==
          DAMACY_OK);
-  EXPECT(damacy_spatial_resolution_info(resolved)->level == 0);
-  damacy_spatial_resolution_destroy(resolved);
+  EXPECT(resolved.level == 0);
+  damacy_spatial_resolution_clear(&resolved);
   query = identity_query();
   query.output_to_reference.linear[0][0] = 4;
   query.output_to_reference.linear[1][1] = 4;
-  EXPECT(damacy_spatial_resolve(image, &output, &query, &resolved) ==
+  EXPECT(damacy_spatial_resolve(image, &query, 2, output_shape, &resolved) ==
          DAMACY_OK);
-  info = damacy_spatial_resolution_info(resolved);
-  EXPECT(info->level == 2 && info->requires_resampling);
-  EXPECT(info->output_to_source.offset[0] == 0.375);
-  damacy_spatial_resolution_destroy(resolved);
+  EXPECT(resolved.level == 2 && resolved.requires_resampling);
+  EXPECT(resolved.output_to_source.offset[0] == 0.375);
+  damacy_spatial_resolution_clear(&resolved);
   query = identity_query();
   query.output_to_reference.linear[0][0] = 0.5;
   query.output_to_reference.linear[1][1] = 0.5;
-  EXPECT(damacy_spatial_resolve(image, &output, &query, &resolved) ==
+  EXPECT(damacy_spatial_resolve(image, &query, 2, output_shape, &resolved) ==
          DAMACY_OK);
-  EXPECT(damacy_spatial_resolution_info(resolved)->level == 0);
-  damacy_spatial_resolution_destroy(resolved);
+  EXPECT(resolved.level == 0);
+  damacy_spatial_resolution_clear(&resolved);
   damacy_ngff_image_destroy(image);
   return 0;
 }
@@ -186,43 +178,38 @@ test_sampler_bounds(void)
   EXPECT(!image_create(&image));
   struct damacy_spatial_query query = identity_query();
   query.output_to_reference.offset[0] = -0.25;
-  struct damacy_spatial_resolution* resolved;
-  EXPECT(damacy_spatial_resolve(image, &output, &query, &resolved) ==
+  struct damacy_spatial_resolution resolved;
+  EXPECT(damacy_spatial_resolve(image, &query, 2, output_shape, &resolved) ==
          DAMACY_OK);
-  const struct damacy_spatial_info* info =
-    damacy_spatial_resolution_info(resolved);
-  EXPECT(info->source_bounds_index.dims[0].beg == 0);
-  EXPECT(info->source_bounds_index.dims[0].end == 4);
-  damacy_spatial_resolution_destroy(resolved);
+  EXPECT(resolved.source_bounds_index.dims[0].beg == 0);
+  EXPECT(resolved.source_bounds_index.dims[0].end == 4);
+  damacy_spatial_resolution_clear(&resolved);
   query.sampler.filter = DAMACY_FILTER_LINEAR;
-  EXPECT(damacy_spatial_resolve(image, &output, &query, &resolved) ==
+  EXPECT(damacy_spatial_resolve(image, &query, 2, output_shape, &resolved) ==
          DAMACY_INVAL);
-  EXPECT(!resolved);
+  EXPECT(!resolved.uri && !resolved.rank);
   query.sampler.boundary = DAMACY_BOUNDARY_CONSTANT;
   query.sampler.constant_value = 17;
-  EXPECT(damacy_spatial_resolve(image, &output, &query, &resolved) ==
+  EXPECT(damacy_spatial_resolve(image, &query, 2, output_shape, &resolved) ==
          DAMACY_OK);
-  info = damacy_spatial_resolution_info(resolved);
-  EXPECT(info->source_bounds_index.dims[0].beg == -1);
-  EXPECT(info->source_bounds_index.dims[0].end == 4);
-  EXPECT(info->read_bounds_index.dims[0].beg == 0);
-  EXPECT(info->read_bounds_index.dims[0].end == 4);
-  damacy_spatial_resolution_destroy(resolved);
+  EXPECT(resolved.source_bounds_index.dims[0].beg == -1);
+  EXPECT(resolved.source_bounds_index.dims[0].end == 4);
+  EXPECT(resolved.read_bounds_index.dims[0].beg == 0);
+  EXPECT(resolved.read_bounds_index.dims[0].end == 4);
+  damacy_spatial_resolution_clear(&resolved);
   query.output_to_reference.offset[0] = -20;
-  EXPECT(damacy_spatial_resolve(image, &output, &query, &resolved) ==
+  EXPECT(damacy_spatial_resolve(image, &query, 2, output_shape, &resolved) ==
          DAMACY_OK);
-  info = damacy_spatial_resolution_info(resolved);
-  EXPECT(info->read_bounds_index.dims[0].beg == 0);
-  EXPECT(info->read_bounds_index.dims[0].end == 0);
-  damacy_spatial_resolution_destroy(resolved);
+  EXPECT(resolved.read_bounds_index.dims[0].beg == 0);
+  EXPECT(resolved.read_bounds_index.dims[0].end == 0);
+  damacy_spatial_resolution_clear(&resolved);
   query.sampler.boundary = DAMACY_BOUNDARY_CLAMP;
   query.sampler.constant_value = 0;
-  EXPECT(damacy_spatial_resolve(image, &output, &query, &resolved) ==
+  EXPECT(damacy_spatial_resolve(image, &query, 2, output_shape, &resolved) ==
          DAMACY_OK);
-  info = damacy_spatial_resolution_info(resolved);
-  EXPECT(info->read_bounds_index.dims[0].beg == 0);
-  EXPECT(info->read_bounds_index.dims[0].end == 1);
-  damacy_spatial_resolution_destroy(resolved);
+  EXPECT(resolved.read_bounds_index.dims[0].beg == 0);
+  EXPECT(resolved.read_bounds_index.dims[0].end == 1);
+  damacy_spatial_resolution_clear(&resolved);
   damacy_ngff_image_destroy(image);
   return 0;
 }
@@ -233,34 +220,65 @@ test_invalid_queries(void)
   struct damacy_ngff_image* image;
   EXPECT(!image_create(&image));
   struct damacy_spatial_query query = identity_query();
-  struct damacy_spatial_resolution* resolved;
+  struct damacy_spatial_resolution resolved;
   double invalid[] = { 0, NAN, INFINITY, 1e100 };
   for (size_t i = 0; i < sizeof(invalid) / sizeof(*invalid); ++i) {
     query.output_to_reference.linear[0][0] = invalid[i];
-    EXPECT(damacy_spatial_resolve(image, &output, &query, &resolved) ==
+    EXPECT(damacy_spatial_resolve(image, &query, 2, output_shape, &resolved) ==
            DAMACY_INVAL);
-    EXPECT(!resolved);
+    EXPECT(!resolved.uri && !resolved.rank);
   }
   query = identity_query();
   query.level = -2;
-  EXPECT(damacy_spatial_resolve(image, &output, &query, &resolved) ==
+  EXPECT(damacy_spatial_resolve(image, &query, 2, output_shape, &resolved) ==
          DAMACY_INVAL);
   query.level = 3;
-  EXPECT(damacy_spatial_resolve(image, &output, &query, &resolved) ==
+  EXPECT(damacy_spatial_resolve(image, &query, 2, output_shape, &resolved) ==
          DAMACY_INVAL);
   query.level = 0;
   query.sampler.constant_value = 1;
-  EXPECT(damacy_spatial_resolve(image, &output, &query, &resolved) ==
+  EXPECT(damacy_spatial_resolve(image, &query, 2, output_shape, &resolved) ==
          DAMACY_INVAL);
   query.sampler.constant_value = 0;
   query.sampler.filter = 0;
-  EXPECT(damacy_spatial_resolve(image, &output, &query, &resolved) ==
+  EXPECT(damacy_spatial_resolve(image, &query, 2, output_shape, &resolved) ==
          DAMACY_INVAL);
   query = identity_query();
-  struct damacy_batch_spec wrong = output;
-  wrong.sample_rank = 3;
-  EXPECT(damacy_spatial_resolve(image, &wrong, &query, &resolved) ==
+  EXPECT(damacy_spatial_resolve(image, &query, 3, output_shape, &resolved) ==
          DAMACY_RANK);
+  damacy_ngff_image_destroy(image);
+  return 0;
+}
+
+static int
+test_resolution_shape_and_clear(void)
+{
+  struct damacy_ngff_image* image;
+  EXPECT(!image_create(&image));
+  struct damacy_spatial_query query = identity_query();
+  query.sampler.boundary = DAMACY_BOUNDARY_CONSTANT;
+  const int64_t shape[] = { INT64_C(1) << 40, INT64_C(1) << 40 };
+  struct damacy_spatial_resolution resolved;
+  EXPECT(damacy_spatial_resolve(image, &query, 2, shape, &resolved) ==
+         DAMACY_OK);
+  EXPECT(resolved.output_shape[0] == shape[0]);
+  EXPECT(resolved.requires_resampling);
+  damacy_spatial_resolution_clear(&resolved);
+  damacy_spatial_resolution_clear(&resolved);
+  EXPECT(!resolved.uri && !resolved.rank);
+  struct damacy_sample sample;
+  EXPECT(damacy_spatial_resolution_sample(&resolved, &sample) == DAMACY_INVAL);
+  EXPECT(!sample.uri && !sample.rank);
+  const int64_t invalid[] = { 0, -1, INT64_C(1) << 52 };
+  for (size_t i = 0; i < sizeof(invalid) / sizeof(*invalid); ++i) {
+    int64_t bad_shape[] = { invalid[i], 4 };
+    EXPECT(damacy_spatial_resolve(image, &query, 2, bad_shape, &resolved) ==
+           DAMACY_INVAL);
+    EXPECT(!resolved.uri && !resolved.rank);
+  }
+  EXPECT(damacy_spatial_resolve(image, &query, 2, NULL, &resolved) ==
+         DAMACY_INVAL);
+  EXPECT(damacy_spatial_resolve(image, &query, 2, shape, NULL) == DAMACY_INVAL);
   damacy_ngff_image_destroy(image);
   return 0;
 }
@@ -340,10 +358,7 @@ test_collapsed_volume(void)
     .levels = &level,
     .dtype = dtype_u16
   };
-  struct damacy_batch_spec shape = { .dtype = DAMACY_F32,
-                                     .sample_rank = 3,
-                                     .sample_shape = { 2, 2, 2 },
-                                     .samples_per_batch = 1 };
+  const int64_t shape[] = { 2, 2, 2 };
   struct damacy_spatial_query query = {
     .output_to_reference = { .linear = { { 0.7854589457317591,
                                            0.4315455905112043,
@@ -359,17 +374,17 @@ test_collapsed_volume(void)
                  .boundary = DAMACY_BOUNDARY_CONSTANT },
     .level = DAMACY_LEVEL_AUTO
   };
-  struct damacy_spatial_resolution* resolved = NULL;
-  EXPECT(damacy_spatial_resolve(&image, &shape, &query, &resolved) ==
+  struct damacy_spatial_resolution resolved;
+  EXPECT(damacy_spatial_resolve(&image, &query, 3, shape, &resolved) ==
          DAMACY_INVAL);
-  EXPECT(!resolved);
+  EXPECT(!resolved.uri && !resolved.rank);
   query.output_to_reference = (struct damacy_affine){
     .linear = { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } }
   };
-  EXPECT(damacy_spatial_resolve(&image, &shape, &query, &resolved) ==
+  EXPECT(damacy_spatial_resolve(&image, &query, 3, shape, &resolved) ==
          DAMACY_OK);
-  EXPECT(!damacy_spatial_resolution_info(resolved)->requires_resampling);
-  damacy_spatial_resolution_destroy(resolved);
+  EXPECT(!resolved.requires_resampling);
+  damacy_spatial_resolution_clear(&resolved);
   return 0;
 }
 
@@ -381,6 +396,7 @@ main(void)
   RUN(test_sampler_bounds);
   RUN(test_invalid_queries);
   RUN(test_collapsed_volume);
+  RUN(test_resolution_shape_and_clear);
   RUN(test_metadata_limits_and_load);
   return 0;
 }

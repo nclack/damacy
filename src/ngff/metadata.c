@@ -143,14 +143,9 @@ string_equal(struct json_node node, const char* expected)
 }
 
 static int
-root_document(struct cslice src, struct json_node* root)
+root_object(struct cslice src, struct json_node* root)
 {
-  if (json_resolve(src, NULL, 0, root, NULL) || root->type != JSON_OBJECT)
-    return 1;
-  for (const char* p = root->s.end; p < src.end; ++p)
-    if (*p != ' ' && *p != '\t' && *p != '\n' && *p != '\r')
-      return 1;
-  return 0;
+  return json_resolve(src, NULL, 0, root, NULL) || root->type != JSON_OBJECT;
 }
 
 static enum damacy_status
@@ -355,7 +350,7 @@ ngff_parse_group(struct cslice src,
   *out = NULL;
   struct json_node root, node, ome, multiscale;
   uint64_t format;
-  if (root_document(src, &root) || member(root, "zarr_format", &node) ||
+  if (root_object(src, &root) || member(root, "zarr_format", &node) ||
       json_as_uint(node, &format) || format != 3 ||
       member(root, "node_type", &node) || !string_equal(node, "group") ||
       member(root, "attributes", &node) || member(node, "ome", &ome) ||
@@ -378,17 +373,7 @@ ngff_parse_group(struct cslice src,
   status = read_axes(node, &image->info);
   if (status != DAMACY_OK)
     goto Fail;
-  double group_scale[DAMACY_MAX_RANK] = { 0 };
-  double group_origin[DAMACY_MAX_RANK] = { 0 };
-  enum json_err error = member(multiscale, "coordinateTransformations", &node);
-  if (error == JSON_OK) {
-    status = read_transform(node, image->info.rank, group_scale, group_origin);
-    if (status != DAMACY_OK)
-      goto Fail;
-  } else if (error != JSON_ERR_NOT_FOUND) {
-    status = DAMACY_INVAL;
-    goto Fail;
-  }
+  enum json_err error;
   status = DAMACY_INVAL;
   if (member(multiscale, "datasets", &node))
     goto Fail;
@@ -444,7 +429,7 @@ ngff_parse_array(struct cslice src,
                  uint32_t index)
 {
   struct json_node root, names, value;
-  if (root_document(src, &root))
+  if (root_object(src, &root))
     return DAMACY_INVAL;
   static const char* keys[] = { "zarr_format",    "node_type",
                                 "shape",          "data_type",
