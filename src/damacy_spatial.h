@@ -8,7 +8,6 @@ extern "C"
 #endif
 
   struct damacy_ngff_image;
-  struct damacy_spatial_resolution;
 
   enum damacy_ngff_axis_kind
   {
@@ -85,7 +84,7 @@ extern "C"
     int32_t level;
   };
 
-  struct damacy_spatial_info
+  struct damacy_spatial_resolution
   {
     const char* uri;
     uint32_t level;
@@ -111,15 +110,14 @@ extern "C"
 
   enum damacy_status damacy_spatial_resolve(
     const struct damacy_ngff_image* image,
-    const struct damacy_batch_spec* output,
     const struct damacy_spatial_query* query,
-    struct damacy_spatial_resolution** out);
-  const struct damacy_spatial_info* damacy_spatial_resolution_info(
-    const struct damacy_spatial_resolution* resolution);
+    uint8_t rank,
+    const int64_t* output_shape,
+    struct damacy_spatial_resolution* out);
   enum damacy_status damacy_spatial_resolution_sample(
     const struct damacy_spatial_resolution* resolution,
     struct damacy_sample* out);
-  void damacy_spatial_resolution_destroy(
+  void damacy_spatial_resolution_clear(
     struct damacy_spatial_resolution* resolution);
 
 #ifdef __cplusplus

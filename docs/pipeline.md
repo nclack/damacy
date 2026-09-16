@@ -54,7 +54,7 @@ with damacy.Pipeline(
 ```
 
 The paths in `Sample` and `IndexQuery` must name little-endian numeric Zarr v3
-**arrays**. Use an [NGFF image and spatial resolver](spatial.md) to select a
+**arrays**. Use an [NGFF image](spatial.md) to select a
 level from a group before pushing an aligned crop. The examples assume decoded
 chunks no larger than 2 MiB.
 

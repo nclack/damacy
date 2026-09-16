@@ -94,7 +94,6 @@ __all__ = [
     "Sampler",
     "ShutdownError",
     "SpatialQuery",
-    "SpatialResolver",
     "Stats",
     "Status",
     "StorageError",
@@ -1944,5 +1943,4 @@ from ._spatial import (  # noqa: E402
     ResolvedSpatialQuery,
     Sampler,
     SpatialQuery,
-    SpatialResolver,
 )

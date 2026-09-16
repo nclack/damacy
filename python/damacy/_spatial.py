@@ -7,7 +7,14 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from . import BatchSpec, FileMetadataReader, Sample, _component, _native, _positive_int
+from . import (
+    FileMetadataReader,
+    Status,
+    UnsupportedOperation,
+    _component,
+    _native,
+    _positive_int,
+)
 
 
 def _index(value: int, name: str) -> int:
@@ -108,6 +115,29 @@ class NgffImage:
         )
         object.__setattr__(self, "data_type", info["data_type"])
 
+    def resolve(
+        self, query: SpatialQuery, *, shape: Iterable[int]
+    ) -> ResolvedSpatialQuery:
+        """Resolve source geometry without I/O, batching, or output allocation."""
+        if not isinstance(query, SpatialQuery):
+            raise TypeError("query must be a SpatialQuery")
+        output_shape = tuple(
+            _positive_int(value, "shape extent", (1 << 52) - 1) for value in shape
+        )
+        if len(output_shape) != len(self.axes):
+            raise ValueError("output rank must match the NGFF image")
+        info = _component(
+            _native.spatial_resolve,
+            self._native,
+            output_shape,
+            query.output_to_reference,
+            {"nearest": 1, "linear": 2}[query.sampler.filter],
+            {"error": 1, "constant": 2, "clamp": 3}[query.sampler.boundary],
+            query.sampler.constant_value,
+            -1 if query.level == "auto" else query.level,
+        )
+        return ResolvedSpatialQuery._from_native(info, query.sampler)
+
 
 @dataclass(frozen=True, slots=True)
 class Sampler:
@@ -181,11 +211,10 @@ class SpatialQuery:
 
 @dataclass(frozen=True, slots=True, init=False)
 class ResolvedSpatialQuery:
-    """Owned source selection and geometry, independent of the loaded image.
+    """Owned source geometry returned by NgffImage.resolve().
 
-    Aligned results can be pushed to a Pipeline or converted with ``as_sample``.
-    Other results raise UnsupportedOperation when converted or pushed; their
-    geometry remains available for inspection without invoking a decoder.
+    Aligned results can be pushed to a Pipeline. Other results raise
+    UnsupportedOperation when pushed; their geometry remains inspectable.
     """
 
     uri: str
@@ -197,59 +226,27 @@ class ResolvedSpatialQuery:
     source_bounds_index: tuple[tuple[int, int], ...]
     read_bounds_index: tuple[tuple[int, int], ...]
     requires_resampling: bool
-    _native: object
+
+    def __init__(self) -> None:
+        raise TypeError("use NgffImage.resolve() to create a ResolvedSpatialQuery")
 
     @classmethod
-    def _from_native(cls, native: object, sampler: Sampler) -> ResolvedSpatialQuery:
+    def _from_native(
+        cls, info: dict[str, Any], sampler: Sampler
+    ) -> ResolvedSpatialQuery:
         result = object.__new__(cls)
-        object.__setattr__(result, "_native", native)
         object.__setattr__(result, "sampler", sampler)
-        for name, value in _native.spatial_info(native).items():
+        for name, value in info.items():
             object.__setattr__(result, name, value)
         return result
 
     def _to_native(self) -> dict[str, Any]:
-        return _component(_native.spatial_sample, self._native)
-
-    def as_sample(self) -> Sample:
-        """Return an interval sample, or fail if resampling is required."""
-        sample = self._to_native()
-        return Sample(uri=sample["uri"], aabb=tuple(axis[1] for axis in sample["axes"]))
-
-
-@dataclass(frozen=True, slots=True)
-class SpatialResolver:
-    """Resolve queries using injected image metadata and fixed output geometry.
-
-    Resolution does no I/O and can be shared across threads. The same
-    BatchSpec should be supplied to the downstream Pipeline.
-    """
-
-    image: NgffImage
-    output: BatchSpec
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.image, NgffImage) or not isinstance(
-            self.output, BatchSpec
-        ):
-            raise TypeError("SpatialResolver requires an NgffImage and a BatchSpec")
-        if len(self.image.axes) != len(self.output.shape):
-            raise ValueError("output rank must match the NGFF image")
-
-    def resolve(self, query: SpatialQuery) -> ResolvedSpatialQuery:
-        """Choose the source level, map coordinates, and bound source reads."""
-        if not isinstance(query, SpatialQuery):
-            raise TypeError("query must be a SpatialQuery")
-        native = _component(
-            _native.spatial_resolve,
-            self.image._native,
-            self.output.shape,
-            self.output.samples,
-            int(self.output.dtype),
-            query.output_to_reference,
-            {"nearest": 1, "linear": 2}[query.sampler.filter],
-            {"error": 1, "constant": 2, "clamp": 3}[query.sampler.boundary],
-            query.sampler.constant_value,
-            -1 if query.level == "auto" else query.level,
-        )
-        return ResolvedSpatialQuery._from_native(native, query.sampler)
+        if self.requires_resampling:
+            error = UnsupportedOperation("submit spatial query: resampling required")
+            error.status = Status.UNSUPPORTED
+            error.what = "submit spatial query: resampling required"
+            raise error
+        return {
+            "uri": self.uri,
+            "axes": [("interval", span) for span in self.source_bounds_index],
+        }
