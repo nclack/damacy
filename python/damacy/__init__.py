@@ -77,6 +77,10 @@ __all__ = [
     "MetadataCache",
     "Metric",
     "NativeCudaError",
+    "NgffAxis",
+    "NgffImage",
+    "NgffLevel",
+    "NgffLimits",
     "NotFound",
     "NumaStrategy",
     "OutOfMemory",
@@ -85,12 +89,16 @@ __all__ = [
     "PoolStarved",
     "QueueLimits",
     "RankMismatch",
+    "ResolvedSpatialQuery",
     "Sample",
+    "Sampler",
     "ShutdownError",
+    "SpatialQuery",
     "Stats",
     "Status",
     "StorageError",
     "TryAgain",
+    "UnsupportedOperation",
     "ZarrMetadata",
     "max_concurrency",
     "set_log_level",
@@ -241,6 +249,7 @@ class Status(IntEnum):
     OOM = _native.STATUS_OOM
     BUDGET = _native.STATUS_BUDGET
     SHUTDOWN = _native.STATUS_SHUTDOWN
+    UNSUPPORTED = _native.STATUS_UNSUPPORTED
 
 
 # ---- exceptions ---------------------------------------------------------
@@ -305,6 +314,10 @@ class ShutdownError(DamacyError):
     """Pipeline destroyed or in failed state."""
 
 
+class UnsupportedOperation(DamacyError):
+    """The requested metadata or execution operation is not supported."""
+
+
 class PoolStarved(DamacyError):
     """Raised when :meth:`Pipeline.pop` waits longer than
     ``Config.pop_timeout_s`` for the next batch.
@@ -332,6 +345,7 @@ _STATUS_TO_EXC: dict[int, type[DamacyError]] = {
     _native.STATUS_OOM: OutOfMemory,
     _native.STATUS_BUDGET: BudgetExceeded,
     _native.STATUS_SHUTDOWN: ShutdownError,
+    _native.STATUS_UNSUPPORTED: UnsupportedOperation,
 }
 
 
@@ -1587,8 +1601,10 @@ class Pipeline:
         # _pending_buf is the head iterator's already-pulled-but-not-yet-
         # pushed samples; held flat to avoid wrapping `it` in successive
         # itertools.chain() layers under sustained backpressure.
-        self._pending: deque[Iterator[Sample | IndexQuery]] = deque()
-        self._pending_buf: list[Sample | IndexQuery] = []
+        self._pending: deque[Iterator[Sample | IndexQuery | ResolvedSpatialQuery]] = (
+            deque()
+        )
+        self._pending_buf: list[Sample | IndexQuery | ResolvedSpatialQuery] = []
         # damacy_pop has no timed variant; on timeout the worker stays
         # parked inside it and the next pop() adopts the same thread.
         self._pop_lock = threading.Lock()
@@ -1669,7 +1685,9 @@ class Pipeline:
 
     # ---- pipeline ----------------------------------------------------
 
-    def push(self, samples: Iterable[Sample | IndexQuery]) -> None:
+    def push(
+        self, samples: Iterable[Sample | IndexQuery | ResolvedSpatialQuery]
+    ) -> None:
         """Queue samples for processing. Accepts any iterable (list,
         generator, infinite generator, …); large or unbounded sources
         are pulled lazily as :meth:`pop` frees space.
@@ -1891,3 +1909,14 @@ class Pipeline:
 # Avoid "no handler for damacy" warnings in apps that don't configure
 # logging; users opt in by attaching their own handler / level.
 logging.getLogger(__name__).addHandler(logging.NullHandler())
+
+
+from ._spatial import (  # noqa: E402
+    NgffAxis,
+    NgffImage,
+    NgffLevel,
+    NgffLimits,
+    ResolvedSpatialQuery,
+    Sampler,
+    SpatialQuery,
+)

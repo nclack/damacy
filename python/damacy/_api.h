@@ -15,3 +15,8 @@ api_pipeline_from_components(struct damacy_planner* planner,
                              const struct damacy_batch_spec* output,
                              const struct damacy_queue_limits* queues,
                              PyObject* dependencies);
+
+int
+spatial_register(PyObject* module);
+struct damacy_metadata_reader*
+api_metadata_reader(PyObject* capsule);

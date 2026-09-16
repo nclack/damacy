@@ -746,3 +746,51 @@ json_str_eq(struct json_node n, const char* lit)
   size_t span = cslice_len(n.s);
   return span == L && memcmp(n.s.beg, lit, L) == 0;
 }
+
+enum json_err
+json_object_iter_init(struct json_node node, struct json_object_iter* it)
+{
+  if (!it)
+    return JSON_ERR_INVALID;
+  if (node.type != JSON_OBJECT)
+    return JSON_ERR_TYPE;
+  if (cslice_len(node.s) < 2 || *node.s.beg != '{' || node.s.end[-1] != '}')
+    return JSON_ERR_PARSE;
+  *it = (struct json_object_iter){ .remaining = { node.s.beg + 1, node.s.end },
+                                   .first = 1 };
+  return JSON_OK;
+}
+
+enum json_err
+json_object_iter_next(struct json_object_iter* it,
+                      struct json_node* key,
+                      struct json_node* value)
+{
+  if (!it || !key || !value)
+    return JSON_ERR_INVALID;
+  struct cslice cursor = it->remaining;
+  skip_ws(&cursor);
+  if (cs_at_end(cursor))
+    return JSON_ERR_PARSE;
+  if (*cursor.beg == '}')
+    return JSON_ERR_NOT_FOUND;
+  if (!it->first) {
+    if (*cursor.beg != ',')
+      return JSON_ERR_PARSE;
+    cursor.beg++;
+    skip_ws(&cursor);
+  }
+  key->type = JSON_STRING;
+  if (lex_string_span(&cursor, &key->s, &key->flag))
+    return JSON_ERR_PARSE;
+  skip_ws(&cursor);
+  if (cs_at_end(cursor) || *cursor.beg++ != ':')
+    return JSON_ERR_PARSE;
+  skip_ws(&cursor);
+  enum json_err error = lex_value(&cursor, value);
+  if (error != JSON_OK)
+    return error;
+  it->remaining = cursor;
+  it->first = 0;
+  return JSON_OK;
+}

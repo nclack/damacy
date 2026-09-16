@@ -52,8 +52,10 @@ with damacy.Pipeline(
         del array
 ```
 
-The paths must name little-endian numeric Zarr v3 **arrays**. An NGFF group is
-not resolved to a level automatically. The examples assume decoded chunks no larger than 2 MiB.
+The paths in `Sample` and `IndexQuery` must name little-endian numeric Zarr v3
+**arrays**. Use an [NGFF image](spatial.md) to select a
+level from a group before pushing an aligned crop. The examples assume decoded
+chunks no larger than 2 MiB.
 
 `FileMetadataReader` supplies small asynchronous metadata reads. `ZarrMetadata`
 supplies Zarr interpretation and cache capacities; `MetadataCache` is a capacity
@@ -276,15 +278,11 @@ Linux io_uring metadata requirements. CUDA support is enabled by default;
 turning it on builds both executors and requires the CUDA toolkit, nvCOMP, and
 a runtime NVIDIA driver. GDS requires a CUDA build.
 
-## Future queries
+## Spatial queries
 
-Rectangular and indexed queries copy or gather existing voxels. Spatial
-queries will describe a fixed output tensor, a transform
-from output coordinates to source space, and sampler settings including
-interpolation, antialiasing, and boundary handling.
-
-For NGFF images, resolving a spatial query will choose an appropriate source
-level from the requested sampling scale before enumerating chunks. The plan
-will record the chosen array and transform. Resampling also needs interpolation
-halos and dependencies across chunks. These are later planner and executor
-operations; they are not implemented by the current box query.
+[Spatial queries](spatial.md) resolve a fixed output grid, transform, and sampler
+against loaded NGFF metadata. The resolver chooses a source level before chunk
+planning. Aligned crops can use either executor now. Requests that still need
+resampling expose their geometry and bounds, but fail when converted or pushed
+for decoding. Future resampling operations will carry these dependencies across
+source chunks in the prepared plan.
