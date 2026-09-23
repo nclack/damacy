@@ -230,6 +230,302 @@ start_executor(struct damacy_reader* reader,
 }
 
 static int
+finish_batch(struct damacy_executor* executor, struct damacy_batch** out)
+{
+  for (unsigned i = 0; i < 2 * MAX_CHUNKS; ++i) {
+    int changed = 0;
+    EXPECT(executor->ops->step(executor, &changed) == DAMACY_OK);
+    enum damacy_status status = executor->ops->take(executor, out);
+    if (status == DAMACY_OK)
+      return 0;
+    EXPECT(status == DAMACY_AGAIN && changed);
+  }
+  return 1;
+}
+
+static int
+check_output(struct damacy_batch* batch,
+             const struct test_store* store,
+             const struct test_chunk* chunks,
+             uint32_t count)
+{
+  struct damacy_batch_info info;
+  damacy_batch_info(batch, &info);
+  EXPECT(info.device_type == DAMACY_DEVICE_CPU);
+  EXPECT(info.rank == 2 && info.shape[0] == 2 && info.shape[1] == count * 4);
+  const float* data = info.data;
+  for (unsigned sample = 0; sample < 2; ++sample)
+    for (uint32_t c = 0; c < count; ++c)
+      for (unsigned i = 0; i < 4; ++i) {
+        float expected =
+          chunks[c].missing
+            ? 999
+            : store->data[chunks[c].shard][chunks[c].offset / 2 + i];
+        EXPECT(data[(sample * count + c) * 4 + i] == expected);
+      }
+  return 0;
+}
+
+static int
+test_merge_and_shard_order(void)
+{
+  struct test_chunk chunks[12];
+  for (unsigned shard = 0; shard < 3; ++shard)
+    for (unsigned i = 0; i < 4; ++i)
+      chunks[shard * 4 + i] =
+        (struct test_chunk){ .shard = shard,
+                             .offset = (i < 2 ? 40 : 8) - (i % 2) * 8 };
+  struct test_store store;
+  store_init(&store, 4);
+  struct damacy_reader reader = { .store = &store.base,
+                                  .max_inflight_reads = 4 };
+  struct damacy_stats stats = { 0 };
+  struct damacy_executor* executor = NULL;
+  EXPECT(start_executor(&reader, 4, 12, 8 << 20, &stats, &executor) == 0);
+  struct prepared_plan* plan = make_plan(chunks, 12);
+  EXPECT(plan);
+  EXPECT(plan->chunks[0].path != plan->chunks[1].path);
+  EXPECT(executor->ops->submit(executor, plan, 0) == DAMACY_OK);
+  struct damacy_batch* batch = NULL;
+  EXPECT(finish_batch(executor, &batch) == 0);
+  EXPECT(check_output(batch, &store, chunks, 12) == 0);
+  EXPECT(store.n_reads == 6);
+  for (unsigned i = 0; i < store.n_reads; ++i) {
+    EXPECT(store.records[i].shard == i % 3);
+    EXPECT(store.records[i].offset == (i < 3 ? 0 : 32));
+    EXPECT(store.records[i].bytes == 2 * CHUNK_BYTES);
+  }
+  EXPECT(stats.reads_issued == 6 && stats.chunks_dispatched == 12);
+  EXPECT(stats.decode.count == 12);
+  EXPECT(stats.decode.input_bytes == 12 * CHUNK_BYTES);
+  EXPECT(stats.decode.output_bytes == 12 * CHUNK_BYTES);
+  EXPECT(stats.io.input_bytes == 12 * CHUNK_BYTES);
+  damacy_batch_release(batch);
+  damacy_executor_destroy(executor);
+  return 0;
+}
+
+static int
+test_reader_limit_and_retry(void)
+{
+  const struct test_chunk chunks[] = {
+    { .offset = 0 }, { .offset = 8 }, { .offset = 16 }, { .offset = 24 }
+  };
+  struct test_store store;
+  store_init(&store, 1);
+  struct damacy_reader reader = { .store = &store.base,
+                                  .max_inflight_reads = 1 };
+  struct damacy_stats stats = { 0 };
+  struct damacy_executor* executor = NULL;
+  EXPECT(start_executor(&reader, 2, 4, 8 << 20, &stats, &executor) == 0);
+  struct prepared_plan* plan = make_plan(chunks, 4);
+  EXPECT(plan);
+  EXPECT(executor->ops->submit(executor, plan, 0) == DAMACY_OK);
+  struct damacy_batch* batch = NULL;
+  EXPECT(finish_batch(executor, &batch) == 0);
+  EXPECT(check_output(batch, &store, chunks, 4) == 0);
+  EXPECT(store.rejected > 0 && store.pending == 0 && store.n_reads == 2);
+  EXPECT(store.records[0].offset == 0 && store.records[0].bytes == 16);
+  EXPECT(store.records[1].offset == 16 && store.records[1].bytes == 16);
+  EXPECT(stats.chunks_dispatched == 4 && stats.reads_issued == 2);
+  damacy_batch_release(batch);
+  damacy_executor_destroy(executor);
+  return 0;
+}
+
+static int
+test_overlapping_ranges(void)
+{
+  const struct test_chunk chunks[] = { { .offset = 4 }, { .offset = 0 } };
+  struct test_store store;
+  store_init(&store, 2);
+  struct damacy_reader reader = { .store = &store.base,
+                                  .max_inflight_reads = 2 };
+  struct damacy_stats stats = { 0 };
+  struct damacy_executor* executor = NULL;
+  EXPECT(start_executor(&reader, 2, 2, 8 << 20, &stats, &executor) == 0);
+  struct prepared_plan* plan = make_plan(chunks, 2);
+  EXPECT(plan);
+  EXPECT(executor->ops->submit(executor, plan, 0) == DAMACY_OK);
+  struct damacy_batch* batch = NULL;
+  EXPECT(finish_batch(executor, &batch) == 0);
+  EXPECT(check_output(batch, &store, chunks, 2) == 0);
+  EXPECT(store.n_reads == 1 && store.records[0].offset == 0);
+  EXPECT(store.records[0].bytes == 12);
+  EXPECT(stats.decode.input_bytes == 16 && stats.io.input_bytes == 12);
+  damacy_batch_release(batch);
+  damacy_executor_destroy(executor);
+  return 0;
+}
+
+static int
+test_single_worker_and_fills(void)
+{
+  for (unsigned all_missing = 0; all_missing < 2; ++all_missing) {
+    const struct test_chunk chunks[] = {
+      { .missing = 1 },
+      { .shard = 2, .offset = 24, .missing = (uint8_t)all_missing },
+      { .missing = 1 },
+      { .shard = 0, .offset = 8, .missing = (uint8_t)all_missing },
+    };
+    struct test_store store;
+    store_init(&store, 1);
+    struct damacy_reader reader = { .store = &store.base,
+                                    .max_inflight_reads = 1 };
+    struct damacy_stats stats = { 0 };
+    struct damacy_executor* executor = NULL;
+    EXPECT(start_executor(&reader, 1, 4, 8 << 20, &stats, &executor) == 0);
+    struct prepared_plan* plan = make_plan(chunks, 4);
+    EXPECT(plan);
+    EXPECT(executor->ops->submit(executor, plan, 0) == DAMACY_OK);
+    struct damacy_batch* batch = NULL;
+    EXPECT(finish_batch(executor, &batch) == 0);
+    EXPECT(check_output(batch, &store, chunks, 4) == 0);
+    EXPECT(store.n_reads == (all_missing ? 0u : 2u));
+    EXPECT(stats.chunks_dispatched == 4);
+    damacy_batch_release(batch);
+    damacy_executor_destroy(executor);
+  }
+  return 0;
+}
+
+static int
+test_batch_order_and_retained_output(void)
+{
+  const struct test_chunk chunks[] = { { .offset = 8 }, { .offset = 0 } };
+  struct test_store store;
+  store_init(&store, 2);
+  store.held_event = 1;
+  struct damacy_reader reader = { .store = &store.base,
+                                  .max_inflight_reads = 2 };
+  struct damacy_stats stats = { 0 };
+  struct damacy_executor* executor = NULL;
+  EXPECT(start_executor(&reader, 2, 2, 8 << 20, &stats, &executor) == 0);
+  for (unsigned i = 0; i < 2; ++i) {
+    struct prepared_plan* plan = make_plan(chunks, 2);
+    EXPECT(plan);
+    EXPECT(executor->ops->submit(executor, plan, i) == DAMACY_OK);
+  }
+  int changed = 0;
+  EXPECT(executor->ops->step(executor, &changed) == DAMACY_OK);
+  EXPECT(store.n_events == 2 && store.pending == 1);
+  struct damacy_batch* first = NULL;
+  EXPECT(executor->ops->take(executor, &first) == DAMACY_AGAIN);
+  store.held_event = 0;
+  EXPECT(finish_batch(executor, &first) == 0);
+  struct damacy_batch* second = NULL;
+  EXPECT(executor->ops->take(executor, &second) == DAMACY_OK);
+  struct damacy_batch_info a, b;
+  damacy_batch_info(first, &a);
+  damacy_batch_info(second, &b);
+  EXPECT(a.batch_id == 0 && b.batch_id == 1 && a.data != b.data);
+  struct prepared_plan* third = make_plan(chunks, 2);
+  EXPECT(third);
+  EXPECT(executor->ops->submit(executor, third, 2) == DAMACY_AGAIN);
+  damacy_batch_retain(first);
+  damacy_batch_release(first);
+  damacy_batch_release(second);
+  EXPECT(executor->ops->step(executor, &changed) == DAMACY_OK);
+  EXPECT(executor->ops->submit(executor, third, 2) == DAMACY_OK);
+  struct damacy_batch* last = NULL;
+  EXPECT(finish_batch(executor, &last) == 0);
+  EXPECT(check_output(last, &store, chunks, 2) == 0);
+  damacy_batch_release(last);
+  damacy_executor_destroy(executor);
+  EXPECT(check_output(first, &store, chunks, 2) == 0);
+  damacy_batch_release(first);
+  return 0;
+}
+
+static int
+test_plan_memory_budget(void)
+{
+  const struct test_chunk chunks[] = { { .offset = 0 }, { .offset = 8 } };
+  struct test_store store;
+  store_init(&store, 2);
+  struct damacy_reader reader = { .store = &store.base,
+                                  .max_inflight_reads = 2 };
+  struct damacy_stats stats = { 0 };
+  struct damacy_executor* executor = NULL;
+  EXPECT(start_executor(&reader, 2, 2, 8 << 20, &stats, &executor) == 0);
+  executor->ops->stats(executor, &stats);
+  uint64_t initial = stats.host_bytes_committed;
+  struct prepared_plan* plan = make_plan(chunks, 2);
+  EXPECT(plan);
+  EXPECT(executor->ops->submit(executor, plan, 0) == DAMACY_OK);
+  executor->ops->stats(executor, &stats);
+  uint64_t with_plan = stats.host_bytes_committed;
+  EXPECT(with_plan > initial && with_plan <= (8 << 20));
+  struct damacy_batch* batch = NULL;
+  EXPECT(finish_batch(executor, &batch) == 0);
+  executor->ops->stats(executor, &stats);
+  EXPECT(stats.host_bytes_committed == initial);
+  damacy_batch_release(batch);
+  damacy_executor_destroy(executor);
+  executor = NULL;
+  EXPECT(start_executor(&reader, 2, 2, with_plan, &stats, &executor) == 0);
+  plan = make_plan(chunks, 2);
+  EXPECT(plan);
+  EXPECT(executor->ops->submit(executor, plan, 0) == DAMACY_BUDGET);
+  executor->ops->stats(executor, &stats);
+  EXPECT(stats.host_bytes_committed == initial);
+  prepared_plan_destroy(plan);
+  damacy_executor_destroy(executor);
+  return 0;
+}
+
+static int
+test_plan_memory_retry(void)
+{
+  const struct test_chunk chunks[] = { { .offset = 0 }, { .offset = 8 } };
+  struct test_store store;
+  store_init(&store, 2);
+  struct damacy_reader reader = { .store = &store.base,
+                                  .max_inflight_reads = 2 };
+  struct damacy_stats stats = { 0 };
+  struct damacy_executor* executor = NULL;
+  EXPECT(start_executor(&reader, 2, 2, 8 << 20, &stats, &executor) == 0);
+  executor->ops->stats(executor, &stats);
+  uint64_t initial = stats.host_bytes_committed;
+  struct prepared_plan* plan = make_plan(chunks, 2);
+  EXPECT(plan);
+  EXPECT(executor->ops->submit(executor, plan, 0) == DAMACY_OK);
+  executor->ops->stats(executor, &stats);
+  uint64_t plan_bytes = stats.host_bytes_committed - initial;
+  EXPECT(plan_bytes > 0);
+  damacy_executor_destroy(executor);
+  for (unsigned i = 1; i <= 16; ++i) {
+    executor = NULL;
+    EXPECT(start_executor(
+             &reader, 2, 2, initial + i * plan_bytes, &stats, &executor) == 0);
+    plan = make_plan(chunks, 2);
+    EXPECT(plan);
+    enum damacy_status status = executor->ops->submit(executor, plan, 0);
+    if (status == DAMACY_BUDGET) {
+      prepared_plan_destroy(plan);
+      damacy_executor_destroy(executor);
+      continue;
+    }
+    EXPECT(status == DAMACY_OK);
+    struct prepared_plan* next = make_plan(chunks, 2);
+    EXPECT(next);
+    EXPECT(executor->ops->submit(executor, next, 1) == DAMACY_AGAIN);
+    struct damacy_batch* first = NULL;
+    EXPECT(finish_batch(executor, &first) == 0);
+    EXPECT(executor->ops->submit(executor, next, 1) == DAMACY_OK);
+    struct damacy_batch* second = NULL;
+    EXPECT(finish_batch(executor, &second) == 0);
+    EXPECT(check_output(first, &store, chunks, 2) == 0);
+    EXPECT(check_output(second, &store, chunks, 2) == 0);
+    damacy_batch_release(first);
+    damacy_batch_release(second);
+    damacy_executor_destroy(executor);
+    return 0;
+  }
+  return 1;
+}
+
+static int
 test_read_errors_and_shutdown(void)
 {
   const struct test_chunk chunks[] = {
@@ -237,7 +533,7 @@ test_read_errors_and_shutdown(void)
   };
   for (unsigned failure = 0; failure < 3; ++failure) {
     struct test_store store;
-    store_init(&store, 4);
+    store_init(&store, 2);
     if (failure == 0)
       store.submit_status = DAMACY_IO;
     else if (failure == 1)
@@ -270,6 +566,13 @@ test_read_errors_and_shutdown(void)
 int
 main(void)
 {
+  RUN(test_merge_and_shard_order);
+  RUN(test_reader_limit_and_retry);
+  RUN(test_overlapping_ranges);
+  RUN(test_single_worker_and_fills);
+  RUN(test_batch_order_and_retained_output);
+  RUN(test_plan_memory_budget);
+  RUN(test_plan_memory_retry);
   RUN(test_read_errors_and_shutdown);
   return 0;
 }

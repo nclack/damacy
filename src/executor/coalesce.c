@@ -2,6 +2,14 @@
 
 #include "executor/read_op_sort.h"
 
+#include <string.h>
+
+static int
+same_path(const char* a, const char* b)
+{
+  return a == b || !strcmp(a, b);
+}
+
 enum damacy_status
 coalesce_chunks(struct dispatch_output* out,
                 uint64_t read_op_max_bytes,
@@ -28,7 +36,7 @@ coalesce_chunks(struct dispatch_output* out,
   for (uint32_t i = 0; i < n; ++i)
     remap[i] = UINT32_MAX;
 
-  // Partition: real (path interned, nbytes > 0) vs fill placeholders.
+  // Partition: real (path present, nbytes > 0) vs fill placeholders.
   uint32_t n_io = 0;
   for (uint32_t i = 0; i < n; ++i) {
     struct read_op* r = &out->read_ops[i];
@@ -51,7 +59,7 @@ coalesce_chunks(struct dispatch_output* out,
     int fusable = 0;
     if (leader_old != UINT32_MAX) {
       struct read_op* leader = &out->read_ops[leader_old];
-      if (curr->shard_path == leader->shard_path &&
+      if (same_path(curr->shard_path, leader->shard_path) &&
           curr->file_offset >= leader->file_offset &&
           curr->file_offset <= leader_end &&
           leader_chunks < max_chunks_per_wave) {
@@ -91,7 +99,7 @@ coalesce_chunks(struct dispatch_output* out,
     uint32_t* starts = perm; // perm is dead after the fuse loop
     uint32_t n_runs = 0;
     for (uint32_t k = 0; k < n_real; ++k)
-      if (k == 0 || tmp[k].shard_path != tmp[k - 1].shard_path)
+      if (k == 0 || !same_path(tmp[k].shard_path, tmp[k - 1].shard_path))
         starts[n_runs++] = k;
     uint32_t outk = 0;
     for (uint32_t round = 0; outk < n_real; ++round) {
