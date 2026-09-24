@@ -579,6 +579,17 @@ def test_multiscale_selection_and_escaped_strings(tmp_path):
         load(root)
 
 
+def test_unrelated_keys_are_skipped(tmp_path):
+    root = tmp_path / "image"
+    write_image(root)
+    path = root / "zarr.json"
+    metadata = json.loads(path.read_text())
+    metadata["attributes"]["ome"]["\0"] = 1
+    metadata["attributes"]["ome"]["multiscales"][0]["axes"][0]["\ud800"] = 2
+    path.write_text(json.dumps(metadata))
+    assert load(root).levels[0].shape == (32, 32)
+
+
 @pytest.mark.parametrize(
     "mutate",
     [

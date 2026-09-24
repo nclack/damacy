@@ -374,6 +374,19 @@ test_resolution_shape_and_clear(void)
 }
 
 static int
+test_unrelated_keys_are_skipped(void)
+{
+  char text[4096];
+  snprintf(
+    text, sizeof(text), "{\"\\u0000\":1,\"\\ud800\":2,\"\":3,%s", group + 1);
+  struct damacy_ngff_image* image = NULL;
+  EXPECT(ngff_parse_group(text_slice(text), "volume", 0, 3, &image) ==
+         DAMACY_OK);
+  damacy_ngff_image_destroy(image);
+  return 0;
+}
+
+static int
 test_metadata_limits_and_load(void)
 {
   struct damacy_ngff_image* image = NULL;
@@ -488,6 +501,7 @@ main(void)
   RUN(test_invalid_queries);
   RUN(test_collapsed_volume);
   RUN(test_resolution_shape_and_clear);
+  RUN(test_unrelated_keys_are_skipped);
   RUN(test_metadata_limits_and_load);
   return 0;
 }

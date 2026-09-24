@@ -114,13 +114,11 @@ member(struct json_node node, const char* key, struct json_node* out)
   struct json_node name, value;
   int found = 0;
   while ((error = json_object_iter_next(&it, &name, &value)) == JSON_OK) {
-    if (!cslice_len(name.s))
-      continue;
     const char* text = NULL;
     enum damacy_status status = read_string(name, &text);
-    if (status != DAMACY_OK)
-      return status == DAMACY_OOM ? JSON_ERR_OOM : JSON_ERR_PARSE;
-    int matches = !strcmp(key, text);
+    if (status == DAMACY_OOM)
+      return JSON_ERR_OOM;
+    int matches = status == DAMACY_OK && !strcmp(key, text);
     free((void*)text);
     if (matches) {
       if (found)
