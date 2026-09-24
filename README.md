@@ -61,7 +61,8 @@ while allowing the pool to reuse its storage.
 
 See [Pipeline composition](docs/pipeline.md) for the complete component,
 limit, ownership, and build contracts. Build a CPU Python package from source
-with the Linux dependencies `liburing`, `libzstd`, and `libblosc` installed:
+with `libzstd` and `libblosc` installed (plus `liburing` on Linux). On macOS,
+install dependencies with `brew install cmake ninja pkg-config zstd c-blosc`:
 
 ```sh
 pip install . --config-settings=cmake.define.DAMACY_CUDA=OFF
@@ -161,23 +162,27 @@ If you have data that uses one of the unsupported codecs and you'd like it added
 
 ## Runtime dependencies
 
-All builds require Linux async metadata I/O and CPU codec libraries. CUDA
-builds additionally link the NVIDIA driver and nvCOMP. Build with
+CPU builds support Linux and macOS and require the CPU codec libraries.
+Linux uses io_uring for async metadata I/O; macOS uses a POSIX worker pool.
+CUDA builds additionally link the NVIDIA driver and nvCOMP. Build with
 `DAMACY_CUDA=OFF` to import and run on a host without a CUDA driver.
 
 | Library | Used by | How it is loaded |
 |---|---|---|
-| `liburing` | CPU and CUDA: async metadata I/O | normal dynamic loader |
+| `liburing` | Linux async metadata I/O | normal dynamic loader |
 | `libzstd`, `libblosc` | CPU decoding, included in both builds | normal dynamic loader |
 | `libcuda.so.1`, nvCOMP | CUDA builds | driver loader; nvCOMP may be linked statically |
 | `libnuma.so.1` | Optional CUDA placement and host affinity | `dlopen`; absence disables placement |
 | `libcufile.so.0` | Optional CUDA GPUDirect Storage | `dlopen`; requires `DAMACY_ENABLE_GDS=ON` |
 | `libmount.so.1`, `libudev.so.1` | cuFile initialization when GDS is used | dynamic loader |
 
-Metadata reads require a Linux kernel with the io_uring operations damacy uses:
+On Linux, metadata reads require a kernel with the io_uring operations damacy uses:
 `STATX`, `OPENAT2`, `READ`, and `CLOSE`. If the kernel does not advertise
 those operations, pipeline construction fails instead of falling back to a thread
-pool.
+pool. On macOS, `metadata_io_concurrency` sets the number of metadata workers;
+bulk reads use the shared POSIX file backend. NUMA placement and CPU affinity
+are unavailable. CUDA defaults off on macOS and cannot be enabled there.
+See [native build instructions](docs/pipeline.md#build-without-cuda).
 
 GDS notes:
 

@@ -12,6 +12,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 static const char* MINIMAL_ZARR_JSON =
   "{"

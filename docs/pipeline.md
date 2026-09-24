@@ -180,6 +180,14 @@ On Linux, install C/C++ build tools, CMake, Ninja, pkg-config, liburing, zstd,
 and C-Blosc development packages. For example, Ubuntu packages are
 `build-essential cmake ninja-build pkg-config python3-dev liburing-dev libzstd-dev libblosc-dev`.
 
+On macOS, install the native dependencies with Homebrew:
+
+```sh
+brew install cmake ninja pkg-config zstd c-blosc uv
+```
+
+Then build and test on either platform:
+
 ```sh
 cmake --preset cpu
 cmake --build build
@@ -196,10 +204,13 @@ pip install . --config-settings=cmake.define.DAMACY_CUDA=OFF
 ```
 
 The extension has no CUDA or nvCOMP dependency in this configuration.
-`CudaExecutor` reports that CUDA support was not built. CPU builds retain the
-Linux io_uring metadata requirements. CUDA support is enabled by default;
-turning it on builds both executors and requires the CUDA toolkit, nvCOMP, and
-a runtime NVIDIA driver. GDS requires a CUDA build.
+`CudaExecutor` reports that CUDA support was not built. Linux retains its
+io_uring metadata requirements. macOS uses a POSIX metadata worker pool,
+with one worker per `metadata_io_concurrency`, and shared POSIX bulk reads.
+CMake selects `platform.mach.c` and `numa.mach.c`; NUMA placement and CPU
+affinity are unavailable. CUDA defaults off on macOS and cannot be enabled.
+On Linux CUDA defaults on, builds both executors, and requires the CUDA toolkit,
+nvCOMP, and a runtime NVIDIA driver. GDS requires a CUDA build.
 
 ## Future queries
 
