@@ -696,27 +696,28 @@ queries and prepared-plan contract.</p>
 </span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="n">executor</span> <span class="o">=</span> <span class="n">damacy</span><span class="o">.</span><span class="n">CpuExecutor</span><span class="p">(</span>
 </span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>    <span class="n">reader</span><span class="o">=</span><span class="n">chunk_reader</span><span class="p">,</span>
 </span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>    <span class="n">limits</span><span class="o">=</span><span class="n">damacy</span><span class="o">.</span><span class="n">CpuLimits</span><span class="p">(</span>
-</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>        <span class="n">max_memory_bytes</span><span class="o">=</span><span class="mi">1</span> <span class="o">&lt;&lt;</span> <span class="mi">30</span><span class="p">,</span>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>        <span class="n">max_memory_bytes</span><span class="o">=</span><span class="mi">3</span> <span class="o">&lt;&lt;</span> <span class="mi">30</span><span class="p">,</span>
 </span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>        <span class="n">decode_workers</span><span class="o">=</span><span class="mi">8</span><span class="p">,</span>
 </span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>        <span class="n">max_encoded_chunk_bytes</span><span class="o">=</span><span class="mi">4</span> <span class="o">&lt;&lt;</span> <span class="mi">20</span><span class="p">,</span>
 </span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>        <span class="n">max_decoded_chunk_bytes</span><span class="o">=</span><span class="mi">2</span> <span class="o">&lt;&lt;</span> <span class="mi">20</span><span class="p">,</span>
-</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>    <span class="p">),</span>
-</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a><span class="p">)</span>
-</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a><span class="n">output</span> <span class="o">=</span> <span class="n">damacy</span><span class="o">.</span><span class="n">BatchSpec</span><span class="p">(</span><span class="n">samples</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="p">(</span><span class="mi">64</span><span class="p">,</span> <span class="mi">256</span><span class="p">,</span> <span class="mi">256</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">"f32"</span><span class="p">)</span>
-</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a><span class="n">queues</span> <span class="o">=</span> <span class="n">damacy</span><span class="o">.</span><span class="n">QueueLimits</span><span class="p">(</span><span class="n">lookahead_samples</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span> <span class="n">prepared_batches</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
-</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a>
-</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a><span class="k">with</span> <span class="n">damacy</span><span class="o">.</span><span class="n">Pipeline</span><span class="p">(</span>
-</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a>    <span class="n">planner</span><span class="o">=</span><span class="n">planner</span><span class="p">,</span> <span class="n">executor</span><span class="o">=</span><span class="n">executor</span><span class="p">,</span> <span class="n">output</span><span class="o">=</span><span class="n">output</span><span class="p">,</span> <span class="n">queues</span><span class="o">=</span><span class="n">queues</span>
-</span><span id="__span-0-33"><a id="__codelineno-0-33" name="__codelineno-0-33" href="#__codelineno-0-33"></a><span class="p">)</span> <span class="k">as</span> <span class="n">pipeline</span><span class="p">:</span>
-</span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34" href="#__codelineno-0-34"></a>    <span class="n">pipeline</span><span class="o">.</span><span class="n">push</span><span class="p">([</span>
-</span><span id="__span-0-35"><a id="__codelineno-0-35" name="__codelineno-0-35" href="#__codelineno-0-35"></a>        <span class="n">damacy</span><span class="o">.</span><span class="n">Sample</span><span class="p">(</span><span class="n">uri</span><span class="o">=</span><span class="n">uri</span><span class="p">,</span> <span class="n">aabb</span><span class="o">=</span><span class="p">[(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">64</span><span class="p">),</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">256</span><span class="p">),</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">256</span><span class="p">)])</span>
-</span><span id="__span-0-36"><a id="__codelineno-0-36" name="__codelineno-0-36" href="#__codelineno-0-36"></a>        <span class="k">for</span> <span class="n">uri</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">"/data/image-1.zarr/0"</span><span class="p">,</span> <span class="s2">"/data/image-2.zarr/0"</span><span class="p">]</span>
-</span><span id="__span-0-37"><a id="__codelineno-0-37" name="__codelineno-0-37" href="#__codelineno-0-37"></a>    <span class="p">])</span>
-</span><span id="__span-0-38"><a id="__codelineno-0-38" name="__codelineno-0-38" href="#__codelineno-0-38"></a>    <span class="k">with</span> <span class="n">pipeline</span><span class="o">.</span><span class="n">pop</span><span class="p">()</span> <span class="k">as</span> <span class="n">batch</span><span class="p">:</span>
-</span><span id="__span-0-39"><a id="__codelineno-0-39" name="__codelineno-0-39" href="#__codelineno-0-39"></a>        <span class="n">array</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">from_dlpack</span><span class="p">(</span><span class="n">batch</span><span class="p">)</span>
-</span><span id="__span-0-40"><a id="__codelineno-0-40" name="__codelineno-0-40" href="#__codelineno-0-40"></a>        <span class="k">assert</span> <span class="n">array</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">256</span><span class="p">,</span> <span class="mi">256</span><span class="p">)</span>
-</span><span id="__span-0-41"><a id="__codelineno-0-41" name="__codelineno-0-41" href="#__codelineno-0-41"></a>        <span class="k">assert</span> <span class="n">batch</span><span class="o">.</span><span class="n">info</span><span class="o">.</span><span class="n">device_type</span> <span class="o">==</span> <span class="n">damacy</span><span class="o">.</span><span class="n">DeviceType</span><span class="o">.</span><span class="n">CPU</span>
-</span><span id="__span-0-42"><a id="__codelineno-0-42" name="__codelineno-0-42" href="#__codelineno-0-42"></a>        <span class="k">del</span> <span class="n">array</span>
+</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>        <span class="n">chunks_per_input_buffer</span><span class="o">=</span><span class="mi">256</span><span class="p">,</span>
+</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a>    <span class="p">),</span>
+</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a><span class="p">)</span>
+</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a><span class="n">output</span> <span class="o">=</span> <span class="n">damacy</span><span class="o">.</span><span class="n">BatchSpec</span><span class="p">(</span><span class="n">samples</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="p">(</span><span class="mi">64</span><span class="p">,</span> <span class="mi">256</span><span class="p">,</span> <span class="mi">256</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">"f32"</span><span class="p">)</span>
+</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a><span class="n">queues</span> <span class="o">=</span> <span class="n">damacy</span><span class="o">.</span><span class="n">QueueLimits</span><span class="p">(</span><span class="n">lookahead_samples</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span> <span class="n">prepared_batches</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a>
+</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a><span class="k">with</span> <span class="n">damacy</span><span class="o">.</span><span class="n">Pipeline</span><span class="p">(</span>
+</span><span id="__span-0-33"><a id="__codelineno-0-33" name="__codelineno-0-33" href="#__codelineno-0-33"></a>    <span class="n">planner</span><span class="o">=</span><span class="n">planner</span><span class="p">,</span> <span class="n">executor</span><span class="o">=</span><span class="n">executor</span><span class="p">,</span> <span class="n">output</span><span class="o">=</span><span class="n">output</span><span class="p">,</span> <span class="n">queues</span><span class="o">=</span><span class="n">queues</span>
+</span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34" href="#__codelineno-0-34"></a><span class="p">)</span> <span class="k">as</span> <span class="n">pipeline</span><span class="p">:</span>
+</span><span id="__span-0-35"><a id="__codelineno-0-35" name="__codelineno-0-35" href="#__codelineno-0-35"></a>    <span class="n">pipeline</span><span class="o">.</span><span class="n">push</span><span class="p">([</span>
+</span><span id="__span-0-36"><a id="__codelineno-0-36" name="__codelineno-0-36" href="#__codelineno-0-36"></a>        <span class="n">damacy</span><span class="o">.</span><span class="n">Sample</span><span class="p">(</span><span class="n">uri</span><span class="o">=</span><span class="n">uri</span><span class="p">,</span> <span class="n">aabb</span><span class="o">=</span><span class="p">[(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">64</span><span class="p">),</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">256</span><span class="p">),</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">256</span><span class="p">)])</span>
+</span><span id="__span-0-37"><a id="__codelineno-0-37" name="__codelineno-0-37" href="#__codelineno-0-37"></a>        <span class="k">for</span> <span class="n">uri</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">"/data/image-1.zarr/0"</span><span class="p">,</span> <span class="s2">"/data/image-2.zarr/0"</span><span class="p">]</span>
+</span><span id="__span-0-38"><a id="__codelineno-0-38" name="__codelineno-0-38" href="#__codelineno-0-38"></a>    <span class="p">])</span>
+</span><span id="__span-0-39"><a id="__codelineno-0-39" name="__codelineno-0-39" href="#__codelineno-0-39"></a>    <span class="k">with</span> <span class="n">pipeline</span><span class="o">.</span><span class="n">pop</span><span class="p">()</span> <span class="k">as</span> <span class="n">batch</span><span class="p">:</span>
+</span><span id="__span-0-40"><a id="__codelineno-0-40" name="__codelineno-0-40" href="#__codelineno-0-40"></a>        <span class="n">array</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">from_dlpack</span><span class="p">(</span><span class="n">batch</span><span class="p">)</span>
+</span><span id="__span-0-41"><a id="__codelineno-0-41" name="__codelineno-0-41" href="#__codelineno-0-41"></a>        <span class="k">assert</span> <span class="n">array</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">256</span><span class="p">,</span> <span class="mi">256</span><span class="p">)</span>
+</span><span id="__span-0-42"><a id="__codelineno-0-42" name="__codelineno-0-42" href="#__codelineno-0-42"></a>        <span class="k">assert</span> <span class="n">batch</span><span class="o">.</span><span class="n">info</span><span class="o">.</span><span class="n">device_type</span> <span class="o">==</span> <span class="n">damacy</span><span class="o">.</span><span class="n">DeviceType</span><span class="o">.</span><span class="n">CPU</span>
+</span><span id="__span-0-43"><a id="__codelineno-0-43" name="__codelineno-0-43" href="#__codelineno-0-43"></a>        <span class="k">del</span> <span class="n">array</span>
 </span></code></pre></div>
 <p>The paths must name little-endian numeric Zarr v3 <strong>arrays</strong>. An NGFF group is
 not resolved to a level automatically. The examples assume decoded chunks no larger than 2 MiB.</p>
@@ -796,11 +797,15 @@ capacities. Defaults come from the Python value objects.</p>
 </tr>
 <tr>
 <td><code>CpuLimits.max_memory_bytes</code></td>
-<td>CPU executor's input, decoded, codec-workspace, and two output buffers.</td>
+<td>CPU executor's buffers, codec workspace, active read plans, and temporary read-planning scratch.</td>
 </tr>
 <tr>
 <td><code>CpuLimits.decode_workers</code></td>
 <td>Total decoding/assembly workers, including the calling scheduler thread.</td>
+</tr>
+<tr>
+<td><code>CpuLimits.chunks_per_input_buffer</code></td>
+<td>Chunks each of the two encoded-input buffers holds; from <code>decode_workers</code> to 16384.</td>
 </tr>
 <tr>
 <td><code>FileReader.workers</code></td>
@@ -822,10 +827,31 @@ The metadata cache requires at least <code>floor</code> array entries and
 cover pending samples and the batch being prepared. Queued plans own their
 metadata and do not pin cache entries. The legacy <code>Config</code> adapter retains its
 older, stricter cache validation.</p>
-<p>CPU memory admission includes a conservative allowance for Blosc scratch
-storage. <code>Stats.host_bytes_committed</code> reports that reservation, which can exceed
-the bytes actually touched. It excludes metadata caches, prepared plans, reader
-queues, thread stacks, and allocator overhead: it is not a process RSS limit.
+<p>The CPU executor merges adjacent or overlapping encoded ranges within each
+shard, then interleaves the reads across shards. It decodes each unique source
+chunk once per batch, including when several output samples use that chunk.
+Each of its two encoded-input buffers holds <code>chunks_per_input_buffer</code> chunks
+(default 256). A merged read contains at most that many chunks, so reads merge
+even with one decode worker; submission also respects the reader limit.
+Decoder workspaces remain per worker.</p>
+<p>The two input buffers reserve
+<code>2 * chunks_per_input_buffer * max_encoded_chunk_bytes</code> bytes, plus per-chunk
+bookkeeping. With the defaults, 256 chunks and a 4 MiB encoded-chunk bound,
+that is 2 GiB before decoder workspaces and output buffers. Set the bound to
+match the largest encoded chunk expected, and include this reserve in
+<code>max_memory_bytes</code>. If the budget is too small, starting the pipeline reports
+<code>BUDGET</code> and logs how many bytes the input buffers, decoder workspaces, and
+output buffers need.</p>
+<p>CPU memory admission includes active read plans, temporary planning scratch,
+and a conservative allowance for Blosc scratch storage.
+<code>Stats.host_bytes_committed</code> reports current buffers, read plans, and codec
+reservations, which can exceed the bytes actually touched. Temporary planning
+scratch is checked against the cap and released before submission returns.
+If an active batch's read plan temporarily prevents admission, submission
+retries after that batch completes. A plan that cannot fit by itself reports
+<code>BUDGET</code>.
+The cap excludes metadata caches, prepared plans, reader queues, thread stacks,
+and allocator overhead: it is not a process RSS limit.
 Queued plan storage is bounded separately by
 <code>prepared_batches * max_plan_bytes</code>, with up to two accepted plans and one plan
 being built in addition. Retaining results across repeated pipeline restarts
@@ -867,30 +893,21 @@ Operation tables and prepared-plan records are private implementation APIs.</p>
 <p>On Linux, install C/C++ build tools, CMake, Ninja, pkg-config, liburing, zstd,
 and C-Blosc development packages. For example, Ubuntu packages are
 <code>build-essential cmake ninja-build pkg-config python3-dev liburing-dev libzstd-dev libblosc-dev</code>.</p>
-<p>On macOS, install the native dependencies with Homebrew:</p>
-<div class="language-sh highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>brew<span class="w"> </span>install<span class="w"> </span>cmake<span class="w"> </span>ninja<span class="w"> </span>pkg-config<span class="w"> </span>zstd<span class="w"> </span>c-blosc<span class="w"> </span>uv
-</span></code></pre></div>
-<p>Then build and test on either platform:</p>
-<div class="language-sh highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>cmake<span class="w"> </span>--preset<span class="w"> </span>cpu
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>cmake<span class="w"> </span>--build<span class="w"> </span>build
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>ctest<span class="w"> </span>--test-dir<span class="w"> </span>build<span class="w"> </span>--output-on-failure
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>cmake<span class="w"> </span>--preset<span class="w"> </span>cpu
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>cmake<span class="w"> </span>--build<span class="w"> </span>build
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>ctest<span class="w"> </span>--test-dir<span class="w"> </span>build<span class="w"> </span>--output-on-failure
 </span></code></pre></div>
 <p>The examples use NumPy (<code>pip install numpy</code>). The fixture generator uses <code>uv</code>.
 Enable <code>DAMACY_PYTHON=ON</code> and provide a Python 3.11+ interpreter with pytest,
 pytest-cov, and NumPy to include Python tests.
 Build a CPU wheel with:</p>
-<div class="language-sh highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>pip<span class="w"> </span>install<span class="w"> </span>.<span class="w"> </span>--config-settings<span class="o">=</span>cmake.define.DAMACY_CUDA<span class="o">=</span>OFF
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>pip<span class="w"> </span>install<span class="w"> </span>.<span class="w"> </span>--config-settings<span class="o">=</span>cmake.define.DAMACY_CUDA<span class="o">=</span>OFF
 </span></code></pre></div>
 <p>The extension has no CUDA or nvCOMP dependency in this configuration.
-<code>CudaExecutor</code> reports that CUDA support was not built. Linux retains its
-io_uring metadata requirements. macOS uses a POSIX metadata worker pool,
-with one worker per <code>metadata_io_concurrency</code>, and shared POSIX bulk reads.
-NUMA placement and CPU affinity are unavailable. CUDA defaults off on macOS
-and cannot be enabled. On either platform, <code>FileReader(workers=...)</code> and the
-legacy <code>Config.n_io_threads</code> cannot exceed the online CPU count; larger values
-raise <code>InvalidArgument</code>.
-On Linux CUDA defaults on, builds both executors, and requires the CUDA toolkit,
-nvCOMP, and a runtime NVIDIA driver. GDS requires a CUDA build.</p>
+<code>CudaExecutor</code> reports that CUDA support was not built. CPU builds retain the
+Linux io_uring metadata requirements. CUDA support is enabled by default;
+turning it on builds both executors and requires the CUDA toolkit, nvCOMP, and
+a runtime NVIDIA driver. GDS requires a CUDA build.</p>
 <h2 id="future-queries">Future queries<a class="headerlink" href="#future-queries" title="Permanent link">&para;</a></h2>
 <p>The first milestone implements rectangular copy/cast queries. Index-array
 queries can add ordered selections and repeated indices without a separate

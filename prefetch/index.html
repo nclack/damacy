@@ -808,11 +808,7 @@ sets the metadata request-concurrency budget; the ring allocates enough
 entries internally for multi-step requests and driver wakeups. At startup the
 driver requires kernel support for <code>IORING_OP_STATX</code>, <code>IORING_OP_OPENAT2</code>,
 <code>IORING_OP_READ</code>, and <code>IORING_OP_CLOSE</code>; there is no thread-pool fallback in
-the Linux build.</p>
-<p>On macOS, CMake selects a POSIX worker-pool backend instead of io_uring.
-<code>metadata_io_concurrency</code> is the worker count; each worker completes one
-stat/open/read/close request at a time. Shutdown drains accepted requests.
-Operation histograms measure syscall duration on macOS, excluding queue wait.</p>
+the current build.</p>
 <p>The default metadata concurrency is 32. Treat much deeper values as storage
 tuning: they are useful when metadata operations have real latency, but each
 active read can hold an open file descriptor and allocate its destination
