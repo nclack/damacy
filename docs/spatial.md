@@ -57,7 +57,7 @@ planner = damacy.ChunkPlanner(
 )
 executor = damacy.CpuExecutor(
     reader=damacy.FileReader(workers=4),
-    limits=damacy.CpuLimits(max_memory_bytes=256 << 20),
+    limits=damacy.CpuLimits(max_memory_bytes=3 << 30),
 )
 with damacy.Pipeline(
     planner=planner,
