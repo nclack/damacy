@@ -13,7 +13,7 @@
         <link rel="canonical" href="https://nclack.github.io/damacy/budget/">
       
       
-        <link rel="prev" href="../spatial/">
+        <link rel="prev" href="../pipeline/">
       
       
         <link rel="next" href="../distributed/">
@@ -297,33 +297,6 @@
     
   
     Pipeline composition
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../spatial/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Spatial queries
   
 
     
@@ -796,7 +769,7 @@ configuration — then round up generously:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pool_reservation       = 2 × samples_per_batch × prod(sample_shape) × dtype_bytes
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>one_chunk_per_wave     ≈ max_chunk_uncompressed_bytes × 2   # compressed + decoded buffers, one chunk
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>both_waves_one_chunk   ≈ 2 × one_chunk_per_wave             # two GPU waves resident at once
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>index_reservation      = 2 × min(max_index_bytes, 8 × samples_per_batch × sum(sample_shape))
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>index_reservation      = 2 × (8 × samples_per_batch × sum(sample_shape) + 16 × 16384 × rank)   # 0 if max_index_bytes = 0
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>budget_floor           ≈ pool_reservation + index_reservation + both_waves_one_chunk + scratch_slack
 </span></code></pre></div>
 <p>The <code>2 ×</code> in <code>pool_reservation</code> is output-side double-buffering.
@@ -886,13 +859,17 @@ budget.</p>
 </tr>
 <tr>
 <td>Indexed-query data</td>
-<td>Source/output index pairs for two batch slots</td>
-<td>Sum of indexed-axis lengths, bounded by <code>max_index_bytes</code> per slot</td>
+<td>Source/output index pairs and per-chunk selection ranges for two batch slots</td>
+<td>Output shape and rank; none when <code>max_index_bytes=0</code></td>
 </tr>
 </tbody>
 </table>
-<p>Index storage is reserved at construction, using the output shape and the
-configured cap. Setting <code>max_index_bytes=0</code> disables indexed CUDA queries.
+<p>Index storage is reserved at construction from the output shape. A nonzero
+<code>max_index_bytes</code> below <code>8 × samples_per_batch × sum(sample_shape)</code> raises
+<code>BudgetExceeded</code> from <code>Pipeline(cfg)</code>. Each slot also reserves 16 bytes per
+axis for up to 16384 chunks, to record which part of each chunk an indexed
+query selects. Setting <code>max_index_bytes=0</code> drops both reservations; <code>push</code>
+then rejects indexed queries.
 Decoder scratch and fanout storage depend on the data. damacy cannot know the sub-stream count of
 a chunk until it inspects the chunk's header, so damacy picks
 per-wave geometry such that even after adaptive growth to the

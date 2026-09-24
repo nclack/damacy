@@ -16,7 +16,7 @@
         <link rel="prev" href="..">
       
       
-        <link rel="next" href="../spatial/">
+        <link rel="next" href="../budget/">
       
       
         
@@ -415,10 +415,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#spatial-queries" class="md-nav__link">
+  <a href="#future-queries" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Spatial queries
+        Future queries
       
     </span>
   </a>
@@ -429,33 +429,6 @@
   
 </nav>
       
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../spatial/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Spatial queries
-  
-
-    
-  </span>
-  
-  
-
-      </a>
     </li>
   
 
@@ -688,10 +661,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#spatial-queries" class="md-nav__link">
+  <a href="#future-queries" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Spatial queries
+        Future queries
       
     </span>
   </a>
@@ -767,10 +740,8 @@ and indexed queries and prepared-plan contract.</p>
 </span><span id="__span-0-41"><a id="__codelineno-0-41" name="__codelineno-0-41" href="#__codelineno-0-41"></a>        <span class="k">assert</span> <span class="n">batch</span><span class="o">.</span><span class="n">info</span><span class="o">.</span><span class="n">device_type</span> <span class="o">==</span> <span class="n">damacy</span><span class="o">.</span><span class="n">DeviceType</span><span class="o">.</span><span class="n">CPU</span>
 </span><span id="__span-0-42"><a id="__codelineno-0-42" name="__codelineno-0-42" href="#__codelineno-0-42"></a>        <span class="k">del</span> <span class="n">array</span>
 </span></code></pre></div>
-<p>The paths in <code>Sample</code> and <code>IndexQuery</code> must name little-endian numeric Zarr v3
-<strong>arrays</strong>. Use an <a href="../spatial/">NGFF image</a> to select a
-level from a group before pushing an aligned crop. The examples assume decoded
-chunks no larger than 2 MiB.</p>
+<p>The paths must name little-endian numeric Zarr v3 <strong>arrays</strong>. An NGFF group is
+not resolved to a level automatically. The examples assume decoded chunks no larger than 2 MiB.</p>
 <p><code>FileMetadataReader</code> supplies small asynchronous metadata reads. <code>ZarrMetadata</code>
 supplies Zarr interpretation and cache capacities; <code>MetadataCache</code> is a capacity
 configuration. The planner fetches array descriptions and shard indexes on
@@ -860,8 +831,8 @@ derives the bounding AABB from these selections.</p>
 unconsumed suffix remains caller-owned and can be retried.</p>
 <h2 id="limits-and-backpressure">Limits and backpressure<a class="headerlink" href="#limits-and-backpressure" title="Permanent link">&para;</a></h2>
 <p>Sizes are bytes, with positive explicit limits. <code>CudaLimits.max_index_bytes</code>
-also accepts zero to disable indexed CUDA queries. Defaults come from the
-Python value objects.</p>
+also accepts zero, which rejects indexed CUDA queries at push. Defaults come
+from the Python value objects.</p>
 <table>
 <thead>
 <tr>
@@ -924,16 +895,20 @@ Python value objects.</p>
 </tr>
 <tr>
 <td><code>CudaLimits.max_index_bytes</code></td>
-<td>Device index storage per batch: eight bytes per index across all indexed axes and samples. Default 64 MiB.</td>
+<td>Device index storage per batch: eight bytes per index across all indexed axes and samples. Zero, or at least <code>8 * samples * sum(shape)</code>. Default 64 MiB.</td>
 </tr>
 </tbody>
 </table>
 <p>CUDA reserves index storage for its two execution slots within
-<code>max_gpu_memory_bytes</code>. Each slot allocates the smaller of <code>max_index_bytes</code>
-and the maximum index data possible for the configured output shape. An
-identical amount of pinned host staging is allocated. A query exceeding the
-index capacity raises <code>BudgetExceeded</code>. <code>Config.max_index_bytes</code> provides the
-same setting through the CUDA convenience adapter.</p>
+<code>max_gpu_memory_bytes</code>. A nonzero <code>max_index_bytes</code> must hold every index a
+batch can contain, <code>8 * samples * sum(shape)</code> bytes, so an accepted query never
+runs out of room. A smaller value raises <code>BudgetExceeded</code> from <code>Pipeline</code>. Each
+slot allocates that amount, plus 16 bytes per axis for up to 16384 chunks to
+record each chunk's selected range. An identical amount of pinned host staging
+is allocated. With <code>max_index_bytes=0</code>, <code>push</code> raises <code>BudgetExceeded</code> for an
+<code>IndexQuery</code>; the query is not consumed and the pipeline keeps running.
+<code>Config.max_index_bytes</code> provides the same setting through the CUDA
+convenience adapter.</p>
 <p>For injected pipelines, define <code>floor = queues.lookahead_samples + output.samples</code>.
 The metadata cache requires at least <code>floor</code> array entries and
 <code>floor * plan_limits.max_shards_per_sample</code> shard-index entries. These floors
@@ -1000,13 +975,16 @@ Build a CPU wheel with:</p>
 Linux io_uring metadata requirements. CUDA support is enabled by default;
 turning it on builds both executors and requires the CUDA toolkit, nvCOMP, and
 a runtime NVIDIA driver. GDS requires a CUDA build.</p>
-<h2 id="spatial-queries">Spatial queries<a class="headerlink" href="#spatial-queries" title="Permanent link">&para;</a></h2>
-<p><a href="../spatial/">Spatial queries</a> resolve a fixed output grid, transform, and sampler
-against loaded NGFF metadata. The resolver chooses a source level before chunk
-planning. Aligned crops can use either executor now. Requests that still need
-resampling expose their geometry and bounds, but fail when converted or pushed
-for decoding. Future resampling operations will carry these dependencies across
-source chunks in the prepared plan.</p>
+<h2 id="future-queries">Future queries<a class="headerlink" href="#future-queries" title="Permanent link">&para;</a></h2>
+<p>Rectangular and indexed queries copy or gather existing voxels. Spatial
+queries will describe a fixed output tensor, a transform
+from output coordinates to source space, and sampler settings including
+interpolation, antialiasing, and boundary handling.</p>
+<p>For NGFF images, resolving a spatial query will choose an appropriate source
+level from the requested sampling scale before enumerating chunks. The plan
+will record the chosen array and transform. Resampling also needs interpolation
+halos and dependencies across chunks. These are later planner and executor
+operations; they are not implemented by the current box query.</p>
 
 
 
