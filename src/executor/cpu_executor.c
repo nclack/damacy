@@ -128,7 +128,9 @@ cpu_read_plan_build(const struct prepared_plan* plan,
                                          .file_offset = chunk->offset,
                                          .nbytes = chunk->encoded_bytes };
   }
-  uint32_t read_chunks = config->chunks_per_input_buffer;
+  uint32_t read_chunks = config->decode_workers;
+  if (read_chunks > config->chunks_per_input_buffer)
+    read_chunks = config->chunks_per_input_buffer;
   uint32_t* read_index = indices + 2 * (size_t)count;
   uint32_t* offset_in_read = indices + 3 * (size_t)count;
   reads.count = count;

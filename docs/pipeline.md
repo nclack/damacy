@@ -129,9 +129,10 @@ The CPU executor merges adjacent or overlapping encoded ranges within each
 shard, then interleaves the reads across shards. It decodes each unique source
 chunk once per batch, including when several output samples use that chunk.
 Each of its two encoded-input buffers holds `chunks_per_input_buffer` chunks
-(default 256). A merged read contains at most that many chunks, so reads merge
-even with one decode worker; submission also respects the reader limit.
-Decoder workspaces remain per worker.
+(default 256). A merged read contains at most
+`min(decode_workers, chunks_per_input_buffer)` chunks, so one buffer can hold
+several reads at once; with one decode worker, reads do not merge. Submission
+also respects the reader limit. Decoder workspaces remain per worker.
 
 The two input buffers reserve
 `2 * chunks_per_input_buffer * max_encoded_chunk_bytes` bytes, plus per-chunk

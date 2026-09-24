@@ -656,43 +656,44 @@ test_read_buffer_capacity(void)
 static int
 test_merged_read_limit(void)
 {
-  const uint32_t buffer_chunks[] = { 64, 256 };
+  const uint32_t workers[] = { 1, 2, 32 };
+  const uint32_t buffer_chunks = 256;
   struct test_chunk chunks[513];
   for (unsigned i = 0; i < 513; ++i)
     chunks[i] = (struct test_chunk){ .shard = i % 3,
                                      .offset = (170 - i / 3) * CHUNK_BYTES };
-  for (unsigned mode = 0; mode < 2; ++mode) {
-    uint32_t limit = buffer_chunks[mode];
+  for (unsigned mode = 0; mode < 3; ++mode) {
+    uint32_t limit = workers[mode];
     struct test_store store;
     store_init(&store, 512);
     struct damacy_reader reader = { .store = &store.base,
                                     .max_inflight_reads = 512 };
     struct damacy_stats stats = { 0 };
     struct damacy_executor* executor = NULL;
-    EXPECT(
-      start_executor(&reader, 1, limit, 513, 32 << 20, &stats, &executor) == 0);
+    EXPECT(start_executor(
+             &reader, limit, buffer_chunks, 513, 32 << 20, &stats, &executor) ==
+           0);
     struct prepared_plan* plan = make_plan(chunks, 513);
     EXPECT(plan);
     EXPECT(executor->ops->submit(executor, plan, 0) == DAMACY_OK);
     struct damacy_batch* batch = NULL;
     EXPECT(finish_batch(executor, &batch) == 0);
     EXPECT(check_output(batch, &store, chunks, 513) == 0);
+    EXPECT(stats.chunks_dispatched == 513 && stats.waves_emitted == 3);
+    EXPECT(store.n_events == 3);
+    EXPECT(store.events[0].count == buffer_chunks / limit);
     uint32_t reads_per_shard = (171 + limit - 1) / limit;
     EXPECT(store.n_reads == 3 * reads_per_shard);
-    EXPECT(store.n_events == store.n_reads);
     EXPECT(stats.reads_issued == store.n_reads);
-    EXPECT(stats.waves_emitted == store.n_reads);
     for (unsigned i = 0; i < store.n_reads; ++i) {
       uint32_t first = (i / 3) * limit;
       uint32_t count = 171 - first;
       if (count > limit)
         count = limit;
-      EXPECT(store.events[i].count == 1);
       EXPECT(store.records[i].shard == i % 3);
       EXPECT(store.records[i].offset == (uint64_t)first * CHUNK_BYTES);
       EXPECT(store.records[i].bytes == count * CHUNK_BYTES);
     }
-    EXPECT(stats.chunks_dispatched == 513);
     EXPECT(stats.io.input_bytes == 513 * CHUNK_BYTES);
     damacy_batch_release(batch);
     damacy_executor_destroy(executor);
@@ -701,21 +702,26 @@ test_merged_read_limit(void)
 }
 
 static int
-test_read_plan_large_buffers(void)
+test_read_plan_many_workers(void)
 {
-  const uint32_t buffer_chunks[] = { 256, 257, 1024 };
+  const struct
+  {
+    uint32_t workers;
+    uint32_t buffer_chunks;
+  } modes[] = { { 256, 256 }, { 257, 1024 }, { 1024, 1024 } };
   struct test_chunk chunks[513];
   for (unsigned i = 0; i < 513; ++i)
     chunks[i] = (struct test_chunk){ .offset = (512 - i) * CHUNK_BYTES };
   struct prepared_plan* plan = make_plan(chunks, 513);
   EXPECT(plan);
   for (unsigned mode = 0; mode < 3; ++mode) {
-    uint32_t limit = buffer_chunks[mode];
-    struct damacy_cpu_config config = { .decode_workers = 1,
+    uint32_t limit = modes[mode].workers;
+    struct damacy_cpu_config config = { .decode_workers = modes[mode].workers,
                                         .max_encoded_chunk_bytes = CHUNK_BYTES,
                                         .max_decoded_chunk_bytes = CHUNK_BYTES,
                                         .max_memory_bytes = 8 << 20,
-                                        .chunks_per_input_buffer = limit };
+                                        .chunks_per_input_buffer =
+                                          modes[mode].buffer_chunks };
     struct cpu_read_plan reads = { 0 };
     EXPECT(cpu_read_plan_build(plan, &config, 8 << 20, 0, &reads) == DAMACY_OK);
     EXPECT(reads.count == (513 + limit - 1) / limit);
@@ -851,7 +857,7 @@ main(void)
   RUN(test_read_errors_and_shutdown);
   RUN(test_read_buffer_capacity);
   RUN(test_merged_read_limit);
-  RUN(test_read_plan_large_buffers);
+  RUN(test_read_plan_many_workers);
   RUN(test_input_memory_budget);
   RUN(test_input_buffer_validation);
   return 0;
