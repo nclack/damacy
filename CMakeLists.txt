@@ -15,14 +15,25 @@ include(Warnings)
 include(Helpers)
 include(Fuzz) # declares DAMACY_FUZZ and applies fuzz-mode flags
 
-option(DAMACY_CUDA "Build the CUDA executor" ON)
+# CUDA is unavailable on current macOS toolchains; keep Linux's default.
+if(APPLE)
+    set(DAMACY_CUDA_DEFAULT OFF)
+else()
+    set(DAMACY_CUDA_DEFAULT ON)
+endif()
+option(DAMACY_CUDA "Build the CUDA executor" ${DAMACY_CUDA_DEFAULT})
 if(DAMACY_FUZZ)
     set(DAMACY_CUDA OFF)
+endif()
+if(APPLE AND DAMACY_CUDA)
+    message(FATAL_ERROR "macOS supports the CPU executor; set DAMACY_CUDA=OFF")
 endif()
 
 find_package(Threads REQUIRED)
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(LIBURING REQUIRED IMPORTED_TARGET liburing)
+if(NOT APPLE)
+    pkg_check_modules(LIBURING REQUIRED IMPORTED_TARGET liburing)
+endif()
 
 if(DAMACY_CUDA)
     if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)

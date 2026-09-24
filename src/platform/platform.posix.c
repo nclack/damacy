@@ -22,16 +22,6 @@ platform_page_alignment(void)
   return ps > 0 ? ps : 4096;
 }
 
-size_t
-platform_available_memory(void)
-{
-  long pages = sysconf(_SC_AVPHYS_PAGES);
-  long page_sz = sysconf(_SC_PAGESIZE);
-  if (pages > 0 && page_sz > 0)
-    return (size_t)pages * (size_t)page_sz;
-  return 0;
-}
-
 void*
 platform_aligned_alloc(size_t alignment, size_t size)
 {

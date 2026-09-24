@@ -14,7 +14,6 @@ extern "C"
   size_t platform_page_alignment(void);
   void* platform_aligned_alloc(size_t alignment, size_t size);
   void platform_aligned_free(void* ptr);
-  size_t platform_available_memory(void);
 
   struct platform_clock
   {

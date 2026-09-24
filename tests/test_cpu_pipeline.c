@@ -115,6 +115,18 @@ verify_crop(struct damacy_batch* batch, int offset, int unsigned_bits)
 }
 
 static int
+test_reader_workers_limited_to_cpus(void)
+{
+  uint32_t cpus = (uint32_t)platform_default_thread_count();
+  struct damacy_reader* reader = NULL;
+  EXPECT(damacy_file_reader_create(cpus + 1, 4, &reader) == DAMACY_INVAL);
+  EXPECT(!reader);
+  EXPECT(damacy_file_reader_create(cpus, 4, &reader) == DAMACY_OK);
+  damacy_reader_destroy(reader);
+  return 0;
+}
+
+static int
 test_codecs_and_types(void)
 {
   const char* codecs[] = { "none", "zstd", "blosc-zstd" };
@@ -429,5 +441,6 @@ main(void)
   RUN(test_release_from_other_pipeline);
   RUN(test_retained_outputs_and_shutdown);
   RUN(test_bfloat_rounding_and_fill);
+  RUN(test_reader_workers_limited_to_cpus);
   return 0;
 }

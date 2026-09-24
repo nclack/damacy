@@ -32,7 +32,8 @@ add_src_lib(lru    SOURCES util/lru.c    util/lru.h LINKS log)
 add_src_lib(pool   SOURCES util/pool.c   util/pool.h LINKS log platform)
 add_src_lib(path_intern SOURCES util/path_intern.c util/path_intern.h LINKS hash)
 
-# Platform abstraction (posix-only for now; chucky-style platform-split lives here).
+# Platform abstraction: POSIX sources on Linux and macOS. macOS has no NUMA
+# or CPU affinity controls, so it builds the numa.darwin.c stub instead.
 # platform.posix.c uses dlopen for platform_dl*; numa.posix.c uses libnuma via
 # platform_dl* so a single binary works on hosts with or without libnuma installed.
 add_src_lib(platform
@@ -188,10 +189,19 @@ else()
     target_sources(store PRIVATE store/store_fs_gds.h store/store_fs_gds_stub.c)
 endif()
 
+if(APPLE)
+    set(METADATA_STORE_IMPL store/metadata_store_async.posix.c)
+else()
+    set(METADATA_STORE_IMPL store/metadata_store_async.c)
+endif()
 add_src_lib(metadata_store_async
-    SOURCES store/metadata_store_async.h store/metadata_store_async.c
-    LINKS store log platform PkgConfig::LIBURING
+    SOURCES store/metadata_store_async.h store/metadata_store_async_common.h
+            store/metadata_store_async_common.c ${METADATA_STORE_IMPL}
+    LINKS store log platform
 )
+if(NOT APPLE)
+    target_link_libraries(metadata_store_async PUBLIC PkgConfig::LIBURING)
+endif()
 if(TARGET numa)
     target_link_libraries(metadata_store_async PUBLIC numa)
     target_compile_definitions(

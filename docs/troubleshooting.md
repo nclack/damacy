@@ -17,12 +17,14 @@ the calling thread yet. Two fixes:
 
 ## Pipeline construction fails during metadata I/O setup
 
-The CPU and CUDA metadata paths use io_uring for Zarr metadata and shard indexes. At construction damacy requires kernel support for
+On Linux, the CPU and CUDA metadata paths use io_uring for Zarr metadata and shard indexes. At construction damacy requires kernel support for
 `IORING_OP_STATX`, `IORING_OP_OPENAT2`, `IORING_OP_READ`, and
 `IORING_OP_CLOSE`. If ring creation or the operation probe fails,
 pipeline construction fails without a thread-pool fallback. Check the native log for the exact io_uring failure.
 
-On supported kernels, an unusually high `metadata_io_concurrency` can also
+macOS uses POSIX metadata worker threads and has no io_uring dependency.
+An unusually high `metadata_io_concurrency` can exhaust thread resources on
+macOS. On either platform it can also
 stress process file-descriptor limits because each in-flight metadata read can
 hold an open fd. The default is 64; for much deeper settings, check
 `ulimit -n` and remember to multiply by ranks per node.

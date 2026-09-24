@@ -309,11 +309,151 @@ test_read_file_open_error_completes(void)
   return 0;
 }
 
+static int
+test_empty_and_short_reads(void)
+{
+  char root[128], path[256];
+  EXPECT(make_root(root, sizeof root) == 0);
+  snprintf(path, sizeof path, "%s/payload", root);
+  EXPECT(fixture_write_file(path, "") == 0);
+  struct metadata_store_async* s = metadata_store_async_create(2, NULL, NULL);
+  EXPECT(s);
+
+  struct read_wait empty, zero, short_read;
+  read_wait_init(&empty);
+  read_wait_init(&zero);
+  read_wait_init(&short_read);
+  EXPECT(metadata_store_async_read_file(s, path, read_cb, &empty) == 0);
+  EXPECT(metadata_store_async_read(s, path, 17, 0, read_cb, &zero) == 0);
+  read_wait_block(&empty);
+  read_wait_block(&zero);
+  EXPECT(empty.status == DAMACY_OK && empty.len == 0 && !empty.data);
+  EXPECT(zero.status == DAMACY_OK && zero.len == 0 && !zero.data);
+  struct metadata_store_async_backend_stats stats;
+  metadata_store_async_backend_stats_get(s, &stats);
+  EXPECT(stats.read_jobs == 0 && stats.read_active == 0);
+
+  EXPECT(fixture_write_file(path, "abc") == 0);
+  EXPECT(metadata_store_async_read(s, path, 1, 3, read_cb, &short_read) == 0);
+  read_wait_block(&short_read);
+  EXPECT(short_read.status == DAMACY_IO);
+  EXPECT(short_read.len == 0 && !short_read.data);
+  metadata_store_async_destroy(s);
+  read_wait_done(&empty);
+  read_wait_done(&zero);
+  read_wait_done(&short_read);
+  fixture_rm_tree(root);
+  return 0;
+}
+
+static int
+test_missing_stat_and_not_directory(void)
+{
+  char root[128], path[256], missing[300];
+  EXPECT(make_root(root, sizeof root) == 0);
+  snprintf(path, sizeof path, "%s/payload", root);
+  EXPECT(fixture_write_file(path, "abc") == 0);
+  struct metadata_store_async* s = metadata_store_async_create(2, NULL, NULL);
+  EXPECT(s);
+  for (int not_directory = 0; not_directory < 2; ++not_directory) {
+    snprintf(
+      missing, sizeof missing, "%s/missing", not_directory ? path : root);
+    struct read_wait r;
+    struct stat_wait st;
+    read_wait_init(&r);
+    stat_wait_init(&st);
+    EXPECT(metadata_store_async_read_file(s, missing, read_cb, &r) == 0);
+    EXPECT(metadata_store_async_stat(s, missing, stat_cb, &st) == 0);
+    read_wait_block(&r);
+    stat_wait_block(&st);
+    EXPECT(r.status == DAMACY_NOTFOUND && !r.data && r.len == 0);
+    EXPECT(st.status == STORE_STAT_NOT_FOUND && st.size == 0);
+    read_wait_done(&r);
+    stat_wait_done(&st);
+  }
+  metadata_store_async_destroy(s);
+  fixture_rm_tree(root);
+  return 0;
+}
+
+struct chain_read
+{
+  struct metadata_store_async* store;
+  const char* path;
+  struct read_wait first, next;
+  int submit_failed;
+};
+
+static void
+chain_read_cb(void* user, enum damacy_status status, void* data, size_t len)
+{
+  struct chain_read* chain = user;
+  chain->submit_failed = metadata_store_async_read(
+    chain->store, chain->path, 1, 2, read_cb, &chain->next);
+  read_cb(&chain->first, status, data, len);
+}
+
+static int
+test_callback_can_submit(void)
+{
+  char root[128], path[256];
+  EXPECT(make_root(root, sizeof root) == 0);
+  snprintf(path, sizeof path, "%s/payload", root);
+  EXPECT(fixture_write_file(path, "abc") == 0);
+  struct metadata_store_async* s = metadata_store_async_create(1, NULL, NULL);
+  EXPECT(s);
+  struct chain_read chain = { .store = s, .path = path };
+  read_wait_init(&chain.first);
+  read_wait_init(&chain.next);
+  EXPECT(metadata_store_async_read_file(s, path, chain_read_cb, &chain) == 0);
+  EXPECT(read_wait_block_ms(&chain.first, 2000));
+  EXPECT(!chain.submit_failed);
+  EXPECT(read_wait_block_ms(&chain.next, 2000));
+  EXPECT(chain.first.status == DAMACY_OK && chain.first.len == 3);
+  EXPECT(chain.next.status == DAMACY_OK && chain.next.len == 2);
+  EXPECT(!memcmp(chain.next.data, "bc", 2));
+  metadata_store_async_destroy(s);
+  read_wait_done(&chain.first);
+  read_wait_done(&chain.next);
+  fixture_rm_tree(root);
+  return 0;
+}
+
+static int
+test_destroy_drains_requests(void)
+{
+  char root[128], path[256];
+  EXPECT(make_root(root, sizeof root) == 0);
+  snprintf(path, sizeof path, "%s/payload", root);
+  EXPECT(fixture_write_file(path, "abc") == 0);
+  struct metadata_store_async* s = metadata_store_async_create(
+    2, NULL, &(struct damacy_latency_model){ .baseline_ns = 1000000 });
+  EXPECT(s);
+  struct read_wait pending[32];
+  for (size_t i = 0; i < sizeof pending / sizeof *pending; ++i) {
+    read_wait_init(&pending[i]);
+    EXPECT(metadata_store_async_read_file(s, path, read_cb, &pending[i]) == 0);
+  }
+  metadata_store_async_destroy(s);
+  for (size_t i = 0; i < sizeof pending / sizeof *pending; ++i) {
+    EXPECT(pending[i].done);
+    EXPECT(pending[i].status == DAMACY_OK && pending[i].len == 3);
+    EXPECT(!memcmp(pending[i].data, "abc", 3));
+    read_wait_done(&pending[i]);
+  }
+  fixture_rm_tree(root);
+  return 0;
+}
+
 int
 main(void)
 {
   RUN(test_read_stat_and_stats);
   RUN(test_op_latency_measured);
   RUN(test_read_file_open_error_completes);
+  RUN(test_empty_and_short_reads);
+  RUN(test_missing_stat_and_not_directory);
+  RUN(test_callback_can_submit);
+  RUN(test_destroy_drains_requests);
   return 0;
 }

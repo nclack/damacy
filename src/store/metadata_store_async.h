@@ -14,6 +14,11 @@ extern "C"
   struct metadata_store_async;
   struct numa_resolved;
 
+  // Successful submissions invoke the callback exactly once, on a backend
+  // thread. Callbacks may overlap and may submit more work. The read callback
+  // owns data and must free it (NULL for a successful empty read).
+  // Callers must stop submitting before destroy; destroy drains all accepted
+  // requests and joins callbacks. Do not destroy from a callback.
   typedef void (*metadata_store_read_cb)(void* user,
                                          enum damacy_status status,
                                          void* data,
@@ -48,7 +53,8 @@ extern "C"
     uint64_t read_max_active;
   };
 
-// Log2-scale histogram of measured submit->completion latency. Bucket i holds
+// Log2 histogram: submit-to-completion on Linux, syscall duration on macOS.
+// Bucket i holds
 // ops whose latency in ns has floor(log2(ns)) == i (bucket 0 also catches 0 ns,
 // the last bucket catches everything above). Percentiles are derived from the
 // raw buckets at report time so the estimator can change without an ABI change.
@@ -63,7 +69,7 @@ extern "C"
     uint64_t buckets[METADATA_OP_LATENCY_NBUCKETS];
   };
 
-  // Indexed by enum op_kind: statx, open, read, close.
+  // Indexed by enum op_kind: stat/statx, open, read, close.
   struct metadata_store_async_op_latency_stats
   {
     struct metadata_store_async_op_latency_kind
