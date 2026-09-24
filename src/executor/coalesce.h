@@ -31,6 +31,21 @@ extern "C"
 {
 #endif
 
+  // Merges reads in place and updates *n_reads. read_index[i] and
+  // offset_in_read[i] locate original read i in the merged list.
+  // Scratch requirements, with n the original *n_reads:
+  //   read_index, offset_in_read: >= n uint32_t slots each
+  //   u32_scratch:     >= 2 * n uint32_t slots
+  //   read_op_scratch: >= n slots
+  enum damacy_status coalesce_reads(struct read_op* reads,
+                                    uint32_t* n_reads,
+                                    uint64_t read_op_max_bytes,
+                                    uint32_t max_chunks_per_wave,
+                                    uint32_t* read_index,
+                                    uint32_t* offset_in_read,
+                                    uint32_t* u32_scratch,
+                                    struct read_op* read_op_scratch);
+
   // Scratch requirements:
   //   u32_scratch:     >= 4 * out->n_read_ops uint32_t slots
   //   read_op_scratch: >= out->n_read_ops slots

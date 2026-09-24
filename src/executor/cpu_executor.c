@@ -112,8 +112,7 @@ cpu_read_plan_build(const struct prepared_plan* plan,
     (uint64_t)count *
     (sizeof(struct read_op) + sizeof(struct cpu_chunk_read) + sizeof(uint32_t));
   uint64_t scratch_bytes =
-    (uint64_t)count *
-    (sizeof(struct chunk_plan) + sizeof(struct read_op) + 4 * sizeof(uint32_t));
+    (uint64_t)count * (sizeof(struct read_op) + 4 * sizeof(uint32_t));
   uint64_t need = bytes + scratch_bytes;
   if (need > SIZE_MAX)
     return DAMACY_BUDGET;
@@ -121,48 +120,45 @@ cpu_read_plan_build(const struct prepared_plan* plan,
     return need - available <= active_plan_bytes ? DAMACY_AGAIN : DAMACY_BUDGET;
   struct cpu_read_plan reads = { .bytes = bytes };
   reads.reads = calloc(1, (size_t)bytes);
-  struct chunk_plan* chunks = calloc(count, sizeof(*chunks));
   struct read_op* scratch_reads = calloc(count, sizeof(*scratch_reads));
   uint32_t* indices = calloc((size_t)count * 4, sizeof(*indices));
   enum damacy_status status = DAMACY_OOM;
-  if (!reads.reads || !chunks || !scratch_reads || !indices)
+  if (!reads.reads || !scratch_reads || !indices)
     goto Done;
   reads.chunks = (void*)(reads.reads + count);
   reads.first_chunks = (void*)(reads.chunks + count);
   for (uint32_t i = 0; i < count; ++i) {
     const struct plan_chunk* chunk = &plan->chunks[i];
-    chunks[i] =
-      (struct chunk_plan){ .read_op_idx = i, .is_fill = chunk->missing };
     if (!chunk->missing)
       reads.reads[i] = (struct read_op){ .shard_path = chunk->path,
                                          .file_offset = chunk->offset,
                                          .nbytes = chunk->encoded_bytes };
   }
-  struct dispatch_output dispatch = { .read_ops = reads.reads,
-                                      .n_read_ops = count,
-                                      .chunk_plans = chunks,
-                                      .n_chunk_plans = count };
-  status = coalesce_chunks(&dispatch,
-                           (uint64_t)config->decode_workers *
-                             config->max_encoded_chunk_bytes,
-                           config->decode_workers,
-                           indices,
-                           scratch_reads);
+  uint32_t* read_index = indices + 2 * (size_t)count;
+  uint32_t* offset_in_read = indices + 3 * (size_t)count;
+  reads.count = count;
+  status = coalesce_reads(reads.reads,
+                          &reads.count,
+                          (uint64_t)config->decode_workers *
+                            config->max_encoded_chunk_bytes,
+                          config->decode_workers,
+                          read_index,
+                          offset_in_read,
+                          indices,
+                          scratch_reads);
   if (status != DAMACY_OK)
     goto Done;
-  reads.count = dispatch.n_read_ops;
   for (uint32_t i = 0; i < reads.count; ++i)
     reads.first_chunks[i] = UINT32_MAX;
   for (uint32_t i = count; i-- > 0;) {
-    uint32_t read = chunks[i].read_op_idx;
+    uint32_t read = read_index[i];
     reads.chunks[i] =
-      (struct cpu_chunk_read){ .offset = chunks[i].offset_in_read,
+      (struct cpu_chunk_read){ .offset = offset_in_read[i],
                                .next = reads.first_chunks[read] };
     reads.first_chunks[read] = i;
   }
   *out = reads;
 Done:
-  free(chunks);
   free(scratch_reads);
   free(indices);
   if (status != DAMACY_OK)
