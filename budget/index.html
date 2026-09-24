@@ -13,7 +13,7 @@
         <link rel="canonical" href="https://nclack.github.io/damacy/budget/">
       
       
-        <link rel="prev" href="../pipeline/">
+        <link rel="prev" href="../spatial/">
       
       
         <link rel="next" href="../distributed/">
@@ -297,6 +297,33 @@
     
   
     Pipeline composition
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../spatial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Spatial queries
   
 
     
@@ -769,7 +796,8 @@ configuration — then round up generously:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pool_reservation       = 2 × samples_per_batch × prod(sample_shape) × dtype_bytes
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>one_chunk_per_wave     ≈ max_chunk_uncompressed_bytes × 2   # compressed + decoded buffers, one chunk
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>both_waves_one_chunk   ≈ 2 × one_chunk_per_wave             # two GPU waves resident at once
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>budget_floor           ≈ pool_reservation + both_waves_one_chunk + scratch_slack
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>index_reservation      = 2 × min(max_index_bytes, 8 × samples_per_batch × sum(sample_shape))
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>budget_floor           ≈ pool_reservation + index_reservation + both_waves_one_chunk + scratch_slack
 </span></code></pre></div>
 <p>The <code>2 ×</code> in <code>pool_reservation</code> is output-side double-buffering.
 The <code>× 2</code> in <code>one_chunk_per_wave</code> is the compressed + decoded
@@ -826,7 +854,7 @@ lets I/O for upcoming waves stay in flight while the GPU waves
 turn over. Host pinned memory does <em>not</em> count against the GPU
 budget.</p>
 <h3 id="where-the-budget-is-spent">Where the budget is spent<a class="headerlink" href="#where-the-budget-is-spent" title="Permanent link">&para;</a></h3>
-<p>Four buckets share <code>max_gpu_memory_bytes</code>:</p>
+<p>These allocations share <code>max_gpu_memory_bytes</code>:</p>
 <table>
 <thead>
 <tr>
@@ -853,13 +881,19 @@ budget.</p>
 </tr>
 <tr>
 <td>Per-wave metadata</td>
-<td>Pointer/size arrays for the decoder</td>
-<td>Peak sub-stream count</td>
+<td>Pointer/size arrays for the decoder and assembly</td>
+<td>Peak sub-stream and chunk counts</td>
+</tr>
+<tr>
+<td>Indexed-query data</td>
+<td>Source/output index pairs for two batch slots</td>
+<td>Sum of indexed-axis lengths, bounded by <code>max_index_bytes</code> per slot</td>
 </tr>
 </tbody>
 </table>
-<p>The first two are the large ones; the last two are small but
-<em>depend on the data</em>. damacy cannot know the sub-stream count of
+<p>Index storage is reserved at construction, using the output shape and the
+configured cap. Setting <code>max_index_bytes=0</code> disables indexed CUDA queries.
+Decoder scratch and fanout storage depend on the data. damacy cannot know the sub-stream count of
 a chunk until it inspects the chunk's header, so damacy picks
 per-wave geometry such that even after adaptive growth to the
 structural ceiling, the total fits inside the cap. Grows commit
