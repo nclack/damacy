@@ -269,6 +269,37 @@ test_shared_metadata(void)
   return 0;
 }
 
+static int
+test_release_from_other_pipeline(void)
+{
+  char root[] = "/tmp/damacy_release_XXXXXX";
+  EXPECT(mkdtemp(root));
+  char uri[256];
+  snprintf(uri, sizeof(uri), "%s/array", root);
+  int64_t shape[] = { 5, 11 }, chunks[] = { 2, 4 }, shards[] = { 4, 8 };
+  EXPECT(fixture_write_zarr(uri, shape, chunks, shards, 2, "uint16", 10) == 0);
+  struct components a = { 0 }, b = { 0 };
+  EXPECT(create_components(&a) == 0);
+  EXPECT(create_components(&b) == 0);
+  EXPECT(start_pipeline(&a, DAMACY_F32, 2, 5, 2) == 0);
+  EXPECT(start_pipeline(&b, DAMACY_F32, 2, 5, 2) == 0);
+  struct damacy_sample samples[] = { sample(uri, 1, 2, 2, 5),
+                                     sample(uri, 1, 2, 2, 5) };
+  EXPECT(damacy_push(a.pipeline,
+                     (struct damacy_sample_slice){ samples, samples + 2 })
+           .status == DAMACY_OK);
+  struct damacy_batch* batch = NULL;
+  EXPECT(damacy_pop(a.pipeline, &batch) == DAMACY_OK);
+  damacy_batch_retain(batch);
+  damacy_release(b.pipeline, batch);
+  EXPECT(atomic_load(&batch->references) == 1);
+  damacy_release(a.pipeline, batch);
+  destroy_components(&a);
+  destroy_components(&b);
+  fixture_rm_tree(root);
+  return 0;
+}
+
 struct pop_waiter
 {
   struct damacy* pipeline;
@@ -395,6 +426,7 @@ main(void)
   RUN(test_codecs_and_types);
   RUN(test_owned_plan);
   RUN(test_shared_metadata);
+  RUN(test_release_from_other_pipeline);
   RUN(test_retained_outputs_and_shutdown);
   RUN(test_bfloat_rounding_and_fill);
   return 0;

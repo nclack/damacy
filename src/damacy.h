@@ -194,8 +194,14 @@ extern "C"
     DAMACY_DEVICE_CUDA = 2,
   };
 
+  // Add one batch reference. Each reference needs its own release.
   void damacy_batch_retain(struct damacy_batch* batch);
+  // Release one batch reference. Unlike damacy_release, this needs no
+  // pipeline, so it also works after the pipeline is destroyed. Thread-safe.
   void damacy_batch_release(struct damacy_batch* batch);
+  // Stop the pipeline without freeing it. Pending work is dropped, blocked
+  // damacy_pop callers wake with DAMACY_SHUTDOWN, and borrowed components may
+  // serve another pipeline. Retained batches stay valid. Safe to repeat.
   void damacy_shutdown(struct damacy* d);
 
   // Fill performance/resource knobs with explicit library defaults. Callers
@@ -217,10 +223,10 @@ extern "C"
   // CUDA device index, or -1 for CPU execution.
   int damacy_get_device(const struct damacy* d);
 
-  // Tear down. Does NOT flush in-flight work; the io_queue is asked to
-  // shut down and pending CUDA streams are synchronized before buffers
-  // are released. Pending damacy_pop callers (from another thread) wake
-  // with DAMACY_SHUTDOWN.
+  // Shut down (see damacy_shutdown), then free the pipeline. Components
+  // passed to damacy_pipeline_create stay with the caller; components made by
+  // damacy_create are destroyed. Release retained batches afterwards with
+  // damacy_batch_release.
   void damacy_destroy(struct damacy* d);
 
   struct damacy_push_result
@@ -250,7 +256,8 @@ extern "C"
 
   // Release one batch reference. The buffer is reusable after the last
   // consumer releases it. Thread-safe; may be called from
-  // a thread other than the one that called damacy_pop.
+  // a thread other than the one that called damacy_pop. A batch from another
+  // pipeline is still released, with a warning.
   void damacy_release(struct damacy* d, struct damacy_batch* b);
 
   // Release one reference after ordering CUDA output writes behind event.

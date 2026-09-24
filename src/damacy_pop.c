@@ -1,6 +1,7 @@
 #include "damacy_internal.h"
 
 #include "damacy_stats.h"
+#include "log/log.h"
 
 #include <string.h>
 
@@ -51,8 +52,11 @@ damacy_pop(struct damacy* self, struct damacy_batch** out)
 void
 damacy_release(struct damacy* self, struct damacy_batch* batch)
 {
-  if (batch && batch->owner == self)
-    damacy_batch_release(batch);
+  if (!batch)
+    return;
+  if (batch->owner != self)
+    log_warn("damacy_release: batch belongs to another pipeline");
+  damacy_batch_release(batch);
 }
 
 enum damacy_status
