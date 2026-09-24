@@ -223,6 +223,52 @@ test_owned_plan(void)
   return 0;
 }
 
+static int
+test_shared_metadata(void)
+{
+  char root[] = "/tmp/damacy_shared_metadata_XXXXXX";
+  EXPECT(mkdtemp(root));
+  char uri[256];
+  snprintf(uri, sizeof(uri), "%s/array", root);
+  int64_t shape[] = { 5, 11 }, chunks[] = { 2, 4 }, shards[] = { 4, 8 };
+  EXPECT(fixture_write_zarr(uri, shape, chunks, shards, 2, "uint16", 10) == 0);
+  struct components a = { 0 }, b = { 0 };
+  EXPECT(create_components(&a) == 0);
+  EXPECT(create_components(&b) == 0);
+  damacy_planner_destroy(b.planner);
+  b.planner = NULL;
+  EXPECT(damacy_chunk_planner_create(
+           a.metadata,
+           &(struct damacy_plan_limits){ .max_chunks = 1024,
+                                         .max_chunk_bytes = 1 << 20,
+                                         .max_shards_per_sample = 4,
+                                         .max_plan_bytes = 1 << 20 },
+           &b.planner) == DAMACY_OK);
+  EXPECT(start_pipeline(&a, DAMACY_F32, 2, 5, 2) == 0);
+  EXPECT(start_pipeline(&b, DAMACY_F32, 2, 5, 2) == 0);
+  damacy_metadata_reader_destroy(a.metadata_reader);
+  a.metadata_reader = NULL;
+  damacy_metadata_destroy(a.metadata);
+  a.metadata = NULL;
+  struct damacy* pipelines[] = { a.pipeline, b.pipeline };
+  struct damacy_sample samples[] = { sample(uri, 1, 2, 2, 5),
+                                     sample(uri, 1, 2, 2, 5) };
+  for (unsigned i = 0; i < 2; ++i)
+    EXPECT(damacy_push(pipelines[i],
+                       (struct damacy_sample_slice){ samples, samples + 2 })
+             .status == DAMACY_OK);
+  for (unsigned i = 0; i < 2; ++i) {
+    struct damacy_batch* batch = NULL;
+    EXPECT(damacy_pop(pipelines[i], &batch) == DAMACY_OK);
+    EXPECT(verify_crop(batch, 10, 16) == 0);
+    damacy_release(pipelines[i], batch);
+  }
+  destroy_components(&a);
+  destroy_components(&b);
+  fixture_rm_tree(root);
+  return 0;
+}
+
 struct pop_waiter
 {
   struct damacy* pipeline;
@@ -348,6 +394,7 @@ main(void)
 {
   RUN(test_codecs_and_types);
   RUN(test_owned_plan);
+  RUN(test_shared_metadata);
   RUN(test_retained_outputs_and_shutdown);
   RUN(test_bfloat_rounding_and_fill);
   return 0;

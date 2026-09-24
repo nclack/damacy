@@ -17,14 +17,12 @@ struct damacy_metadata_reader
 {
   uint32_t concurrency;
   struct damacy_latency_model latency;
-  _Atomic int active;
 };
 
 struct damacy_metadata
 {
-  struct damacy_metadata_reader* reader;
+  struct damacy_metadata_reader reader;
   struct damacy_metadata_cache_config cache;
-  _Atomic int active;
 };
 
 struct damacy_planner_ops

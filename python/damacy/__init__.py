@@ -881,7 +881,10 @@ class FileReader:
 
 
 class FileMetadataReader:
-    """Configure a separate asynchronous queue for filesystem metadata reads."""
+    """Configure a separate asynchronous queue for filesystem metadata reads.
+
+    Holds settings only; metadata providers copy them, so it can be shared.
+    """
 
     __slots__ = ("_native",)
 
@@ -903,7 +906,11 @@ class FileMetadataReader:
 
 
 class ZarrMetadata:
-    """Provide Zarr v3 array metadata and shard indexes for sample URIs."""
+    """Provide Zarr v3 array metadata and shard indexes for sample URIs.
+
+    Holds settings only. Each planner copies them and keeps its own caches, so
+    planners can share one instance.
+    """
 
     __slots__ = ("_native", "cache", "reader")
 
@@ -1381,8 +1388,9 @@ class Pipeline:
 
     ``planner`` resolves source metadata into owned chunk plans. ``executor``
     reads, decodes, and assembles them. ``output`` defines the batch tensor;
-    ``queues`` bounds preparation. Components serve one active pipeline and
-    may be reused after it closes. Exported tensors retain their storage.
+    ``queues`` bounds preparation. The planner and executor serve one active
+    pipeline and may be reused after it closes. Exported tensors retain their
+    storage.
 
     ``Pipeline(Config(...))`` composes the CUDA pipeline for existing callers.
     For CUDA, pass an explicit executor device or make a CUDA context current

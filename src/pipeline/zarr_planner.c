@@ -13,7 +13,7 @@
 struct zarr_planner
 {
   struct damacy_planner base;
-  struct damacy_metadata* metadata;
+  struct damacy_metadata metadata;
   struct damacy_plan_limits limits;
   struct damacy_batch_spec output;
   struct damacy_queue_limits queues;
@@ -29,7 +29,6 @@ struct zarr_planner
   uint64_t pushed;
   uint64_t planned;
   uint64_t watermark;
-  int bound;
 };
 
 static void
@@ -60,11 +59,6 @@ zarr_stop(struct damacy_planner* base)
   clear_samples(self);
   free(self->samples);
   self->samples = NULL;
-  if (self->bound) {
-    self->metadata->active = 0;
-    self->metadata->reader->active = 0;
-    self->bound = 0;
-  }
 }
 
 static enum damacy_status
@@ -73,9 +67,7 @@ zarr_start(struct damacy_planner* base,
            const struct damacy_queue_limits* queues)
 {
   struct zarr_planner* self = (void*)base;
-  struct damacy_metadata* metadata = self->metadata;
-  if (metadata->active || metadata->reader->active)
-    return DAMACY_INVAL;
+  const struct damacy_metadata* metadata = &self->metadata;
   uint64_t floor =
     (uint64_t)queues->lookahead_samples + output->samples_per_batch;
   if (metadata->cache.array_entries < floor ||
@@ -90,18 +82,8 @@ zarr_start(struct damacy_planner* base,
   self->output = *output;
   self->queues = *queues;
   self->pushed = self->planned = self->watermark = 0;
-  int expected = 0;
-  if (!atomic_compare_exchange_strong(&metadata->active, &expected, 1))
-    return DAMACY_INVAL;
-  expected = 0;
-  if (!atomic_compare_exchange_strong(
-        &metadata->reader->active, &expected, 1)) {
-    metadata->active = 0;
-    return DAMACY_INVAL;
-  }
-  self->bound = 1;
   self->reader = metadata_store_async_create(
-    (int)metadata->reader->concurrency, NULL, &metadata->reader->latency);
+    (int)metadata->reader.concurrency, NULL, &metadata->reader.latency);
   if (!self->reader)
     goto Fail;
   array_meta_async_fetcher_init(&self->array_fetcher, self->reader);
@@ -313,7 +295,7 @@ damacy_chunk_planner_create(struct damacy_metadata* metadata,
   if (!self)
     return DAMACY_OOM;
   self->base.ops = &zarr_ops;
-  self->metadata = metadata;
+  self->metadata = *metadata;
   self->limits = *limits;
   *out = &self->base;
   return DAMACY_OK;

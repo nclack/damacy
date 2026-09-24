@@ -15,12 +15,16 @@ import numpy as np
 import pytest
 
 
-def planner(**limits):
+def zarr_metadata():
+    return damacy.ZarrMetadata(
+        reader=damacy.FileMetadataReader(concurrency=2),
+        cache=damacy.MetadataCache(array_entries=16, shard_index_entries=64),
+    )
+
+
+def planner(metadata=None, **limits):
     return damacy.ChunkPlanner(
-        metadata=damacy.ZarrMetadata(
-            reader=damacy.FileMetadataReader(concurrency=2),
-            cache=damacy.MetadataCache(array_entries=16, shard_index_entries=64),
-        ),
+        metadata=metadata or zarr_metadata(),
         limits=damacy.PlanLimits(
             **(
                 {"max_chunks": 128, "max_chunk_bytes": 1024, "max_shards_per_sample": 4}
@@ -178,6 +182,23 @@ def test_components_exclusive_and_reusable(tiny_zarr):
         np.testing.assert_array_equal(
             view, np.arange(128, dtype=np.float32).reshape(1, 8, 16)
         )
+
+
+def test_planners_share_metadata(tiny_zarr):
+    metadata = zarr_metadata()
+    pipelines = [pipeline(planner=planner(metadata)) for _ in range(2)]
+    try:
+        for p in pipelines:
+            p.push([sample(tiny_zarr)])
+        for p in pipelines:
+            with p.pop() as batch:
+                np.testing.assert_array_equal(
+                    np.from_dlpack(batch),
+                    np.arange(128, dtype=np.float32).reshape(1, 8, 16),
+                )
+    finally:
+        for p in pipelines:
+            p.close()
 
 
 def test_mixed_source_types(tmp_path):

@@ -97,9 +97,10 @@ Views survive batch release and pipeline shutdown. Explicit CUDA devices retain
 the primary context and completion stream until the last buffer is released.
 Caller-owned CUDA contexts must outlive their views.
 
-Planners, executors, metadata providers, and metadata readers reject use by two
-active pipelines. They can be reused after shutdown. Python retains dependencies;
-C borrows them until shutdown and requires reverse-order destruction. Queue and
+Planners and executors reject use by two active pipelines. They can be reused
+after shutdown. Metadata providers and metadata readers hold only settings that
+planners copy, so planners may share them. Python retains dependencies; C
+borrows them until shutdown and requires reverse-order destruction. Queue and
 buffer saturation report retriable backpressure, not a storage error. Closing
 a pipeline stops preparation, wakes blocked pops, joins execution, and releases
 queued work before its dependencies can disappear.

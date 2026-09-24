@@ -146,10 +146,12 @@ requires closing the pipeline and constructing another one.
 ## Lifetimes and interoperation
 
 Use a context manager or call `Pipeline.close()`. Python retains the injected
-components and their dependencies. Planners, executors, metadata providers,
-and metadata readers each serve one active pipeline; simultaneous reuse is
-rejected. They may be reused after close. Closing stops pending work and wakes
-blocked pops. Reuse creates fresh active caches and execution resources.
+components and their dependencies. Planners and executors each serve one
+active pipeline; simultaneous reuse is rejected. They may be reused after
+close. Metadata providers and metadata readers hold only settings. Each planner
+copies them and builds its own caches, so any number of planners may share one.
+Closing stops pending work and wakes blocked pops. Reuse creates fresh active
+caches and execution resources.
 
 `np.from_dlpack(batch)` produces a CPU view; `torch.from_dlpack(batch)` accepts
 CPU or CUDA results. A DLPack view remains valid after releasing the `Batch` and

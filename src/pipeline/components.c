@@ -96,10 +96,6 @@ damacy_file_metadata_reader_create(uint32_t concurrency,
 void
 damacy_metadata_reader_destroy(struct damacy_metadata_reader* reader)
 {
-  if (reader && reader->active) {
-    log_error("metadata reader is still in use");
-    return;
-  }
   free(reader);
 }
 
@@ -116,7 +112,7 @@ damacy_zarr_metadata_create(struct damacy_metadata_reader* reader,
   struct damacy_metadata* metadata = calloc(1, sizeof(*metadata));
   if (!metadata)
     return DAMACY_OOM;
-  metadata->reader = reader;
+  metadata->reader = *reader;
   metadata->cache = *cache;
   *out = metadata;
   return DAMACY_OK;
@@ -125,10 +121,6 @@ damacy_zarr_metadata_create(struct damacy_metadata_reader* reader,
 void
 damacy_metadata_destroy(struct damacy_metadata* metadata)
 {
-  if (metadata && metadata->active) {
-    log_error("metadata provider is still in use");
-    return;
-  }
   free(metadata);
 }
 

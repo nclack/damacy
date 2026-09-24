@@ -99,7 +99,9 @@ extern "C"
   void damacy_executor_destroy(struct damacy_executor* executor);
 
   // Components are borrowed until shutdown; each planner/executor may serve
-  // one active pipeline. Readers and metadata outlive their dependents.
+  // one active pipeline. A reader must outlive its executors. Metadata and
+  // metadata readers hold only settings, copied by the objects created from
+  // them, so they can be shared or destroyed at any time.
   enum damacy_status damacy_pipeline_create(
     struct damacy_planner* planner,
     struct damacy_executor* executor,
