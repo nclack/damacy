@@ -29,10 +29,11 @@ planner = damacy.ChunkPlanner(
 executor = damacy.CpuExecutor(
     reader=chunk_reader,
     limits=damacy.CpuLimits(
-        max_memory_bytes=1 << 30,
+        max_memory_bytes=3 << 30,
         decode_workers=8,
         max_encoded_chunk_bytes=4 << 20,
         max_decoded_chunk_bytes=2 << 20,
+        chunks_per_input_buffer=256,
     ),
 )
 output = damacy.BatchSpec(samples=2, shape=(64, 256, 256), dtype="f32")
@@ -112,6 +113,7 @@ capacities. Defaults come from the Python value objects.
 | `PlanLimits.max_plan_bytes` | Owned storage per prepared plan. |
 | `CpuLimits.max_memory_bytes` | CPU executor's buffers, codec workspace, active read plans, and temporary read-planning scratch. |
 | `CpuLimits.decode_workers` | Total decoding/assembly workers, including the calling scheduler thread. |
+| `CpuLimits.chunks_per_input_buffer` | Chunks each of the two encoded-input buffers holds; from `decode_workers` to 16384. |
 | `FileReader.workers` | Bulk I/O workers, separate from decoding workers. |
 | `FileReader.max_inflight_reads` | Bulk read capacity; execution respects this bound and retries saturation. |
 | `CudaLimits` | GPU memory and execution geometry, plus the CUDA codec-layout cache capacity. |
@@ -126,8 +128,20 @@ older, stricter cache validation.
 The CPU executor merges adjacent or overlapping encoded ranges within each
 shard, then interleaves the reads across shards. It decodes each unique source
 chunk once per batch, including when several output samples use that chunk.
-Both input groups stay within the decode-worker, encoded-byte, and reader
-limits; merging does not increase the number of decode workers.
+Each of its two encoded-input buffers holds `chunks_per_input_buffer` chunks
+(default 256). A merged read contains at most
+`min(decode_workers, chunks_per_input_buffer)` chunks, so one buffer can hold
+several reads at once; with one decode worker, reads do not merge. Submission
+also respects the reader limit. Decoder workspaces remain per worker.
+
+The two input buffers reserve
+`2 * chunks_per_input_buffer * max_encoded_chunk_bytes` bytes, plus per-chunk
+bookkeeping. With the defaults, 256 chunks and a 4 MiB encoded-chunk bound,
+that is 2 GiB before decoder workspaces and output buffers. Set the bound to
+match the largest encoded chunk expected, and include this reserve in
+`max_memory_bytes`. If the budget is too small, starting the pipeline reports
+`BUDGET` and logs how many bytes the input buffers, decoder workspaces, and
+output buffers need.
 
 CPU memory admission includes active read plans, temporary planning scratch,
 and a conservative allowance for Blosc scratch storage.

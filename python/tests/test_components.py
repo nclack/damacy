@@ -284,6 +284,9 @@ def test_invalid_limits():
         lambda: damacy.CpuLimits(0),
         lambda: damacy.PlanLimits(max_chunks=0),
         lambda: damacy.CpuLimits(1 << 20, decode_workers=-1),
+        lambda: damacy.CpuLimits(1 << 20, chunks_per_input_buffer=0),
+        lambda: damacy.CpuLimits(1 << 20, decode_workers=8, chunks_per_input_buffer=7),
+        lambda: damacy.CpuLimits(1 << 20, chunks_per_input_buffer=16385),
     ]:
         with pytest.raises(ValueError):
             make()

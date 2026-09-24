@@ -826,12 +826,19 @@ class CpuLimits:
     decode_workers: int = 8
     max_encoded_chunk_bytes: int = 4 << 20
     max_decoded_chunk_bytes: int = 2 << 20
+    chunks_per_input_buffer: int = 256
 
     def __post_init__(self) -> None:
         _positive_int(self.max_memory_bytes, "max_memory_bytes", (1 << 64) - 1)
         _positive_int(self.decode_workers, "decode_workers", _native.MAX_IO_THREADS)
         _positive_int(self.max_encoded_chunk_bytes, "max_encoded_chunk_bytes")
         _positive_int(self.max_decoded_chunk_bytes, "max_decoded_chunk_bytes")
+        _positive_int(self.chunks_per_input_buffer, "chunks_per_input_buffer", 16384)
+        if self.chunks_per_input_buffer < self.decode_workers:
+            raise ValueError(
+                f"chunks_per_input_buffer ({self.chunks_per_input_buffer}) must be "
+                f"at least decode_workers ({self.decode_workers})"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -962,6 +969,7 @@ class CpuExecutor:
             limits.max_encoded_chunk_bytes,
             limits.max_decoded_chunk_bytes,
             limits.max_memory_bytes,
+            limits.chunks_per_input_buffer,
         )
 
 

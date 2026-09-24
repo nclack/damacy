@@ -1,4 +1,5 @@
 #include "damacy_stats.h"
+#include "executor/cpu_read_plan.h"
 #include "expect.h"
 #include "pipeline/components.h"
 #include "store/store_internal.h"
@@ -8,10 +9,11 @@
 
 enum
 {
-  MAX_CHUNKS = 32,
-  MAX_READS = 64,
-  SHARD_BYTES = 128,
+  MAX_CHUNKS = 513,
+  MAX_READS = 2 * MAX_CHUNKS,
+  MAX_EVENTS = 32,
   CHUNK_BYTES = 8,
+  SHARD_BYTES = MAX_CHUNKS * CHUNK_BYTES,
 };
 
 struct read_record
@@ -33,7 +35,7 @@ struct test_store
   struct store base;
   uint16_t data[3][SHARD_BYTES / sizeof(uint16_t)];
   struct read_record records[MAX_READS];
-  struct pending_reads events[MAX_READS];
+  struct pending_reads events[MAX_EVENTS];
   unsigned n_reads;
   unsigned n_events;
   unsigned pending;
@@ -83,7 +85,7 @@ submit_reads(struct store* base, const struct store_read* reads, size_t count)
     return (struct store_submit_result){ .status = DAMACY_AGAIN };
   }
   if (count > MAX_CHUNKS || count > MAX_READS - store->n_reads ||
-      store->n_events == MAX_READS)
+      store->n_events == MAX_EVENTS)
     return (struct store_submit_result){ .status = DAMACY_IO };
   struct pending_reads* pending = &store->events[store->n_events++];
   pending->count = count;
@@ -214,6 +216,7 @@ make_plan(const struct test_chunk* chunks, uint32_t count)
 static int
 start_executor(struct damacy_reader* reader,
                uint32_t workers,
+               uint32_t buffer_chunks,
                uint32_t count,
                uint64_t budget,
                struct damacy_stats* stats,
@@ -222,7 +225,9 @@ start_executor(struct damacy_reader* reader,
   struct damacy_cpu_config config = { .decode_workers = workers,
                                       .max_encoded_chunk_bytes = CHUNK_BYTES,
                                       .max_decoded_chunk_bytes = CHUNK_BYTES,
-                                      .max_memory_bytes = budget };
+                                      .max_memory_bytes = budget,
+                                      .chunks_per_input_buffer =
+                                        buffer_chunks };
   EXPECT(damacy_cpu_executor_create(reader, &config, out) == DAMACY_OK);
   struct damacy_batch_spec output = output_spec(count);
   EXPECT((*out)->ops->start(*out, &output, stats) == DAMACY_OK);
@@ -281,7 +286,7 @@ test_merge_and_shard_order(void)
                                   .max_inflight_reads = 4 };
   struct damacy_stats stats = { 0 };
   struct damacy_executor* executor = NULL;
-  EXPECT(start_executor(&reader, 4, 12, 8 << 20, &stats, &executor) == 0);
+  EXPECT(start_executor(&reader, 4, 4, 12, 8 << 20, &stats, &executor) == 0);
   struct prepared_plan* plan = make_plan(chunks, 12);
   EXPECT(plan);
   EXPECT(plan->chunks[0].path != plan->chunks[1].path);
@@ -317,7 +322,7 @@ test_reader_limit_and_retry(void)
                                   .max_inflight_reads = 1 };
   struct damacy_stats stats = { 0 };
   struct damacy_executor* executor = NULL;
-  EXPECT(start_executor(&reader, 2, 4, 8 << 20, &stats, &executor) == 0);
+  EXPECT(start_executor(&reader, 2, 2, 4, 8 << 20, &stats, &executor) == 0);
   struct prepared_plan* plan = make_plan(chunks, 4);
   EXPECT(plan);
   EXPECT(executor->ops->submit(executor, plan, 0) == DAMACY_OK);
@@ -343,7 +348,7 @@ test_overlapping_ranges(void)
                                   .max_inflight_reads = 2 };
   struct damacy_stats stats = { 0 };
   struct damacy_executor* executor = NULL;
-  EXPECT(start_executor(&reader, 2, 2, 8 << 20, &stats, &executor) == 0);
+  EXPECT(start_executor(&reader, 2, 2, 2, 8 << 20, &stats, &executor) == 0);
   struct prepared_plan* plan = make_plan(chunks, 2);
   EXPECT(plan);
   EXPECT(executor->ops->submit(executor, plan, 0) == DAMACY_OK);
@@ -374,7 +379,7 @@ test_single_worker_and_fills(void)
                                     .max_inflight_reads = 1 };
     struct damacy_stats stats = { 0 };
     struct damacy_executor* executor = NULL;
-    EXPECT(start_executor(&reader, 1, 4, 8 << 20, &stats, &executor) == 0);
+    EXPECT(start_executor(&reader, 1, 1, 4, 8 << 20, &stats, &executor) == 0);
     struct prepared_plan* plan = make_plan(chunks, 4);
     EXPECT(plan);
     EXPECT(executor->ops->submit(executor, plan, 0) == DAMACY_OK);
@@ -403,7 +408,7 @@ test_fills_share_merged_input(void)
                                   .max_inflight_reads = 2 };
   struct damacy_stats stats = { 0 };
   struct damacy_executor* executor = NULL;
-  EXPECT(start_executor(&reader, 6, 6, 8 << 20, &stats, &executor) == 0);
+  EXPECT(start_executor(&reader, 6, 6, 6, 8 << 20, &stats, &executor) == 0);
   struct prepared_plan* plan = make_plan(chunks, 6);
   EXPECT(plan);
   EXPECT(executor->ops->submit(executor, plan, 0) == DAMACY_OK);
@@ -435,7 +440,7 @@ test_batch_order_and_retained_output(void)
                                   .max_inflight_reads = 2 };
   struct damacy_stats stats = { 0 };
   struct damacy_executor* executor = NULL;
-  EXPECT(start_executor(&reader, 2, 2, 8 << 20, &stats, &executor) == 0);
+  EXPECT(start_executor(&reader, 2, 2, 2, 8 << 20, &stats, &executor) == 0);
   for (unsigned i = 0; i < 2; ++i) {
     struct prepared_plan* plan = make_plan(chunks, 2);
     EXPECT(plan);
@@ -482,7 +487,7 @@ test_plan_memory_budget(void)
                                   .max_inflight_reads = 2 };
   struct damacy_stats stats = { 0 };
   struct damacy_executor* executor = NULL;
-  EXPECT(start_executor(&reader, 2, 2, 8 << 20, &stats, &executor) == 0);
+  EXPECT(start_executor(&reader, 2, 2, 2, 8 << 20, &stats, &executor) == 0);
   executor->ops->stats(executor, &stats);
   uint64_t initial = stats.host_bytes_committed;
   struct prepared_plan* plan = make_plan(chunks, 2);
@@ -498,7 +503,7 @@ test_plan_memory_budget(void)
   damacy_batch_release(batch);
   damacy_executor_destroy(executor);
   executor = NULL;
-  EXPECT(start_executor(&reader, 2, 2, with_plan, &stats, &executor) == 0);
+  EXPECT(start_executor(&reader, 2, 2, 2, with_plan, &stats, &executor) == 0);
   plan = make_plan(chunks, 2);
   EXPECT(plan);
   EXPECT(executor->ops->submit(executor, plan, 0) == DAMACY_BUDGET);
@@ -519,7 +524,7 @@ test_plan_memory_retry(void)
                                   .max_inflight_reads = 2 };
   struct damacy_stats stats = { 0 };
   struct damacy_executor* executor = NULL;
-  EXPECT(start_executor(&reader, 2, 2, 8 << 20, &stats, &executor) == 0);
+  EXPECT(start_executor(&reader, 2, 2, 2, 8 << 20, &stats, &executor) == 0);
   executor->ops->stats(executor, &stats);
   uint64_t initial = stats.host_bytes_committed;
   struct prepared_plan* plan = make_plan(chunks, 2);
@@ -532,7 +537,8 @@ test_plan_memory_retry(void)
   for (unsigned i = 1; i <= 16; ++i) {
     executor = NULL;
     EXPECT(start_executor(
-             &reader, 2, 2, initial + i * plan_bytes, &stats, &executor) == 0);
+             &reader, 2, 2, 2, initial + i * plan_bytes, &stats, &executor) ==
+           0);
     plan = make_plan(chunks, 2);
     EXPECT(plan);
     enum damacy_status status = executor->ops->submit(executor, plan, 0);
@@ -576,10 +582,10 @@ test_read_errors_and_shutdown(void)
     else
       store.held_event = 2;
     struct damacy_reader reader = { .store = &store.base,
-                                    .max_inflight_reads = 2 };
+                                    .max_inflight_reads = 1 };
     struct damacy_stats stats = { 0 };
     struct damacy_executor* executor = NULL;
-    EXPECT(start_executor(&reader, 2, 4, 8 << 20, &stats, &executor) == 0);
+    EXPECT(start_executor(&reader, 2, 2, 4, 8 << 20, &stats, &executor) == 0);
     struct prepared_plan* plan = make_plan(chunks, 4);
     EXPECT(plan);
     EXPECT(executor->ops->submit(executor, plan, 0) == DAMACY_OK);
@@ -598,6 +604,245 @@ test_read_errors_and_shutdown(void)
   return 0;
 }
 
+static int
+test_read_buffer_capacity(void)
+{
+  const uint32_t workers[] = { 1, 2, 32 };
+  const uint32_t buffer_chunks = 256;
+  struct test_chunk chunks[513];
+  for (unsigned i = 0; i < 513; ++i)
+    chunks[i] =
+      (struct test_chunk){ .shard = i % 3,
+                           .offset = 2 * (170 - i / 3) * CHUNK_BYTES };
+  for (unsigned mode = 0; mode < 3; ++mode) {
+    struct test_store store;
+    store_init(&store, 512);
+    struct damacy_reader reader = { .store = &store.base,
+                                    .max_inflight_reads = 512 };
+    struct damacy_stats stats = { 0 };
+    struct damacy_executor* executor = NULL;
+    EXPECT(start_executor(&reader,
+                          workers[mode],
+                          buffer_chunks,
+                          513,
+                          32 << 20,
+                          &stats,
+                          &executor) == 0);
+    struct prepared_plan* plan = make_plan(chunks, 513);
+    EXPECT(plan);
+    EXPECT(executor->ops->submit(executor, plan, 0) == DAMACY_OK);
+    struct damacy_batch* batch = NULL;
+    EXPECT(finish_batch(executor, &batch) == 0);
+    EXPECT(check_output(batch, &store, chunks, 513) == 0);
+    EXPECT(stats.chunks_dispatched == 513 && stats.waves_emitted == 3);
+    EXPECT(store.n_events == 3);
+    EXPECT(store.events[0].count == buffer_chunks);
+    EXPECT(store.events[1].count == buffer_chunks);
+    EXPECT(store.events[2].count == 513 - 2 * buffer_chunks);
+    EXPECT(store.n_reads == 513 && stats.reads_issued == 513);
+    for (unsigned i = 0; i < store.n_reads; ++i) {
+      EXPECT(store.records[i].shard == i % 3);
+      EXPECT(store.records[i].offset == 2 * (uint64_t)(i / 3) * CHUNK_BYTES);
+      EXPECT(store.records[i].bytes == CHUNK_BYTES);
+    }
+    EXPECT(stats.decode.input_bytes == 513 * CHUNK_BYTES);
+    EXPECT(stats.io.input_bytes == 513 * CHUNK_BYTES);
+    damacy_batch_release(batch);
+    damacy_executor_destroy(executor);
+  }
+  return 0;
+}
+
+static int
+test_merged_read_limit(void)
+{
+  const uint32_t workers[] = { 1, 2, 32 };
+  const uint32_t buffer_chunks = 256;
+  struct test_chunk chunks[513];
+  for (unsigned i = 0; i < 513; ++i)
+    chunks[i] = (struct test_chunk){ .shard = i % 3,
+                                     .offset = (170 - i / 3) * CHUNK_BYTES };
+  for (unsigned mode = 0; mode < 3; ++mode) {
+    uint32_t limit = workers[mode];
+    struct test_store store;
+    store_init(&store, 512);
+    struct damacy_reader reader = { .store = &store.base,
+                                    .max_inflight_reads = 512 };
+    struct damacy_stats stats = { 0 };
+    struct damacy_executor* executor = NULL;
+    EXPECT(start_executor(
+             &reader, limit, buffer_chunks, 513, 32 << 20, &stats, &executor) ==
+           0);
+    struct prepared_plan* plan = make_plan(chunks, 513);
+    EXPECT(plan);
+    EXPECT(executor->ops->submit(executor, plan, 0) == DAMACY_OK);
+    struct damacy_batch* batch = NULL;
+    EXPECT(finish_batch(executor, &batch) == 0);
+    EXPECT(check_output(batch, &store, chunks, 513) == 0);
+    EXPECT(stats.chunks_dispatched == 513 && stats.waves_emitted == 3);
+    EXPECT(store.n_events == 3);
+    EXPECT(store.events[0].count == buffer_chunks / limit);
+    uint32_t reads_per_shard = (171 + limit - 1) / limit;
+    EXPECT(store.n_reads == 3 * reads_per_shard);
+    EXPECT(stats.reads_issued == store.n_reads);
+    for (unsigned i = 0; i < store.n_reads; ++i) {
+      uint32_t first = (i / 3) * limit;
+      uint32_t count = 171 - first;
+      if (count > limit)
+        count = limit;
+      EXPECT(store.records[i].shard == i % 3);
+      EXPECT(store.records[i].offset == (uint64_t)first * CHUNK_BYTES);
+      EXPECT(store.records[i].bytes == count * CHUNK_BYTES);
+    }
+    EXPECT(stats.io.input_bytes == 513 * CHUNK_BYTES);
+    damacy_batch_release(batch);
+    damacy_executor_destroy(executor);
+  }
+  return 0;
+}
+
+static int
+test_read_plan_many_workers(void)
+{
+  const struct
+  {
+    uint32_t workers;
+    uint32_t buffer_chunks;
+  } modes[] = { { 256, 256 }, { 257, 1024 }, { 1024, 1024 } };
+  struct test_chunk chunks[513];
+  for (unsigned i = 0; i < 513; ++i)
+    chunks[i] = (struct test_chunk){ .offset = (512 - i) * CHUNK_BYTES };
+  struct prepared_plan* plan = make_plan(chunks, 513);
+  EXPECT(plan);
+  for (unsigned mode = 0; mode < 3; ++mode) {
+    uint32_t limit = modes[mode].workers;
+    struct damacy_cpu_config config = { .decode_workers = modes[mode].workers,
+                                        .max_encoded_chunk_bytes = CHUNK_BYTES,
+                                        .max_decoded_chunk_bytes = CHUNK_BYTES,
+                                        .max_memory_bytes = 8 << 20,
+                                        .chunks_per_input_buffer =
+                                          modes[mode].buffer_chunks };
+    struct cpu_read_plan reads = { 0 };
+    EXPECT(cpu_read_plan_build(plan, &config, 8 << 20, 0, &reads) == DAMACY_OK);
+    EXPECT(reads.count == (513 + limit - 1) / limit);
+    unsigned char seen[513] = { 0 };
+    uint32_t total = 0;
+    for (uint32_t i = 0; i < reads.count; ++i) {
+      const struct read_op* read = &reads.reads[i];
+      uint32_t expected = 513 - i * limit;
+      if (expected > limit)
+        expected = limit;
+      EXPECT(!strcmp(read->shard_path, "a"));
+      EXPECT(read->file_offset == (uint64_t)i * limit * CHUNK_BYTES);
+      EXPECT(read->nbytes == expected * CHUNK_BYTES);
+      uint32_t count = 0;
+      for (uint32_t c = reads.first_chunks[i]; c != UINT32_MAX;
+           c = reads.chunks[c].next) {
+        EXPECT(c < 513 && !seen[c]);
+        seen[c] = 1;
+        EXPECT(read->file_offset + reads.chunks[c].offset == chunks[c].offset);
+        EXPECT(reads.chunks[c].offset + CHUNK_BYTES <= read->nbytes);
+        ++count;
+      }
+      EXPECT(count == expected);
+      total += count;
+    }
+    EXPECT(total == 513);
+    cpu_read_plan_destroy(&reads);
+  }
+  prepared_plan_destroy(plan);
+  return 0;
+}
+
+static int
+test_input_buffer_validation(void)
+{
+  struct test_store store;
+  store_init(&store, 2);
+  struct damacy_reader reader = { .store = &store.base,
+                                  .max_inflight_reads = 2 };
+  const struct
+  {
+    uint32_t workers;
+    uint32_t buffer_chunks;
+    enum damacy_status status;
+  } cases[] = {
+    { 8, 0, DAMACY_INVAL },
+    { 8, 7, DAMACY_INVAL },
+    { 8, 8, DAMACY_OK },
+    { 1, DAMACY_MAX_CHUNKS_PER_BATCH, DAMACY_OK },
+    { 1, DAMACY_MAX_CHUNKS_PER_BATCH + 1, DAMACY_INVAL },
+  };
+  for (unsigned i = 0; i < sizeof(cases) / sizeof(*cases); ++i) {
+    struct damacy_cpu_config config = { .decode_workers = cases[i].workers,
+                                        .max_encoded_chunk_bytes = CHUNK_BYTES,
+                                        .max_decoded_chunk_bytes = CHUNK_BYTES,
+                                        .max_memory_bytes = 8 << 20,
+                                        .chunks_per_input_buffer =
+                                          cases[i].buffer_chunks };
+    struct damacy_executor* executor = NULL;
+    EXPECT(damacy_cpu_executor_create(&reader, &config, &executor) ==
+           cases[i].status);
+    EXPECT((executor != NULL) == (cases[i].status == DAMACY_OK));
+    damacy_executor_destroy(executor);
+  }
+  return 0;
+}
+
+static int
+test_input_memory_budget(void)
+{
+  struct test_store store;
+  store_init(&store, 2);
+  struct damacy_reader reader = { .store = &store.base,
+                                  .max_inflight_reads = 2 };
+  struct damacy_stats stats = { 0 };
+  struct damacy_executor* executor = NULL;
+  EXPECT(start_executor(&reader, 2, 256, 2, 8 << 20, &stats, &executor) == 0);
+  executor->ops->stats(executor, &stats);
+  uint64_t initial = stats.host_bytes_committed;
+  damacy_executor_destroy(executor);
+  struct damacy_cpu_config config = { .decode_workers = 2,
+                                      .max_encoded_chunk_bytes =
+                                        2 * CHUNK_BYTES,
+                                      .max_decoded_chunk_bytes = CHUNK_BYTES,
+                                      .max_memory_bytes = 8 << 20,
+                                      .chunks_per_input_buffer = 256 };
+  struct damacy_batch_spec output = output_spec(2);
+  EXPECT(damacy_cpu_executor_create(&reader, &config, &executor) == DAMACY_OK);
+  EXPECT(executor->ops->start(executor, &output, &stats) == DAMACY_OK);
+  executor->ops->stats(executor, &stats);
+  uint64_t required = stats.host_bytes_committed;
+  EXPECT(required == initial + 2 * 256 * CHUNK_BYTES);
+  damacy_executor_destroy(executor);
+  const uint64_t budgets[] = { 1, initial, required - 1, required };
+  for (unsigned i = 0; i < 4; ++i) {
+    config.max_memory_bytes = budgets[i];
+    EXPECT(damacy_cpu_executor_create(&reader, &config, &executor) ==
+           DAMACY_OK);
+    EXPECT(executor->ops->start(executor, &output, &stats) ==
+           (i == 3 ? DAMACY_OK : DAMACY_BUDGET));
+    executor->ops->stats(executor, &stats);
+    EXPECT(stats.host_bytes_committed == (i == 3 ? required : 0));
+    damacy_executor_destroy(executor);
+  }
+  config.max_encoded_chunk_bytes = UINT32_MAX;
+  config.max_memory_bytes = 8 << 20;
+  EXPECT(damacy_cpu_executor_create(&reader, &config, &executor) == DAMACY_OK);
+  EXPECT(executor->ops->start(executor, &output, &stats) == DAMACY_BUDGET);
+  damacy_executor_destroy(executor);
+  if (SIZE_MAX > UINT32_MAX) {
+    config.max_encoded_chunk_bytes = CHUNK_BYTES;
+    config.max_memory_bytes = UINT64_MAX;
+    output.sample_shape[0] = INT64_MAX / 8;
+    EXPECT(damacy_cpu_executor_create(&reader, &config, &executor) ==
+           DAMACY_OK);
+    EXPECT(executor->ops->start(executor, &output, &stats) == DAMACY_BUDGET);
+    damacy_executor_destroy(executor);
+  }
+  return 0;
+}
+
 int
 main(void)
 {
@@ -610,5 +855,10 @@ main(void)
   RUN(test_plan_memory_budget);
   RUN(test_plan_memory_retry);
   RUN(test_read_errors_and_shutdown);
+  RUN(test_read_buffer_capacity);
+  RUN(test_merged_read_limit);
+  RUN(test_read_plan_many_workers);
+  RUN(test_input_memory_budget);
+  RUN(test_input_buffer_validation);
   return 0;
 }

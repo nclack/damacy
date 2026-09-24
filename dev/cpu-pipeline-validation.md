@@ -18,7 +18,9 @@ eight I/O workers, and a 4 GiB executor memory limit. Each worker count was
 measured once in the same 16-core CPU allocation, in the order 1, 4, 8, 16.
 Filesystem caches were shared between runs. These are rates after warmup, not
 cold-storage measurements or training-loop timings. The scenario
-is [throughput-cpu.json](../bench/scenarios/throughput-cpu.json).
+is [throughput-cpu.json](../bench/scenarios/throughput-cpu.json). It now sets
+a 5 GiB limit, because later 256-chunk input buffers reserve 2 GiB with the
+default 4 MiB encoded-chunk bound.
 
 CUDA comparisons use five warmup batches and thirty measured batches, with a
 6 GiB device-memory limit. Baseline and refactor runs alternate on one L40
