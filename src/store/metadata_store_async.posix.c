@@ -93,8 +93,13 @@ process_job(struct metadata_store_async* s, struct metadata_job* job)
     started = metadata_monotonic_ns();
     int rc = fstat(fd, &st);
     metadata_record_op_latency(&s->common, OP_STATX, started);
-    if (rc || st.st_size < 0 || (uint64_t)st.st_size > SIZE_MAX) {
+    if (rc || st.st_size < 0) {
       status = DAMACY_IO;
+      goto Close;
+    }
+    if ((uint64_t)st.st_size > job->requested_len ||
+        (uint64_t)st.st_size > UINT32_MAX) {
+      status = DAMACY_BUDGET;
       goto Close;
     }
     len = (size_t)st.st_size;
@@ -292,7 +297,17 @@ metadata_store_async_read_file(struct metadata_store_async* s,
                                metadata_store_read_cb cb,
                                void* user)
 {
-  return post_read(s, key, 0, 0, REQ_READ_FILE, cb, user);
+  return post_read(s, key, 0, SIZE_MAX, REQ_READ_FILE, cb, user);
+}
+
+int
+metadata_store_async_read_file_bounded(struct metadata_store_async* s,
+                                       const char* key,
+                                       size_t max_bytes,
+                                       metadata_store_read_cb cb,
+                                       void* user)
+{
+  return post_read(s, key, 0, max_bytes, REQ_READ_FILE, cb, user);
 }
 
 int
