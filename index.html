@@ -6,7 +6,7 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="High-speed streamed assembly of tensors from zarr sources to GPU.">
+        <meta name="description" content="Streamed assembly of tensors from Zarr sources into RAM or GPU memory.">
       
       
       
@@ -14,14 +14,14 @@
       
       
       
-        <link rel="next" href="budget/">
+        <link rel="next" href="pipeline/">
       
       
         
       
       
       <link rel="icon" href="assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -29,7 +29,7 @@
       
     
     
-      <link rel="stylesheet" href="assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="assets/stylesheets/palette.ab4e12ef.min.css">
@@ -320,10 +320,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#quick-start" class="md-nav__link">
+  <a href="#cuda-quick-start" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Quick start
+        CUDA quick start
       
     </span>
   </a>
@@ -367,6 +367,33 @@
   
 </nav>
       
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pipeline composition
+  
+
+    
+  </span>
+  
+  
+
+      </a>
     </li>
   
 
@@ -533,10 +560,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#quick-start" class="md-nav__link">
+  <a href="#cuda-quick-start" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Quick start
+        CUDA quick start
       
     </span>
   </a>
@@ -597,16 +624,17 @@
 
 
 <h1 id="damacy">damacy<a class="headerlink" href="#damacy" title="Permanent link">&para;</a></h1>
-<p><strong>High-speed streamed assembly of tensors from zarr sources to GPU.</strong></p>
-<p>damacy reads sharded <a href="https://ngff.openmicroscopy.org/">NGFF</a> zarr stores
-straight onto the GPU: per-shard chunk indexing, parallel host I/O,
-in-flight GPU-side decompression (zstd, blosc1-zstd), and a typed
-assemble kernel that lands each batch as a DLPack-ready device tensor.</p>
+<p><strong>Streamed assembly of tensors from Zarr sources into RAM or GPU memory.</strong></p>
+<p>Damacy separates metadata and chunk planning from CPU or CUDA execution. Both
+executors read Zarr v3 arrays, decode raw bytes, zstd, or Blosc-zstd, and return
+contiguous batches through DLPack. CPU builds require no CUDA toolkit or driver.</p>
+<p>Start with <a href="pipeline/">Pipeline composition</a> for the CPU API, complete
+component construction, resource limits, and buffer ownership.</p>
 <p><a href="https://github.com/nclack/damacy/actions/workflows/build.yml"><img alt="build" src="https://github.com/nclack/damacy/actions/workflows/build.yml/badge.svg" /></a>
 <a href="https://github.com/nclack/damacy/actions/workflows/test.yml"><img alt="test" src="https://github.com/nclack/damacy/actions/workflows/test.yml/badge.svg" /></a>
 <a href="https://codecov.io/gh/nclack/damacy"><img alt="codecov" src="https://codecov.io/gh/nclack/damacy/branch/main/graph/badge.svg" /></a></p>
 <hr />
-<h2 id="quick-start">Quick start<a class="headerlink" href="#quick-start" title="Permanent link">&para;</a></h2>
+<h2 id="cuda-quick-start">CUDA quick start<a class="headerlink" href="#cuda-quick-start" title="Permanent link">&para;</a></h2>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">damacy</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
@@ -614,44 +642,44 @@ assemble kernel that lands each batch as a DLPack-ready device tensor.</p>
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">samples_per_batch</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
 </span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">sample_shape</span><span class="o">=</span><span class="p">(</span><span class="mi">64</span><span class="p">,</span> <span class="mi">256</span><span class="p">,</span> <span class="mi">256</span><span class="p">),</span>
 </span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="n">max_gpu_memory_bytes</span><span class="o">=</span><span class="mi">1</span> <span class="o">&lt;&lt;</span> <span class="mi">30</span><span class="p">,</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;bf16&quot;</span><span class="p">,</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="p">)</span>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="n">samples</span> <span class="o">=</span> <span class="p">[</span>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    <span class="n">damacy</span><span class="o">.</span><span class="n">Sample</span><span class="p">(</span><span class="n">uri</span><span class="o">=</span><span class="s2">&quot;/data/cells/cell-1.zarr&quot;</span><span class="p">,</span> <span class="n">aabb</span><span class="o">=</span><span class="p">[(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">64</span><span class="p">),</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">256</span><span class="p">),</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">256</span><span class="p">)]),</span>
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    <span class="n">damacy</span><span class="o">.</span><span class="n">Sample</span><span class="p">(</span><span class="n">uri</span><span class="o">=</span><span class="s2">&quot;/data/cells/cell-2.zarr&quot;</span><span class="p">,</span> <span class="n">aabb</span><span class="o">=</span><span class="p">[(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">64</span><span class="p">),</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">256</span><span class="p">),</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">256</span><span class="p">)]),</span>
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="p">]</span>
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>
-</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="k">with</span> <span class="n">damacy</span><span class="o">.</span><span class="n">Pipeline</span><span class="p">(</span><span class="n">cfg</span><span class="p">)</span> <span class="k">as</span> <span class="n">d</span><span class="p">:</span>
-</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>    <span class="n">d</span><span class="o">.</span><span class="n">push</span><span class="p">(</span><span class="n">samples</span><span class="p">)</span>
-</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">samples</span><span class="p">)</span> <span class="o">//</span> <span class="n">cfg</span><span class="o">.</span><span class="n">samples_per_batch</span><span class="p">):</span>
-</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>        <span class="k">with</span> <span class="n">d</span><span class="o">.</span><span class="n">pop</span><span class="p">()</span> <span class="k">as</span> <span class="n">batch</span><span class="p">:</span>
-</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>            <span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">from_dlpack</span><span class="p">(</span><span class="n">batch</span><span class="p">)</span>
-</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>            <span class="o">...</span>  <span class="c1"># train step</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="n">dtype</span><span class="o">=</span><span class="s2">"bf16"</span><span class="p">,</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    <span class="n">device</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="p">)</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="n">samples</span> <span class="o">=</span> <span class="p">[</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    <span class="n">damacy</span><span class="o">.</span><span class="n">Sample</span><span class="p">(</span><span class="n">uri</span><span class="o">=</span><span class="s2">"/data/cells/cell-1.zarr"</span><span class="p">,</span> <span class="n">aabb</span><span class="o">=</span><span class="p">[(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">64</span><span class="p">),</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">256</span><span class="p">),</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">256</span><span class="p">)]),</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    <span class="n">damacy</span><span class="o">.</span><span class="n">Sample</span><span class="p">(</span><span class="n">uri</span><span class="o">=</span><span class="s2">"/data/cells/cell-2.zarr"</span><span class="p">,</span> <span class="n">aabb</span><span class="o">=</span><span class="p">[(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">64</span><span class="p">),</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">256</span><span class="p">),</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">256</span><span class="p">)]),</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="p">]</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="k">with</span> <span class="n">damacy</span><span class="o">.</span><span class="n">Pipeline</span><span class="p">(</span><span class="n">cfg</span><span class="p">)</span> <span class="k">as</span> <span class="n">d</span><span class="p">:</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>    <span class="n">d</span><span class="o">.</span><span class="n">push</span><span class="p">(</span><span class="n">samples</span><span class="p">)</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">samples</span><span class="p">)</span> <span class="o">//</span> <span class="n">cfg</span><span class="o">.</span><span class="n">samples_per_batch</span><span class="p">):</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>        <span class="k">with</span> <span class="n">d</span><span class="o">.</span><span class="n">pop</span><span class="p">()</span> <span class="k">as</span> <span class="n">batch</span><span class="p">:</span>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>            <span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">from_dlpack</span><span class="p">(</span><span class="n">batch</span><span class="p">)</span>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>            <span class="o">...</span>  <span class="c1"># train step</span>
 </span></code></pre></div>
 <p>By default the pipeline captures whatever CUDA context is current on
-the calling thread; PyTorch sets one up implicitly, and bare-Python
+the calling thread; callers can initialize it through PyTorch, and bare-Python
 users can call <code>damacy._native.cuda_init_primary()</code> once. For
 multi-GPU setups, see <a href="distributed/">Distributed</a> for the device
 binding model and a torchrun example.</p>
 <h2 id="concepts">Concepts<a class="headerlink" href="#concepts" title="Permanent link">&para;</a></h2>
 <p>You hand damacy a stream of <code>Sample</code>s; it returns a stream of
-<code>Batch</code>es, each one a device tensor of shape
+<code>Batch</code>es, each one a CPU or CUDA tensor of shape
 <code>(samples_per_batch, *sample_shape)</code>.</p>
 <ul>
 <li>A <strong><code>Sample</code></strong> is one crop request: a zarr URI plus an <code>aabb</code>
   (axis-aligned bounding box) given as a list of <code>(start, stop)</code>
   tuples — one per spatial axis. Every <code>aabb</code> must produce the same
-  per-sample shape, and that shape is <code>Config.sample_shape</code>.</li>
+  per-sample shape, and that shape is <code>BatchSpec.shape</code> (or <code>Config.sample_shape</code>).</li>
 <li>A <strong><code>Pipeline</code></strong> is a streaming context. You <code>push</code> an iterable
   of samples (lazy generators are fine — and recommended for long
   runs) and call <code>pop()</code> to block for the next ready batch.</li>
-<li>A <strong><code>Batch</code></strong> is a DLPack-ready handle to a GPU-resident tensor.
-  Use it inside a <code>with</code> block so damacy can reclaim the slot when
-  you're done.</li>
+<li>A <strong><code>Batch</code></strong> is a DLPack-ready handle to a CPU or CUDA tensor.
+  Use it inside a <code>with</code> block and release consumer views so damacy can
+  reclaim the buffer when you are done.</li>
 </ul>
 <p><code>samples_per_batch</code>, <code>sample_shape</code>, and <code>max_gpu_memory_bytes</code> are required
-on <code>Config</code>; everything else has a sensible default. The assemble
-kernel casts heterogeneous source dtypes
+on <code>Config</code>; everything else has a sensible default. Assembly casts heterogeneous source dtypes
 (<code>u8</code>/<code>u16</code>/<code>i16</code>/<code>u32</code>/<code>i32</code>/<code>f16</code>/<code>f32</code>) to the configured
 destination <code>dtype</code> (<code>f32</code> or <code>bf16</code>) on the way out, so your zarrs
 do not need to match it.</p>
@@ -660,6 +688,7 @@ do not need to match it.</p>
 The native extension (<code>damacy._native</code>) is an implementation detail
 documented only via its <code>.pyi</code> stub.</p>
 <ul>
+<li><a href="pipeline/">Pipeline composition</a> — CPU and CUDA components, builds, and lifetimes.</li>
 <li><a href="api/">API reference</a> — <code>Pipeline</code>, <code>Config</code>, <code>Sample</code>, <code>Batch</code>, the
   exception hierarchy, and the <code>Stats</code>/<code>Metric</code> value types.</li>
 <li><a href="budget/">GPU memory budget</a> — how to think about
@@ -741,7 +770,7 @@ documented only via its <code>.pyi</code> stub.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": ".", "features": ["navigation.instant", "navigation.tracking", "navigation.sections", "navigation.top", "content.code.copy", "content.code.annotate", "toc.follow"], "search": "assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

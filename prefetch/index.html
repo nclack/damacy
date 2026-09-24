@@ -6,7 +6,7 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="High-speed streamed assembly of tensors from zarr sources to GPU.">
+        <meta name="description" content="Streamed assembly of tensors from Zarr sources into RAM or GPU memory.">
       
       
       
@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -270,6 +270,33 @@
     
   
     Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pipeline composition
   
 
     
@@ -655,34 +682,34 @@
 
 
 <h1 id="async-prefetch">Async prefetch<a class="headerlink" href="#async-prefetch" title="Permanent link">&para;</a></h1>
-<p>The <a href="../#quick-start">quick start</a> shows the synchronous read
+<p>The <a href="../#cuda-quick-start">quick start</a> shows the synchronous read
 pattern:</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="k">with</span> <span class="n">batch</span> <span class="k">as</span> <span class="n">t</span><span class="p">:</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">from_dlpack</span><span class="p">(</span><span class="n">t</span><span class="p">)</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="o">...</span>  <span class="c1"># train step</span>
 </span></code></pre></div>
-<p><code>x</code> is a zero-copy view onto damacy's slot, and the <code>with</code> block
-releases the slot at scope exit by host-syncing on damacy's
-producer stream. That's fine when fwd/bwd happens inside the
-block.</p>
-<p>Training loops that prefetch the next batch on a background thread
-while the main thread runs fwd/bwd need to skip that host sync.
-Both patterns below do — they hand a CUDA event (or stream) to
-<code>Batch.release(event=...)</code>, and damacy waits on it before reusing
-the slot.</p>
+<p><code>x</code> shares the output buffer. Exiting the <code>with</code> block releases the batch
+reference; the tensor retains its own reference until it is destroyed. Retaining
+both output buffers prevents the next batch from completing.</p>
+<p>For CUDA work that outlives the batch's host scope, pass a consumer event or
+stream to <code>Batch.release(event=...)</code>. Damacy orders subsequent writes behind
+that event. Release the tensor view as well when it is no longer needed.
+These CUDA examples use an existing <code>Config</code>-based or injected pipeline;
+<a href="../pipeline/">Pipeline composition</a> covers CPU consumers.</p>
 <h2 id="deferred-release-preferred">Deferred release (preferred)<a class="headerlink" href="#deferred-release-preferred" title="Permanent link">&para;</a></h2>
 <p>No D2D copy. The batch handle is held for the duration of the
 training step; release happens after fwd/bwd has been enqueued on
 the current stream:</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">prefetch</span><span class="p">(</span><span class="n">p</span><span class="p">):</span>
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    <span class="n">batch</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">pop</span><span class="p">()</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    <span class="n">tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">from_dlpack</span><span class="p">(</span><span class="n">batch</span><span class="p">)</span>  <span class="c1"># zero-copy view onto damacy&#39;s slot</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    <span class="n">tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">from_dlpack</span><span class="p">(</span><span class="n">batch</span><span class="p">)</span>  <span class="c1"># zero-copy view onto damacy's slot</span>
 </span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    <span class="k">return</span> <span class="n">tensor</span><span class="p">,</span> <span class="n">batch</span>
 </span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>
 </span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="c1"># Main training loop:</span>
 </span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="n">tensor</span><span class="p">,</span> <span class="n">batch</span> <span class="o">=</span> <span class="n">prefetch_future</span><span class="o">.</span><span class="n">result</span><span class="p">()</span>
 </span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="o">...</span> <span class="c1"># forward / backward on tensor</span>
 </span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="n">batch</span><span class="o">.</span><span class="n">release</span><span class="p">(</span><span class="n">event</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">current_stream</span><span class="p">())</span>  <span class="c1"># no host sync</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="k">del</span> <span class="n">tensor</span>
 </span></code></pre></div>
 <p><code>event=torch.cuda.current_stream()</code> records a CUevent on the
 caller's stream and tells damacy to wait on it before re-assembling
@@ -845,7 +872,7 @@ comparing it with <code>ulimit -n</code>.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.sections", "navigation.top", "content.code.copy", "content.code.annotate", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>
