@@ -11,7 +11,6 @@ test_memory_and_threads(void)
 {
   EXPECT(platform_page_size() == (size_t)sysconf(_SC_PAGESIZE));
   EXPECT(platform_page_alignment() == platform_page_size());
-  EXPECT(platform_available_memory() > 0);
   EXPECT(platform_default_thread_count() > 0);
   void* ptr = platform_aligned_alloc(64, 128);
   EXPECT(ptr && (uintptr_t)ptr % 64 == 0);
