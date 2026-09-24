@@ -6,7 +6,7 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="High-speed streamed assembly of tensors from zarr sources to GPU.">
+        <meta name="description" content="Streamed assembly of tensors from Zarr sources into RAM or GPU memory.">
       
       
       
@@ -270,6 +270,33 @@
     
   
     Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pipeline composition
   
 
     
@@ -655,21 +682,20 @@
 
 
 <h1 id="async-prefetch">Async prefetch<a class="headerlink" href="#async-prefetch" title="Permanent link">&para;</a></h1>
-<p>The <a href="../#quick-start">quick start</a> shows the synchronous read
+<p>The <a href="../#cuda-quick-start">quick start</a> shows the synchronous read
 pattern:</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="k">with</span> <span class="n">batch</span> <span class="k">as</span> <span class="n">t</span><span class="p">:</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">from_dlpack</span><span class="p">(</span><span class="n">t</span><span class="p">)</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="o">...</span>  <span class="c1"># train step</span>
 </span></code></pre></div>
-<p><code>x</code> is a zero-copy view onto damacy's slot, and the <code>with</code> block
-releases the slot at scope exit by host-syncing on damacy's
-producer stream. That's fine when fwd/bwd happens inside the
-block.</p>
-<p>Training loops that prefetch the next batch on a background thread
-while the main thread runs fwd/bwd need to skip that host sync.
-Both patterns below do — they hand a CUDA event (or stream) to
-<code>Batch.release(event=...)</code>, and damacy waits on it before reusing
-the slot.</p>
+<p><code>x</code> shares the output buffer. Exiting the <code>with</code> block releases the batch
+reference; the tensor retains its own reference until it is destroyed. Retaining
+both output buffers prevents the next batch from completing.</p>
+<p>For CUDA work that outlives the batch's host scope, pass a consumer event or
+stream to <code>Batch.release(event=...)</code>. Damacy orders subsequent writes behind
+that event. Release the tensor view as well when it is no longer needed.
+These CUDA examples use an existing <code>Config</code>-based or injected pipeline;
+<a href="../pipeline/">Pipeline composition</a> covers CPU consumers.</p>
 <h2 id="deferred-release-preferred">Deferred release (preferred)<a class="headerlink" href="#deferred-release-preferred" title="Permanent link">&para;</a></h2>
 <p>No D2D copy. The batch handle is held for the duration of the
 training step; release happens after fwd/bwd has been enqueued on
@@ -683,6 +709,7 @@ the current stream:</p>
 </span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="n">tensor</span><span class="p">,</span> <span class="n">batch</span> <span class="o">=</span> <span class="n">prefetch_future</span><span class="o">.</span><span class="n">result</span><span class="p">()</span>
 </span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="o">...</span> <span class="c1"># forward / backward on tensor</span>
 </span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="n">batch</span><span class="o">.</span><span class="n">release</span><span class="p">(</span><span class="n">event</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">current_stream</span><span class="p">())</span>  <span class="c1"># no host sync</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="k">del</span> <span class="n">tensor</span>
 </span></code></pre></div>
 <p><code>event=torch.cuda.current_stream()</code> records a CUevent on the
 caller's stream and tells damacy to wait on it before re-assembling
