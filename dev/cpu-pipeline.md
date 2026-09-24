@@ -79,10 +79,10 @@ adjacent or overlapping ranges within each shard and interleave merged reads
 across shards. Each unique chunk retains its offset within a merged read; its
 uses still control output assembly. CPU reads use exact encoded byte ranges,
 without CUDA's page alignment. It handles raw bytes, zstd, and C-Blosc zstd
-with no, byte, or bit shuffle. It copies clipped chunk intersections and casts
-supported source types to `f32` or `bf16`, including fill-only chunks. The CUDA
-executor currently retains its per-use decode behavior; cross-sample GPU decode
-reuse can be optimized separately.
+with no, byte, or bit shuffle. It copies clipped chunk intersections, gathers
+indexed positions, and casts supported source types to `f32` or `bf16`,
+including fill-only chunks. The CUDA executor currently retains its per-use
+decode behavior; cross-sample GPU decode reuse can be optimized separately.
 
 ## Resources and ownership
 
