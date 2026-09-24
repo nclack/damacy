@@ -3,9 +3,9 @@
 #endif
 
 #include "store/metadata_store_async.h"
+#include "store/metadata_store_async_common.h"
 
 #include "log/log.h"
-#include "platform/platform.h"
 #ifdef DAMACY_METADATA_ASYNC_NUMA
 #include "numa/numa.h"
 #endif
@@ -16,14 +16,12 @@
 #include <linux/openat2.h>
 #include <math.h>
 #include <pthread.h>
-#include <stdatomic.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
 #include <sys/stat.h>
-#include <time.h>
 #include <unistd.h>
 
 #define URING_MAX_EPOLL_EVENTS 2
@@ -33,20 +31,6 @@ enum request_kind
   REQ_READ_FILE,
   REQ_READ,
   REQ_STAT,
-};
-
-enum op_kind
-{
-  OP_STATX,
-  OP_OPEN,
-  OP_READ,
-  OP_CLOSE,
-};
-
-enum latency_op_kind
-{
-  LATENCY_OP_STAT,
-  LATENCY_OP_SUBMIT,
 };
 
 #define OP_TAG_MASK 0x7ull
@@ -86,33 +70,6 @@ struct metadata_job
 _Static_assert(_Alignof(struct metadata_job) >= 8,
                "metadata_job pointers must leave low bits for op tags");
 
-struct metadata_metrics
-{
-  struct {
-    _Atomic uint64_t ops;
-    _Atomic uint64_t stat_ops;
-    _Atomic uint64_t submit_ops;
-    _Atomic uint64_t active;
-    _Atomic uint64_t max_active;
-    _Atomic uint64_t total_sleep_ns;
-    _Atomic uint64_t max_sleep_ns;
-  } injector;
-
-  struct {
-    _Atomic uint64_t jobs;
-    _Atomic uint64_t active;
-    _Atomic uint64_t max_active;
-  } read;
-
-  struct {
-    _Atomic uint64_t count[METADATA_OP_LATENCY_NKINDS];
-    _Atomic uint64_t sum_ns[METADATA_OP_LATENCY_NKINDS];
-    _Atomic uint64_t max_ns[METADATA_OP_LATENCY_NKINDS];
-    _Atomic uint64_t buckets[METADATA_OP_LATENCY_NKINDS]
-                            [METADATA_OP_LATENCY_NBUCKETS];
-  } op_latency;
-};
-
 struct metadata_store_async
 {
   struct io_uring ring;
@@ -120,7 +77,7 @@ struct metadata_store_async
   int worker_started;
   int ring_initialized;
   int lock_initialized;
-  int rng_lock_initialized;
+  int common_initialized;
   int event_fd;
   int epoll_fd;
   uint32_t concurrency;
@@ -131,184 +88,12 @@ struct metadata_store_async
   struct metadata_job* pending_tail;
   int stopping;
 
-  struct damacy_latency_model latency;
-  int latency_enabled;
-  uint64_t rng_state;
-  pthread_mutex_t rng_lock;
-
-  struct metadata_metrics metrics;
+  struct metadata_store_common common;
 
 #ifdef DAMACY_METADATA_ASYNC_NUMA
   struct numa_resolved affinity;
 #endif
 };
-
-static void
-atomic_max_u64(_Atomic uint64_t* dst, uint64_t val)
-{
-  uint64_t cur = atomic_load_explicit(dst, memory_order_relaxed);
-  while (cur < val &&
-         !atomic_compare_exchange_weak_explicit(
-           dst, &cur, val, memory_order_relaxed, memory_order_relaxed)) {
-  }
-}
-
-static uint64_t
-monotonic_ns(void)
-{
-  struct timespec now;
-  clock_gettime(CLOCK_MONOTONIC, &now);
-  return (uint64_t)now.tv_sec * 1000000000ull + (uint64_t)now.tv_nsec;
-}
-
-static unsigned
-latency_bucket(uint64_t ns)
-{
-  if (ns == 0)
-    return 0;
-  unsigned idx = 63u - (unsigned)__builtin_clzll(ns);
-  if (idx >= METADATA_OP_LATENCY_NBUCKETS)
-    idx = METADATA_OP_LATENCY_NBUCKETS - 1;
-  return idx;
-}
-
-static void
-record_op_latency(struct metadata_store_async* s,
-                  enum op_kind kind,
-                  uint64_t submit_ts)
-{
-  if (!submit_ts)
-    return;
-  uint64_t now = monotonic_ns();
-  uint64_t elapsed = now > submit_ts ? now - submit_ts : 0;
-  atomic_fetch_add_explicit(
-    &s->metrics.op_latency.count[kind], 1, memory_order_relaxed);
-  atomic_fetch_add_explicit(
-    &s->metrics.op_latency.sum_ns[kind], elapsed, memory_order_relaxed);
-  atomic_max_u64(&s->metrics.op_latency.max_ns[kind], elapsed);
-  atomic_fetch_add_explicit(
-    &s->metrics.op_latency.buckets[kind][latency_bucket(elapsed)],
-    1,
-    memory_order_relaxed);
-}
-
-static int
-latency_enabled(const struct damacy_latency_model* l)
-{
-  return l && (l->baseline_ns || l->lognormal_mu_ln_ns != 0.0 ||
-               l->lognormal_sigma_ln_ns != 0.0);
-}
-
-static uint32_t
-pcg32(uint64_t* state)
-{
-  uint64_t oldstate = *state;
-  *state = oldstate * 6364136223846793005ULL + 1442695040888963407ULL;
-  uint32_t xorshifted = (uint32_t)(((oldstate >> 18u) ^ oldstate) >> 27u);
-  uint32_t rot = (uint32_t)(oldstate >> 59u);
-  return (xorshifted >> rot) | (xorshifted << ((-rot) & 31u));
-}
-
-static double
-uniform01(uint64_t* state)
-{
-  uint32_t u = pcg32(state);
-  return ((double)u + 1.0) / 4294967297.0;
-}
-
-static double
-normal01(uint64_t* state)
-{
-  double u1 = uniform01(state);
-  double u2 = uniform01(state);
-  return sqrt(-2.0 * log(u1)) * cos(6.2831853071795864769 * u2);
-}
-
-static uint64_t
-sample_delay_ns(struct metadata_store_async* s)
-{
-  const struct damacy_latency_model* l = &s->latency;
-  uint64_t ns = l->baseline_ns;
-  if (l->lognormal_mu_ln_ns == 0.0 && l->lognormal_sigma_ln_ns == 0.0)
-    return ns;
-
-  pthread_mutex_lock(&s->rng_lock);
-  double z = normal01(&s->rng_state);
-  pthread_mutex_unlock(&s->rng_lock);
-
-  double tail = exp(l->lognormal_mu_ln_ns + l->lognormal_sigma_ln_ns * z);
-  uint64_t tail_ns = tail > 0.0 ? (uint64_t)tail : 0;
-  if (l->cap_ns && tail_ns > l->cap_ns)
-    tail_ns = l->cap_ns;
-  if (UINT64_MAX - ns < tail_ns)
-    return UINT64_MAX;
-  return ns + tail_ns;
-}
-
-static void
-sleep_for_sample(struct metadata_store_async* s, enum latency_op_kind kind)
-{
-  if (!s->latency_enabled)
-    return;
-  uint64_t ns = sample_delay_ns(s);
-  if (ns > INT64_MAX)
-    ns = INT64_MAX;
-  atomic_fetch_add_explicit(&s->metrics.injector.ops, 1, memory_order_relaxed);
-  atomic_fetch_add_explicit(
-    &s->metrics.injector.total_sleep_ns, ns, memory_order_relaxed);
-  atomic_max_u64(&s->metrics.injector.max_sleep_ns, ns);
-  switch (kind) {
-    case LATENCY_OP_STAT:
-      atomic_fetch_add_explicit(
-        &s->metrics.injector.stat_ops, 1, memory_order_relaxed);
-      break;
-    case LATENCY_OP_SUBMIT:
-      atomic_fetch_add_explicit(
-        &s->metrics.injector.submit_ops, 1, memory_order_relaxed);
-      break;
-  }
-  uint64_t active = atomic_fetch_add_explicit(
-                      &s->metrics.injector.active, 1, memory_order_relaxed) +
-                    1;
-  atomic_max_u64(&s->metrics.injector.max_active, active);
-  if (ns)
-    platform_sleep_ns((int64_t)ns);
-  atomic_fetch_sub_explicit(&s->metrics.injector.active, 1, memory_order_relaxed);
-}
-
-static void
-read_active_begin(struct metadata_store_async* s)
-{
-  atomic_fetch_add_explicit(&s->metrics.read.jobs, 1, memory_order_relaxed);
-  uint64_t active = atomic_fetch_add_explicit(
-                      &s->metrics.read.active, 1, memory_order_relaxed) +
-                    1;
-  atomic_max_u64(&s->metrics.read.max_active, active);
-}
-
-static void
-read_active_end(struct metadata_store_async* s)
-{
-  atomic_fetch_sub_explicit(&s->metrics.read.active, 1, memory_order_relaxed);
-}
-
-static int
-status_not_found_errno(int err)
-{
-  return err == ENOENT || err == ENOTDIR;
-}
-
-static enum damacy_status
-damacy_status_from_errno(int err)
-{
-  return status_not_found_errno(err) ? DAMACY_NOTFOUND : DAMACY_IO;
-}
-
-static enum store_stat_result
-stat_status_from_errno(int err)
-{
-  return status_not_found_errno(err) ? STORE_STAT_NOT_FOUND : STORE_STAT_ERROR;
-}
 
 static void
 job_free(struct metadata_job* job)
@@ -384,7 +169,7 @@ submit_op(struct metadata_store_async* s,
   if (!sqe)
     return 1;
   set_sqe_data(sqe, job, kind);
-  job->submit_ts[kind] = monotonic_ns();
+  job->submit_ts[kind] = metadata_monotonic_ns();
   *sqe_out = sqe;
   return 0;
 }
@@ -402,7 +187,7 @@ complete_job(struct metadata_store_async* s, struct metadata_job* job)
       stat_status = STORE_STAT_OK;
       size = (uint64_t)job->stx.stx_size;
     } else {
-      stat_status = stat_status_from_errno(-job->stat_res);
+      stat_status = metadata_stat_status_from_errno(-job->stat_res);
     }
     job->stat_cb(job->user, stat_status, size);
   } else {
@@ -447,7 +232,7 @@ submit_read(struct metadata_store_async* s, struct metadata_job* job)
   struct io_uring_sqe* sqe = NULL;
   if (submit_op(s, job, OP_READ, &sqe))
     return 1;
-  read_active_begin(s);
+  metadata_read_active_begin(&s->common);
   io_uring_prep_read(sqe, job->fd, job->data, job->len, job->offset);
   return 0;
 }
@@ -525,13 +310,13 @@ start_job(struct metadata_store_async* s, struct metadata_job* job)
   job->status = DAMACY_OK;
 
   if (job->kind == REQ_STAT) {
-    sleep_for_sample(s, LATENCY_OP_STAT);
+    metadata_inject_latency(&s->common, LATENCY_OP_STAT);
     if (submit_statx(s, job))
       fail_request_before_submit(s, job, DAMACY_OOM);
     return;
   }
 
-  sleep_for_sample(s, LATENCY_OP_SUBMIT);
+  metadata_inject_latency(&s->common, LATENCY_OP_SUBMIT);
   if (job->kind == REQ_READ_FILE) {
     if (ensure_sq_space(s, 2)) {
       fail_request_before_submit(s, job, DAMACY_IO);
@@ -610,7 +395,7 @@ handle_statx_complete(struct metadata_store_async* s, struct metadata_job* job)
   }
 
   if (job->stat_res < 0) {
-    job->status = damacy_status_from_errno(-job->stat_res);
+    job->status = metadata_status_from_errno(-job->stat_res);
     if (job->open_done) {
       if (job->fd >= 0)
         finish_job(s, job);
@@ -634,7 +419,7 @@ handle_open_complete(struct metadata_store_async* s, struct metadata_job* job)
 {
   job->open_done = 1;
   if (job->open_res < 0) {
-    job->status = damacy_status_from_errno(-job->open_res);
+    job->status = metadata_status_from_errno(-job->open_res);
     if (job->kind == REQ_READ || job->stat_done)
       complete_job(s, job);
     return;
@@ -657,12 +442,12 @@ handle_open_complete(struct metadata_store_async* s, struct metadata_job* job)
 static void
 handle_read_complete(struct metadata_store_async* s, struct metadata_job* job)
 {
-  read_active_end(s);
+  metadata_read_active_end(&s->common);
   if (job->read_res < 0) {
     free(job->data);
     job->data = NULL;
     job->len = 0;
-    job->status = damacy_status_from_errno(-job->read_res);
+    job->status = metadata_status_from_errno(-job->read_res);
   } else if ((size_t)job->read_res != job->len) {
     free(job->data);
     job->data = NULL;
@@ -687,7 +472,7 @@ handle_cqe(struct metadata_store_async* s, struct io_uring_cqe* cqe)
     return;
   struct metadata_job* job = (struct metadata_job*)(data & ~OP_TAG_MASK);
   enum op_kind kind = (enum op_kind)(data & OP_TAG_MASK);
-  record_op_latency(s, kind, job->submit_ts[kind]);
+  metadata_record_op_latency(&s->common, kind, job->submit_ts[kind]);
   switch (kind) {
     case OP_STATX:
       job->stat_res = cqe->res;
@@ -844,8 +629,8 @@ metadata_store_async_free_partial(struct metadata_store_async* s)
     io_uring_queue_exit(&s->ring);
   if (s->lock_initialized)
     pthread_mutex_destroy(&s->lock);
-  if (s->rng_lock_initialized)
-    pthread_mutex_destroy(&s->rng_lock);
+  if (s->common_initialized)
+    metadata_store_common_destroy(&s->common);
   while (s->pending_head) {
     struct metadata_job* job = s->pending_head;
     s->pending_head = job->next;
@@ -881,18 +666,13 @@ metadata_store_async_create(int concurrency,
 #else
   (void)affinity;
 #endif
-  if (latency) {
-    s->latency = *latency;
-    s->latency_enabled = latency_enabled(latency);
-    s->rng_state = latency->seed ? latency->seed : 0xc0ffee1234ULL;
-  }
 
   if (pthread_mutex_init(&s->lock, NULL) != 0)
     goto Fail;
   s->lock_initialized = 1;
-  if (pthread_mutex_init(&s->rng_lock, NULL) != 0)
+  if (metadata_store_common_init(&s->common, latency))
     goto Fail;
-  s->rng_lock_initialized = 1;
+  s->common_initialized = 1;
 
   uint32_t entries = ring_entries_for_concurrency(concurrency);
   int rc = io_uring_queue_init(entries, &s->ring, 0);
@@ -965,6 +745,12 @@ metadata_store_async_destroy(struct metadata_store_async* s)
     pthread_join(s->worker, NULL);
   s->worker_started = 0;
   metadata_store_async_free_partial(s);
+}
+
+struct metadata_store_common*
+metadata_store_async_common(struct metadata_store_async* s)
+{
+  return &s->common;
 }
 
 static int
@@ -1049,123 +835,4 @@ metadata_store_async_stat(struct metadata_store_async* s,
     return 1;
   }
   return 0;
-}
-
-void
-metadata_store_async_latency_stats_get(
-  struct metadata_store_async* s,
-  struct metadata_store_async_latency_stats* out)
-{
-  if (!out)
-    return;
-  *out = (struct metadata_store_async_latency_stats){ 0 };
-  if (!s)
-    return;
-  *out = (struct metadata_store_async_latency_stats){
-    .ops = atomic_load_explicit(&s->metrics.injector.ops, memory_order_relaxed),
-    .stat_ops =
-      atomic_load_explicit(&s->metrics.injector.stat_ops, memory_order_relaxed),
-    .submit_ops = atomic_load_explicit(&s->metrics.injector.submit_ops,
-                                       memory_order_relaxed),
-    .active =
-      atomic_load_explicit(&s->metrics.injector.active, memory_order_relaxed),
-    .max_active = atomic_load_explicit(&s->metrics.injector.max_active,
-                                       memory_order_relaxed),
-    .total_sleep_ns = atomic_load_explicit(&s->metrics.injector.total_sleep_ns,
-                                           memory_order_relaxed),
-    .max_sleep_ns = atomic_load_explicit(&s->metrics.injector.max_sleep_ns,
-                                         memory_order_relaxed),
-  };
-}
-
-void
-metadata_store_async_latency_stats_reset(struct metadata_store_async* s)
-{
-  if (!s)
-    return;
-  uint64_t active =
-    atomic_load_explicit(&s->metrics.injector.active, memory_order_relaxed);
-  atomic_store_explicit(&s->metrics.injector.ops, 0, memory_order_relaxed);
-  atomic_store_explicit(&s->metrics.injector.stat_ops, 0, memory_order_relaxed);
-  atomic_store_explicit(
-    &s->metrics.injector.submit_ops, 0, memory_order_relaxed);
-  atomic_store_explicit(
-    &s->metrics.injector.max_active, active, memory_order_relaxed);
-  atomic_store_explicit(
-    &s->metrics.injector.total_sleep_ns, 0, memory_order_relaxed);
-  atomic_store_explicit(
-    &s->metrics.injector.max_sleep_ns, 0, memory_order_relaxed);
-}
-
-void
-metadata_store_async_backend_stats_get(
-  struct metadata_store_async* s,
-  struct metadata_store_async_backend_stats* out)
-{
-  if (!out)
-    return;
-  *out = (struct metadata_store_async_backend_stats){ 0 };
-  if (!s)
-    return;
-  *out = (struct metadata_store_async_backend_stats){
-    .read_jobs =
-      atomic_load_explicit(&s->metrics.read.jobs, memory_order_relaxed),
-    .read_active =
-      atomic_load_explicit(&s->metrics.read.active, memory_order_relaxed),
-    .read_max_active =
-      atomic_load_explicit(&s->metrics.read.max_active, memory_order_relaxed),
-  };
-}
-
-void
-metadata_store_async_backend_stats_reset(struct metadata_store_async* s)
-{
-  if (!s)
-    return;
-  uint64_t active =
-    atomic_load_explicit(&s->metrics.read.active, memory_order_relaxed);
-  atomic_store_explicit(&s->metrics.read.jobs, 0, memory_order_relaxed);
-  atomic_store_explicit(
-    &s->metrics.read.max_active, active, memory_order_relaxed);
-}
-
-void
-metadata_store_async_op_latency_stats_get(
-  struct metadata_store_async* s,
-  struct metadata_store_async_op_latency_stats* out)
-{
-  if (!out)
-    return;
-  *out = (struct metadata_store_async_op_latency_stats){ 0 };
-  if (!s)
-    return;
-  for (unsigned k = 0; k < METADATA_OP_LATENCY_NKINDS; ++k) {
-    out->kinds[k].count = atomic_load_explicit(&s->metrics.op_latency.count[k],
-                                               memory_order_relaxed);
-    out->kinds[k].sum_ns = atomic_load_explicit(
-      &s->metrics.op_latency.sum_ns[k], memory_order_relaxed);
-    out->kinds[k].max_ns = atomic_load_explicit(
-      &s->metrics.op_latency.max_ns[k], memory_order_relaxed);
-    for (unsigned b = 0; b < METADATA_OP_LATENCY_NBUCKETS; ++b)
-      out->kinds[k].buckets[b] = atomic_load_explicit(
-        &s->metrics.op_latency.buckets[k][b], memory_order_relaxed);
-  }
-}
-
-void
-metadata_store_async_op_latency_stats_reset(struct metadata_store_async* s)
-{
-  if (!s)
-    return;
-  for (unsigned k = 0; k < METADATA_OP_LATENCY_NKINDS; ++k) {
-    atomic_store_explicit(
-      &s->metrics.op_latency.count[k], 0, memory_order_relaxed);
-    atomic_store_explicit(
-      &s->metrics.op_latency.sum_ns[k], 0, memory_order_relaxed);
-    atomic_store_explicit(
-      &s->metrics.op_latency.max_ns[k], 0, memory_order_relaxed);
-    for (unsigned b = 0; b < METADATA_OP_LATENCY_NBUCKETS; ++b)
-      atomic_store_explicit(
-        &s->metrics.op_latency.buckets[k][b], 0, memory_order_relaxed);
-  }
 }

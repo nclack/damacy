@@ -195,7 +195,8 @@ else()
     set(METADATA_STORE_IMPL store/metadata_store_async.c)
 endif()
 add_src_lib(metadata_store_async
-    SOURCES store/metadata_store_async.h ${METADATA_STORE_IMPL}
+    SOURCES store/metadata_store_async.h store/metadata_store_async_common.h
+            store/metadata_store_async_common.c ${METADATA_STORE_IMPL}
     LINKS store log platform
 )
 if(NOT APPLE)
