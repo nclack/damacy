@@ -35,6 +35,10 @@ struct render_job
   void* d_indices;
   uint32_t indices_cap;
   uint32_t n_indices;
+  struct gather_dim* gather_dims;
+  void* d_gather_dims;
+  uint32_t gather_dims_cap;
+  uint32_t n_gather_dims;
 
   uint32_t n_read_op_groups;
   uint32_t n_sample_plans;
@@ -91,7 +95,8 @@ struct wave_pack_limits
 int
 render_job_init(struct render_job* job,
                 uint32_t samples_per_batch_cap,
-                uint32_t indices_cap);
+                uint32_t indices_cap,
+                uint32_t gather_dims_cap);
 
 void
 render_job_destroy(struct render_job* job, int cuda_skip);

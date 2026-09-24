@@ -57,6 +57,23 @@ dispatch_index_capacity(const struct damacy_config* config)
   return (uint32_t)(count * config->samples_per_batch);
 }
 
+uint32_t
+dispatch_gather_dim_capacity(const struct damacy_config* config)
+{
+  return dispatch_index_capacity(config)
+           ? DAMACY_MAX_CHUNKS_PER_BATCH * config->sample_rank
+           : 0;
+}
+
+uint64_t
+dispatch_index_storage_bytes(const struct damacy_config* config)
+{
+  return (uint64_t)dispatch_index_capacity(config) *
+           sizeof(struct gather_index) +
+         (uint64_t)dispatch_gather_dim_capacity(config) *
+           sizeof(struct gather_dim);
+}
+
 enum damacy_status
 dispatch_plan_build(const struct prepared_plan* plan,
                     uint16_t slot,
@@ -74,7 +91,7 @@ dispatch_plan_build(const struct prepared_plan* plan,
   path_intern_reset(out->paths);
   out->n_chunk_plans = out->n_read_ops = out->n_read_op_groups = 0;
   out->n_sample_plans = plan->n_regions;
-  out->n_indices = 0;
+  out->n_indices = out->n_gather_dims = 0;
   int64_t strides[DAMACY_MAX_RANK + 1];
   strides[plan->output.sample_rank] = 1;
   for (int d = plan->output.sample_rank - 1; d >= 0; --d)
@@ -145,8 +162,13 @@ dispatch_plan_build(const struct prepared_plan* plan,
       .is_fill = chunk->missing
     };
     struct sample_plan* sample = &out->sample_plans[region->sample];
-    if (sample->indexed)
+    if (sample->indexed) {
       ++sample->chunk_count;
+      if (meta->rank > out->gather_dims_cap - out->n_gather_dims)
+        return DAMACY_BUDGET;
+      dispatch->gather_offset = out->n_gather_dims;
+      out->n_gather_dims += meta->rank;
+    }
     for (uint8_t d = 0; d < meta->rank; ++d) {
       if (!sample->indexed) {
         dispatch->chunk_d[d] = (uint32_t)(chunk->coordinate[d] -
@@ -159,7 +181,7 @@ dispatch_plan_build(const struct prepared_plan* plan,
                                                     region->source.dims[d],
                                                     origin,
                                                     meta->inner_chunk_shape[d]);
-      dispatch->gather[d] = (struct gather_dim){
+      out->gather_dims[dispatch->gather_offset + d] = (struct gather_dim){
         .begin = region->axes[d].count
                    ? sample->dims[d].index_offset + (uint32_t)span.begin
                    : (uint32_t)(span.begin - origin),

@@ -27,7 +27,7 @@ configuration — then round up generously:
 pool_reservation       = 2 × samples_per_batch × prod(sample_shape) × dtype_bytes
 one_chunk_per_wave     ≈ max_chunk_uncompressed_bytes × 2   # compressed + decoded buffers, one chunk
 both_waves_one_chunk   ≈ 2 × one_chunk_per_wave             # two GPU waves resident at once
-index_reservation      = 2 × min(max_index_bytes, 8 × samples_per_batch × sum(sample_shape))
+index_reservation      = 2 × (min(max_index_bytes, 8 × samples_per_batch × sum(sample_shape)) + 16 × 16384 × rank)
 budget_floor           ≈ pool_reservation + index_reservation + both_waves_one_chunk + scratch_slack
 ```
 
@@ -108,10 +108,12 @@ These allocations share `max_gpu_memory_bytes`:
 | Wave-resident buffers   | Compressed + decoded chunk bytes for the two in-flight waves | budget headroom, in `max_chunk_uncompressed_bytes` steps |
 | Decoder scratch         | nvcomp's working memory                                    | Peak sub-stream count in the dataset                     |
 | Per-wave metadata       | Pointer/size arrays for the decoder and assembly           | Peak sub-stream and chunk counts                         |
-| Indexed-query data      | Source/output index pairs for two batch slots             | Sum of indexed-axis lengths, bounded by `max_index_bytes` per slot |
+| Indexed-query data      | Source/output index pairs and per-chunk selection ranges for two batch slots | Output shape and rank; none when `max_index_bytes=0` |
 
 Index storage is reserved at construction, using the output shape and the
-configured cap. Setting `max_index_bytes=0` disables indexed CUDA queries.
+configured cap. Each slot also reserves 16 bytes per axis for up to 16384
+chunks, to record which part of each chunk an indexed query selects. Setting
+`max_index_bytes=0` disables indexed CUDA queries and both reservations.
 Decoder scratch and fanout storage depend on the data. damacy cannot know the sub-stream count of
 a chunk until it inspects the chunk's header, so damacy picks
 per-wave geometry such that even after adaptive growth to the

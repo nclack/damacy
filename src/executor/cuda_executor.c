@@ -250,7 +250,8 @@ cuda_start(struct damacy_executor* base,
   for (unsigned i = 0; i < DAMACY_N_BATCH_SLOTS && !failed; ++i)
     failed = render_job_init(&self->jobs.jobs[i],
                              output->samples_per_batch,
-                             dispatch_index_capacity(&self->cfg));
+                             dispatch_index_capacity(&self->cfg),
+                             dispatch_gather_dim_capacity(&self->cfg));
   if (!failed)
     failed = wave_pool_init(&self->waves,
                             &self->batches,

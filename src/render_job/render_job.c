@@ -12,7 +12,8 @@
 int
 render_job_init(struct render_job* job,
                 uint32_t samples_per_batch_cap,
-                uint32_t indices_cap)
+                uint32_t indices_cap,
+                uint32_t gather_dims_cap)
 {
   memset(job, 0, sizeof(*job));
   job->read_ops = (struct read_op*)calloc(DAMACY_MAX_CHUNKS_PER_BATCH,
@@ -45,6 +46,16 @@ render_job_init(struct render_job* job,
     job->d_indices = (void*)(uintptr_t)dptr;
     job->indices_cap = indices_cap;
   }
+  if (gather_dims_cap) {
+    size_t gather_bytes = (size_t)gather_dims_cap * sizeof(*job->gather_dims);
+    if (cuMemHostAlloc((void**)&job->gather_dims, gather_bytes, 0) !=
+        CUDA_SUCCESS)
+      goto Error;
+    if (cuMemAlloc(&dptr, gather_bytes) != CUDA_SUCCESS)
+      goto Error;
+    job->d_gather_dims = (void*)(uintptr_t)dptr;
+    job->gather_dims_cap = gather_dims_cap;
+  }
   return 0;
 Error:
   render_job_destroy(job, 0);
@@ -65,6 +76,10 @@ render_job_destroy(struct render_job* job, int cuda_skip)
     cuMemFreeHost(job->indices);
   if (!cuda_skip && job->d_indices)
     cuMemFree(CUDPTR(job->d_indices));
+  if (!cuda_skip && job->gather_dims)
+    cuMemFreeHost(job->gather_dims);
+  if (!cuda_skip && job->d_gather_dims)
+    cuMemFree(CUDPTR(job->d_gather_dims));
   path_intern_free(&job->paths);
   if (!cuda_skip && job->d_sample_plans)
     cuMemFree(CUDPTR(job->d_sample_plans));
@@ -122,6 +137,7 @@ render_job_reset(struct render_job* job)
   job->n_read_op_groups = 0;
   job->n_sample_plans = 0;
   job->n_indices = 0;
+  job->n_gather_dims = 0;
   job->n_chunks = 0;
   job->n_chunks_to_load = 0;
   job->n_loads_issued = 0;
@@ -143,6 +159,8 @@ render_job_dispatch_output(struct render_job* job, uint32_t samples_per_batch)
     .read_op_groups_cap = DAMACY_MAX_CHUNKS_PER_BATCH,
     .indices = job->indices,
     .indices_cap = job->indices_cap,
+    .gather_dims = job->gather_dims,
+    .gather_dims_cap = job->gather_dims_cap,
     .paths = &job->paths,
   };
 }
@@ -158,8 +176,16 @@ render_job_upload_sample_plans(struct render_job* job, void* stream)
                         (size_t)job->n_indices * sizeof(*job->indices),
                         (CUstream)stream) != CUDA_SUCCESS)
     return DAMACY_CUDA;
-  for (uint32_t i = 0; i < job->n_sample_plans; ++i)
+  if (job->n_gather_dims &&
+      cuMemcpyHtoDAsync(CUDPTR(job->d_gather_dims),
+                        job->gather_dims,
+                        (size_t)job->n_gather_dims * sizeof(*job->gather_dims),
+                        (CUstream)stream) != CUDA_SUCCESS)
+    return DAMACY_CUDA;
+  for (uint32_t i = 0; i < job->n_sample_plans; ++i) {
     job->sample_plans[i].indices = job->d_indices;
+    job->sample_plans[i].gather_dims = job->d_gather_dims;
+  }
   return cuMemcpyHtoDAsync(CUDPTR(job->d_sample_plans),
                            job->sample_plans,
                            (size_t)job->n_sample_plans *
@@ -182,6 +208,7 @@ render_job_commit_plan(struct render_job* job,
   job->n_loads_issued = out->n_loads_issued;
   job->n_sample_plans = out->n_sample_plans;
   job->n_indices = out->n_indices;
+  job->n_gather_dims = out->n_gather_dims;
   job->n_read_op_groups = out->n_read_op_groups;
   job->n_chunks_dispatched = 0;
   job->n_groups_dispatched = 0;

@@ -1551,6 +1551,8 @@ test_owned_index_plan(void)
     .read_op_groups_cap = 8,
     .indices = (struct gather_index[14]){ 0 },
     .indices_cap = 13,
+    .gather_dims = (struct gather_dim[16]){ 0 },
+    .gather_dims_cap = 15,
     .paths = &(struct path_intern){ 0 }
   };
   struct dispatch_scratch scratch = { 0 };
@@ -1558,14 +1560,19 @@ test_owned_index_plan(void)
          DAMACY_BUDGET);
   dispatch.indices_cap = 14;
   EXPECT(dispatch_plan_build(plan, 0, PAGE, PAGE, 8, &dispatch, &scratch) ==
+         DAMACY_BUDGET);
+  dispatch.gather_dims_cap = 16;
+  EXPECT(dispatch_plan_build(plan, 0, PAGE, PAGE, 8, &dispatch, &scratch) ==
          DAMACY_OK);
-  EXPECT(dispatch.n_indices == 14);
+  EXPECT(dispatch.n_indices == 14 && dispatch.n_gather_dims == 16);
   EXPECT(dispatch.sample_plans[0].indexed &&
          dispatch.sample_plans[0].chunk_count == 4);
   uint64_t elements = 0;
-  for (uint32_t i = 0; i < dispatch.n_chunk_plans; ++i)
-    elements += (uint64_t)dispatch.chunk_plans[i].gather[0].count *
-                dispatch.chunk_plans[i].gather[1].count;
+  for (uint32_t i = 0; i < dispatch.n_chunk_plans; ++i) {
+    const struct gather_dim* gather =
+      dispatch.gather_dims + dispatch.chunk_plans[i].gather_offset;
+    elements += (uint64_t)gather[0].count * gather[1].count;
+  }
   EXPECT(elements == 24);
   path_intern_free(dispatch.paths);
   dispatch_scratch_destroy(&scratch);

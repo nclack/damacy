@@ -46,8 +46,8 @@ extern "C"
     uint8_t shuffle_mode;              // enum assemble_shuffle_mode
     uint8_t shuffle_typesize;          // 1, 2, 4, 8; 0 if NONE
     uint8_t is_fill;                   // 1 = broadcast sample.fill_value
+    uint32_t gather_offset;            // index into sample.gather_dims[]
     uint32_t chunk_d[DAMACY_MAX_RANK]; // chunk grid position within sample
-    struct gather_dim gather[DAMACY_MAX_RANK];
   };
 
   // Launch the assemble kernel on `stream`. Inputs (device-resident

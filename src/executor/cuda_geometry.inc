@@ -30,8 +30,7 @@ resolve_wave_geometry(const struct damacy_config* cfg,
   out->input =
     out->want_gds ? input_transfer_gds() : input_transfer_host_staging();
 
-  uint64_t index_bytes =
-    2ull * dispatch_index_capacity(cfg) * sizeof(struct gather_index);
+  uint64_t index_bytes = 2ull * dispatch_index_storage_bytes(cfg);
   if (index_bytes > resolver_budget)
     return DAMACY_BUDGET;
   resolver_budget -= index_bytes;

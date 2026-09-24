@@ -132,10 +132,12 @@ with the sum of index-vector lengths and selected chunk uses.
 
 CPU assembly intersects each axis with a decoded chunk, then writes the Cartesian
 product of selected positions to the specified output positions. Contiguous
-trailing axes retain row copies. CUDA dispatch produces per-chunk selection spans
-and uploads compact source/output index pairs, reusing the existing read, decode,
-fill, shuffle, and cast paths. Index buffers are bounded by `max_index_bytes` and
-included in the GPU budget before wave sizing.
+trailing axes retain row copies. CUDA dispatch writes per-chunk selection spans
+to a per-batch array that only indexed samples reference, so rectangular chunk
+records carry no selection data. It uploads that array once per batch with
+compact source/output index pairs. Assembly reuses the existing read, decode,
+fill, shuffle, and cast paths. Index buffers are bounded by `max_index_bytes`
+and included in the GPU budget before wave sizing.
 
 ## Next: spatial resampling and NGFF
 

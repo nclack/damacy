@@ -651,19 +651,20 @@ set_assemble_chunk_base(struct assemble_chunk* out,
   out->src_base_byte_off = (uint64_t)c->dev_decompressed_offset;
   out->sample_idx_in_batch = c->sample_idx_in_batch;
   out->is_fill = c->is_fill | force_fill;
+  out->gather_offset = c->gather_offset;
   memcpy(out->chunk_d, c->chunk_d, spatial_rank * sizeof(*c->chunk_d));
-  memcpy(out->gather, c->gather, spatial_rank * sizeof(*c->gather));
 }
 
 static uint64_t
 chunk_output_elements(const struct chunk_plan* c,
                       const struct sample_plan* sp,
+                      const struct gather_dim* gather_dims,
                       uint8_t spatial_rank)
 {
   uint64_t out = 1;
   for (uint8_t d = 0; d < spatial_rank; ++d) {
     if (sp->indexed) {
-      out *= c->gather[d].count;
+      out *= gather_dims[c->gather_offset + d].count;
       continue;
     }
     int64_t chunk_shape = (int64_t)sp->dims[d].chunk_shape;
@@ -692,7 +693,8 @@ build_assemble_meta(const struct wave_pool* wp, struct damacy_wave* wave)
     set_assemble_chunk_base(
       &wave->h_assemble_chunks[i], c, spatial_rank, wp->bypass_decode);
 
-    uint64_t elements = chunk_output_elements(c, sp, spatial_rank);
+    uint64_t elements =
+      chunk_output_elements(c, sp, job->gather_dims, spatial_rank);
     uint32_t bpc = sp->indexed
                      ? assemble_gather_blocks(elements)
                      : assemble_blocks_per_chunk(spatial_rank, sp->dims);

@@ -190,8 +190,9 @@ Python value objects.
 
 CUDA reserves index storage for its two execution slots within
 `max_gpu_memory_bytes`. Each slot allocates the smaller of `max_index_bytes`
-and the maximum index data possible for the configured output shape. An
-identical amount of pinned host staging is allocated. A query exceeding the
+and the maximum index data possible for the configured output shape, plus
+16 bytes per axis for up to 16384 chunks to record each chunk's selected range.
+An identical amount of pinned host staging is allocated. A query exceeding the
 index capacity raises `BudgetExceeded`. `Config.max_index_bytes` provides the
 same setting through the CUDA convenience adapter.
 

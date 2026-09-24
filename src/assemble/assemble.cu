@@ -235,9 +235,10 @@ gather_body(int rank,
             const uint8_t* arena_base,
             uint8_t* output_base)
 {
+  const struct gather_dim* gather = s.gather_dims + c.gather_offset;
   uint64_t elements = 1;
   for (int d = 0; d < rank; ++d)
-    elements *= c.gather[d].count;
+    elements *= gather[d].count;
   for (uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
        i < elements;
        i += (uint64_t)gridDim.x * blockDim.x) {
@@ -246,7 +247,7 @@ gather_body(int rank,
     uint64_t destination = s.sample_dst_off_elems;
 #pragma unroll
     for (int d = rank - 1; d >= 0; --d) {
-      const struct gather_dim dim = c.gather[d];
+      const struct gather_dim dim = gather[d];
       uint32_t position = (uint32_t)(remaining % dim.count);
       remaining /= dim.count;
       uint32_t src = dim.begin + position;
