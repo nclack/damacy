@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import ctypes
 import dataclasses
 import gc
@@ -625,6 +626,18 @@ def test_resolution_is_independent_of_files_and_can_run_in_threads(tmp_path):
     assert all(
         r.level == 1 and r.source_bounds_index == ((0, 4), (0, 4)) for r in results
     )
+
+
+def test_image_compares_and_copies_by_metadata(tmp_path):
+    root = tmp_path / "image"
+    write_image(root)
+    image = load(root)
+    assert "_native" not in repr(image)
+    assert image == load(root) and hash(image) == hash(load(root))
+    assert json.loads(json.dumps(dataclasses.asdict(image)))["data_type"] == "uint16"
+    assert copy.deepcopy(image).resolve(query(), shape=(4, 4)).level == 0
+    with pytest.raises(TypeError, match="pickled"):
+        pickle.dumps(image)
 
 
 def test_query_values_are_copied_and_validated():

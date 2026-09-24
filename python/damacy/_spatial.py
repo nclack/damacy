@@ -5,7 +5,7 @@ import operator
 import os
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, NoReturn
 
 from . import (
     FileMetadataReader,
@@ -66,8 +66,15 @@ class NgffLevel:
     origin_reference_index: tuple[float, ...]
 
 
+class _NativeImage:
+    # Keeps the native handle out of the dataclass fields, so repr, ==, hash,
+    # and asdict() see only the metadata.
+    __slots__ = ("_native",)
+    _native: object
+
+
 @dataclass(frozen=True, slots=True, init=False)
-class NgffImage:
+class NgffImage(_NativeImage):
     """Load an immutable OME-Zarr 0.5 image description through the given reader.
 
     Loading reads the image group's metadata and each level's array metadata.
@@ -78,7 +85,6 @@ class NgffImage:
     axes: tuple[NgffAxis, ...]
     levels: tuple[NgffLevel, ...]
     data_type: str
-    _native: object
 
     def __init__(
         self,
@@ -114,6 +120,15 @@ class NgffImage:
             self, "levels", tuple(NgffLevel(**level) for level in info["levels"])
         )
         object.__setattr__(self, "data_type", info["data_type"])
+
+    def __copy__(self) -> NgffImage:
+        return self
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> NgffImage:
+        return self
+
+    def __reduce__(self) -> NoReturn:
+        raise TypeError("NgffImage cannot be pickled; load it in each process")
 
     def resolve(
         self, query: SpatialQuery, *, shape: Iterable[int]
