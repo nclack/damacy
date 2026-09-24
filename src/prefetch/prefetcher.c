@@ -56,7 +56,8 @@ struct prefetcher_slot
   struct prefetch_handle* h_shards;
   uint64_t* shard_coords; // flat [n_shards][rank]
   uint32_t n_shards;
-  uint32_t n_shards_requested; // resume cursor when a shard_index request AGAINs
+  uint32_t
+    n_shards_requested; // resume cursor when a shard_index request AGAINs
   struct prefetch_handle h_layout;
 };
 
@@ -365,6 +366,10 @@ advance_from_meta(struct prefetcher* p, struct prefetcher_slot* s)
 
   if (n == 0) {
     s->n_shards = 0;
+    if (!p->chunk_layout_cache) {
+      slot_mark_ready(p, s);
+      return;
+    }
     struct prefetch_request_result layout_req = request_chunk_layout(p, s);
     if (layout_req.status == DAMACY_AGAIN)
       return;
@@ -430,6 +435,10 @@ advance_from_shard(struct prefetcher* p, struct prefetcher_slot* s)
     }
   }
 
+  if (!p->chunk_layout_cache) {
+    slot_mark_ready(p, s);
+    return;
+  }
   struct prefetch_request_result layout_req = request_chunk_layout(p, s);
   // AGAIN = the chunk_layout cache is transiently saturated. Stay in
   // pending_shards and retry next tick; the watermark advance will free a pin.
@@ -624,7 +633,6 @@ prefetcher_create(const struct prefetcher_config* cfg)
   CHECK(Error, cfg->lookahead);
   CHECK(Error, cfg->array_meta_cache);
   CHECK(Error, cfg->shard_index_cache);
-  CHECK(Error, cfg->chunk_layout_cache);
 
   self = (struct prefetcher*)malloc(sizeof(*self));
   CHECK(Error, self);
@@ -934,7 +942,8 @@ prefetcher_advance_watermark(struct prefetcher* self, uint64_t watermark)
     return;
   prefetch_cache_advance_watermark(self->array_meta_cache, watermark);
   prefetch_cache_advance_watermark(self->shard_index_cache, watermark);
-  prefetch_cache_advance_watermark(self->chunk_layout_cache, watermark);
+  if (self->chunk_layout_cache)
+    prefetch_cache_advance_watermark(self->chunk_layout_cache, watermark);
 }
 
 void

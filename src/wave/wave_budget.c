@@ -6,9 +6,10 @@
 #include "decoder/blosc1.h"
 #include "decoder/decoder_memcpy.h"
 #include "decoder/decoder_zstd.h"
+#include "executor/dispatch.h"
 #include "gpu_budget/gpu_budget.h"
 #include "log/log.h"
-#include "planner/planner.h"
+#include "platform/platform.h"
 #include "util/cuda_check.h"
 #include "wave/fanout.h" // fanout_next_pow2
 
@@ -207,6 +208,7 @@ wave_pool_resolve_sizing(uint32_t max_chunks_per_wave,
                          uint32_t max_substreams_per_chunk,
                          uint8_t input_device_staging_buffers,
                          uint64_t max_gpu_memory_bytes,
+                         uint64_t max_read_op_bytes,
                          uint64_t max_chunk_uncompressed_bytes,
                          uint32_t samples_per_batch,
                          struct wave_pool_sizing* out)
@@ -214,11 +216,14 @@ wave_pool_resolve_sizing(uint32_t max_chunks_per_wave,
   const uint32_t max_substreams_per_wave = DAMACY_MAX_SUBSTREAMS_PER_WAVE(
     max_chunks_per_wave, max_substreams_per_chunk);
   const uint64_t min_per_wave = max_chunk_uncompressed_bytes;
+  const uint64_t alignment = platform_page_alignment();
+  const uint64_t min_input =
+    min_per_wave > alignment ? min_per_wave : alignment;
   uint64_t total_min = 0;
   enum damacy_status s = predict_pool_total(max_chunks_per_wave,
                                             max_substreams_per_wave,
                                             input_device_staging_buffers,
-                                            min_per_wave,
+                                            min_input,
                                             min_per_wave,
                                             max_chunk_uncompressed_bytes,
                                             samples_per_batch,
@@ -251,7 +256,7 @@ wave_pool_resolve_sizing(uint32_t max_chunks_per_wave,
   s = predict_pool_total(max_chunks_per_wave,
                          max_substreams_per_wave,
                          input_device_staging_buffers,
-                         per_wave,
+                         per_wave > min_input ? per_wave : min_input,
                          per_wave,
                          max_chunk_uncompressed_bytes,
                          samples_per_batch,
@@ -265,7 +270,7 @@ wave_pool_resolve_sizing(uint32_t max_chunks_per_wave,
     s = predict_pool_total(max_chunks_per_wave,
                            max_substreams_per_wave,
                            input_device_staging_buffers,
-                           per_wave,
+                           per_wave > min_input ? per_wave : min_input,
                            per_wave,
                            max_chunk_uncompressed_bytes,
                            samples_per_batch,
@@ -273,7 +278,16 @@ wave_pool_resolve_sizing(uint32_t max_chunks_per_wave,
     if (s != DAMACY_OK)
       return s;
   }
-  out->input_staging_per_wave = per_wave;
+  uint64_t input_bytes = per_wave > min_input ? per_wave : min_input;
+  if (input_device_staging_buffers && input_bytes < max_read_op_bytes) {
+    uint64_t extra =
+      (max_gpu_memory_bytes - predicted) / input_device_staging_buffers;
+    if (extra > max_read_op_bytes - input_bytes)
+      extra = max_read_op_bytes - input_bytes;
+    input_bytes += extra;
+    predicted += extra * input_device_staging_buffers;
+  }
+  out->input_staging_per_wave = input_bytes;
   out->dev_decompressed_per_wave = per_wave;
   out->worst_case_total_bytes = predicted;
   return DAMACY_OK;

@@ -1,483 +1,132 @@
-#include "damacy.h"
+#include "damacy_internal.h"
 
 #include "damacy_config.h"
-#include "damacy_internal.h"
 #include "damacy_stats.h"
-#include "log/log.h"
-#include "platform/platform.h"
-#include "store/store_fs_gds.h"
-#include "util/cuda_check.h"
-#include "util/prelude.h"
-#include "wave/wave_budget.h"
+
+#ifdef DAMACY_HAS_CUDA
+#include "executor/cuda_executor.h"
+#endif
 
 #include <stdlib.h>
-
-// --- ctx guard ------------------------------------------------------------
+#include <string.h>
 
 enum damacy_status
-ctx_guard_enter(struct damacy* d, struct ctx_guard* g)
+damacy_pipeline_create(struct damacy_planner* planner,
+                       struct damacy_executor* executor,
+                       const struct damacy_batch_spec* output,
+                       const struct damacy_queue_limits* queues,
+                       struct damacy** out)
 {
-  g->active = 0;
-  if (!d || d->retained_primary_device < 0)
-    return DAMACY_OK;
-  enum damacy_status s = DAMACY_CUDA;
-  CU(Fail, cuCtxPushCurrent(d->retained_primary));
-  g->active = 1;
+  if (!out)
+    return DAMACY_INVAL;
+  *out = NULL;
+  if (!planner || !executor || !queues || !output || planner->active ||
+      executor->active || !queues->prepared_batches ||
+      queues->prepared_batches > 1024 ||
+      queues->lookahead_samples < output->samples_per_batch ||
+      queues->lookahead_samples > UINT32_MAX - 4)
+    return DAMACY_INVAL;
+  int64_t shape[DAMACY_MAX_RANK + 1], strides[DAMACY_MAX_RANK + 1];
+  uint64_t bytes;
+  enum damacy_status status = batch_spec_layout(output, shape, strides, &bytes);
+  if (status != DAMACY_OK)
+    return status;
+  struct damacy* self = calloc(1, sizeof(*self));
+  if (!self)
+    return DAMACY_OOM;
+  int planner_claimed = 0, executor_claimed = 0;
+  int planner_started = 0, executor_started = 0;
+  self->output = *output;
+  self->queues = *queues;
+  self->planner = planner;
+  self->executor = executor;
+  stats_init(&self->stats);
+  self->plans = calloc(queues->prepared_batches, sizeof(*self->plans));
+  if (!self->plans) {
+    status = DAMACY_OOM;
+    goto Fail;
+  }
+  int expected = 0;
+  if (!atomic_compare_exchange_strong(&planner->active, &expected, 1)) {
+    status = DAMACY_INVAL;
+    goto Fail;
+  }
+  planner_claimed = 1;
+  expected = 0;
+  if (!atomic_compare_exchange_strong(&executor->active, &expected, 1)) {
+    status = DAMACY_INVAL;
+    goto Fail;
+  }
+  executor_claimed = 1;
+  status = planner->ops->start(planner, output, queues);
+  if (status != DAMACY_OK)
+    goto Fail;
+  planner_started = 1;
+  status = executor->ops->start(executor, output, &self->stats);
+  if (status != DAMACY_OK)
+    goto Fail;
+  executor_started = 1;
+  self->device =
+    executor->device_type == DAMACY_DEVICE_CUDA ? executor->device_id : -1;
+  self->sched =
+    scheduler_create(damacy_scheduler_step,
+                     self,
+                     10000,
+                     NULL,
+                     &(struct scheduler_hooks){ damacy_scheduler_enter,
+                                                damacy_scheduler_leave });
+  if (!self->sched) {
+    status = DAMACY_OOM;
+    goto Fail;
+  }
+  *out = self;
   return DAMACY_OK;
 Fail:
-  return s;
+  if (executor_started)
+    executor->ops->stop(executor);
+  if (planner_started)
+    planner->ops->stop(planner);
+  if (executor_claimed)
+    executor->active = 0;
+  if (planner_claimed)
+    planner->active = 0;
+  free(self->plans);
+  free(self);
+  return status;
 }
 
 void
-ctx_guard_exit(struct ctx_guard* g)
+damacy_shutdown(struct damacy* self)
 {
-  if (g && g->active) {
-    cuCtxPopCurrent(NULL);
-    g->active = 0;
-  }
-}
-
-// --- public API: create / destroy ----------------------------------------
-
-// Single teardown list shared by every destroy path. cuda_skip=1 leaks
-// CUDA-owned state and skips driver calls; CPU heap is always released.
-// wave_pool first: its destroy syncs streams before the downstream
-// batch_pool / planner free what those streams touched.
-static void
-destroy_inner(struct damacy* self, int cuda_skip)
-{
-  if (!self)
+  if (!self || self->stopped)
     return;
-
-  // Stop the worker first so its accesses retire before we free.
-  scheduler_destroy(self->sched);
-  self->sched = NULL;
-
-  // Stop the prefetcher thread first so no new metadata requests are admitted.
-  // Its gates/owners must stay alive until async metadata callbacks have
-  // drained because completions can release waiters through those gates.
-  prefetcher_stop(self->prefetcher);
-  metadata_store_async_destroy(self->store_meta_async);
-  self->store_meta_async = NULL;
-  prefetcher_destroy(self->prefetcher);
-  self->prefetcher = NULL;
-  prefetch_cache_destroy(self->chunk_layout_cache);
-  self->chunk_layout_cache = NULL;
-  prefetch_cache_destroy(self->shard_index_cache);
-  self->shard_index_cache = NULL;
-  prefetch_cache_destroy(self->array_meta_cache);
-  self->array_meta_cache = NULL;
-
-  wave_pool_destroy(&self->wave_pool, cuda_skip);
-  render_job_pool_destroy(&self->render_jobs, cuda_skip);
-
-  free(self->staging);
-  self->staging = NULL;
-  lookahead_destroy(&self->lookahead);
-  batch_pool_destroy(&self->batch_pool, cuda_skip);
-
-  planner_destroy(self->planner);
-  self->planner = NULL;
-  store_destroy(self->store_gds);
-  self->store_gds = NULL;
-  store_destroy(self->store_host);
-  self->store_host = NULL;
-  gpu_budget_destroy(self->budget);
-  self->budget = NULL;
-}
-
-struct resolved_wave_geometry
-{
-  const struct input_transfer_ops* input;
-  struct wave_pool_sizing sizing;
-  struct gpu_budget_breakdown predicted;
-  uint32_t max_chunks_per_wave;
-  uint32_t max_substreams_per_chunk;
-  uint8_t host_buffer_waves;
-  uint8_t want_gds;
-};
-
-enum wave_geometry_step
-{
-  WAVE_GEOMETRY_SIZING,
-  WAVE_GEOMETRY_PREDICT,
-};
-
-static enum damacy_status
-resolve_wave_geometry(const struct damacy_config* cfg,
-                      uint64_t resolver_budget,
-                      uint64_t runtime_chunk_cap,
-                      struct resolved_wave_geometry* out,
-                      enum wave_geometry_step* failed_step)
-{
-  *out = (struct resolved_wave_geometry){ 0 };
-  out->max_chunks_per_wave = resolve_max_chunks_per_wave(cfg);
-  out->max_substreams_per_chunk = resolve_max_substreams_per_chunk(cfg);
-  out->host_buffer_waves = resolve_host_buffer_waves(cfg);
-  out->want_gds = resolve_enable_gds(cfg);
-  out->input =
-    out->want_gds ? input_transfer_gds() : input_transfer_host_staging();
-
-  const struct input_transfer_resources min_input =
-    input_transfer_resources(out->input, out->host_buffer_waves, 0);
-  enum damacy_status s =
-    wave_pool_resolve_sizing(out->max_chunks_per_wave,
-                             out->max_substreams_per_chunk,
-                             min_input.device_staging_buffers,
-                             resolver_budget,
-                             runtime_chunk_cap,
-                             cfg->samples_per_batch,
-                             &out->sizing);
-  if (s != DAMACY_OK) {
-    if (failed_step)
-      *failed_step = WAVE_GEOMETRY_SIZING;
-    return s;
+  scheduler_lock(self->sched);
+  if (self->stopping) {
+    while (!self->stopped)
+      scheduler_wait(self->sched);
+    scheduler_unlock(self->sched);
+    return;
   }
-
-  const struct input_transfer_resources input_resources =
-    input_transfer_resources(
-      out->input, out->host_buffer_waves, out->sizing.input_staging_per_wave);
-  s = gpu_budget_predict(cfg,
-                         &input_resources,
-                         out->sizing.dev_decompressed_per_wave,
-                         &out->predicted);
-  if (s != DAMACY_OK && failed_step)
-    *failed_step = WAVE_GEOMETRY_PREDICT;
-  return s;
-}
-
-enum damacy_status
-damacy_create(const struct damacy_config* cfg, struct damacy** out)
-{
-  enum damacy_status s = DAMACY_INVAL;
-  struct damacy* self = NULL;
-  struct ctx_guard cg = { 0 };
-
-  CHECK_SILENT(InvalidArg, out);
-  *out = NULL;
-
-  s = validate_config(cfg);
-  if (s != DAMACY_OK)
-    return s;
-
-  s = DAMACY_OOM;
-  self = (struct damacy*)calloc(1, sizeof(*self));
-  CHECK(Fail, self);
-  self->cfg = *cfg;
-  self->failed_status = DAMACY_OK;
-  self->page_alignment = (uint64_t)platform_page_alignment();
-  // -1 sentinel set before any goto Fail: 0 from calloc is a valid CUdevice.
-  self->retained_primary_device = -1;
-  self->retained_primary = NULL;
-  stats_init(&self->stats);
-
-  s = DAMACY_CUDA;
-  CU(Fail, cuInit(0));
-
-  CUcontext caller_ctx = NULL;
-  CU(Fail, cuCtxGetCurrent(&caller_ctx));
-  if (cfg->device >= 0) {
-    if (caller_ctx) {
-      CUdevice cur_dev;
-      CU(Fail, cuCtxGetDevice(&cur_dev));
-      if ((int)cur_dev != cfg->device) {
-        s = DAMACY_INVAL;
-        log_error("damacy_create: Config.device=%d but a CUcontext is "
-                  "already current on device %d — likely a missing "
-                  "cuCtxSetCurrent / torch.cuda.set_device(%d)",
-                  cfg->device,
-                  (int)cur_dev,
-                  cfg->device);
-        goto Fail;
-      }
-    }
-    CUdevice dev;
-    CU(Fail, cuDeviceGet(&dev, cfg->device));
-    CUcontext primary = NULL;
-    CU(Fail, cuDevicePrimaryCtxRetain(&primary, dev));
-    self->retained_primary_device = cfg->device;
-    self->retained_primary = primary;
-    self->worker_ctx = primary;
-    self->cuda_device = cfg->device;
-  } else {
-    if (!caller_ctx) {
-      log_error("damacy_create: no CUcontext is current on calling thread");
-      s = DAMACY_INVAL;
-      goto Fail;
-    }
-    CUdevice dev;
-    CU(Fail, cuCtxGetDevice(&dev));
-    self->cuda_device = (int)dev;
-    self->worker_ctx = caller_ctx;
+  self->planner->ops->stats(self->planner, &self->stats);
+  self->executor->ops->stats(self->executor, &self->stats);
+  self->stopping = 1;
+  scheduler_broadcast(self->sched);
+  while (self->pop_calls)
+    scheduler_wait(self->sched);
+  scheduler_unlock(self->sched);
+  scheduler_stop(self->sched);
+  self->planner->ops->stop(self->planner);
+  self->executor->ops->stop(self->executor);
+  self->planner->active = self->executor->active = 0;
+  for (uint32_t i = 0; i < self->queues.prepared_batches; ++i) {
+    prepared_plan_destroy(self->plans[i]);
+    self->plans[i] = NULL;
   }
-
-  s = ctx_guard_enter(self, &cg);
-  if (s != DAMACY_OK)
-    goto Fail;
-
-  // Resolve the GPU's host-NUMA node now that we know the CUdevice. The
-  // resolved plan is consumed by the wave_pool_init scope below and by
-  // the store / scheduler worker threads at startup.
-  {
-    CUdevice cu_dev;
-    if (cuCtxGetDevice(&cu_dev) == CUDA_SUCCESS) {
-      numa_init(
-        cfg->tuning.numa_strategy, cfg->tuning.numa_node, cu_dev, &self->numa);
-    } else {
-      // Should never happen — ctx_guard_enter just pushed our ctx, or
-      // the caller's ctx is live. Be safe; treat as disabled.
-      self->numa.node = -1;
-    }
-  }
-
-  const uint64_t max_gpu = cfg->tuning.max_gpu_memory_bytes;
-  const uint64_t runtime_chunk_cap = resolve_max_chunk_uncompressed(cfg);
-  self->budget = gpu_budget_new(max_gpu);
-  if (!self->budget) {
-    s = DAMACY_OOM;
-    goto Fail;
-  }
-
-  // Carve out the double-buffered batch-output pool before sizing
-  // wave-resident buffers; the resolver is greedy, so without this
-  // reservation the lazy pool has no room at first push.
-  uint64_t pool_reserve = 0;
-  {
-    uint64_t pool_bytes = 0;
-    CHECK(Fail,
-          (s = resolve_sample_volume_bytes(cfg, &pool_bytes)) == DAMACY_OK);
-    pool_reserve = 2ull * pool_bytes;
-  }
-  if (pool_reserve >= max_gpu) {
-    log_error(
-      "damacy: batch-output pool reserve=%llu >= "
-      "max_gpu_memory_bytes=%llu; nothing left for wave-resident "
-      "buffers (sample_shape × samples_per_batch × dtype_bpe × 2 exceeds cap)",
-      (unsigned long long)pool_reserve,
-      (unsigned long long)max_gpu);
-    s = DAMACY_BUDGET;
-    goto Fail;
-  }
-  const uint64_t resolver_budget = max_gpu - pool_reserve;
-
-  struct resolved_wave_geometry geom = { 0 };
-  s =
-    resolve_wave_geometry(cfg, resolver_budget, runtime_chunk_cap, &geom, NULL);
-  if (s != DAMACY_OK)
-    goto Fail;
-  {
-    gpu_budget_commit(self->budget, geom.predicted.total);
-    log_debug("damacy: resolved geometry from max_gpu_memory_bytes=%llu "
-              "(pool_reserve=%llu, resolver_budget=%llu): "
-              "input_staging_per_wave=%llu dev_decompressed_per_wave=%llu "
-              "initial_nvcomp_temp=%llu predicted_total=%llu",
-              (unsigned long long)max_gpu,
-              (unsigned long long)pool_reserve,
-              (unsigned long long)resolver_budget,
-              (unsigned long long)geom.sizing.input_staging_per_wave,
-              (unsigned long long)geom.sizing.dev_decompressed_per_wave,
-              (unsigned long long)geom.predicted.nvcomp_temp,
-              (unsigned long long)geom.predicted.total);
-    // Resolver guarantees this fits; assert defensively in case the
-    // accounting drifts. A breach here is a bug, not user input.
-    if (gpu_budget_committed(self->budget) > gpu_budget_max(self->budget)) {
-      log_error(
-        "damacy: post-resolve drift: total=%llu cap=%llu "
-        "(dev_compressed=%llu dev_decompressed=%llu "
-        "blosc1_meta=%llu fanout_soa=%llu nvcomp_temp=%llu batch_meta=%llu)",
-        (unsigned long long)geom.predicted.total,
-        (unsigned long long)gpu_budget_max(self->budget),
-        (unsigned long long)geom.predicted.dev_compressed,
-        (unsigned long long)geom.predicted.dev_decompressed,
-        (unsigned long long)geom.predicted.blosc1_meta,
-        (unsigned long long)geom.predicted.fanout_soa,
-        (unsigned long long)geom.predicted.nvcomp_temp,
-        (unsigned long long)geom.predicted.batch_metadata);
-      s = DAMACY_BUDGET;
-      goto Fail;
-    }
-  }
-
-  s = DAMACY_OOM;
-
-  // Sample.uri is absolute; fs store joins root+key, so empty root is a
-  // pass-through.
-  {
-    struct store_fs_config sc = {
-      .root = "",
-      .nthreads = (int)cfg->tuning.n_io_threads,
-      .affinity = &self->numa,
-      // Worst case: every staging slot full of unfused single-chunk
-      // reads, plus slack for the stray reads that share the pool.
-      .max_inflight_reads = (uint32_t)geom.host_buffer_waves *
-                              geom.max_chunks_per_wave +
-                            DAMACY_READ_JOB_SLACK,
-    };
-    self->store_host = store_fs_create(&sc);
-    CHECK(Fail, self->store_host);
-  }
-  self->store_meta_async =
-    metadata_store_async_create((int)resolve_metadata_io_concurrency(cfg),
-                                &self->numa,
-                                &cfg->debug.metadata_latency);
-  CHECK(Fail, self->store_meta_async);
-  if (geom.want_gds) {
-    struct store_fs_gds_config sc = {
-      .root = "",
-      .fd_cache_capacity = 0,
-    };
-    self->store_gds = store_fs_gds_create(&sc);
-    if (!self->store_gds) {
-      s = DAMACY_INVAL;
-      goto Fail;
-    }
-  }
-
-  array_meta_async_fetcher_init(&self->array_meta_async_fetcher,
-                                self->store_meta_async);
-  {
-    struct prefetch_cache_config array_meta_cache_cfg = {
-      .capacity = cfg->tuning.n_array_meta_cache,
-      .max_probe = 16,
-      .knob_name = "n_array_meta_cache",
-      .ops = &array_meta_ops,
-      .async_fetcher = &self->array_meta_async_fetcher.base,
-    };
-    self->array_meta_cache = prefetch_cache_create(&array_meta_cache_cfg);
-    CHECK(Fail, self->array_meta_cache);
-  }
-  shard_index_async_fetcher_init(&self->shard_index_async_fetcher,
-                                 self->store_meta_async,
-                                 self->array_meta_cache);
-  {
-    struct prefetch_cache_config shard_index_cache_cfg = {
-      .capacity = cfg->tuning.n_shard_index_cache,
-      .max_probe = 16,
-      .knob_name = "n_shard_index_cache",
-      .ops = &shard_index_ops,
-      .async_fetcher = &self->shard_index_async_fetcher.base,
-    };
-    self->shard_index_cache = prefetch_cache_create(&shard_index_cache_cfg);
-    CHECK(Fail, self->shard_index_cache);
-  }
-  chunk_layout_async_fetcher_init(&self->chunk_layout_async_fetcher,
-                                  self->store_meta_async,
-                                  self->array_meta_cache,
-                                  self->shard_index_cache,
-                                  geom.max_substreams_per_chunk);
-  {
-    struct prefetch_cache_config chunk_layout_cache_cfg = {
-      .capacity = cfg->tuning.n_chunk_layout_cache,
-      .max_probe = 16,
-      .knob_name = "n_chunk_layout_cache",
-      .ops = &chunk_layout_ops,
-      .async_fetcher = &self->chunk_layout_async_fetcher.base,
-    };
-    self->chunk_layout_cache = prefetch_cache_create(&chunk_layout_cache_cfg);
-    CHECK(Fail, self->chunk_layout_cache);
-  }
-
-  for (int b = 0; b < DAMACY_N_BATCH_SLOTS; ++b)
-    CHECK(Fail,
-          batch_slot_init(&self->batch_pool.slots[b], cfg->samples_per_batch) ==
-            0);
-  for (int b = 0; b < DAMACY_N_BATCH_SLOTS; ++b) {
-    struct render_job* job =
-      render_job_pool_for_batch_slot(&self->render_jobs, (uint16_t)b);
-    CHECK(Fail, render_job_init(job, cfg->samples_per_batch) == 0);
-  }
-
-  s = DAMACY_OOM;
-  // Keep first-touch allocations on the GPU's NUMA node.
-  {
-    struct platform_cpu_mask saved_affinity;
-    numa_scope_enter(&self->numa, &saved_affinity);
-    int wp_rc =
-      wave_pool_init(&self->wave_pool,
-                     &self->batch_pool,
-                     &self->render_jobs,
-                     geom.want_gds ? self->store_gds : self->store_host,
-                     &self->stats,
-                     cfg->dtype,
-                     geom.host_buffer_waves,
-                     geom.max_chunks_per_wave,
-                     geom.max_substreams_per_chunk,
-                     geom.sizing.input_staging_per_wave,
-                     geom.sizing.dev_decompressed_per_wave,
-                     runtime_chunk_cap,
-                     geom.input,
-                     cfg->debug.bypass_decode,
-                     self->budget);
-    numa_scope_exit(&saved_affinity);
-    CHECK(Fail, wp_rc == 0);
-  }
-  if (geom.want_gds)
-    log_info("damacy: input transfer via cuFile / GDS");
-
-  struct planner_config pcfg = {
-    .array_meta_cache = self->array_meta_cache,
-    .chunk_layout_cache = self->chunk_layout_cache,
-    .shard_index_cache = self->shard_index_cache,
-    .dst_dtype = cfg->dtype,
-    .page_alignment = self->page_alignment,
-    .max_chunk_uncompressed_bytes = runtime_chunk_cap,
-    .read_op_max_bytes = resolve_max_read_op_bytes(cfg),
-    .max_chunks_per_wave = geom.max_chunks_per_wave,
-    .max_substreams_per_chunk = geom.max_substreams_per_chunk,
-  };
-  CHECK(Fail, planner_create(&pcfg, &self->planner) == DAMACY_OK);
-
-  CHECK(Fail, lookahead_init(&self->lookahead, cfg->lookahead_samples) == 0);
-
-  {
-    struct prefetcher_config prefetcher_cfg = {
-      .lookahead = &self->lookahead,
-      .array_meta_cache = self->array_meta_cache,
-      .shard_index_cache = self->shard_index_cache,
-      .chunk_layout_cache = self->chunk_layout_cache,
-      .capacity = cfg->lookahead_samples,
-      .owner_capacity = cfg->lookahead_samples + 4u,
-      .max_shards_per_sample = cfg->tuning.max_shards_per_sample,
-    };
-    self->prefetcher = prefetcher_create(&prefetcher_cfg);
-    CHECK(Fail, self->prefetcher);
-  }
-
-  self->staging = (struct prefetcher_ready*)calloc(
-    2u * (size_t)cfg->samples_per_batch, sizeof(struct prefetcher_ready));
-  CHECK(Fail, self->staging);
-
-  self->handle.d = self;
-
-  // Start the prefetcher worker before the scheduler so the scheduler's
-  // first tick can see ready batches.
-  CHECK(Fail, prefetcher_start(self->prefetcher) == 0);
-
-  // Spawn the worker last — everything it touches must already exist.
-  self->sched = scheduler_create(
-    damacy_scheduler_step, self, DAMACY_POP_POLL_NS, &self->numa);
-  if (!self->sched) {
-    s = DAMACY_OOM;
-    goto Fail;
-  }
-
-  ctx_guard_exit(&cg);
-  *out = self;
-  return DAMACY_OK;
-
-Fail:
-  if (self) {
-    // destroy_inner under the pushed ctx, then pop, then release primary.
-    destroy_inner(self, 0);
-    ctx_guard_exit(&cg);
-    if (self->retained_primary_device >= 0)
-      cuDevicePrimaryCtxRelease((CUdevice)self->retained_primary_device);
-    free(self);
-  }
-  return s;
-
-InvalidArg:
-  return DAMACY_INVAL;
+  scheduler_lock(self->sched);
+  self->plan_count = 0;
+  self->stopped = 1;
+  scheduler_broadcast(self->sched);
+  scheduler_unlock(self->sched);
 }
 
 void
@@ -485,118 +134,133 @@ damacy_destroy(struct damacy* self)
 {
   if (!self)
     return;
-
-  struct ctx_guard cg = { 0 };
-  enum damacy_status gs = ctx_guard_enter(self, &cg);
-  if (gs != DAMACY_OK) {
-    // Ctx no longer pushable (device reset, primary released elsewhere):
-    // leak CUDA state and walk the teardown list with skip=1.
-    log_warn("damacy_destroy: ctx_guard_enter failed (status=%d); "
-             "leaking CUDA resources",
-             (int)gs);
-    destroy_inner(self, 1);
-  } else {
-    destroy_inner(self, 0);
-    ctx_guard_exit(&cg);
+  damacy_shutdown(self);
+  scheduler_destroy(self->sched);
+  if (self->owns_components) {
+    damacy_executor_destroy(self->executor);
+    damacy_planner_destroy(self->planner);
+    damacy_metadata_destroy(self->owned_metadata);
+    damacy_metadata_reader_destroy(self->owned_metadata_reader);
+    damacy_reader_destroy(self->owned_reader);
   }
-  if (self->retained_primary_device >= 0)
-    cuDevicePrimaryCtxRelease((CUdevice)self->retained_primary_device);
+  free(self->plans);
   free(self);
 }
 
 int
-damacy_get_device(const struct damacy* d)
+damacy_get_device(const struct damacy* self)
 {
-  return d ? d->cuda_device : -1;
+  return self ? self->device : -1;
 }
 
-// Test-only hook. Overwrites gpu_bytes_committed so unit tests can drive
-// the observe-and-grow OOM path without having to fabricate a workload
-// that escapes the resolver's worst-case reservation. Returns the prior
-// value. Not declared in damacy.h — tests forward-declare it with
-// extern; production code must not call it.
+enum damacy_status
+damacy_create(const struct damacy_config* config, struct damacy** out)
+{
+  if (!out)
+    return DAMACY_INVAL;
+  *out = NULL;
+  enum damacy_status status = validate_config(config);
+  if (status != DAMACY_OK)
+    return status;
+  struct damacy_reader* reader = NULL;
+  struct damacy_metadata_reader* metadata_reader = NULL;
+  struct damacy_metadata* metadata = NULL;
+  struct damacy_planner* planner = NULL;
+  struct damacy_executor* executor = NULL;
+  const struct damacy_tuning* tuning = &config->tuning;
+#ifdef DAMACY_HAS_CUDA
+  struct numa_resolved affinity;
+  struct platform_cpu_mask saved;
+  cuda_resolve_numa(config, &affinity);
+  numa_scope_enter(&affinity, &saved);
+#endif
+  status = damacy_file_reader_create(tuning->n_io_threads,
+                                     (uint32_t)tuning->host_buffer_waves *
+                                         tuning->max_chunks_per_wave +
+                                       DAMACY_READ_JOB_SLACK,
+                                     &reader);
+  if (status != DAMACY_OK)
+    goto Done;
+  status = damacy_file_metadata_reader_create(tuning->metadata_io_concurrency,
+                                              &config->debug.metadata_latency,
+                                              &metadata_reader);
+  if (status != DAMACY_OK)
+    goto Done;
+  status = damacy_zarr_metadata_create(
+    metadata_reader,
+    &(struct damacy_metadata_cache_config){
+      .array_entries = tuning->n_array_meta_cache,
+      .shard_entries = tuning->n_shard_index_cache },
+    &metadata);
+  if (status != DAMACY_OK)
+    goto Done;
+  status = damacy_chunk_planner_create(
+    metadata,
+    &(struct damacy_plan_limits){
+      .max_chunks = DAMACY_MAX_CHUNKS_PER_BATCH,
+      .max_chunk_bytes = tuning->max_chunk_uncompressed_bytes,
+      .max_shards_per_sample = tuning->max_shards_per_sample,
+      .max_plan_bytes = 64ull << 20 },
+    &planner);
+  if (status != DAMACY_OK)
+    goto Done;
+  status = damacy_cuda_executor_create(
+    reader,
+    &(struct damacy_cuda_config){
+      .device = config->device,
+      .max_gpu_memory_bytes = tuning->max_gpu_memory_bytes,
+      .max_chunk_bytes = tuning->max_chunk_uncompressed_bytes,
+      .max_read_bytes = tuning->max_read_op_bytes,
+      .max_chunks_per_wave = tuning->max_chunks_per_wave,
+      .max_substreams_per_chunk = tuning->max_substreams_per_chunk,
+      .host_buffer_waves = tuning->host_buffer_waves,
+      .chunk_layout_entries = tuning->n_chunk_layout_cache,
+      .numa_strategy = tuning->numa_strategy,
+      .numa_node = tuning->numa_node,
+      .enable_gds = tuning->enable_gds,
+      .bypass_decode = config->debug.bypass_decode },
+    &executor);
+  if (status != DAMACY_OK)
+    goto Done;
+  struct damacy_batch_spec output = { .dtype = config->dtype,
+                                      .sample_rank = config->sample_rank,
+                                      .samples_per_batch =
+                                        config->samples_per_batch };
+  memcpy(
+    output.sample_shape, config->sample_shape, sizeof(output.sample_shape));
+  status = damacy_pipeline_create(
+    planner,
+    executor,
+    &output,
+    &(struct damacy_queue_limits){
+      .lookahead_samples = config->lookahead_samples, .prepared_batches = 2 },
+    out);
+  if (status == DAMACY_OK) {
+    (*out)->owns_components = 1;
+    (*out)->owned_reader = reader;
+    (*out)->owned_metadata_reader = metadata_reader;
+    (*out)->owned_metadata = metadata;
+#ifdef DAMACY_HAS_CUDA
+    numa_scope_exit(&saved);
+#endif
+    return DAMACY_OK;
+  }
+Done:
+#ifdef DAMACY_HAS_CUDA
+  numa_scope_exit(&saved);
+#endif
+  damacy_executor_destroy(executor);
+  damacy_planner_destroy(planner);
+  damacy_metadata_destroy(metadata);
+  damacy_metadata_reader_destroy(metadata_reader);
+  damacy_reader_destroy(reader);
+  return status;
+}
+
+#ifdef DAMACY_HAS_CUDA
 uint64_t
-damacy_set_gpu_bytes_committed_for_test(struct damacy* self, uint64_t v)
+damacy_set_gpu_bytes_committed_for_test(struct damacy* self, uint64_t value)
 {
-  if (!self)
-    return 0;
-  return gpu_budget_set_committed_for_test(self->budget, v);
+  return self ? cuda_executor_set_budget(self->executor, value) : 0;
 }
-
-void
-damacy_config_describe(const struct damacy_config* cfg)
-{
-  if (!cfg) {
-    log_info("damacy_config_describe: NULL config");
-    return;
-  }
-  const uint64_t max_gpu = cfg->tuning.max_gpu_memory_bytes;
-  const uint64_t runtime_chunk_cap = resolve_max_chunk_uncompressed(cfg);
-  uint64_t pool_reserve = 0;
-  {
-    uint64_t pool_bytes = 0;
-    // resolve_sample_volume_bytes rejects rank=0 / non-positive dims; on
-    // those, leave pool_reserve at 0 so describe still prints useful
-    // info for the rest of the geometry.
-    enum damacy_status pvs = resolve_sample_volume_bytes(cfg, &pool_bytes);
-    if (pvs == DAMACY_OK)
-      pool_reserve = 2ull * pool_bytes;
-    else
-      log_info(
-        "damacy_config_describe: resolve_sample_volume_bytes failed (%s); "
-        "pool_reserve=0",
-        damacy_status_str(pvs));
-  }
-  const uint64_t resolver_budget =
-    pool_reserve < max_gpu ? max_gpu - pool_reserve : 0;
-  log_info("damacy_config_describe: max_gpu_memory_bytes=%llu "
-           "(pool_reserve=%llu, resolver_budget=%llu, "
-           "max_chunk_uncompressed_bytes=%llu, samples_per_batch=%u)",
-           (unsigned long long)max_gpu,
-           (unsigned long long)pool_reserve,
-           (unsigned long long)resolver_budget,
-           (unsigned long long)runtime_chunk_cap,
-           (unsigned)cfg->samples_per_batch);
-
-  struct resolved_wave_geometry geom = { 0 };
-  enum wave_geometry_step failed_step = WAVE_GEOMETRY_SIZING;
-  enum damacy_status rs = resolve_wave_geometry(
-    cfg, resolver_budget, runtime_chunk_cap, &geom, &failed_step);
-  if (rs != DAMACY_OK) {
-    const char* where = failed_step == WAVE_GEOMETRY_PREDICT
-                          ? "gpu_budget_predict"
-                          : "wave_pool_resolve_sizing";
-    log_info(
-      "damacy_config_describe: %s failed (%s)", where, damacy_status_str(rs));
-    return;
-  }
-  log_info("damacy_config_describe: input_staging_per_wave=%llu "
-           "dev_decompressed_per_wave=%llu",
-           (unsigned long long)geom.sizing.input_staging_per_wave,
-           (unsigned long long)geom.sizing.dev_decompressed_per_wave);
-  log_info("damacy_config_describe: dev_compressed=%llu dev_decompressed=%llu "
-           "blosc1_meta=%llu fanout_soa=%llu "
-           "nvcomp_temp=%llu batch_metadata=%llu",
-           (unsigned long long)geom.predicted.dev_compressed,
-           (unsigned long long)geom.predicted.dev_decompressed,
-           (unsigned long long)geom.predicted.blosc1_meta,
-           (unsigned long long)geom.predicted.fanout_soa,
-           (unsigned long long)geom.predicted.nvcomp_temp,
-           (unsigned long long)geom.predicted.batch_metadata);
-  // predicted.total is the *initial* allocation (initial fanout / decoder
-  // floors); sizing.worst_case_total_bytes is the post-grow worst case
-  // the resolver pre-reserved against the cap. Their difference is the
-  // grow-time headroom; the cap minus the worst case is unused slack.
-  const uint64_t initial_alloc = geom.predicted.total;
-  const uint64_t worst_case = geom.sizing.worst_case_total_bytes;
-  const uint64_t reserved_for_grow =
-    worst_case > initial_alloc ? worst_case - initial_alloc : 0;
-  const uint64_t slack = max_gpu > worst_case ? max_gpu - worst_case : 0;
-  log_info("damacy_config_describe: initial_alloc=%llu reserved_for_grow=%llu "
-           "worst_case_total=%llu slack=%llu cap=%llu",
-           (unsigned long long)initial_alloc,
-           (unsigned long long)reserved_for_grow,
-           (unsigned long long)worst_case,
-           (unsigned long long)slack,
-           (unsigned long long)max_gpu);
-}
+#endif

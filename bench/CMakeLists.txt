@@ -10,7 +10,9 @@ target_link_libraries(
     PRIVATE damacy json json_writer slice strbuf warnings
 )
 # nvcomp_static drags in libstdc++/libgcc_s; fold them into the binary too.
-target_link_options(damacy_bench PRIVATE -static-libstdc++ -static-libgcc)
+if(DAMACY_CUDA)
+    target_link_options(damacy_bench PRIVATE -static-libstdc++ -static-libgcc)
+endif()
 
 add_executable(metadata_store_async_bench metadata_store_async_bench.c)
 target_link_libraries(
@@ -19,8 +21,10 @@ target_link_libraries(
 )
 
 # Mount-ceiling probe; replays DAMACY_TRACE_READS captures (see file header).
-add_executable(preadreplay preadreplay.c)
-target_link_libraries(
-    preadreplay
-    PRIVATE warnings Threads::Threads CUDA::cuda_driver
-)
+if(DAMACY_CUDA)
+    add_executable(preadreplay preadreplay.c)
+    target_link_libraries(
+        preadreplay
+        PRIVATE warnings Threads::Threads CUDA::cuda_driver
+    )
+endif()

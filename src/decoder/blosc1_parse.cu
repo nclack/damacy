@@ -3,7 +3,7 @@
 #include "assemble/assemble.h"
 #include "damacy_limits.h"
 #include "decoder/launch_check.h"
-#include "planner/planner.h"
+#include "executor/dispatch.h"
 #include "zarr/zarr_chunk_layout.h"
 #include "zarr/zarr_metadata.h"
 
@@ -61,24 +61,31 @@ blosc1_chunk_scan_kernel(const uint8_t* __restrict__ d_compressed,
   const struct sample_plan& sp = d_sample_plans[chunk.sample_idx_in_batch];
 
   const uint8_t* d_comp = d_compressed + chunk.compressed_offset;
+  if (chunk.compressed_nbytes < kBloscHeaderBytes) {
+    record_parse_err(d_parse_err, 4u);
+    return;
+  }
   const uint8_t flags = d_comp[2];
   const uint32_t cbytes = read_u32_le(d_comp + 12);
-  if (cbytes != chunk.compressed_nbytes) {
+  if (cbytes != chunk.compressed_nbytes ||
+      read_u32_le(d_comp + 4) != chunk.decompressed_nbytes) {
     record_parse_err(d_parse_err, 4u);
     return;
   }
 
-  const uint32_t nblocks = sp.layout.nblocks;
   const bool memcpyed = ((flags >> 1) & 0x1u) != 0u;
 
   struct assemble_chunk* a = &d_assemble_chunks[chunk_idx];
   if (memcpyed) {
+    if (cbytes - kBloscHeaderBytes != chunk.decompressed_nbytes) {
+      record_parse_err(d_parse_err, 4u);
+      return;
+    }
     // Set the per-chunk bit; Kernel B reads it to skip these chunks.
     atomicOr(&d_is_memcpyed[chunk_idx >> 5], 1u << (chunk_idx & 31u));
-    const uint32_t overhead = kBloscHeaderBytes + 4u * nblocks;
     const uint32_t slot = atomicAdd(d_n_memcpy, 1u);
     struct gpu_memcpy_op op;
-    op.d_src = (uint8_t*)d_comp + overhead;
+    op.d_src = (uint8_t*)d_comp + kBloscHeaderBytes;
     op.d_dst = d_decompressed + chunk.decompressed_offset;
     op.nbytes = chunk.decompressed_nbytes;
     d_memcpy_ops[slot] = op;

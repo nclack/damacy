@@ -45,9 +45,9 @@ add_damacy_test(
     path_intern
     test_fixture
 )
-add_damacy_test(test_coalesce planner path_intern log)
+add_damacy_test(test_coalesce dispatch_utils path_intern log)
 add_damacy_test(test_path_intern path_intern hash log)
-add_damacy_test(test_group_chunks planner log)
+add_damacy_test(test_group_chunks dispatch_utils log)
 add_damacy_test(test_lookahead lookahead log platform)
 add_damacy_test(test_prefetch_cache prefetch_cache log)
 add_damacy_test(test_array_meta array_meta prefetch_cache zarr store test_fixture)
@@ -62,6 +62,13 @@ add_damacy_test(test_scheduler scheduler platform log)
 # DAMACY_FUZZ (which disables the CUDA-linked damacy target). Also
 # requires `uv` on PATH at test time (provided by flake.nix devShell).
 if(NOT DAMACY_FUZZ)
+    add_damacy_test(test_damacy_plan damacy)
+    add_damacy_test(test_cpu_pipeline damacy test_fixture Threads::Threads)
+    add_damacy_test(test_cpu_executor cpu_executor)
+    set_tests_properties(test_cpu_pipeline PROPERTIES TIMEOUT 120)
+endif()
+
+if(DAMACY_CUDA)
     add_library(cuda_test_util STATIC cuda_init.c cuda_init.h)
     target_include_directories(
         cuda_test_util
@@ -76,7 +83,6 @@ if(NOT DAMACY_FUZZ)
         test_damacy
         PRIVATE CUDA::cudart_static cuda_test_util
     )
-    add_damacy_test(test_damacy_plan damacy)
     add_damacy_test(test_damacy_blosc damacy test_fixture)
     target_link_libraries(test_damacy_blosc PRIVATE cuda_test_util)
     add_damacy_test(test_damacy_caps damacy decoder test_fixture cuda_test_util)

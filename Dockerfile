@@ -45,12 +45,15 @@ RUN apt-get update \
         ca-certificates \
         curl \
         xz-utils \
+        util-linux \
         cmake \
         ninja-build \
         pkg-config \
         python3 \
         python3-dev \
         liburing-dev \
+        libzstd-dev \
+        libblosc-dev \
         libnuma1 \
         libmount1 \
         libudev1 \
@@ -81,7 +84,7 @@ ENV PATH=/opt/venv/bin:${PATH} \
 # pytest drives python/tests/* via the python_pytest ctest target;
 # installed alongside scikit-build-core so the cmake configure can
 # detect it and register the test.
-RUN uv pip install scikit-build-core pytest pytest-cov
+RUN uv pip install scikit-build-core pytest pytest-cov numpy
 
 # ----- build configuration ---------------------------------------------------
 # Override at `docker build` time via --build-arg to produce a coverage
@@ -137,7 +140,7 @@ RUN ctest --test-dir build --output-on-failure -E "test_damacy|test_assemble|pyt
 # so the editable install resolves `damacy._native` without rebuilding.
 # Skipped under TSan (the .so isn't built; the install would 404).
 RUN if [ "${DAMACY_TSAN}" != "ON" ]; then \
-        cp build/python/_native*.so python/damacy/ && \
+        cp build/python/damacy/_native*.so python/damacy/ && \
         uv pip install --no-deps --no-build-isolation -e .; \
     fi
 

@@ -1,6 +1,6 @@
 # Async prefetch
 
-The [quick start](index.md#quick-start) shows the synchronous read
+The [quick start](index.md#cuda-quick-start) shows the synchronous read
 pattern:
 
 ```python
@@ -9,16 +9,15 @@ with batch as t:
     ...  # train step
 ```
 
-`x` is a zero-copy view onto damacy's slot, and the `with` block
-releases the slot at scope exit by host-syncing on damacy's
-producer stream. That's fine when fwd/bwd happens inside the
-block.
+`x` shares the output buffer. Exiting the `with` block releases the batch
+reference; the tensor retains its own reference until it is destroyed. Retaining
+both output buffers prevents the next batch from completing.
 
-Training loops that prefetch the next batch on a background thread
-while the main thread runs fwd/bwd need to skip that host sync.
-Both patterns below do — they hand a CUDA event (or stream) to
-`Batch.release(event=...)`, and damacy waits on it before reusing
-the slot.
+For CUDA work that outlives the batch's host scope, pass a consumer event or
+stream to `Batch.release(event=...)`. Damacy orders subsequent writes behind
+that event. Release the tensor view as well when it is no longer needed.
+These CUDA examples use an existing `Config`-based or injected pipeline;
+[Pipeline composition](pipeline.md) covers CPU consumers.
 
 ## Deferred release (preferred)
 
@@ -36,6 +35,7 @@ def prefetch(p):
 tensor, batch = prefetch_future.result()
 ... # forward / backward on tensor
 batch.release(event=torch.cuda.current_stream())  # no host sync
+del tensor
 ```
 
 `event=torch.cuda.current_stream()` records a CUevent on the

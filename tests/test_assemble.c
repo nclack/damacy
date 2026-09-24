@@ -6,8 +6,8 @@
 
 #include "assemble/assemble.h"
 #include "dtype/dtype.h"
+#include "executor/dispatch.h"
 #include "expect.h"
-#include "planner/planner.h"
 
 #include <cuda.h>
 #include <cuda_runtime.h>

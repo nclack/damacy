@@ -188,6 +188,22 @@ extern "C"
   struct damacy;
   struct damacy_batch;
 
+  enum damacy_device_type
+  {
+    DAMACY_DEVICE_CPU = 1,
+    DAMACY_DEVICE_CUDA = 2,
+  };
+
+  // Add one batch reference. Each reference needs its own release.
+  void damacy_batch_retain(struct damacy_batch* batch);
+  // Release one batch reference. Unlike damacy_release, this needs no
+  // pipeline, so it also works after the pipeline is destroyed. Thread-safe.
+  void damacy_batch_release(struct damacy_batch* batch);
+  // Stop the pipeline without freeing it. Pending work is dropped, blocked
+  // damacy_pop callers wake with DAMACY_SHUTDOWN, and borrowed components may
+  // serve another pipeline. Retained batches stay valid. Safe to repeat.
+  void damacy_shutdown(struct damacy* d);
+
   // Fill performance/resource knobs with explicit library defaults. Callers
   // still own required geometry fields such as sample_shape, samples_per_batch,
   // lookahead_samples, dtype, and max_gpu_memory_bytes.
@@ -204,13 +220,13 @@ extern "C"
   // Requires a live CUDA context on the calling thread.
   void damacy_config_describe(const struct damacy_config* cfg);
 
-  // The CUDA device index this instance is bound to.
+  // CUDA device index, or -1 for CPU execution.
   int damacy_get_device(const struct damacy* d);
 
-  // Tear down. Does NOT flush in-flight work; the io_queue is asked to
-  // shut down and pending CUDA streams are synchronized before buffers
-  // are released. Pending damacy_pop callers (from another thread) wake
-  // with DAMACY_SHUTDOWN.
+  // Shut down (see damacy_shutdown), then free the pipeline. Components
+  // passed to damacy_pipeline_create stay with the caller; components made by
+  // damacy_create are destroyed. Release retained batches afterwards with
+  // damacy_batch_release.
   void damacy_destroy(struct damacy* d);
 
   struct damacy_push_result
@@ -234,50 +250,30 @@ extern "C"
   struct damacy_push_result damacy_push(struct damacy* d,
                                         struct damacy_sample_slice samples);
 
-  // Block until the next batch is on-device-ready, in push-FIFO order.
-  // *out is owned by damacy until damacy_release.
+  // Return the next ready batch in push order. The caller owns one reference;
+  // release it with damacy_release or damacy_batch_release.
   enum damacy_status damacy_pop(struct damacy* d, struct damacy_batch** out);
 
-  // Return the batch's slot to the pool. Thread-safe; may be called from
-  // a thread other than the one that called damacy_pop.
+  // Release one batch reference. The buffer is reusable after the last
+  // consumer releases it. Thread-safe; may be called from
+  // a thread other than the one that called damacy_pop. A batch from another
+  // pipeline is still released, with a warning.
   void damacy_release(struct damacy* d, struct damacy_batch* b);
 
-  // Deferred release: tell damacy not to reuse the batch's buffer until
-  // `event` (a CUevent) has fired. Useful when the consumer kicked off
-  // an async D2D copy on a side stream and wants the host to return
-  // immediately instead of blocking on cuEventSynchronize before exiting
-  // a `with` block.
-  //
-  // Damacy records the wait on its internal stream_post (which is where
-  // assemble writes the slot's output buffer), so the next batch's
-  // assemble kernel — which writes to the same buffer — will wait on
-  // `event` before launching. No host synchronization is performed; this
-  // call returns as soon as the wait is queued and the slot state
-  // transitions to FREE.
-  //
-  // Latency note: stream_post is shared across both batch slots, so the
-  // wait gates EVERY subsequent assemble until `event` fires — not just
-  // the released slot's next reuse. A long-held consumer event therefore
-  // stalls the second slot's assemble too. For maximum overlap, release
-  // with an event that completes quickly relative to the consumer's
-  // step time.
-  //
-  // The event must remain valid for the duration of this call; damacy
-  // captures it into stream_post's command queue via cuStreamWaitEvent
-  // and is done with the handle by return. Passing a NULL event is
-  // equivalent to damacy_release.
-  //
-  // Returns DAMACY_OK on success or DAMACY_CUDA if the driver call fails.
-  // In either case the slot is released back to the pool — on the
-  // DAMACY_CUDA path the deferred wait was not installed and the slot
-  // falls back to immediate release, so the caller knows reuse is not
-  // gated on `event` but won't block on a future pop.
+  // Release one reference after ordering CUDA output writes behind event.
+  // While active, the wait is queued on the shared output stream and gates
+  // both output slots. After shutdown this synchronizes the event on the host.
+  // CPU execution rejects non-NULL events. The reference is released even if
+  // the wait fails; callers must handle that error before allowing reuse.
   enum damacy_status damacy_release_event(struct damacy* d,
                                           struct damacy_batch* b,
                                           void* event);
 
   struct damacy_batch_info
   {
+    void* data;
+    enum damacy_device_type device_type;
+    int device_id;
     void* device_ptr;                   // dtype-typed, contiguous
     int64_t shape[DAMACY_MAX_RANK + 1]; // [N, ...zarr axes]
     uint8_t rank;                       // includes leading N axis
@@ -308,7 +304,8 @@ extern "C"
     struct damacy_metric plan;
     struct damacy_metric io;
     struct damacy_metric input_transfer;
-    // decode: stream_decode work only (nvcomp + status_reduce).
+    // CPU decode/assemble times sum worker observations. CUDA decode measures
+    // stream_decode work (nvcomp + status_reduce).
     // post_decode: stream_post work — post-decode kernels + 4B D2H +
     // cross-stream wait on decode_done. A large post_decode avg means
     // stream_post is bottlenecking; a small avg means it overlaps the
@@ -382,6 +379,7 @@ extern "C"
     // wave-init to the first damacy_pop (lazy batch pool sizing) and stays
     // flat after that. Useful for surfacing the runtime budget to callers.
     uint64_t gpu_bytes_committed;
+    uint64_t host_bytes_committed;
   };
 
   void damacy_stats_get(const struct damacy* d, struct damacy_stats* out);

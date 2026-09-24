@@ -6,20 +6,23 @@
 //
 // All path/timestamp orchestration belongs in bench/run.py; this binary
 // is the timing core only.
-#include "damacy.h"
+#include "damacy_pipeline.h"
 
 #include "util/json.h"
 #include "util/json_writer.h"
 #include "util/slice.h"
 #include "util/strbuf.h"
 
+#ifdef DAMACY_HAS_CUDA
 #include <cuda.h>
-#include <cuda_runtime.h>
+#endif
+
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <time.h>
 
 #define countof(a) (sizeof(a) / sizeof((a)[0]))
@@ -114,7 +117,10 @@ struct scenario
   uint32_t lookahead_samples;
   uint32_t n_io_threads;
   uint32_t metadata_io_concurrency;
-  uint64_t max_gpu_memory_bytes;         // required
+  uint64_t max_gpu_memory_bytes;
+  uint64_t max_cpu_memory_bytes;
+  uint32_t decode_workers;
+  int cpu;
   uint32_t max_chunk_uncompressed_bytes; // 0 → tuning_defaults() baseline
   uint64_t max_read_op_bytes;            // 0 → tuning_defaults() baseline
   uint32_t n_array_meta_cache;
@@ -430,6 +436,29 @@ parse_scenario(struct cslice src, struct scenario* sc)
     sc->n_io_threads = (uint32_t)v;
     read_uint_opt(src, p_meta_io, countof(p_meta_io), &v, 8);
     sc->metadata_io_concurrency = (uint32_t)v;
+    static const struct json_query p_executor[] = {
+      { QUERY_KEY, .key = "pipeline" }, { QUERY_KEY, .key = "executor" }
+    };
+    char executor[16] = "cuda";
+    read_string_into(
+      src, p_executor, countof(p_executor), executor, sizeof(executor));
+    if (strcmp(executor, "cpu") && strcmp(executor, "cuda"))
+      return 1;
+    sc->cpu = !strcmp(executor, "cpu");
+    static const struct json_query p_cpu[] = { { QUERY_KEY, .key = "pipeline" },
+                                               { QUERY_KEY,
+                                                 .key = "max_cpu_memory_mb" } };
+    static const struct json_query p_workers[] = {
+      { QUERY_KEY, .key = "pipeline" }, { QUERY_KEY, .key = "decode_workers" }
+    };
+    read_uint_opt(src, p_cpu, countof(p_cpu), &v, 0);
+    if (v > (UINT64_MAX >> 20) || (sc->cpu && !v))
+      return 1;
+    sc->max_cpu_memory_bytes = v << 20;
+    read_uint_opt(src, p_workers, countof(p_workers), &v, 8);
+    if (!v || v > UINT32_MAX)
+      return 1;
+    sc->decode_workers = (uint32_t)v;
     read_uint_opt(src, p_g, countof(p_g), &v, 0);
     sc->max_gpu_memory_bytes = v << 20;
     read_uint_opt(src, p_c, countof(p_c), &v, 0);
@@ -649,8 +678,12 @@ array_table_init_uris(struct array_table* t,
     if (e != JSON_OK || v.type != JSON_STRING)
       return 1;
     char* slot = &t->uris[(size_t)t->n * BENCH_MAX_URI];
-    int w = snprintf(
-      slot, BENCH_MAX_URI, "%s/%.*s", store_root, (int)cslice_len(v.s), v.s.beg);
+    int w = snprintf(slot,
+                     BENCH_MAX_URI,
+                     "%s/%.*s",
+                     store_root,
+                     (int)cslice_len(v.s),
+                     v.s.beg);
     if (w < 0 || w >= BENCH_MAX_URI)
       return 1;
     int64_t shp[DAMACY_MAX_RANK];
@@ -712,6 +745,7 @@ struct run_metrics
   uint64_t pushed;
   uint64_t popped;
   struct damacy_stats stats;
+  uint64_t peak_host_bytes;
 };
 
 // Push exactly n_target_batches * samples_per_batch samples and pop
@@ -902,10 +936,10 @@ emit_results(const struct scenario* sc, const struct run_metrics* rm, FILE* out)
   emit_metric(&jw, &rm->stats.plan, "batch");
   emit_metric(&jw, &rm->stats.io, "wave");
   emit_metric(&jw, &rm->stats.input_transfer, "wave");
-  emit_metric(&jw, &rm->stats.decode, "wave");
+  emit_metric(&jw, &rm->stats.decode, sc->cpu ? "chunk" : "wave");
   emit_metric(&jw, &rm->stats.post_decode, "wave");
   emit_metric(&jw, &rm->stats.decode_gap, "wave");
-  emit_metric(&jw, &rm->stats.assemble, "wave");
+  emit_metric(&jw, &rm->stats.assemble, sc->cpu ? "chunk" : "wave");
   emit_metric(&jw, &rm->stats.bind_wait, "wave");
   emit_metric(&jw, &rm->stats.pop_wait, "poll");
   jw_array_end(&jw);
@@ -980,6 +1014,10 @@ emit_results(const struct scenario* sc, const struct run_metrics* rm, FILE* out)
   emit_metadata_op_latency(&jw, rm);
   jw_key(&jw, "gpu_bytes_committed");
   jw_uint(&jw, rm->stats.gpu_bytes_committed);
+  jw_key(&jw, "host_bytes_committed");
+  jw_uint(&jw, rm->stats.host_bytes_committed);
+  jw_key(&jw, "peak_host_bytes");
+  jw_uint(&jw, rm->peak_host_bytes);
   jw_object_end(&jw);
 
   // Derived numbers.
@@ -1035,6 +1073,85 @@ emit_results(const struct scenario* sc, const struct run_metrics* rm, FILE* out)
 
 // ---- main -------------------------------------------------------------------
 
+struct benchmark_pipeline
+{
+  struct damacy* handle;
+  struct damacy_reader* reader;
+  struct damacy_metadata_reader* metadata_reader;
+  struct damacy_metadata* metadata;
+  struct damacy_planner* planner;
+  struct damacy_executor* executor;
+};
+
+static void
+pipeline_destroy(struct benchmark_pipeline* pipeline)
+{
+  damacy_destroy(pipeline->handle);
+  damacy_executor_destroy(pipeline->executor);
+  damacy_planner_destroy(pipeline->planner);
+  damacy_metadata_destroy(pipeline->metadata);
+  damacy_metadata_reader_destroy(pipeline->metadata_reader);
+  damacy_reader_destroy(pipeline->reader);
+}
+
+static enum damacy_status
+pipeline_create(const struct scenario* scenario,
+                const struct damacy_config* cfg,
+                struct benchmark_pipeline* pipeline)
+{
+  if (!scenario->cpu)
+    return damacy_create(cfg, &pipeline->handle);
+  enum damacy_status status = damacy_file_reader_create(
+    cfg->tuning.n_io_threads, 4096, &pipeline->reader);
+  if (status != DAMACY_OK)
+    return status;
+  status =
+    damacy_file_metadata_reader_create(cfg->tuning.metadata_io_concurrency,
+                                       &cfg->debug.metadata_latency,
+                                       &pipeline->metadata_reader);
+  if (status != DAMACY_OK)
+    return status;
+  status = damacy_zarr_metadata_create(
+    pipeline->metadata_reader,
+    &(struct damacy_metadata_cache_config){ cfg->tuning.n_array_meta_cache,
+                                            cfg->tuning.n_shard_index_cache },
+    &pipeline->metadata);
+  if (status != DAMACY_OK)
+    return status;
+  status = damacy_chunk_planner_create(
+    pipeline->metadata,
+    &(struct damacy_plan_limits){
+      .max_chunks = 16384,
+      .max_chunk_bytes = cfg->tuning.max_chunk_uncompressed_bytes,
+      .max_shards_per_sample = cfg->tuning.max_shards_per_sample,
+      .max_plan_bytes = 64ull << 20 },
+    &pipeline->planner);
+  if (status != DAMACY_OK)
+    return status;
+  status = damacy_cpu_executor_create(
+    pipeline->reader,
+    &(struct damacy_cpu_config){
+      .decode_workers = scenario->decode_workers,
+      .max_encoded_chunk_bytes = (uint32_t)cfg->tuning.max_read_op_bytes,
+      .max_decoded_chunk_bytes = cfg->tuning.max_chunk_uncompressed_bytes,
+      .max_memory_bytes = scenario->max_cpu_memory_bytes },
+    &pipeline->executor);
+  if (status != DAMACY_OK)
+    return status;
+  struct damacy_batch_spec output = { .dtype = cfg->dtype,
+                                      .sample_rank = cfg->sample_rank,
+                                      .samples_per_batch =
+                                        cfg->samples_per_batch };
+  memcpy(output.sample_shape, cfg->sample_shape, sizeof(output.sample_shape));
+  return damacy_pipeline_create(
+    pipeline->planner,
+    pipeline->executor,
+    &output,
+    &(struct damacy_queue_limits){ .lookahead_samples = cfg->lookahead_samples,
+                                   .prepared_batches = 2 },
+    &pipeline->handle);
+}
+
 int
 main(int argc, char** argv)
 {
@@ -1082,13 +1199,14 @@ main(int argc, char** argv)
     }
   }
 
-  fprintf(stderr,
-          "scenario: store_root=%s n_arrays=%u rank=%u batches=%u (warmup=%u)\n",
-          sc.store_root,
-          at.n,
-          sc.rank,
-          sc.n_batches,
-          sc.n_warmup_batches);
+  fprintf(
+    stderr,
+    "scenario: store_root=%s n_arrays=%u rank=%u batches=%u (warmup=%u)\n",
+    sc.store_root,
+    at.n,
+    sc.rank,
+    sc.n_batches,
+    sc.n_warmup_batches);
 
   struct damacy_config cfg = {
     .samples_per_batch = sc.samples_per_batch,
@@ -1120,30 +1238,29 @@ main(int argc, char** argv)
 
   struct rng rng = { .s = sc.sampling_seed ? sc.sampling_seed : 0xdeadbeefULL };
 
-  // damacy_create requires a CUcontext current. Retain dev 0's primary.
-  if (cuInit(0) != CUDA_SUCCESS) {
-    fprintf(stderr, "cuInit failed\n");
-    array_table_free(&at);
-    free(json_buf);
-    return 1;
+#ifdef DAMACY_HAS_CUDA
+  if (!sc.cpu) {
+    CUdevice device;
+    CUcontext context;
+    if (cuInit(0) != CUDA_SUCCESS || cuDeviceGet(&device, 0) != CUDA_SUCCESS ||
+        cuDevicePrimaryCtxRetain(&context, device) != CUDA_SUCCESS ||
+        cuCtxSetCurrent(context) != CUDA_SUCCESS) {
+      fprintf(stderr, "CUDA context initialization failed\n");
+      array_table_free(&at);
+      free(json_buf);
+      return 1;
+    }
   }
-  CUdevice cu_dev = 0;
-  CUcontext cu_ctx = NULL;
-  if (cuDeviceGet(&cu_dev, 0) != CUDA_SUCCESS ||
-      cuDevicePrimaryCtxRetain(&cu_ctx, cu_dev) != CUDA_SUCCESS ||
-      cuCtxSetCurrent(cu_ctx) != CUDA_SUCCESS) {
-    fprintf(stderr, "primary ctx setup failed\n");
-    array_table_free(&at);
-    free(json_buf);
-    return 1;
-  }
+#endif
 
   double t_init_a = now_seconds();
-  struct damacy* d = NULL;
-  enum damacy_status cs = damacy_create(&cfg, &d);
+  struct benchmark_pipeline pipeline = { 0 };
+  enum damacy_status cs = pipeline_create(&sc, &cfg, &pipeline);
+  struct damacy* d = pipeline.handle;
   double t_init_b = now_seconds();
   if (cs != DAMACY_OK) {
-    fprintf(stderr, "damacy_create: %s\n", damacy_status_str(cs));
+    fprintf(stderr, "pipeline_create: %s\n", damacy_status_str(cs));
+    pipeline_destroy(&pipeline);
     array_table_free(&at);
     free(json_buf);
     return 1;
@@ -1172,7 +1289,7 @@ main(int argc, char** argv)
               NULL,
               NULL,
               NULL)) {
-      damacy_destroy(d);
+      pipeline_destroy(&pipeline);
       array_table_free(&at);
       free(json_buf);
       return 1;
@@ -1201,7 +1318,7 @@ main(int argc, char** argv)
               &rm.consumer_block_ms_total,
               &rm.consumer_push_ms_total,
               &rm.consumer_pop_wait_ms_total)) {
-      damacy_destroy(d);
+      pipeline_destroy(&pipeline);
       array_table_free(&at);
       free(json_buf);
       return 1;
@@ -1220,7 +1337,7 @@ main(int argc, char** argv)
               &rm.consumer_block_ms_total,
               &rm.consumer_push_ms_total,
               &rm.consumer_pop_wait_ms_total)) {
-      damacy_destroy(d);
+      pipeline_destroy(&pipeline);
       array_table_free(&at);
       free(json_buf);
       return 1;
@@ -1233,7 +1350,10 @@ main(int argc, char** argv)
   rm.popped += popped_steady;
 
   damacy_stats_get(d, &rm.stats);
-  damacy_destroy(d);
+  struct rusage usage;
+  if (getrusage(RUSAGE_SELF, &usage) == 0)
+    rm.peak_host_bytes = (uint64_t)usage.ru_maxrss * 1024;
+  pipeline_destroy(&pipeline);
   array_table_free(&at);
 
   emit_results(&sc, &rm, stdout);
