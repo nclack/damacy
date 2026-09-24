@@ -33,28 +33,36 @@ scratch_reserve(struct dispatch_scratch* scratch, uint32_t count)
   return DAMACY_OK;
 }
 
-uint32_t
-dispatch_index_capacity(const struct damacy_config* config)
+uint64_t
+dispatch_max_indices(const struct damacy_config* config)
 {
   if (!config || !config->samples_per_batch || !config->sample_rank ||
       config->sample_rank > DAMACY_MAX_RANK)
     return 0;
-  uint64_t capacity =
-    config->tuning.max_index_bytes / sizeof(struct gather_index);
-  if (capacity > UINT32_MAX)
-    capacity = UINT32_MAX;
   uint64_t count = 0;
   for (uint8_t d = 0; d < config->sample_rank; ++d) {
     if (config->sample_shape[d] <= 0)
       return 0;
     uint64_t extent = (uint64_t)config->sample_shape[d];
-    if (extent > capacity - count)
-      return (uint32_t)capacity;
+    if (extent > UINT64_MAX - count)
+      return UINT64_MAX;
     count += extent;
   }
-  if (config->samples_per_batch && count > capacity / config->samples_per_batch)
-    return (uint32_t)capacity;
-  return (uint32_t)(count * config->samples_per_batch);
+  if (count > UINT64_MAX / config->samples_per_batch)
+    return UINT64_MAX;
+  return count * config->samples_per_batch;
+}
+
+uint32_t
+dispatch_index_capacity(const struct damacy_config* config)
+{
+  uint64_t capacity = dispatch_max_indices(config);
+  if (!capacity)
+    return 0;
+  uint64_t limit = config->tuning.max_index_bytes / sizeof(struct gather_index);
+  if (capacity > limit)
+    capacity = limit;
+  return capacity > UINT32_MAX ? UINT32_MAX : (uint32_t)capacity;
 }
 
 uint32_t

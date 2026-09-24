@@ -134,6 +134,7 @@ extern "C"
     uint32_t capacity;
   };
 
+  uint64_t dispatch_max_indices(const struct damacy_config* config);
   uint32_t dispatch_index_capacity(const struct damacy_config* config);
   uint32_t dispatch_gather_dim_capacity(const struct damacy_config* config);
   uint64_t dispatch_index_storage_bytes(const struct damacy_config* config);

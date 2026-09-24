@@ -595,8 +595,10 @@ class Config:
             intersecting more shards is rejected with :class:`InvalidArgument`.
         max_chunk_uncompressed_bytes: Largest uncompressed chunk size
             the pipeline accepts; 0 selects the C default (512 KB).
-        max_index_bytes: GPU index storage cap per batch, eight bytes per index.
-            Zero disables indexed CUDA queries. Included in the total GPU budget.
+        max_index_bytes: GPU index storage per batch, eight bytes per index.
+            Must be zero, which rejects indexed queries at push, or at least
+            ``8 * samples_per_batch * sum(sample_shape)``. Included in the
+            total GPU budget.
         max_read_op_bytes: Cap on the size of a single coalesced
             read issued to storage. 0 selects the C default. Tune
             against your storage tier: small values keep the queue
@@ -934,9 +936,12 @@ class CpuLimits:
 class CudaLimits:
     """GPU buffer limits, wave geometry, and codec-layout cache capacity.
 
-    ``max_index_bytes`` caps index storage per batch (eight bytes per index).
-    Zero disables indexed CUDA queries. Storage also counts against the total
-    GPU budget; allocation is capped by the output shape.
+    ``max_index_bytes`` is index storage per batch, eight bytes per index. It
+    must be zero or at least ``8 * samples * sum(shape)`` of the output, so a
+    batch never runs out; a smaller value raises :class:`BudgetExceeded` from
+    :class:`Pipeline`. With zero, :meth:`Pipeline.push` rejects an
+    :class:`IndexQuery` with :class:`BudgetExceeded`. Storage counts against
+    the total GPU budget; only what the output shape needs is allocated.
     """
 
     max_gpu_memory_bytes: int
@@ -1693,8 +1698,10 @@ class Pipeline:
 
         Local validation (shape/rank against ``Pipeline.output.shape``)
         raises the matching :class:`DamacyError` subclass here and
-        discards the offending iterator. Errors that depend on store
-        contents — :class:`NotFound`, :class:`DtypeMismatch`,
+        discards the offending iterator. So does an :class:`IndexQuery`
+        on a CUDA executor with ``max_index_bytes=0``, which raises
+        :class:`BudgetExceeded`; the pipeline keeps running. Errors that
+        depend on store contents — :class:`NotFound`, :class:`DtypeMismatch`,
         per-array :class:`RankMismatch`, decode failures — surface at
         :meth:`pop` instead, since the pipeline fetches metadata
         asynchronously after push returns. Once any such error fires,

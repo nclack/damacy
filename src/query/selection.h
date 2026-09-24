@@ -51,6 +51,9 @@ query_validate(const struct damacy_sample* sample,
                const struct damacy_batch_spec* output,
                uint64_t max_index_bytes);
 
+int
+query_has_indices(const struct damacy_sample* sample);
+
 enum damacy_status
 query_copy(const struct damacy_sample* sample,
            char** uri,

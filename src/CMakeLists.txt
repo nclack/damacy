@@ -291,6 +291,7 @@ if(NOT DAMACY_FUZZ)
                 damacy_lifecycle.c damacy_push.c damacy_plan.c damacy_pop.c
                 damacy_scheduler.c
         LINKS pipeline_components metadata_planner cpu_executor scheduler damacy_stats
+              query_selection
     )
     if(DAMACY_CUDA)
         add_cuda_lib(cuda_executor

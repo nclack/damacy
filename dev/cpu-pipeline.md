@@ -136,8 +136,9 @@ trailing axes retain row copies. CUDA dispatch writes per-chunk selection spans
 to a per-batch array that only indexed samples reference, so rectangular chunk
 records carry no selection data. It uploads that array once per batch with
 compact source/output index pairs. Assembly reuses the existing read, decode,
-fill, shuffle, and cast paths. Index buffers are bounded by `max_index_bytes`
-and included in the GPU budget before wave sizing.
+fill, shuffle, and cast paths. Index buffers hold the most indices a batch can
+contain and are included in the GPU budget before wave sizing. A nonzero
+`max_index_bytes` must cover them; zero rejects indexed samples at push.
 
 ## Next: spatial resampling and NGFF
 

@@ -168,6 +168,18 @@ cuda_start(struct damacy_executor* base,
   memcpy(self->cfg.sample_shape,
          output->sample_shape,
          sizeof(self->cfg.sample_shape));
+  uint64_t max_indices = dispatch_max_indices(&self->cfg);
+  if (self->config.max_index_bytes &&
+      self->config.max_index_bytes / sizeof(struct gather_index) <
+        max_indices) {
+    log_error("max_index_bytes=%llu is too small: a batch can hold %llu "
+              "indices (samples_per_batch * sum(sample_shape)), 8 bytes each. "
+              "Raise max_index_bytes, or set it to 0 to disable indexed "
+              "queries",
+              (unsigned long long)self->config.max_index_bytes,
+              (unsigned long long)max_indices);
+    return DAMACY_BUDGET;
+  }
   enum damacy_status status = DAMACY_CUDA;
   int pushed = 0;
   if (cuInit(0) != CUDA_SUCCESS)
@@ -604,6 +616,7 @@ damacy_cuda_executor_create(struct damacy_reader* reader,
     return DAMACY_OOM;
   self->base.ops = &cuda_ops;
   self->base.device_type = DAMACY_DEVICE_CUDA;
+  self->base.accepts_indexed_samples = config->max_index_bytes != 0;
   self->reader = reader;
   self->config = *config;
   *out = &self->base;

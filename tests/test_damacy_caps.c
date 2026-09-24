@@ -31,6 +31,10 @@
 //   test_sample_shape_mismatch_rejected
 //                                   — push a sample whose aabb extent !=
 //                                     cfg.sample_shape; expect INVAL
+//   test_index_capacity             — too small a nonzero max_index_bytes
+//                                     fails create (BUDGET); with 0, push
+//                                     rejects an indexed sample (BUDGET)
+//                                     and the pipeline keeps running
 //   test_resolver_minimum_one_chunk — budget barely fitting a
 //                                     single-chunk wave produces a valid
 //                                     instance and surfaces tight geometry
@@ -388,6 +392,48 @@ test_sample_shape_mismatch_rejected(void)
   return 0;
 }
 
+static int
+test_index_capacity(void)
+{
+  char root[64];
+  EXPECT(mkdtemp_root(root, sizeof root) == 0);
+  char p[256];
+  snprintf(p, sizeof p, "%s/foo", root);
+  int64_t shape[2] = { 8, 16 }, inner[2] = { 4, 8 }, shard[2] = { 8, 16 };
+  EXPECT(fixture_write_zarr_codec(
+           p, shape, inner, shard, 2, "uint16", 0, "blosc-zstd") == 0);
+
+  // One sample of shape (8, 16) holds at most 8 + 16 indices.
+  struct damacy_config cfg = mk_cfg(root, 1, 8, 16);
+  cfg.tuning.max_index_bytes = 8 * (8 + 16) - 1;
+  struct damacy* d = NULL;
+  EXPECT(damacy_create(&cfg, &d) == DAMACY_BUDGET);
+  EXPECT(d == NULL);
+
+  cfg.tuning.max_index_bytes = 0;
+  EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
+  int64_t rows[8] = { 7, 6, 5, 4, 3, 2, 1, 0 };
+  struct damacy_sample s[2] = { mk_sample(p, 0, 8, 0, 16),
+                                mk_sample(p, 0, 8, 0, 16) };
+  s[1].axes[0] = (struct damacy_axis_selection){ .kind = DAMACY_AXIS_INDICES,
+                                                 .indices = { rows, 8 } };
+  struct damacy_push_result pr =
+    damacy_push(d, (struct damacy_sample_slice){ s, s + 2 });
+  EXPECT(pr.status == DAMACY_BUDGET);
+  EXPECT(pr.unconsumed.beg == s + 1 && pr.unconsumed.end == s + 2);
+  struct damacy_batch* b = NULL;
+  EXPECT(damacy_pop(d, &b) == DAMACY_OK);
+  damacy_release(d, b);
+  pr = damacy_push(d, (struct damacy_sample_slice){ s, s + 1 });
+  EXPECT(pr.status == DAMACY_OK);
+  EXPECT(damacy_pop(d, &b) == DAMACY_OK);
+  damacy_release(d, b);
+
+  damacy_destroy(d);
+  fixture_rm_tree(root);
+  return 0;
+}
+
 // Resolver picks per-wave near the minimum when the budget barely
 // fits. Reports gpu_bytes_committed back through stats so users can
 // observe the resolved size.
@@ -568,6 +614,7 @@ main(void)
   RUN(test_cache_floors_validated_at_create);
   RUN(test_oversized_sample_shard_count_rejected);
   RUN(test_sample_shape_mismatch_rejected);
+  RUN(test_index_capacity);
   RUN(test_resolver_minimum_one_chunk);
   log_info("all tests passed");
   return 0;

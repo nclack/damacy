@@ -55,6 +55,15 @@ query_validate(const struct damacy_sample* sample,
   return DAMACY_OK;
 }
 
+int
+query_has_indices(const struct damacy_sample* sample)
+{
+  for (uint8_t d = 0; d < sample->rank && d < DAMACY_MAX_RANK; ++d)
+    if (sample->axes[d].kind == DAMACY_AXIS_INDICES)
+      return 1;
+  return 0;
+}
+
 static int
 compare_indices(const void* left, const void* right)
 {

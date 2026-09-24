@@ -430,21 +430,29 @@ def test_cuda_index_budget(indexed_executor, tmp_path):
     uri = raw_chunks(
         tmp_path / "array", np.arange(4, dtype=np.float32).reshape(2, 2), (2, 2)
     )
-    for limit in (0, 31, 32):
-        cuda = damacy.CudaExecutor(
+    rectangle = damacy.Sample(uri, [(0, 2), (0, 2)])
+    query = damacy.IndexQuery(uri, ([1, 0], [1, 0]))
+
+    def executor(limit):
+        return damacy.CudaExecutor(
             reader=indexed_executor.reader,
             limits=dataclasses.replace(indexed_executor.limits, max_index_bytes=limit),
             device=0,
         )
-        with pipeline(shape=(2, 2), executor=cuda) as p:
-            p.push([damacy.Sample(uri, [(0, 2), (0, 2)])])
-            with p.pop() as batch:
-                np.testing.assert_array_equal(read_batch(batch), [[[0, 1], [2, 3]]])
-            p.push([damacy.IndexQuery(uri, ([1, 0], [1, 0]))])
-            if limit < 32:
-                with pytest.raises(damacy.BudgetExceeded):
-                    p.pop()
-            else:
-                with p.pop() as batch:
-                    np.testing.assert_array_equal(read_batch(batch), [[[3, 2], [1, 0]]])
-            assert p.stats().gpu_bytes_committed <= cuda.limits.max_gpu_memory_bytes
+
+    with pytest.raises(damacy.BudgetExceeded):
+        pipeline(shape=(2, 2), executor=executor(31))
+    with pipeline(shape=(2, 2), executor=executor(0)) as p:
+        with pytest.raises(damacy.BudgetExceeded):
+            p.push([rectangle, query])
+        with p.pop() as batch:
+            np.testing.assert_array_equal(read_batch(batch), [[[0, 1], [2, 3]]])
+        p.push([rectangle])
+        with p.pop() as batch:
+            np.testing.assert_array_equal(read_batch(batch), [[[0, 1], [2, 3]]])
+    cuda = executor(32)
+    with pipeline(shape=(2, 2), executor=cuda) as p:
+        p.push([query])
+        with p.pop() as batch:
+            np.testing.assert_array_equal(read_batch(batch), [[[3, 2], [1, 0]]])
+        assert p.stats().gpu_bytes_committed <= cuda.limits.max_gpu_memory_bytes

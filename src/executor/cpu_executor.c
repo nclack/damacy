@@ -850,6 +850,7 @@ damacy_cpu_executor_create(struct damacy_reader* reader,
     return DAMACY_OOM;
   self->base.ops = &cpu_ops;
   self->base.device_type = DAMACY_DEVICE_CPU;
+  self->base.accepts_indexed_samples = 1;
   self->reader = reader;
   self->config = *config;
   *out = &self->base;

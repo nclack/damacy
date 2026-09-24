@@ -71,6 +71,7 @@ struct damacy_executor
   _Atomic int active;
   int device_type;
   int device_id;
+  int accepts_indexed_samples;
 };
 
 struct damacy_buffer

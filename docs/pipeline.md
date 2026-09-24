@@ -167,8 +167,8 @@ unconsumed suffix remains caller-owned and can be retried.
 ## Limits and backpressure
 
 Sizes are bytes, with positive explicit limits. `CudaLimits.max_index_bytes`
-also accepts zero to disable indexed CUDA queries. Defaults come from the
-Python value objects.
+also accepts zero, which rejects indexed CUDA queries at push. Defaults come
+from the Python value objects.
 
 | Setting | Scope |
 | --- | --- |
@@ -186,15 +186,18 @@ Python value objects.
 | `FileReader.workers` | Bulk I/O workers, separate from decoding workers. |
 | `FileReader.max_inflight_reads` | Bulk read capacity; execution respects this bound and retries saturation. |
 | `CudaLimits` | GPU memory and execution geometry, plus the CUDA codec-layout cache capacity. |
-| `CudaLimits.max_index_bytes` | Device index storage per batch: eight bytes per index across all indexed axes and samples. Default 64 MiB. |
+| `CudaLimits.max_index_bytes` | Device index storage per batch: eight bytes per index across all indexed axes and samples. Zero, or at least `8 * samples * sum(shape)`. Default 64 MiB. |
 
 CUDA reserves index storage for its two execution slots within
-`max_gpu_memory_bytes`. Each slot allocates the smaller of `max_index_bytes`
-and the maximum index data possible for the configured output shape, plus
-16 bytes per axis for up to 16384 chunks to record each chunk's selected range.
-An identical amount of pinned host staging is allocated. A query exceeding the
-index capacity raises `BudgetExceeded`. `Config.max_index_bytes` provides the
-same setting through the CUDA convenience adapter.
+`max_gpu_memory_bytes`. A nonzero `max_index_bytes` must hold every index a
+batch can contain, `8 * samples * sum(shape)` bytes, so an accepted query never
+runs out of room. A smaller value raises `BudgetExceeded` from `Pipeline`. Each
+slot allocates that amount, plus 16 bytes per axis for up to 16384 chunks to
+record each chunk's selected range. An identical amount of pinned host staging
+is allocated. With `max_index_bytes=0`, `push` raises `BudgetExceeded` for an
+`IndexQuery`; the query is not consumed and the pipeline keeps running.
+`Config.max_index_bytes` provides the same setting through the CUDA
+convenience adapter.
 
 For injected pipelines, define `floor = queues.lookahead_samples + output.samples`.
 The metadata cache requires at least `floor` array entries and
