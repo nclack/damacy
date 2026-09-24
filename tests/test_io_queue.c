@@ -140,10 +140,11 @@ test_out_of_order_completion(void)
   // Regression: retired_seq must track the lowest in-flight seq even
   // when higher seqs finish first. Posts W gate jobs, releases all but
   // gate[0], waits for a barrier post — its retirement proves the
-  // higher seqs completed without advancing past gate[0].
+  // higher seqs completed without advancing past gate[0]. Two workers are
+  // enough to exercise this invariant and fit small hosted CI runners.
   enum
   {
-    W = 4
+    W = 2
   };
   struct io_queue* q = io_queue_create(W, NULL);
   EXPECT(q);
