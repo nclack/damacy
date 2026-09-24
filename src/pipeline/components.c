@@ -45,6 +45,15 @@ damacy_file_reader_create(uint32_t workers,
   *out = NULL;
   if (!workers || workers > DAMACY_MAX_IO_THREADS || !max_inflight_reads)
     return DAMACY_INVAL;
+  int cpus = platform_default_thread_count();
+  if (workers > (uint32_t)cpus) {
+    log_error("file reader workers (n_io_threads)=%u exceeds the %d online "
+              "CPUs; set it to at most %d",
+              workers,
+              cpus,
+              cpus);
+    return DAMACY_INVAL;
+  }
   struct damacy_reader* reader = calloc(1, sizeof(*reader));
   if (!reader)
     return DAMACY_OOM;

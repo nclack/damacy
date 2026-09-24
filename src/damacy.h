@@ -108,9 +108,9 @@ extern "C"
     // Required: must be in [1, DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK].
     uint32_t max_substreams_per_chunk;
 
-    // Bulk chunk-read worker threads. Wave IO uses this queue. Blocking
-    // IO workers may exceed the CPU count. Required: must be in
-    // [1, DAMACY_MAX_IO_THREADS].
+    // Bulk chunk-read worker threads. Wave IO uses this queue. Required:
+    // must be in [1, DAMACY_MAX_IO_THREADS] and no larger than the host's
+    // online CPU count; creation fails with DAMACY_INVAL otherwise.
     uint32_t n_io_threads;
     // Metadata request concurrency for array metadata, shard indexes, and
     // chunk-layout probes. The Linux metadata path uses this as an io_uring

@@ -208,7 +208,9 @@ The extension has no CUDA or nvCOMP dependency in this configuration.
 io_uring metadata requirements. macOS uses a POSIX metadata worker pool,
 with one worker per `metadata_io_concurrency`, and shared POSIX bulk reads.
 NUMA placement and CPU affinity are unavailable. CUDA defaults off on macOS
-and cannot be enabled.
+and cannot be enabled. On either platform, `FileReader(workers=...)` and the
+legacy `Config.n_io_threads` cannot exceed the online CPU count; larger values
+raise `InvalidArgument`.
 On Linux CUDA defaults on, builds both executors, and requires the CUDA toolkit,
 nvCOMP, and a runtime NVIDIA driver. GDS requires a CUDA build.
 
