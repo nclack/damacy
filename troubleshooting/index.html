@@ -706,11 +706,13 @@ the calling thread yet. Two fixes:</p>
   <code>torch.empty(1, device="cuda")</code> is enough.</li>
 </ul>
 <h2 id="pipeline-construction-fails-during-metadata-io-setup">Pipeline construction fails during metadata I/O setup<a class="headerlink" href="#pipeline-construction-fails-during-metadata-io-setup" title="Permanent link">&para;</a></h2>
-<p>The CPU and CUDA metadata paths use io_uring for Zarr metadata and shard indexes. At construction damacy requires kernel support for
+<p>On Linux, the CPU and CUDA metadata paths use io_uring for Zarr metadata and shard indexes. At construction damacy requires kernel support for
 <code>IORING_OP_STATX</code>, <code>IORING_OP_OPENAT2</code>, <code>IORING_OP_READ</code>, and
 <code>IORING_OP_CLOSE</code>. If ring creation or the operation probe fails,
 pipeline construction fails without a thread-pool fallback. Check the native log for the exact io_uring failure.</p>
-<p>On supported kernels, an unusually high <code>metadata_io_concurrency</code> can also
+<p>macOS uses POSIX metadata worker threads and has no io_uring dependency.
+An unusually high <code>metadata_io_concurrency</code> can exhaust thread resources on
+macOS. On either platform it can also
 stress process file-descriptor limits because each in-flight metadata read can
 hold an open fd. The default is 64; for much deeper settings, check
 <code>ulimit -n</code> and remember to multiply by ranks per node.</p>
