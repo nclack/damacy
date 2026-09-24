@@ -101,10 +101,17 @@ cpu_read_plan_build(const struct prepared_plan* plan,
   uint64_t scratch_bytes =
     (uint64_t)count * (sizeof(struct read_op) + 4 * sizeof(uint32_t));
   uint64_t need = bytes + scratch_bytes;
-  if (need > SIZE_MAX)
+  if (need > SIZE_MAX ||
+      (need > available && need - available > active_plan_bytes)) {
+    log_error("read plan for %u chunks needs %llu bytes, but only %llu bytes "
+              "of max_memory_bytes are left after the CPU executor's buffers",
+              count,
+              (unsigned long long)need,
+              (unsigned long long)(available + active_plan_bytes));
     return DAMACY_BUDGET;
+  }
   if (need > available)
-    return need - available <= active_plan_bytes ? DAMACY_AGAIN : DAMACY_BUDGET;
+    return DAMACY_AGAIN;
   struct cpu_read_plan reads = { .bytes = bytes };
   reads.reads = calloc(1, (size_t)bytes);
   struct read_op* scratch_reads = calloc(count, sizeof(*scratch_reads));
@@ -451,8 +458,19 @@ cpu_start(struct damacy_executor* base,
   uint64_t budget = self->config.max_memory_bytes;
   uint64_t need = fixed + input + decode;
   if (chunks > SIZE_MAX / self->config.max_encoded_chunk_bytes ||
-      need > budget || bytes > (budget - need) / 2)
+      need > budget || bytes > (budget - need) / 2) {
+    log_error("max_memory_bytes=%llu is too small for the CPU executor: "
+              "input buffers %llu (2 x %u chunks), decode workspace %llu "
+              "(%u workers), output buffers 2 x %llu, other %llu",
+              (unsigned long long)budget,
+              (unsigned long long)input,
+              (unsigned)chunks,
+              (unsigned long long)decode,
+              (unsigned)workers,
+              (unsigned long long)bytes,
+              (unsigned long long)fixed);
     return DAMACY_BUDGET;
+  }
   self->committed = need + 2 * bytes;
   for (unsigned i = 0; i < 2; ++i) {
     struct damacy_buffer* buffer = calloc(1, sizeof(*buffer));

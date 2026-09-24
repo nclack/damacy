@@ -138,7 +138,9 @@ The two input buffers reserve
 bookkeeping. With the defaults, 256 chunks and a 4 MiB encoded-chunk bound,
 that is 2 GiB before decoder workspaces and output buffers. Set the bound to
 match the largest encoded chunk expected, and include this reserve in
-`max_memory_bytes`; insufficient budgets report `BUDGET`.
+`max_memory_bytes`. If the budget is too small, starting the pipeline reports
+`BUDGET` and logs how many bytes the input buffers, decoder workspaces, and
+output buffers need.
 
 CPU memory admission includes active read plans, temporary planning scratch,
 and a conservative allowance for Blosc scratch storage.
