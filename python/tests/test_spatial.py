@@ -691,16 +691,12 @@ def test_automatic_level_selection_matches_singular_values(tmp_path):
         assert resolved.level == expected
 
 
-def test_active_metadata_reader_is_not_reused(tmp_path, spatial_executor):
+def test_metadata_reader_is_shared_with_running_pipeline(tmp_path, spatial_executor):
     root = tmp_path / "image"
     write_image(root)
     reader = damacy.FileMetadataReader(concurrency=2)
-    with (
-        pipeline(spatial_executor, damacy.BatchSpec(1, (4, 4)), reader),
-        pytest.raises(damacy.InvalidArgument),
-    ):
-        damacy.NgffImage(root, reader=reader, multiscale_index=0)
-    assert damacy.NgffImage(root, reader=reader, multiscale_index=0).levels
+    with pipeline(spatial_executor, damacy.BatchSpec(1, (4, 4)), reader):
+        assert damacy.NgffImage(root, reader=reader, multiscale_index=0).levels
 
 
 @pytest.mark.parametrize("path", ["zarr.json", "1/zarr.json"])

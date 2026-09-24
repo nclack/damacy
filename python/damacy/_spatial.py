@@ -71,7 +71,7 @@ class NgffImage:
     """Load an immutable OME-Zarr 0.5 image description through the given reader.
 
     Loading reads the image group's metadata and each level's array metadata.
-    It finishes before returning and releases the reader for other uses.
+    It finishes before returning.
     ``multiscale_index`` explicitly selects an entry in ``ome.multiscales``.
     """
 

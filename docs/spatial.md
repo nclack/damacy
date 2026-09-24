@@ -78,10 +78,8 @@ and geometry, so it remains usable after the image is released. Python results
 contain ordinary immutable values and can be pickled for transfer between processes.
 Source metadata and data must remain unchanged while the image is in use.
 
-Loading is synchronous and uses the supplied reader exclusively for the
-duration of the call. A reader already serving a pipeline or another load is
-rejected. The example reuses its reader after loading finishes. Use a separate
-reader if loading more images while a pipeline is running.
+Loading is synchronous. It uses only the reader's settings, so one reader can
+serve a running pipeline and other loads at the same time.
 
 ## Coordinates and the output grid
 

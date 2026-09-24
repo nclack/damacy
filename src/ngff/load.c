@@ -79,9 +79,6 @@ damacy_ngff_image_load(struct damacy_metadata_reader* reader,
       limits->max_levels > INT32_MAX || !limits->max_metadata_bytes ||
       limits->max_metadata_bytes > SIZE_MAX)
     return DAMACY_INVAL;
-  int expected = 0;
-  if (!atomic_compare_exchange_strong(&reader->active, &expected, 1))
-    return DAMACY_INVAL;
   struct metadata_store_async* store = metadata_store_async_create(
     (int)reader->concurrency, NULL, &reader->latency);
   struct metadata_read read = { .mutex = platform_mutex_new(),
@@ -124,7 +121,6 @@ Done:
   metadata_store_async_destroy(store);
   platform_mutex_free(read.mutex);
   platform_cond_free(read.cond);
-  atomic_store(&reader->active, 0);
   damacy_ngff_image_destroy(image);
   free(read.data);
   return status;
