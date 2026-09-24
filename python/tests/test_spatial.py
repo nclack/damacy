@@ -108,6 +108,26 @@ def edit(path, keys, value):
     path.write_text(json.dumps(metadata))
 
 
+def set_transforms(root, levels):
+    for i, (scale, translation) in enumerate(levels):
+        edit(
+            root / "zarr.json",
+            (
+                "attributes",
+                "ome",
+                "multiscales",
+                0,
+                "datasets",
+                i,
+                "coordinateTransformations",
+            ),
+            [
+                {"type": "scale", "scale": [scale, scale]},
+                {"type": "translation", "translation": [translation, translation]},
+            ],
+        )
+
+
 def load(path, **kwargs):
     return damacy.NgffImage(
         path,
@@ -118,7 +138,11 @@ def load(path, **kwargs):
 
 
 def query(
-    scale=1, offset=(0, 0), *, sampler=None, level: int | Literal["auto"] = "auto"
+    scale: float = 1,
+    offset=(0, 0),
+    *,
+    sampler=None,
+    level: int | Literal["auto"] = "auto",
 ):
     rank = len(offset)
     return damacy.SpatialQuery(
@@ -285,6 +309,51 @@ def test_ngff_center_offsets_stay_in_adapter(tmp_path):
     resolved = image.resolve(query(2), shape=shape)
     assert resolved.level == 1 and not resolved.requires_resampling
     assert image.resolve(query(4), shape=shape).requires_resampling
+
+
+def test_float_translations_keep_crops_aligned(tmp_path, spatial_executor):
+    root = tmp_path / "image"
+    arrays = write_image(root, data=True)
+    scales = [0.325 * 2**level for level in range(3)]
+    set_transforms(root, [(s, 12.3 + (s - scales[0]) / 2) for s in scales])
+    image = load(root)
+    assert image.levels[1].scale_to_reference == (2, 2)
+    assert image.levels[1].origin_reference_index == (0, 0)
+    output = damacy.BatchSpec(1, (4, 4))
+    resolved = image.resolve(query(2), shape=output.shape)
+    assert resolved.level == 1 and not resolved.requires_resampling
+    with pipeline(spatial_executor, output) as p:
+        p.push([resolved])
+        with p.pop() as batch:
+            np.testing.assert_array_equal(read_batch(batch)[0], arrays[1][:4, :4])
+
+
+def test_float_scale_ratio_keeps_crops_aligned(tmp_path):
+    root = tmp_path / "image"
+    write_image(root, scales=[[1, 1], [3, 3]])
+    set_transforms(root, [(0.1, 0), (0.3, 0)])
+    image = load(root)
+    assert image.levels[1].scale_to_reference == (3, 3)
+    assert image.levels[1].origin_reference_index == (-1, -1)
+    for beg in range(3):
+        resolved = image.resolve(query(3, (3 * beg - 1,) * 2), shape=(2, 2))
+        assert resolved.level == 1 and not resolved.requires_resampling
+        assert resolved.source_bounds_index == ((beg, beg + 2),) * 2
+
+
+def test_documented_level_crop_is_exact(tmp_path):
+    root = tmp_path / "image"
+    write_image(root, scales=[[1, 1], [3, 3]])
+    set_transforms(root, [(0.1, 12.3), (0.1 * 3, 12.3 + (0.1 * 3 - 0.1) / 2)])
+    image = load(root)
+    scale = image.levels[1].scale_to_reference[0]
+    origin = image.levels[1].origin_reference_index[0]
+    for beg in range(1, 4):
+        resolved = image.resolve(
+            query(scale, (origin + scale * beg,) * 2, level=1), shape=(2, 2)
+        )
+        assert not resolved.requires_resampling
+        assert resolved.source_bounds_index == ((beg, beg + 2),) * 2
 
 
 def test_anisotropic_rotated_level_selection_and_time_channel_axes(tmp_path):

@@ -157,6 +157,13 @@ identity. For a 2× level with a half-reference-voxel center translation,
 Damacy preserves that declared alignment. The API never asks callers to add
 or remove NGFF center offsets themselves.
 
+Writers usually compute scales and translations in floating point, so these
+values can miss by a rounding error. For example, scales `0.1` and `0.3` give
+`R_l = 2.9999999999999996`. Loading replaces `R_l` or `origin_l` with the
+nearest multiple of 1/256 when it is that close: within `64 * DBL_EPSILON`
+times `R_l` for the ratio, or times `(|T_l| + |T_0|) / S_0 + R_l` for the
+origin. Whole-number ratios and whole- or half-voxel origins then come out exact.
+
 `NgffLevel.scale_to_reference` and `.origin_reference_index` expose this
 adapted map. Given query matrix `A` and offset `b`, resolution computes:
 
@@ -183,10 +190,13 @@ map and `origin_l + R_l * beg` as its offset.
 
 The current copy path requires the resolved linear map to equal identity,
 its offsets to be integral, and its source bounds to be inside the array.
-Fractional values are not rounded into a crop. Small floating-point differences
-in metadata can therefore make a result require resampling. `requires_resampling`
-reports this, and `Pipeline.push()` rejects such results until a resampler is
-available. The pipeline checks the resulting shape against its own `BatchSpec`.
+The resolver checks this exactly and never rounds a query into a crop. Because
+loading removes rounding error from the level values, a crop built from them
+as above is exact. A query computed another way, such as from physical
+coordinates, can still be off by a rounding error and then require resampling.
+`requires_resampling` reports this, and `Pipeline.push()` rejects such results
+until a resampler is available. The pipeline checks the resulting shape against
+its own `BatchSpec`.
 
 ## Sampler and bounds
 

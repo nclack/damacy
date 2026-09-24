@@ -2,6 +2,7 @@
 
 #include "zarr/zarr_metadata.h"
 
+#include <float.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -309,6 +310,14 @@ read_level(struct json_node node,
     value, rank, level->scale_to_reference, level->origin_reference_index);
 }
 
+// Removes writers' floating-point error so crops built from levels stay exact.
+static double
+round_if_close(double value, double error)
+{
+  double nearest = round(value * 256) / 256;
+  return fabs(value - nearest) <= error ? nearest : value;
+}
+
 static enum damacy_status
 normalize_levels(struct damacy_ngff_image* image)
 {
@@ -329,7 +338,11 @@ normalize_levels(struct damacy_ngff_image* image)
         if (i && scale < image->levels[i - 1].scale_to_reference[d])
           return DAMACY_INVAL;
         double ratio = scale / base_scale;
+        ratio = round_if_close(ratio, 64 * DBL_EPSILON * ratio);
         double offset = (origin - base_origin) / base_scale + 0.5 * (1 - ratio);
+        double magnitude =
+          (fabs(origin) + fabs(base_origin)) / base_scale + ratio;
+        offset = round_if_close(offset, 64 * DBL_EPSILON * magnitude);
         if (!isfinite(ratio) || !isfinite(offset))
           return DAMACY_INVAL;
         level->scale_to_reference[d] = ratio;

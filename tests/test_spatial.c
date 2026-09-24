@@ -63,6 +63,45 @@ image_create(struct damacy_ngff_image** image)
   return 0;
 }
 
+static int
+pyramid_create(const char* scale0,
+               const char* translation0,
+               const char* scale1,
+               const char* translation1,
+               struct damacy_ngff_image** image)
+{
+  char text[2048];
+  snprintf(
+    text,
+    sizeof(text),
+    "{\"zarr_format\":3,\"node_type\":\"group\",\"attributes\":{\"ome\":{"
+    "\"version\":\"0.5\",\"multiscales\":[{\"axes\":["
+    "{\"name\":\"y\",\"type\":\"space\"},"
+    "{\"name\":\"x\",\"type\":\"space\"}],\"datasets\":["
+    "{\"path\":\"0\",\"coordinateTransformations\":["
+    "{\"type\":\"scale\",\"scale\":[%s,%s]},"
+    "{\"type\":\"translation\",\"translation\":[%s,%s]}]},"
+    "{\"path\":\"1\",\"coordinateTransformations\":["
+    "{\"type\":\"scale\",\"scale\":[%s,%s]},"
+    "{\"type\":\"translation\",\"translation\":[%s,%s]}]}]}]}}}",
+    scale0,
+    scale0,
+    translation0,
+    translation0,
+    scale1,
+    scale1,
+    translation1,
+    translation1);
+  EXPECT(ngff_parse_group(text_slice(text), "volume", 0, 2, image) ==
+         DAMACY_OK);
+  for (uint32_t i = 0; i < 2; ++i) {
+    char array[1024];
+    array_json(array, sizeof(array), 64 >> i);
+    EXPECT(ngff_parse_array(text_slice(array), *image, i) == DAMACY_OK);
+  }
+  return 0;
+}
+
 static struct damacy_spatial_query
 identity_query(void)
 {
@@ -118,6 +157,57 @@ test_corner_conversion_and_copy(void)
   EXPECT(sample.axes[0].interval.beg == 2 && sample.axes[0].interval.end == 6);
   EXPECT(sample.axes[1].interval.beg == 3 && sample.axes[1].interval.end == 7);
   damacy_spatial_resolution_clear(&resolved);
+  return 0;
+}
+
+static int
+level_one_crop(const struct damacy_ngff_image* image,
+               double scale,
+               double offset,
+               int64_t beg)
+{
+  struct damacy_spatial_query query = identity_query();
+  for (uint8_t d = 0; d < 2; ++d) {
+    query.output_to_reference.linear[d][d] = scale;
+    query.output_to_reference.offset[d] = offset;
+  }
+  struct damacy_spatial_resolution resolved;
+  EXPECT(damacy_spatial_resolve(image, &query, 2, output_shape, &resolved) ==
+         DAMACY_OK);
+  int aligned = resolved.level == 1 && !resolved.requires_resampling &&
+                resolved.source_bounds_index.dims[0].beg == beg &&
+                resolved.source_bounds_index.dims[1].beg == beg;
+  damacy_spatial_resolution_clear(&resolved);
+  EXPECT(aligned);
+  return 0;
+}
+
+static int
+test_level_rounding_error_is_removed(void)
+{
+  struct damacy_ngff_image* image;
+  EXPECT(!pyramid_create("0.325", "12.3", "0.65", "12.4625", &image));
+  const struct damacy_ngff_level* level =
+    &damacy_ngff_image_info(image)->levels[1];
+  EXPECT(level->scale_to_reference[0] == 2);
+  EXPECT(level->origin_reference_index[0] == 0);
+  EXPECT(!level_one_crop(image, 2, 0, 0));
+  damacy_ngff_image_destroy(image);
+  EXPECT(!pyramid_create("0.1", "0", "0.3", "0", &image));
+  level = &damacy_ngff_image_info(image)->levels[1];
+  EXPECT(level->scale_to_reference[0] == 3);
+  EXPECT(level->origin_reference_index[0] == -1);
+  for (int64_t beg = 0; beg < 3; ++beg)
+    EXPECT(!level_one_crop(image, 3, 3.0 * (double)beg - 1, beg));
+  damacy_ngff_image_destroy(image);
+  EXPECT(!pyramid_create("0.1", "12.3", "0.30000000000000004", "12.4", &image));
+  level = &damacy_ngff_image_info(image)->levels[1];
+  for (int64_t beg = 1; beg < 4; ++beg) {
+    double scale = level->scale_to_reference[0];
+    double offset = level->origin_reference_index[0] + scale * (double)beg;
+    EXPECT(!level_one_crop(image, scale, offset, beg));
+  }
+  damacy_ngff_image_destroy(image);
   return 0;
 }
 
@@ -392,6 +482,7 @@ int
 main(void)
 {
   RUN(test_corner_conversion_and_copy);
+  RUN(test_level_rounding_error_is_removed);
   RUN(test_scale_rotation_and_shear);
   RUN(test_sampler_bounds);
   RUN(test_invalid_queries);
