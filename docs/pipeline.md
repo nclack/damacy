@@ -110,7 +110,7 @@ capacities. Defaults come from the Python value objects.
 | `PlanLimits.max_chunk_bytes` | Decoded source bytes per chunk, before output conversion. |
 | `PlanLimits.max_shards_per_sample` | Maximum number of shard files touched by one sample. |
 | `PlanLimits.max_plan_bytes` | Owned storage per prepared plan. |
-| `CpuLimits.max_memory_bytes` | CPU executor's input, decoded, codec-workspace, and two output buffers. |
+| `CpuLimits.max_memory_bytes` | CPU executor's buffers, codec workspace, active read plans, and temporary read-planning scratch. |
 | `CpuLimits.decode_workers` | Total decoding/assembly workers, including the calling scheduler thread. |
 | `FileReader.workers` | Bulk I/O workers, separate from decoding workers. |
 | `FileReader.max_inflight_reads` | Bulk read capacity; execution respects this bound and retries saturation. |
@@ -123,10 +123,22 @@ cover pending samples and the batch being prepared. Queued plans own their
 metadata and do not pin cache entries. The legacy `Config` adapter retains its
 older, stricter cache validation.
 
-CPU memory admission includes a conservative allowance for Blosc scratch
-storage. `Stats.host_bytes_committed` reports that reservation, which can exceed
-the bytes actually touched. It excludes metadata caches, prepared plans, reader
-queues, thread stacks, and allocator overhead: it is not a process RSS limit.
+The CPU executor merges adjacent or overlapping encoded ranges within each
+shard, then interleaves the reads across shards. It decodes each unique source
+chunk once per batch, including when several output samples use that chunk.
+Both input groups stay within the decode-worker, encoded-byte, and reader
+limits; merging does not increase the number of decode workers.
+
+CPU memory admission includes active read plans, temporary planning scratch,
+and a conservative allowance for Blosc scratch storage.
+`Stats.host_bytes_committed` reports current buffers, read plans, and codec
+reservations, which can exceed the bytes actually touched. Temporary planning
+scratch is checked against the cap and released before submission returns.
+If an active batch's read plan temporarily prevents admission, submission
+retries after that batch completes. A plan that cannot fit by itself reports
+`BUDGET`.
+The cap excludes metadata caches, prepared plans, reader queues, thread stacks,
+and allocator overhead: it is not a process RSS limit.
 Queued plan storage is bounded separately by
 `prepared_batches * max_plan_bytes`, with up to two accepted plans and one plan
 being built in addition. Retaining results across repeated pipeline restarts

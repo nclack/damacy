@@ -74,8 +74,12 @@ resolution. It preserves the existing GPU decode/assembly path. CUDA chunk
 layout probes are backend preparation and never enter shared planning.
 
 The CPU executor deduplicates decoded source chunks within a batch using the
-plan's chunk-use links. It handles raw bytes, zstd, and C-Blosc zstd with no,
-byte, or bit shuffle. It copies clipped chunk intersections and casts the
+plan's chunk-use links. Before reading, it uses the shared coalescer to merge
+adjacent or overlapping ranges within each shard and interleave merged reads
+across shards. Each unique chunk retains its offset within a merged read; its
+uses still control output assembly. CPU reads use exact encoded byte ranges,
+without CUDA's page alignment. It handles raw bytes, zstd, and C-Blosc zstd
+with no, byte, or bit shuffle. It copies clipped chunk intersections and casts
 supported source types to `f32` or `bf16`, including fill-only chunks. The CUDA
 executor currently retains its per-use decode behavior; cross-sample GPU decode
 reuse can be optimized separately.
@@ -83,11 +87,14 @@ reuse can be optimized separately.
 ## Resources and ownership
 
 CPU I/O workers and decode workers are configured independently. There are two
-input groups and two output buffers. Each input group fits the decoder-worker
-and reader capacities. Decoding uses a bounded per-worker output buffer and
-zstd context; memory admission also reserves conservative Blosc workspace.
-The memory cap covers executor buffers, not metadata, reader queues, plan
-storage, thread stacks, allocator overhead, or total process RSS.
+input groups and two output buffers. Each input group holds at most
+`decode_workers` chunks and `decode_workers * max_encoded_chunk_bytes` encoded
+bytes. Merged reads fit these limits, and their count respects the reader
+capacity. Decoding uses a bounded per-worker output buffer and zstd context;
+memory admission also reserves conservative Blosc workspace. The memory cap
+covers executor buffers, active read plans, and temporary read-planning
+scratch. It excludes metadata, reader queues, prepared-plan storage, thread
+stacks, allocator overhead, and total process RSS.
 
 The result handle has its own reference count and owns a reference to its
 buffer. The executor owns another buffer reference and reuses storage only

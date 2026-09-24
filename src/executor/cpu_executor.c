@@ -6,6 +6,7 @@
 
 #include "damacy_config.h"
 #include "damacy_stats.h"
+#include "executor/coalesce.h"
 #include "threadpool/threadpool.h"
 
 #include <stdlib.h>
@@ -19,11 +20,27 @@ enum cpu_slot_state
   CPU_HELD
 };
 
+struct cpu_chunk_read
+{
+  uint32_t offset;
+  uint32_t next;
+};
+
+struct cpu_read_plan
+{
+  struct read_op* reads;
+  struct cpu_chunk_read* chunks;
+  uint32_t* first_chunks;
+  uint32_t count;
+  uint64_t bytes;
+};
+
 struct cpu_slot
 {
   enum cpu_slot_state state;
   struct damacy_buffer* buffer;
   struct prepared_plan* plan;
+  struct cpu_read_plan read_plan;
   uint64_t batch_id;
   uint32_t dispatched;
   uint32_t remaining;
@@ -36,17 +53,23 @@ struct cpu_worker
   ZSTD_DCtx* zstd;
 };
 
+struct cpu_chunk_input
+{
+  const struct plan_chunk* chunk;
+  const void* input;
+};
+
 struct cpu_wave
 {
   struct store_event event;
   struct store_read* reads;
+  struct cpu_chunk_input* chunks;
   void* input;
   enum damacy_status* results;
   float* decode_ms;
   float* assemble_ms;
   uint64_t* output_bytes;
   struct platform_clock clock;
-  uint32_t first_chunk;
   uint32_t count;
   uint32_t slot;
   uint64_t input_bytes;
@@ -69,6 +92,79 @@ struct cpu_executor
   struct cpu_wave* decoding;
   uint64_t committed;
 };
+
+static void
+cpu_read_plan_destroy(struct cpu_read_plan* plan)
+{
+  free(plan->reads);
+  *plan = (struct cpu_read_plan){ 0 };
+}
+
+static enum damacy_status
+cpu_read_plan_build(const struct prepared_plan* plan,
+                    const struct damacy_cpu_config* config,
+                    uint64_t available,
+                    uint64_t active_plan_bytes,
+                    struct cpu_read_plan* out)
+{
+  uint32_t count = plan->n_chunks;
+  uint64_t bytes =
+    (uint64_t)count *
+    (sizeof(struct read_op) + sizeof(struct cpu_chunk_read) + sizeof(uint32_t));
+  uint64_t scratch_bytes =
+    (uint64_t)count * (sizeof(struct read_op) + 4 * sizeof(uint32_t));
+  uint64_t need = bytes + scratch_bytes;
+  if (need > SIZE_MAX)
+    return DAMACY_BUDGET;
+  if (need > available)
+    return need - available <= active_plan_bytes ? DAMACY_AGAIN : DAMACY_BUDGET;
+  struct cpu_read_plan reads = { .bytes = bytes };
+  reads.reads = calloc(1, (size_t)bytes);
+  struct read_op* scratch_reads = calloc(count, sizeof(*scratch_reads));
+  uint32_t* indices = calloc((size_t)count * 4, sizeof(*indices));
+  enum damacy_status status = DAMACY_OOM;
+  if (!reads.reads || !scratch_reads || !indices)
+    goto Done;
+  reads.chunks = (void*)(reads.reads + count);
+  reads.first_chunks = (void*)(reads.chunks + count);
+  for (uint32_t i = 0; i < count; ++i) {
+    const struct plan_chunk* chunk = &plan->chunks[i];
+    if (!chunk->missing)
+      reads.reads[i] = (struct read_op){ .shard_path = chunk->path,
+                                         .file_offset = chunk->offset,
+                                         .nbytes = chunk->encoded_bytes };
+  }
+  uint32_t* read_index = indices + 2 * (size_t)count;
+  uint32_t* offset_in_read = indices + 3 * (size_t)count;
+  reads.count = count;
+  status = coalesce_reads(reads.reads,
+                          &reads.count,
+                          (uint64_t)config->decode_workers *
+                            config->max_encoded_chunk_bytes,
+                          config->decode_workers,
+                          read_index,
+                          offset_in_read,
+                          indices,
+                          scratch_reads);
+  if (status != DAMACY_OK)
+    goto Done;
+  for (uint32_t i = 0; i < reads.count; ++i)
+    reads.first_chunks[i] = UINT32_MAX;
+  for (uint32_t i = count; i-- > 0;) {
+    uint32_t read = read_index[i];
+    reads.chunks[i] =
+      (struct cpu_chunk_read){ .offset = offset_in_read[i],
+                               .next = reads.first_chunks[read] };
+    reads.first_chunks[read] = i;
+  }
+  *out = reads;
+Done:
+  free(scratch_reads);
+  free(indices);
+  if (status != DAMACY_OK)
+    cpu_read_plan_destroy(&reads);
+  return status;
+}
 
 static float
 half_to_float(uint16_t half)
@@ -277,11 +373,9 @@ decode_one(size_t index, int tid, void* arg)
   struct cpu_executor* self = arg;
   struct cpu_wave* wave = self->decoding;
   struct cpu_slot* slot = &self->slots[wave->slot];
-  const struct plan_chunk* chunk =
-    &slot->plan->chunks[wave->first_chunk + index];
+  const struct plan_chunk* chunk = wave->chunks[index].chunk;
   const struct zarr_metadata* meta = &slot->plan->arrays[chunk->array].metadata;
-  const void* input =
-    (const char*)wave->input + index * self->config.max_encoded_chunk_bytes;
+  const void* input = wave->chunks[index].input;
   const void* decoded;
   struct platform_clock clock = { 0 };
   platform_toc(&clock);
@@ -313,6 +407,7 @@ cpu_stop(struct damacy_executor* base)
       store_event_wait(self->reader->store, wave->event);
     free(wave->input);
     free(wave->reads);
+    free(wave->chunks);
     free(wave->results);
     free(wave->decode_ms);
     free(wave->assemble_ms);
@@ -321,6 +416,7 @@ cpu_stop(struct damacy_executor* base)
   }
   for (unsigned i = 0; i < 2; ++i) {
     prepared_plan_destroy(self->slots[i].plan);
+    cpu_read_plan_destroy(&self->slots[i].read_plan);
     buffer_release(self->slots[i].buffer);
     self->slots[i] = (struct cpu_slot){ 0 };
   }
@@ -358,8 +454,8 @@ cpu_start(struct damacy_executor* base,
     2ull * self->config.max_encoded_chunk_bytes +
     self->config.max_decoded_chunk_bytes + codec_reserve +
     sizeof(struct cpu_worker) +
-    2 * (sizeof(struct store_read) + sizeof(enum damacy_status) +
-         2 * sizeof(float) + sizeof(uint64_t));
+    2 * (sizeof(struct store_read) + sizeof(struct cpu_chunk_input) +
+         sizeof(enum damacy_status) + 2 * sizeof(float) + sizeof(uint64_t));
   uint64_t fixed = sizeof(*self) + 2 * sizeof(struct damacy_buffer);
   if (per_worker > self->config.max_memory_bytes / workers ||
       bytes > self->config.max_memory_bytes / 2)
@@ -384,12 +480,13 @@ cpu_start(struct damacy_executor* base,
     wave->input =
       malloc((size_t)workers * self->config.max_encoded_chunk_bytes);
     wave->reads = calloc((size_t)workers, sizeof(*wave->reads));
+    wave->chunks = calloc((size_t)workers, sizeof(*wave->chunks));
     wave->results = calloc((size_t)workers, sizeof(*wave->results));
     wave->decode_ms = calloc((size_t)workers, sizeof(*wave->decode_ms));
     wave->assemble_ms = calloc((size_t)workers, sizeof(*wave->assemble_ms));
     wave->output_bytes = calloc((size_t)workers, sizeof(*wave->output_bytes));
-    if (!wave->input || !wave->reads || !wave->results || !wave->decode_ms ||
-        !wave->assemble_ms || !wave->output_bytes)
+    if (!wave->input || !wave->reads || !wave->chunks || !wave->results ||
+        !wave->decode_ms || !wave->assemble_ms || !wave->output_bytes)
       goto Fail;
   }
   self->workers = calloc((size_t)workers, sizeof(*self->workers));
@@ -428,6 +525,8 @@ cpu_submit(struct damacy_executor* base,
     }
   if (slot < 0)
     return DAMACY_AGAIN;
+  if (!plan || !plan->n_chunks)
+    return DAMACY_INVAL;
   for (uint32_t i = 0; i < plan->n_chunks; ++i) {
     const struct plan_chunk* chunk = &plan->chunks[i];
     if (chunk->encoded_bytes > self->config.max_encoded_chunk_bytes ||
@@ -440,6 +539,15 @@ cpu_submit(struct damacy_executor* base,
       return DAMACY_DECODE;
   }
   struct cpu_slot* target = &self->slots[slot];
+  enum damacy_status status = cpu_read_plan_build(
+    plan,
+    &self->config,
+    self->config.max_memory_bytes - self->committed,
+    self->slots[0].read_plan.bytes + self->slots[1].read_plan.bytes,
+    &target->read_plan);
+  if (status != DAMACY_OK)
+    return status;
+  self->committed += target->read_plan.bytes;
   target->plan = plan;
   target->batch_id = batch_id;
   target->dispatched = 0;
@@ -455,32 +563,44 @@ cpu_dispatch(struct cpu_executor* self, struct cpu_wave* wave, int* changed)
   for (unsigned i = 0; i < 2; ++i) {
     const struct cpu_slot* slot = &self->slots[i];
     if (slot->state == CPU_RENDERING &&
-        slot->dispatched < slot->plan->n_chunks &&
+        slot->dispatched < slot->read_plan.count &&
         (slot_index < 0 || slot->batch_id < self->slots[slot_index].batch_id))
       slot_index = (int)i;
   }
   if (slot_index < 0)
     return DAMACY_OK;
   struct cpu_slot* slot = &self->slots[slot_index];
-  uint32_t count = slot->plan->n_chunks - slot->dispatched;
-  if (count > self->config.decode_workers)
-    count = self->config.decode_workers;
-  if (count > self->reader->max_inflight_reads)
-    count = self->reader->max_inflight_reads;
+  const struct cpu_read_plan* plan = &slot->read_plan;
+  uint32_t next_read = slot->dispatched;
+  uint32_t count = 0;
   uint32_t n_reads = 0;
   uint64_t bytes = 0;
-  for (uint32_t i = 0; i < count; ++i) {
-    const struct plan_chunk* chunk = &slot->plan->chunks[slot->dispatched + i];
-    if (chunk->missing)
-      continue;
-    wave->reads[n_reads++] =
-      (struct store_read){ .key = chunk->path,
-                           .offset = chunk->offset,
-                           .len = chunk->encoded_bytes,
-                           .dst =
-                             (char*)wave->input +
-                             (size_t)i * self->config.max_encoded_chunk_bytes };
-    bytes += chunk->encoded_bytes;
+  uint64_t capacity = (uint64_t)self->config.decode_workers *
+                      self->config.max_encoded_chunk_bytes;
+  while (next_read < plan->count) {
+    const struct read_op* read = &plan->reads[next_read];
+    uint32_t n_chunks = 0;
+    for (uint32_t c = plan->first_chunks[next_read]; c != UINT32_MAX;
+         c = plan->chunks[c].next)
+      ++n_chunks;
+    if (n_chunks > self->config.decode_workers - count ||
+        read->nbytes > capacity - bytes ||
+        (read->nbytes && n_reads == self->reader->max_inflight_reads))
+      break;
+    for (uint32_t c = plan->first_chunks[next_read]; c != UINT32_MAX;
+         c = plan->chunks[c].next)
+      wave->chunks[count++] =
+        (struct cpu_chunk_input){ .chunk = &slot->plan->chunks[c],
+                                  .input = (char*)wave->input + bytes +
+                                           plan->chunks[c].offset };
+    if (read->nbytes)
+      wave->reads[n_reads++] =
+        (struct store_read){ .key = read->shard_path,
+                             .offset = read->file_offset,
+                             .len = read->nbytes,
+                             .dst = (char*)wave->input + bytes };
+    bytes += read->nbytes;
+    ++next_read;
   }
   platform_toc(&wave->clock);
   struct store_submit_result result =
@@ -490,10 +610,9 @@ cpu_dispatch(struct cpu_executor* self, struct cpu_wave* wave, int* changed)
   wave->event = result.event;
   wave->active = 1;
   wave->slot = (uint32_t)slot_index;
-  wave->first_chunk = slot->dispatched;
   wave->count = count;
   wave->input_bytes = bytes;
-  slot->dispatched += count;
+  slot->dispatched = next_read;
   self->stats->reads_issued += n_reads;
   self->stats->chunks_dispatched += count;
   ++self->stats->waves_emitted;
@@ -540,8 +659,7 @@ cpu_step(struct damacy_executor* base, int* changed)
     for (uint32_t j = 0; j < wave->count; ++j) {
       if (wave->results[j] != DAMACY_OK)
         return wave->results[j];
-      const struct plan_chunk* chunk =
-        &slot->plan->chunks[wave->first_chunk + j];
+      const struct plan_chunk* chunk = wave->chunks[j].chunk;
       metric_record(&self->stats->decode,
                     wave->decode_ms[j],
                     chunk->encoded_bytes,
@@ -555,6 +673,8 @@ cpu_step(struct damacy_executor* base, int* changed)
     wave->active = 0;
     if (!slot->remaining) {
       slot->state = CPU_READY;
+      self->committed -= slot->read_plan.bytes;
+      cpu_read_plan_destroy(&slot->read_plan);
       prepared_plan_destroy(slot->plan);
       slot->plan = NULL;
     }

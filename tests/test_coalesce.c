@@ -422,6 +422,39 @@ test_fills_passthrough(void)
   return 0;
 }
 
+static int
+test_equal_path_copies(void)
+{
+  char paths[6][8] = { "shard/0", "shard/0", "shard/0",
+                       "shard/1", "shard/1", "shard/1" };
+  const uint64_t offsets[] = { 0, 4, 16, 0, 4, 16 };
+  const uint32_t expected_reads[] = { 0, 0, 2, 1, 1, 3 };
+  struct read_op reads[6] = { 0 };
+  struct chunk_plan chunks[6] = { 0 };
+  for (uint32_t i = 0; i < 6; ++i) {
+    reads[i] = (struct read_op){ .shard_path = paths[i],
+                                 .file_offset = offsets[i],
+                                 .nbytes = 4 };
+    chunks[i].read_op_idx = i;
+  }
+  struct dispatch_output out = { .read_ops = reads,
+                                 .n_read_ops = 6,
+                                 .chunk_plans = chunks,
+                                 .n_chunk_plans = 6 };
+  EXPECT(run_coalesce(&out, 8, 6) == DAMACY_OK);
+  EXPECT(out.n_read_ops == 4);
+  for (uint32_t i = 0; i < 4; ++i) {
+    EXPECT(strcmp(reads[i].shard_path, i % 2 ? "shard/1" : "shard/0") == 0);
+    EXPECT(reads[i].file_offset == (i < 2 ? 0u : 16u));
+    EXPECT(reads[i].nbytes == (i < 2 ? 8u : 4u));
+  }
+  for (uint32_t i = 0; i < 6; ++i) {
+    EXPECT(chunks[i].read_op_idx == expected_reads[i]);
+    EXPECT(chunks[i].offset_in_read == (i % 3 == 1 ? 4u : 0u));
+  }
+  return 0;
+}
+
 int
 main(void)
 {
@@ -437,5 +470,6 @@ main(void)
   RUN(test_round_robin_interleave);
   RUN(test_chunk_count_cap);
   RUN(test_fills_passthrough);
+  RUN(test_equal_path_copies);
   return 0;
 }
