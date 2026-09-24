@@ -49,7 +49,8 @@
     "n_shard_index_cache": 32768,
     "max_shards_per_sample": 8,
     "executor": "cpu",
-    "max_cpu_memory_mb": 4096,
-    "decode_workers": 8
+    "max_cpu_memory_mb": 5120,
+    "decode_workers": 8,
+    "chunks_per_input_buffer": 256
   }
 }
