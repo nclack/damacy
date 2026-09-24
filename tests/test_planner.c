@@ -414,7 +414,6 @@ test_single_chunk_aligned(void)
   EXPECT(sp->rank == 2);
   EXPECT(sp->batch_pool_slot == 0);
   EXPECT(sp->sample_idx_in_batch == 0);
-  EXPECT(sp->chunk_count == 1);
   EXPECT(sp->dims[0].chunk_shape == 2 && sp->dims[1].chunk_shape == 4);
   EXPECT(sp->dims[0].chunk_grid_extent == 1 &&
          sp->dims[1].chunk_grid_extent == 1);
@@ -489,7 +488,6 @@ test_multi_chunk_partial(void)
 
   struct sample_plan* sp = &samples[0];
   EXPECT(sp->rank == 2);
-  EXPECT(sp->chunk_count == 4);
   EXPECT(sp->dims[0].chunk_grid_extent == 2 &&
          sp->dims[1].chunk_grid_extent == 2);
   EXPECT(sp->dims[0].aabb_lo_relative == 1 &&
@@ -542,7 +540,6 @@ test_two_samples_indices(void)
 
   EXPECT(samples[0].sample_dst_off_elems == 0);
   EXPECT(samples[1].sample_dst_off_elems == 8); // sample_idx=1 * stride[0]=8
-  EXPECT(samples[0].chunk_count == 1 && samples[1].chunk_count == 1);
 
   fixture_destroy(&f);
   return 0;
@@ -1565,8 +1562,7 @@ test_owned_index_plan(void)
   EXPECT(dispatch_plan_build(plan, 0, PAGE, PAGE, 8, &dispatch, &scratch) ==
          DAMACY_OK);
   EXPECT(dispatch.n_indices == 14 && dispatch.n_gather_dims == 16);
-  EXPECT(dispatch.sample_plans[0].indexed &&
-         dispatch.sample_plans[0].chunk_count == 4);
+  EXPECT(dispatch.sample_plans[0].indexed);
   uint64_t elements = 0;
   for (uint32_t i = 0; i < dispatch.n_chunk_plans; ++i) {
     const struct gather_dim* gather =

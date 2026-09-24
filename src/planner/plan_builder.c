@@ -5,7 +5,6 @@
 #include "prefetch/shard_index.h"
 #include "util/hash.h"
 #include "util/strbuf.h"
-#include "zarr/sample_shard_iterator.h"
 
 #include <stdlib.h>
 #include <string.h>

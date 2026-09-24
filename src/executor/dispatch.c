@@ -108,15 +108,14 @@ dispatch_plan_build(const struct prepared_plan* plan,
     const struct plan_region* region = &plan->regions[i];
     const struct zarr_metadata* meta = &plan->arrays[region->array].metadata;
     struct sample_plan* sample = &out->sample_plans[region->sample];
-    *sample = (struct sample_plan){
-      .batch_pool_slot = slot,
-      .sample_idx_in_batch = (uint16_t)region->sample,
-      .rank = meta->rank,
-      .src_dtype = (uint8_t)meta->dtype,
-      .indexed = region->operation == PLAN_GATHER,
-      .sample_dst_off_elems = (int64_t)region->sample * strides[0],
-      .chunk_count = region->operation == PLAN_COPY ? 1 : 0
-    };
+    *sample =
+      (struct sample_plan){ .batch_pool_slot = slot,
+                            .sample_idx_in_batch = (uint16_t)region->sample,
+                            .rank = meta->rank,
+                            .src_dtype = (uint8_t)meta->dtype,
+                            .indexed = region->operation == PLAN_GATHER,
+                            .sample_dst_off_elems =
+                              (int64_t)region->sample * strides[0] };
     memcpy(sample->fill_value, meta->fill_value, sizeof(sample->fill_value));
     int64_t source_stride = 1;
     for (int d = meta->rank - 1; d >= 0; --d) {
@@ -145,8 +144,6 @@ dispatch_plan_build(const struct prepared_plan* plan,
                              .aabb_extent = plan->output.sample_shape[d],
                              .dst_stride = strides[d + 1],
                              .src_stride = source_stride };
-      if (!sample->indexed)
-        sample->chunk_count *= (uint32_t)(end - begin);
       source_stride *= (int64_t)chunk;
     }
   }
@@ -171,7 +168,6 @@ dispatch_plan_build(const struct prepared_plan* plan,
     };
     struct sample_plan* sample = &out->sample_plans[region->sample];
     if (sample->indexed) {
-      ++sample->chunk_count;
       if (meta->rank > out->gather_dims_cap - out->n_gather_dims)
         return DAMACY_BUDGET;
       dispatch->gather_offset = out->n_gather_dims;

@@ -243,7 +243,6 @@ run_scenario(int rank,
   sp.rank = (uint8_t)rank;
   sp.src_dtype = (uint8_t)src_dtype;
   sp.sample_dst_off_elems = 0;
-  sp.chunk_count = n_chunks;
   for (int d = 0; d < rank; ++d) {
     sp.dims[d].chunk_shape = S[d];
     sp.dims[d].chunk_grid_extent = N[d];
@@ -555,7 +554,6 @@ run_fill_scenario(enum dtype src_dtype,
   struct sample_plan sp = { 0 };
   sp.rank = (uint8_t)rank;
   sp.src_dtype = (uint8_t)src_dtype;
-  sp.chunk_count = n_chunks;
   for (int d = 0; d < rank; ++d) {
     sp.dims[d].chunk_shape = S[d];
     sp.dims[d].chunk_grid_extent = N[d];
@@ -747,7 +745,6 @@ test_rank3_all_fill(void)
   struct sample_plan sp = { 0 };
   sp.rank = (uint8_t)rank;
   sp.src_dtype = (uint8_t)src_dtype;
-  sp.chunk_count = n_chunks;
   for (int d = 0; d < rank; ++d) {
     sp.dims[d].chunk_shape = S[d];
     sp.dims[d].chunk_grid_extent = N[d];

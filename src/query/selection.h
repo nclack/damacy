@@ -49,7 +49,7 @@ struct selection_span
 enum damacy_status
 query_validate(const struct damacy_sample* sample,
                const struct damacy_batch_spec* output,
-               uint64_t max_index_bytes);
+               uint64_t max_plan_bytes);
 
 int
 query_has_indices(const struct damacy_sample* sample);

@@ -55,8 +55,6 @@ extern "C"
     struct sample_dim dims[DAMACY_MAX_RANK];
     int64_t sample_dst_off_elems;
 
-    uint32_t chunk_count;
-
     uint8_t fill_value[DAMACY_MAX_DTYPE_BYTES];
 
     struct chunk_layout layout;

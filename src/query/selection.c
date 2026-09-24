@@ -25,7 +25,7 @@ axis_length(const struct damacy_axis_selection* axis, uint64_t* length)
 enum damacy_status
 query_validate(const struct damacy_sample* sample,
                const struct damacy_batch_spec* output,
-               uint64_t max_index_bytes)
+               uint64_t max_plan_bytes)
 {
   if (!sample || !sample->uri || !output)
     return DAMACY_INVAL;
@@ -44,7 +44,7 @@ query_validate(const struct damacy_sample* sample,
     if (axis->kind == DAMACY_AXIS_INDICES) {
       uint64_t size =
         (uint64_t)axis->indices.count * sizeof(struct query_index);
-      if (size > max_index_bytes || bytes > max_index_bytes - size)
+      if (size > max_plan_bytes || bytes > max_plan_bytes - size)
         return DAMACY_BUDGET;
       bytes += size;
       for (uint32_t i = 0; i < axis->indices.count; ++i)

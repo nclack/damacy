@@ -2,11 +2,13 @@
 // device arena into the output batch tensor, casting source elements to
 // the destination dtype on the fly.
 //
-// The kernel iterates the union of chunks for each sample (a single
-// rectangle per sample, U[d] = N[d] * S[d]) and culls voxels outside
-// the sample's tight AABB at write time. Per-sample constants live in
-// `struct sample_plan` (planner.h); per-wave-chunk records carry the
-// arena offset and the chunk's grid position. Source dtype is read off
+// For a rectangular sample the kernel iterates the union of its chunks
+// (U[d] = N[d] * S[d]) and culls voxels outside the sample's tight AABB at
+// write time. For an indexed sample each chunk writes only the Cartesian
+// product of its selected positions, described by the sample's gather_dims
+// and indices. Per-sample constants live in `struct sample_plan`
+// (dispatch.h); per-wave-chunk records carry the arena offset and either the
+// chunk's grid position or its gather_dims offset. Source dtype is read off
 // the sample_plan; destination dtype is fixed for the launch.
 #pragma once
 
