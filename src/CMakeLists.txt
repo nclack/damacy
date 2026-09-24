@@ -190,7 +190,7 @@ else()
 endif()
 
 if(APPLE)
-    set(METADATA_STORE_IMPL store/metadata_store_async.mach.c)
+    set(METADATA_STORE_IMPL store/metadata_store_async.posix.c)
 else()
     set(METADATA_STORE_IMPL store/metadata_store_async.c)
 endif()
