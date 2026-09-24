@@ -1,0 +1,1067 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Streamed assembly of tensors from Zarr sources into RAM or GPU memory.">
+      
+      
+      
+        <link rel="canonical" href="https://nclack.github.io/damacy/spatial/">
+      
+      
+        <link rel="prev" href="../pipeline/">
+      
+      
+        <link rel="next" href="../budget/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Spatial queries - damacy</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#ngff-images-and-spatial-queries" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="damacy" class="md-header__button md-logo" aria-label="damacy" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            damacy
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Spatial queries
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/nclack/damacy" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    nclack/damacy
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="damacy" class="md-nav__button md-logo" aria-label="damacy" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    damacy
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/nclack/damacy" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    nclack/damacy
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pipeline composition
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Spatial queries
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Spatial queries
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#assemble-the-stages" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Assemble the stages
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#coordinates-and-the-output-grid" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Coordinates and the output grid
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ngff-interpretation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        NGFF interpretation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#choosing-a-level" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Choosing a level
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sampler-and-bounds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sampler and bounds
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#public-c-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Public C API
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#next-execution-step" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Next execution step
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../budget/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GPU memory budget
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../distributed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Distributed
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../prefetch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Async prefetch
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#assemble-the-stages" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Assemble the stages
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#coordinates-and-the-output-grid" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Coordinates and the output grid
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ngff-interpretation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        NGFF interpretation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#choosing-a-level" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Choosing a level
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sampler-and-bounds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sampler and bounds
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#public-c-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Public C API
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#next-execution-step" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Next execution step
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="ngff-images-and-spatial-queries">NGFF images and spatial queries<a class="headerlink" href="#ngff-images-and-spatial-queries" title="Permanent link">&para;</a></h1>
+<p>A spatial query describes a fixed output grid mapped into a reference image.
+Metadata loading and query resolution are separate from chunk planning and decoding:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>flowchart LR
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    reader[Metadata reader] --&gt; image[Loaded NGFF image]
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    image --&gt; resolver[Resolve query]
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    query[Transform and sampler] --&gt; resolver
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    output[Fixed output shape] --&gt; resolver
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    resolver --&gt; resolved[Source array, transform, and bounds]
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    resolved --&gt; planner[Chunk planner]
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    planner --&gt; executor[CPU or CUDA executor]
+</span></code></pre></div>
+<p>The resolver chooses a source level before the chunk planner reads data. It
+also reports whether that source grid can supply the output by copying voxels.
+<strong>Execution currently requires an aligned crop.</strong> Rotation, reflection, shear,
+fractional offsets, and scaling that remains after level selection require a
+future resampling operation. Those queries can be resolved and inspected now;
+converting or submitting them raises <code>UnsupportedOperation</code> (<code>DAMACY_UNSUPPORTED</code>).</p>
+<h2 id="assemble-the-stages">Assemble the stages<a class="headerlink" href="#assemble-the-stages" title="Permanent link">&para;</a></h2>
+<p>This example uses a three-dimensional image with axes ordered <code>z, y, x</code>. The
+reference array must contain the requested crop. See
+<a href="../pipeline/">pipeline composition</a> for executor limits and batch ownership.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">damacy</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">metadata_reader</span> <span class="o">=</span> <span class="n">damacy</span><span class="o">.</span><span class="n">FileMetadataReader</span><span class="p">(</span><span class="n">concurrency</span><span class="o">=</span><span class="mi">8</span><span class="p">)</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="n">image</span> <span class="o">=</span> <span class="n">damacy</span><span class="o">.</span><span class="n">NgffImage</span><span class="p">(</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>    <span class="s2">"/data/image.zarr"</span><span class="p">,</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>    <span class="n">reader</span><span class="o">=</span><span class="n">metadata_reader</span><span class="p">,</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>    <span class="n">multiscale_index</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>    <span class="n">limits</span><span class="o">=</span><span class="n">damacy</span><span class="o">.</span><span class="n">NgffLimits</span><span class="p">(</span><span class="n">max_levels</span><span class="o">=</span><span class="mi">16</span><span class="p">,</span> <span class="n">max_metadata_bytes</span><span class="o">=</span><span class="mi">4</span> <span class="o">&lt;&lt;</span> <span class="mi">20</span><span class="p">),</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="p">)</span>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="n">output</span> <span class="o">=</span> <span class="n">damacy</span><span class="o">.</span><span class="n">BatchSpec</span><span class="p">(</span><span class="n">samples</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="p">(</span><span class="mi">16</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">64</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">"f32"</span><span class="p">)</span>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="n">query</span> <span class="o">=</span> <span class="n">damacy</span><span class="o">.</span><span class="n">SpatialQuery</span><span class="p">(</span>
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>    <span class="n">output_to_reference</span><span class="o">=</span><span class="p">(</span>
+</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>        <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">8</span><span class="p">),</span>
+</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>        <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">16</span><span class="p">),</span>
+</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>        <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">16</span><span class="p">),</span>
+</span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>    <span class="p">),</span>
+</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a>    <span class="n">sampler</span><span class="o">=</span><span class="n">damacy</span><span class="o">.</span><span class="n">Sampler</span><span class="p">(</span><span class="nb">filter</span><span class="o">=</span><span class="s2">"nearest"</span><span class="p">,</span> <span class="n">boundary</span><span class="o">=</span><span class="s2">"error"</span><span class="p">),</span>
+</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a><span class="p">)</span>
+</span><span id="__span-1-20"><a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a><span class="n">resolved</span> <span class="o">=</span> <span class="n">image</span><span class="o">.</span><span class="n">resolve</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="n">output</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+</span><span id="__span-1-21"><a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a>
+</span><span id="__span-1-22"><a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a><span class="n">planner</span> <span class="o">=</span> <span class="n">damacy</span><span class="o">.</span><span class="n">ChunkPlanner</span><span class="p">(</span>
+</span><span id="__span-1-23"><a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a>    <span class="n">metadata</span><span class="o">=</span><span class="n">damacy</span><span class="o">.</span><span class="n">ZarrMetadata</span><span class="p">(</span>
+</span><span id="__span-1-24"><a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a>        <span class="n">reader</span><span class="o">=</span><span class="n">metadata_reader</span><span class="p">,</span> <span class="n">cache</span><span class="o">=</span><span class="n">damacy</span><span class="o">.</span><span class="n">MetadataCache</span><span class="p">()</span>
+</span><span id="__span-1-25"><a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a>    <span class="p">),</span>
+</span><span id="__span-1-26"><a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a>    <span class="n">limits</span><span class="o">=</span><span class="n">damacy</span><span class="o">.</span><span class="n">PlanLimits</span><span class="p">(),</span>
+</span><span id="__span-1-27"><a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a><span class="p">)</span>
+</span><span id="__span-1-28"><a id="__codelineno-1-28" name="__codelineno-1-28" href="#__codelineno-1-28"></a><span class="n">executor</span> <span class="o">=</span> <span class="n">damacy</span><span class="o">.</span><span class="n">CpuExecutor</span><span class="p">(</span>
+</span><span id="__span-1-29"><a id="__codelineno-1-29" name="__codelineno-1-29" href="#__codelineno-1-29"></a>    <span class="n">reader</span><span class="o">=</span><span class="n">damacy</span><span class="o">.</span><span class="n">FileReader</span><span class="p">(</span><span class="n">workers</span><span class="o">=</span><span class="mi">4</span><span class="p">),</span>
+</span><span id="__span-1-30"><a id="__codelineno-1-30" name="__codelineno-1-30" href="#__codelineno-1-30"></a>    <span class="n">limits</span><span class="o">=</span><span class="n">damacy</span><span class="o">.</span><span class="n">CpuLimits</span><span class="p">(</span><span class="n">max_memory_bytes</span><span class="o">=</span><span class="mi">3</span> <span class="o">&lt;&lt;</span> <span class="mi">30</span><span class="p">),</span>
+</span><span id="__span-1-31"><a id="__codelineno-1-31" name="__codelineno-1-31" href="#__codelineno-1-31"></a><span class="p">)</span>
+</span><span id="__span-1-32"><a id="__codelineno-1-32" name="__codelineno-1-32" href="#__codelineno-1-32"></a><span class="k">with</span> <span class="n">damacy</span><span class="o">.</span><span class="n">Pipeline</span><span class="p">(</span>
+</span><span id="__span-1-33"><a id="__codelineno-1-33" name="__codelineno-1-33" href="#__codelineno-1-33"></a>    <span class="n">planner</span><span class="o">=</span><span class="n">planner</span><span class="p">,</span>
+</span><span id="__span-1-34"><a id="__codelineno-1-34" name="__codelineno-1-34" href="#__codelineno-1-34"></a>    <span class="n">executor</span><span class="o">=</span><span class="n">executor</span><span class="p">,</span>
+</span><span id="__span-1-35"><a id="__codelineno-1-35" name="__codelineno-1-35" href="#__codelineno-1-35"></a>    <span class="n">output</span><span class="o">=</span><span class="n">output</span><span class="p">,</span>
+</span><span id="__span-1-36"><a id="__codelineno-1-36" name="__codelineno-1-36" href="#__codelineno-1-36"></a>    <span class="n">queues</span><span class="o">=</span><span class="n">damacy</span><span class="o">.</span><span class="n">QueueLimits</span><span class="p">(</span><span class="n">lookahead_samples</span><span class="o">=</span><span class="mi">8</span><span class="p">),</span>
+</span><span id="__span-1-37"><a id="__codelineno-1-37" name="__codelineno-1-37" href="#__codelineno-1-37"></a><span class="p">)</span> <span class="k">as</span> <span class="n">pipeline</span><span class="p">:</span>
+</span><span id="__span-1-38"><a id="__codelineno-1-38" name="__codelineno-1-38" href="#__codelineno-1-38"></a>    <span class="n">pipeline</span><span class="o">.</span><span class="n">push</span><span class="p">([</span><span class="n">resolved</span><span class="p">])</span>
+</span><span id="__span-1-39"><a id="__codelineno-1-39" name="__codelineno-1-39" href="#__codelineno-1-39"></a>    <span class="k">with</span> <span class="n">pipeline</span><span class="o">.</span><span class="n">pop</span><span class="p">()</span> <span class="k">as</span> <span class="n">batch</span><span class="p">:</span>
+</span><span id="__span-1-40"><a id="__codelineno-1-40" name="__codelineno-1-40" href="#__codelineno-1-40"></a>        <span class="n">array</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">from_dlpack</span><span class="p">(</span><span class="n">batch</span><span class="p">)</span>
+</span><span id="__span-1-41"><a id="__codelineno-1-41" name="__codelineno-1-41" href="#__codelineno-1-41"></a>        <span class="k">assert</span> <span class="n">array</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">16</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">64</span><span class="p">)</span>
+</span></code></pre></div>
+<p><code>NgffImage</code> loads the group's <code>zarr.json</code> and each level's array metadata once.
+It owns an immutable description. <code>NgffImage.resolve(query, shape=...)</code> performs
+no I/O and can be called from multiple threads. A result owns its source URI
+and geometry, so it remains usable after the image is released. Python results
+contain ordinary immutable values and can be pickled for transfer between processes.
+Source metadata and data must remain unchanged while the image is in use.</p>
+<p>Loading is synchronous. It uses only the reader's settings, so one reader can
+serve a running pipeline and other loads at the same time.</p>
+<h2 id="coordinates-and-the-output-grid">Coordinates and the output grid<a class="headerlink" href="#coordinates-and-the-output-grid" title="Permanent link">&para;</a></h2>
+<p>All public spatial coordinates use <strong>voxel corners</strong>. Voxel index <code>i</code> covers
+<code>[i, i + 1)</code> and has its center at <code>i + 0.5</code>. The volume covered by voxel zero
+starts at coordinate zero, matching interval and indexed queries. Coordinates
+in <code>output_to_reference</code> use the highest-resolution level, <code>image.levels[0]</code>,
+as the reference; they are not physical coordinates.</p>
+<p>For rank <code>N</code>, the Python transform is an <code>N × (N + 1)</code> matrix. Its last column
+is the offset. In C, <code>damacy_affine.linear</code> and <code>.offset</code> represent the same map:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>reference_corner = linear * output_corner + offset
+</span></code></pre></div>
+<p>Rows and columns follow the metadata's array axis order, including time and
+channel dimensions. The supplied output shape determines the rank and fixed output grid.
+Output centers are the grid points <code>(j[0] + 0.5, ..., j[N-1] + 0.5)</code>.
+Only spatial axes may mix, rotate, reflect, or scale. Time and channel axes
+require identity rows/columns and integral offsets, and must remain in bounds.
+Combining spatial resampling with indexed time/channel selections is a later
+extension; use <code>IndexQuery</code> for current arbitrary index selections.</p>
+<p>The spatial linear map must be finite and numerically nonsingular. Validation
+normalizes each spatial row by its largest coefficient and eliminates using
+the largest remaining pivot. Pivots no larger than <code>64 * DBL_EPSILON</code> fail validation. Shapes and
+transformed sample coordinates are limited to <code>2**52 - 1</code> index units so
+half-voxel centers remain representable. Rank, shape, transforms, and sampler
+parameters are checked before a resolution is returned. Batch sizing and dtype
+conversion are validated by the downstream pipeline. Resolution allocates only
+its small description, so the shape need not fit an output buffer at this stage.</p>
+<h2 id="ngff-interpretation">NGFF interpretation<a class="headerlink" href="#ngff-interpretation" title="Permanent link">&para;</a></h2>
+<p>The loader supports the <a href="https://ngff.openmicroscopy.org/0.5/">OME-Zarr 0.5</a>
+<code>attributes.ome</code> layout on Zarr v3. Select the <code>multiscales</code> entry explicitly
+with <code>multiscale_index</code>. Supported images have two or three spatial axes and
+optional time/channel axes, in the declared order. <code>dimension_names</code> must
+match those axes at every level. Arrays must use supported numeric Zarr codecs
+and a common dtype. Custom/unspecified axis types and transforms stored in
+external arrays are currently unsupported.</p>
+<p>Dataset transforms must have one positive scale and an optional following
+translation. Transforms shared by all levels do not affect reference-level
+coordinates and are left uninterpreted.
+Levels must have nondecreasing scales and nonincreasing shapes along each
+axis; nonspatial transforms and shapes must be unchanged. Paths must be
+relative child paths. Axis units are retained as declared; no physical-unit
+conversion or inference is needed for reference-level queries.</p>
+<p>Parsing checks the fields needed for array layout and coordinate interpretation,
+including duplicate consumed fields and finite, correctly sized transforms.
+Unselected multiscale entries and additional attributes are left uninterpreted.
+Unused subtrees and trailing content may remain unexamined; these calls do not
+perform whole-document JSON validation.</p>
+<p>NGFF uses center-origin coordinates, as described in its
+<a href="https://ngff.openmicroscopy.org/rfc/5/#coordinate-convention">coordinate convention</a>.
+The adapter derives a corner-origin map once while loading metadata. If the
+NGFF center-index map at level <code>l</code> is <code>p = S_l * i_l + T_l</code>, then:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>R_l = S_l / S_0
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>origin_l = (T_l - T_0) / S_0 + (1 - R_l) / 2
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>reference_corner = R_l * level_corner + origin_l
+</span></code></pre></div>
+<p>These calculations are componentwise. A transform shared by every level
+cancels when mapping to reference-level indices. Level zero is exactly the
+identity. For a 2× level with a half-reference-voxel center translation,
+<code>origin_l</code> is zero. A scale-only 2× level instead has <code>origin_l = -0.5</code>;
+Damacy preserves that declared alignment. The API never asks callers to add
+or remove NGFF center offsets themselves.</p>
+<p>Writers usually compute scales and translations in floating point, so these
+values can miss by a rounding error. For example, scales <code>0.1</code> and <code>0.3</code> give
+<code>R_l = 2.9999999999999996</code>. Loading replaces <code>R_l</code> or <code>origin_l</code> with the
+nearest multiple of 1/256 when it is that close: within <code>64 * DBL_EPSILON</code>
+times <code>R_l</code> for the ratio, or times <code>(|T_l| + |T_0|) / S_0 + R_l</code> for the
+origin. Whole-number ratios and whole- or half-voxel origins then come out exact.</p>
+<p><code>NgffLevel.scale_to_reference</code> and <code>.origin_reference_index</code> expose this
+adapted map. Given query matrix <code>A</code> and offset <code>b</code>, resolution computes:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>output_to_source.linear = inverse(R_l) * A
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>output_to_source.offset = inverse(R_l) * (b - origin_l)
+</span></code></pre></div>
+<h2 id="choosing-a-level">Choosing a level<a class="headerlink" href="#choosing-a-level" title="Permanent link">&para;</a></h2>
+<p><code>SpatialQuery.level</code> defaults to <code>"auto"</code> (<code>DAMACY_LEVEL_AUTO</code> in C). The
+resolver selects the coarsest level whose spacing is no coarser than the
+requested output spacing in any spatial direction. It tests the smallest
+singular value of <code>inverse(R_l) * A</code>, restricted to spatial axes, against one.
+The comparison allows <code>64 * DBL_EPSILON</code> for numerical error. If no level
+qualifies, it selects level zero for upsampling. Rotation, anisotropic scale,
+and shear are included in this calculation. Source position, boundary mode,
+and decoder capabilities do not change the level choice.</p>
+<p>An explicit nonnegative level index overrides that policy. A bad index fails;
+there is no fallback from a requested level. For an aligned crop of level <code>l</code>
+beginning at index <code>beg</code>, use the level's scale as the query's diagonal linear
+map and <code>origin_l + R_l * beg</code> as its offset.</p>
+<p>The current copy path requires the resolved linear map to equal identity,
+its offsets to be integral, and its source bounds to be inside the array.
+The resolver checks this exactly and never rounds a query into a crop. Because
+loading removes rounding error from the level values, a crop built from them
+as above is exact. A query computed another way, such as from physical
+coordinates, can still be off by a rounding error and then require resampling.
+<code>requires_resampling</code> reports this, and <code>Pipeline.push()</code> rejects such results
+until a resampler is available. The pipeline checks the resulting shape against
+its own <code>BatchSpec</code>.</p>
+<h2 id="sampler-and-bounds">Sampler and bounds<a class="headerlink" href="#sampler-and-bounds" title="Permanent link">&para;</a></h2>
+<p>Each spatial query carries a <code>Sampler</code>. Its current point filters are:</p>
+<table>
+<thead>
+<tr>
+<th>Filter</th>
+<th>Source indices contributing at corner coordinate <code>s</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>nearest</code></td>
+<td><code>floor(s)</code>; a tie on a voxel boundary selects the larger index</td>
+</tr>
+<tr>
+<td><code>linear</code></td>
+<td><code>floor(s - 0.5)</code> and <code>ceil(s - 0.5)</code>, combined across spatial axes</td>
+</tr>
+</tbody>
+</table>
+<p>Linear interpolation omits neighbors with zero weight. These definitions also
+apply to negative coordinates. No additional antialias filter is currently
+specified; choosing a pyramid level uses the downsampling already present in
+the image, whose construction is outside the sampler's control.</p>
+<table>
+<thead>
+<tr>
+<th>Boundary</th>
+<th>Interpretation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>error</code></td>
+<td>Reject if any contributing index is outside the source</td>
+</tr>
+<tr>
+<td><code>constant</code></td>
+<td>Extend the source with the finite <code>constant_value</code></td>
+</tr>
+<tr>
+<td><code>clamp</code></td>
+<td>Replace each out-of-range spatial index with the nearest edge index</td>
+</tr>
+</tbody>
+</table>
+<p><code>constant_value</code> must be zero unless the boundary is <code>constant</code>. Filter and
+boundary enums have no valid zero value in C. Unknown settings fail validation.
+Boundary rules apply to the chosen source level, not the reference array.</p>
+<p><code>source_bounds_index</code> is a half-open integer box enclosing all source indices
+that contribute to the output, before boundary handling. <code>read_bounds_index</code>
+accounts for boundary handling: constant extension clips to the array, while
+clamp includes the touched edge voxels. Empty read intervals are valid for
+constant-only outputs. The bounds include interpolation support. They are
+conservative boxes around transformed crops, not a list of exact touched chunks.
+Boundary sampling currently requires resampling and cannot be decoded yet.</p>
+<h2 id="public-c-api">Public C API<a class="headerlink" href="#public-c-api" title="Permanent link">&para;</a></h2>
+<p>Include <code>damacy_spatial.h</code> alongside the pipeline API. A two-dimensional
+identity crop can be resolved and pushed as follows; <code>pipeline</code> must already
+have matching output geometry and an executor:</p>
+<div class="language-c highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="k">struct</span><span class="w"> </span><span class="nc">damacy_metadata_reader</span><span class="o">*</span><span class="w"> </span><span class="n">reader</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">NULL</span><span class="p">;</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="k">struct</span><span class="w"> </span><span class="nc">damacy_ngff_image</span><span class="o">*</span><span class="w"> </span><span class="n">image</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">NULL</span><span class="p">;</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="k">struct</span><span class="w"> </span><span class="nc">damacy_spatial_resolution</span><span class="w"> </span><span class="n">resolved</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="mi">0</span><span class="p">};</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="k">struct</span><span class="w"> </span><span class="nc">damacy_ngff_limits</span><span class="w"> </span><span class="n">limits</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span><span class="p">.</span><span class="n">max_levels</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">16</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">max_metadata_bytes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mi">20</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="p">};</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="k">const</span><span class="w"> </span><span class="kt">int64_t</span><span class="w"> </span><span class="n">output_shape</span><span class="p">[]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="mi">64</span><span class="p">,</span><span class="w"> </span><span class="mi">64</span><span class="p">};</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="k">struct</span><span class="w"> </span><span class="nc">damacy_spatial_query</span><span class="w"> </span><span class="n">query</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">  </span><span class="p">.</span><span class="n">output_to_reference</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">    </span><span class="p">.</span><span class="n">linear</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{{</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">}},</span><span class="w"> </span><span class="p">.</span><span class="n">offset</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="mi">16</span><span class="p">,</span><span class="w"> </span><span class="mi">24</span><span class="p">}</span>
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="w">  </span><span class="p">},</span>
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="w">  </span><span class="p">.</span><span class="n">sampler</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="w">    </span><span class="p">.</span><span class="n">filter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DAMACY_FILTER_NEAREST</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">boundary</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DAMACY_BOUNDARY_ERROR</span>
+</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="w">  </span><span class="p">},</span>
+</span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a><span class="w">  </span><span class="p">.</span><span class="n">level</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DAMACY_LEVEL_AUTO</span>
+</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a><span class="p">};</span>
+</span><span id="__span-5-17"><a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a><span class="k">struct</span><span class="w"> </span><span class="nc">damacy_sample</span><span class="w"> </span><span class="n">sample</span><span class="p">;</span>
+</span><span id="__span-5-18"><a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a><span class="k">enum</span><span class="w"> </span><span class="n">damacy_status</span><span class="w"> </span><span class="n">status</span><span class="w"> </span><span class="o">=</span>
+</span><span id="__span-5-19"><a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a><span class="w">  </span><span class="n">damacy_file_metadata_reader_create</span><span class="p">(</span><span class="mi">8</span><span class="p">,</span><span class="w"> </span><span class="nb">NULL</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">reader</span><span class="p">);</span>
+</span><span id="__span-5-20"><a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">status</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">DAMACY_OK</span><span class="p">)</span>
+</span><span id="__span-5-21"><a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a><span class="w">  </span><span class="n">status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">damacy_ngff_image_load</span><span class="p">(</span><span class="n">reader</span><span class="p">,</span><span class="w"> </span><span class="s">"/data/image.zarr"</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">limits</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">image</span><span class="p">);</span>
+</span><span id="__span-5-22"><a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">status</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">DAMACY_OK</span><span class="p">)</span>
+</span><span id="__span-5-23"><a id="__codelineno-5-23" name="__codelineno-5-23" href="#__codelineno-5-23"></a><span class="w">  </span><span class="n">status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">damacy_spatial_resolve</span><span class="p">(</span><span class="n">image</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">query</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="n">output_shape</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">resolved</span><span class="p">);</span>
+</span><span id="__span-5-24"><a id="__codelineno-5-24" name="__codelineno-5-24" href="#__codelineno-5-24"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">status</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">DAMACY_OK</span><span class="p">)</span>
+</span><span id="__span-5-25"><a id="__codelineno-5-25" name="__codelineno-5-25" href="#__codelineno-5-25"></a><span class="w">  </span><span class="n">status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">damacy_spatial_resolution_sample</span><span class="p">(</span><span class="o">&amp;</span><span class="n">resolved</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">sample</span><span class="p">);</span>
+</span><span id="__span-5-26"><a id="__codelineno-5-26" name="__codelineno-5-26" href="#__codelineno-5-26"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">status</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">DAMACY_OK</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-27"><a id="__codelineno-5-27" name="__codelineno-5-27" href="#__codelineno-5-27"></a><span class="w">  </span><span class="k">struct</span><span class="w"> </span><span class="nc">damacy_push_result</span><span class="w"> </span><span class="n">pushed</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">damacy_push</span><span class="p">(</span>
+</span><span id="__span-5-28"><a id="__codelineno-5-28" name="__codelineno-5-28" href="#__codelineno-5-28"></a><span class="w">    </span><span class="n">pipeline</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="k">struct</span><span class="w"> </span><span class="nc">damacy_sample_slice</span><span class="p">){.</span><span class="n">beg</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&amp;</span><span class="n">sample</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">end</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&amp;</span><span class="n">sample</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">});</span>
+</span><span id="__span-5-29"><a id="__codelineno-5-29" name="__codelineno-5-29" href="#__codelineno-5-29"></a><span class="w">  </span><span class="n">status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">pushed</span><span class="p">.</span><span class="n">status</span><span class="p">;</span>
+</span><span id="__span-5-30"><a id="__codelineno-5-30" name="__codelineno-5-30" href="#__codelineno-5-30"></a><span class="p">}</span>
+</span><span id="__span-5-31"><a id="__codelineno-5-31" name="__codelineno-5-31" href="#__codelineno-5-31"></a><span class="n">damacy_spatial_resolution_clear</span><span class="p">(</span><span class="o">&amp;</span><span class="n">resolved</span><span class="p">);</span>
+</span><span id="__span-5-32"><a id="__codelineno-5-32" name="__codelineno-5-32" href="#__codelineno-5-32"></a><span class="n">damacy_ngff_image_destroy</span><span class="p">(</span><span class="n">image</span><span class="p">);</span>
+</span><span id="__span-5-33"><a id="__codelineno-5-33" name="__codelineno-5-33" href="#__codelineno-5-33"></a><span class="n">damacy_metadata_reader_destroy</span><span class="p">(</span><span class="n">reader</span><span class="p">);</span>
+</span></code></pre></div>
+<p>A production caller must retry the unconsumed suffix when <code>damacy_push</code> returns
+<code>DAMACY_AGAIN</code>, keeping the sample's owner alive until acceptance or abandonment.
+The example releases it on return. Accepted pushes copy the URI and selectors.
+The C result is a caller-owned <code>damacy_spatial_resolution</code> value with directly
+readable fields. It owns its URI independently of the image. Treat the fields as
+read-only and call <code>damacy_spatial_resolution_clear()</code> before reusing or discarding
+the result. A plain struct copy borrows the same URI; clear only the owning
+value. Clear frees the URI and zeros the value; repeating it is safe.
+Resolution zeros its output on failure. Zero-initialized results can be cleared.</p>
+<p><code>damacy_spatial_resolution_sample()</code> is the compatibility bridge to the existing
+C push API. Its sample borrows the result's URI and its output is zeroed on
+failure. Keep the result alive until the sample is accepted or abandoned.
+The image info accessor returns a borrowed, immutable view. C affine entries
+outside the configured rank are unused.</p>
+<p><code>max_metadata_bytes</code> bounds the sum of input JSON file sizes; files exceeding
+the remaining budget are rejected before allocating or reading their contents.
+<code>max_levels</code> separately bounds the number of level records. Exhaustion returns
+<code>DAMACY_BUDGET</code>. Metadata loading performs no chunk reads and requires no GPU.</p>
+<h2 id="next-execution-step">Next execution step<a class="headerlink" href="#next-execution-step" title="Permanent link">&para;</a></h2>
+<p>A later planner operation can consume the owned resolution directly, group
+source chunks needed by each output tile, and preserve the transform and
+sampler in the prepared plan. CPU resampling needs a bounded decoded working
+set and all contributing chunks available before writing a tile. CUDA can
+implement the same operation after that contract is tested. Neither executor
+should interpret NGFF or choose a pyramid level. Additional filters and
+antialiasing parameters belong on the query's sampler when implemented.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.sections", "navigation.top", "content.code.copy", "content.code.annotate", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

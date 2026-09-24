@@ -16,7 +16,7 @@
         <link rel="prev" href="..">
       
       
-        <link rel="next" href="../budget/">
+        <link rel="next" href="../spatial/">
       
       
         
@@ -371,6 +371,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#indexed-queries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Indexed queries
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#limits-and-backpressure" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -404,10 +415,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#future-queries" class="md-nav__link">
+  <a href="#spatial-queries" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Future queries
+        Spatial queries
       
     </span>
   </a>
@@ -418,6 +429,33 @@
   
 </nav>
       
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../spatial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Spatial queries
+  
+
+    
+  </span>
+  
+  
+
+      </a>
     </li>
   
 
@@ -606,6 +644,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#indexed-queries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Indexed queries
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#limits-and-backpressure" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -639,10 +688,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#future-queries" class="md-nav__link">
+  <a href="#spatial-queries" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Future queries
+        Spatial queries
       
     </span>
   </a>
@@ -673,7 +722,7 @@
 <p>A pipeline receives a planner, an executor, an output specification, and queue
 limits. The planner owns metadata preparation; the executor owns bulk reads,
 decoding, and output buffers. CPU and CUDA execution use the same rectangular
-queries and prepared-plan contract.</p>
+and indexed queries and prepared-plan contract.</p>
 <h2 id="construct-a-cpu-pipeline">Construct a CPU pipeline<a class="headerlink" href="#construct-a-cpu-pipeline" title="Permanent link">&para;</a></h2>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">damacy</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
@@ -719,8 +768,10 @@ queries and prepared-plan contract.</p>
 </span><span id="__span-0-42"><a id="__codelineno-0-42" name="__codelineno-0-42" href="#__codelineno-0-42"></a>        <span class="k">assert</span> <span class="n">batch</span><span class="o">.</span><span class="n">info</span><span class="o">.</span><span class="n">device_type</span> <span class="o">==</span> <span class="n">damacy</span><span class="o">.</span><span class="n">DeviceType</span><span class="o">.</span><span class="n">CPU</span>
 </span><span id="__span-0-43"><a id="__codelineno-0-43" name="__codelineno-0-43" href="#__codelineno-0-43"></a>        <span class="k">del</span> <span class="n">array</span>
 </span></code></pre></div>
-<p>The paths must name little-endian numeric Zarr v3 <strong>arrays</strong>. An NGFF group is
-not resolved to a level automatically. The examples assume decoded chunks no larger than 2 MiB.</p>
+<p>The paths in <code>Sample</code> and <code>IndexQuery</code> must name little-endian numeric Zarr v3
+<strong>arrays</strong>. Use an <a href="../spatial/">NGFF image</a> to select a
+level from a group before pushing an aligned crop. The examples assume decoded
+chunks no larger than 2 MiB.</p>
 <p><code>FileMetadataReader</code> supplies small asynchronous metadata reads. <code>ZarrMetadata</code>
 supplies Zarr interpretation and cache capacities; <code>MetadataCache</code> is a capacity
 configuration. The planner fetches array descriptions and shard indexes on
@@ -752,9 +803,66 @@ execution worker.
 The injected readers inherit the caller's host affinity when their workers
 start. The legacy <code>Config.numa_strategy</code> also applies while constructing those
 readers, preserving placement of the complete legacy pipeline.</p>
+<h2 id="indexed-queries">Indexed queries<a class="headerlink" href="#indexed-queries" title="Permanent link">&para;</a></h2>
+<p><code>IndexQuery(uri, selection=...)</code> accepts one index array or contiguous <code>slice</code>
+per source axis. For a <code>(z, y, x)</code> array:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">query</span> <span class="o">=</span> <span class="n">damacy</span><span class="o">.</span><span class="n">IndexQuery</span><span class="p">(</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    <span class="n">uri</span><span class="o">=</span><span class="s2">"/data/image.zarr/0"</span><span class="p">,</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="n">selection</span><span class="o">=</span><span class="p">([</span><span class="mi">7</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">7</span><span class="p">],</span> <span class="nb">slice</span><span class="p">(</span><span class="mi">16</span><span class="p">,</span> <span class="mi">80</span><span class="p">),</span> <span class="p">[</span><span class="mi">100</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">40</span><span class="p">,</span> <span class="mi">3</span><span class="p">]),</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="p">)</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="n">output</span> <span class="o">=</span> <span class="n">damacy</span><span class="o">.</span><span class="n">BatchSpec</span><span class="p">(</span><span class="n">samples</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="n">query</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">"f32"</span><span class="p">)</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="k">assert</span> <span class="n">query</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">4</span><span class="p">)</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="k">with</span> <span class="n">damacy</span><span class="o">.</span><span class="n">Pipeline</span><span class="p">(</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>    <span class="n">planner</span><span class="o">=</span><span class="n">planner</span><span class="p">,</span> <span class="n">executor</span><span class="o">=</span><span class="n">executor</span><span class="p">,</span> <span class="n">output</span><span class="o">=</span><span class="n">output</span><span class="p">,</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>    <span class="n">queues</span><span class="o">=</span><span class="n">damacy</span><span class="o">.</span><span class="n">QueueLimits</span><span class="p">(</span><span class="n">lookahead_samples</span><span class="o">=</span><span class="mi">2</span><span class="p">),</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="p">)</span> <span class="k">as</span> <span class="n">pipeline</span><span class="p">:</span>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>    <span class="n">pipeline</span><span class="o">.</span><span class="n">push</span><span class="p">([</span><span class="n">query</span><span class="p">])</span>
+</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>    <span class="k">with</span> <span class="n">pipeline</span><span class="o">.</span><span class="n">pop</span><span class="p">()</span> <span class="k">as</span> <span class="n">batch</span><span class="p">:</span>
+</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>        <span class="n">result</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">from_dlpack</span><span class="p">(</span><span class="n">batch</span><span class="p">)</span>  <span class="c1"># CPU executor</span>
+</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>        <span class="k">del</span> <span class="n">result</span>
+</span></code></pre></div>
+<p>Index arrays select independently along each dimension: their Cartesian product
+fills the tensor, matching MATLAB's per-dimension indexing or NumPy's <code>np.ix_</code>.
+Caller order and repeated indices are preserved. A singleton index array keeps
+its axis. A tuple such as <code>(7, 2)</code> is an index array in <code>IndexQuery</code>; use a slice
+for a contiguous range. <code>Sample.aabb</code> retains its existing interval syntax.</p>
+<p>Indices must be nonnegative integers below <code>2**63 - 1</code>. Slices use half-open
+bounds, require an explicit stop, and accept a step of one. A <code>range</code> object can
+supply a strided or reversed index array. Empty selections are rejected. Source
+bounds are validated when metadata arrives; out-of-bounds selections raise
+<code>InvalidArgument</code> from <code>pop</code>. Each query's result shape must match <code>BatchSpec</code>.
+Rectangular and indexed queries can share a batch when their result shapes match.</p>
+<p>Python copies index values into the immutable query at construction. Native
+admission copies accepted queries, and prepared plans own their index data.
+The planner enumerates only selected shards and chunks, including when indices
+span large gaps. <code>max_chunks</code> counts each selected chunk once per sample;
+repeated indices inside that chunk do not consume extra chunk entries.</p>
+<p>The C API uses <code>damacy_sample.rank</code> and one tagged <code>damacy_axis_selection</code>
+per axis. C callers must rebuild against the updated headers and explicitly
+set every active axis to <code>DAMACY_AXIS_INTERVAL</code> or <code>DAMACY_AXIS_INDICES</code>:</p>
+<div class="language-c highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kt">int64_t</span><span class="w"> </span><span class="n">rows</span><span class="p">[]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="mi">7</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">7</span><span class="p">};</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="k">struct</span><span class="w"> </span><span class="nc">damacy_sample</span><span class="w"> </span><span class="n">query</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="p">.</span><span class="n">uri</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">"/data/image.zarr/0"</span><span class="p">,</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span><span class="p">.</span><span class="n">rank</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span><span class="p">.</span><span class="n">axes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">        </span><span class="p">{.</span><span class="n">kind</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DAMACY_AXIS_INDICES</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">indices</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{.</span><span class="n">values</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">count</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">3</span><span class="p">}},</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">        </span><span class="p">{.</span><span class="n">kind</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DAMACY_AXIS_INTERVAL</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">interval</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{.</span><span class="n">beg</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">end</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">8</span><span class="p">}},</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="p">};</span>
+</span></code></pre></div>
+<p>This requests a <code>(3, 4)</code> sample. The union's <code>kind</code> selects its active member;
+there is no default kind. A zero or unknown tag, a null or empty index array,
+or an interval with negative, empty, or reversed bounds returns <code>DAMACY_INVAL</code>
+from <code>damacy_push</code>. Each axis's length must match the configured sample shape.
+Only <code>axes[0..rank)</code> are active, in the Zarr array's stored axis order. Preparation
+derives the bounding AABB from these selections.</p>
+<p><code>damacy_push</code> copies the URI and index values for its consumed prefix. The
+unconsumed suffix remains caller-owned and can be retried.</p>
 <h2 id="limits-and-backpressure">Limits and backpressure<a class="headerlink" href="#limits-and-backpressure" title="Permanent link">&para;</a></h2>
-<p>Sizes are bytes, with positive explicit limits. Zero is invalid for these
-capacities. Defaults come from the Python value objects.</p>
+<p>Sizes are bytes, with positive explicit limits. <code>CudaLimits.max_index_bytes</code>
+also accepts zero, which rejects indexed CUDA queries at push. Defaults come
+from the Python value objects.</p>
 <table>
 <thead>
 <tr>
@@ -793,7 +901,7 @@ capacities. Defaults come from the Python value objects.</p>
 </tr>
 <tr>
 <td><code>PlanLimits.max_plan_bytes</code></td>
-<td>Owned storage per prepared plan.</td>
+<td>Owned storage per prepared plan, including index arrays; also caps copied index data per queued query.</td>
 </tr>
 <tr>
 <td><code>CpuLimits.max_memory_bytes</code></td>
@@ -819,8 +927,22 @@ capacities. Defaults come from the Python value objects.</p>
 <td><code>CudaLimits</code></td>
 <td>GPU memory and execution geometry, plus the CUDA codec-layout cache capacity.</td>
 </tr>
+<tr>
+<td><code>CudaLimits.max_index_bytes</code></td>
+<td>Device index storage per batch: eight bytes per index across all indexed axes and samples. Zero, or at least <code>8 * samples * sum(shape)</code>. Default 64 MiB.</td>
+</tr>
 </tbody>
 </table>
+<p>CUDA reserves index storage for its two execution slots within
+<code>max_gpu_memory_bytes</code>. A nonzero <code>max_index_bytes</code> must hold every index a
+batch can contain, <code>8 * samples * sum(shape)</code> bytes, so an accepted query never
+runs out of room. A smaller value raises <code>BudgetExceeded</code> from <code>Pipeline</code>. Each
+slot allocates that amount, plus 16 bytes per axis for up to 16384 chunks to
+record each chunk's selected range. An identical amount of pinned host staging
+is allocated. With <code>max_index_bytes=0</code>, <code>push</code> raises <code>BudgetExceeded</code> for an
+<code>IndexQuery</code>; the query is not consumed and the pipeline keeps running.
+<code>Config.max_index_bytes</code> provides the same setting through the CUDA
+convenience adapter.</p>
 <p>For injected pipelines, define <code>floor = queues.lookahead_samples + output.samples</code>.
 The metadata cache requires at least <code>floor</code> array entries and
 <code>floor * plan_limits.max_shards_per_sample</code> shard-index entries. These floors
@@ -897,18 +1019,18 @@ Operation tables and prepared-plan records are private implementation APIs.</p>
 and C-Blosc development packages. For example, Ubuntu packages are
 <code>build-essential cmake ninja-build pkg-config python3-dev liburing-dev libzstd-dev libblosc-dev</code>.</p>
 <p>On macOS, install the native dependencies with Homebrew:</p>
-<div class="language-sh highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>brew<span class="w"> </span>install<span class="w"> </span>cmake<span class="w"> </span>ninja<span class="w"> </span>pkg-config<span class="w"> </span>zstd<span class="w"> </span>c-blosc<span class="w"> </span>uv
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>brew<span class="w"> </span>install<span class="w"> </span>cmake<span class="w"> </span>ninja<span class="w"> </span>pkg-config<span class="w"> </span>zstd<span class="w"> </span>c-blosc<span class="w"> </span>uv
 </span></code></pre></div>
 <p>Then build and test on either platform:</p>
-<div class="language-sh highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>cmake<span class="w"> </span>--preset<span class="w"> </span>cpu
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>cmake<span class="w"> </span>--build<span class="w"> </span>build
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>ctest<span class="w"> </span>--test-dir<span class="w"> </span>build<span class="w"> </span>--output-on-failure
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>cmake<span class="w"> </span>--preset<span class="w"> </span>cpu
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>cmake<span class="w"> </span>--build<span class="w"> </span>build
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>ctest<span class="w"> </span>--test-dir<span class="w"> </span>build<span class="w"> </span>--output-on-failure
 </span></code></pre></div>
 <p>The examples use NumPy (<code>pip install numpy</code>). The fixture generator uses <code>uv</code>.
 Enable <code>DAMACY_PYTHON=ON</code> and provide a Python 3.11+ interpreter with pytest,
 pytest-cov, and NumPy to include Python tests.
 Build a CPU wheel with:</p>
-<div class="language-sh highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>pip<span class="w"> </span>install<span class="w"> </span>.<span class="w"> </span>--config-settings<span class="o">=</span>cmake.define.DAMACY_CUDA<span class="o">=</span>OFF
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>pip<span class="w"> </span>install<span class="w"> </span>.<span class="w"> </span>--config-settings<span class="o">=</span>cmake.define.DAMACY_CUDA<span class="o">=</span>OFF
 </span></code></pre></div>
 <p>The extension has no CUDA or nvCOMP dependency in this configuration.
 <code>CudaExecutor</code> reports that CUDA support was not built. Linux retains its
@@ -920,17 +1042,13 @@ legacy <code>Config.n_io_threads</code> cannot exceed the online CPU count; larg
 raise <code>InvalidArgument</code>.
 On Linux CUDA defaults on, builds both executors, and requires the CUDA toolkit,
 nvCOMP, and a runtime NVIDIA driver. GDS requires a CUDA build.</p>
-<h2 id="future-queries">Future queries<a class="headerlink" href="#future-queries" title="Permanent link">&para;</a></h2>
-<p>The first milestone implements rectangular copy/cast queries. Index-array
-queries can add ordered selections and repeated indices without a separate
-stencil type. Spatial queries will describe a fixed output tensor, a transform
-from output coordinates to source space, and sampler settings including
-interpolation, antialiasing, and boundary handling.</p>
-<p>For NGFF images, resolving a spatial query will choose an appropriate source
-level from the requested sampling scale before enumerating chunks. The plan
-will record the chosen array and transform. Resampling also needs interpolation
-halos and dependencies across chunks. These are later planner and executor
-operations; they are not implemented by the current box query.</p>
+<h2 id="spatial-queries">Spatial queries<a class="headerlink" href="#spatial-queries" title="Permanent link">&para;</a></h2>
+<p><a href="../spatial/">Spatial queries</a> resolve a fixed output grid, transform, and sampler
+against loaded NGFF metadata. The resolver chooses a source level before chunk
+planning. Aligned crops can use either executor now. Requests that still need
+resampling expose their geometry and bounds, but fail when converted or pushed
+for decoding. Future resampling operations will carry these dependencies across
+source chunks in the prepared plan.</p>
 
 
 
