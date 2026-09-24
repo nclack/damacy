@@ -115,7 +115,8 @@ extern "C"
     // Metadata request concurrency for array metadata, shard indexes, and
     // chunk-layout probes. The Linux metadata path uses this as an io_uring
     // request-depth budget; macOS uses this many metadata worker threads.
-    // Required: must be > 0 and no larger than DAMACY_MAX_METADATA_IO_CONCURRENCY.
+    // Required: must be > 0 and no larger than
+    // DAMACY_MAX_METADATA_IO_CONCURRENCY.
     uint32_t metadata_io_concurrency;
 
     uint32_t n_array_meta_cache;
@@ -343,8 +344,9 @@ extern "C"
     } metadata_backend;
     // Measured metadata-operation latency: submit-to-completion on Linux,
     // syscall duration on macOS, by kind (stat/open/read/close). Distinct from
-    // the injected synthetic latency in metadata_latency above. Buckets are log2-scale on ns
-    // (bucket i: floor(log2(ns)) == i); percentiles are derived from them.
+    // the injected synthetic latency in metadata_latency above. Buckets are
+    // log2-scale on ns (bucket i: floor(log2(ns)) == i); percentiles are
+    // derived from them.
     struct
     {
       uint64_t count;
