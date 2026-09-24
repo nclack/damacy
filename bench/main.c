@@ -120,6 +120,7 @@ struct scenario
   uint64_t max_gpu_memory_bytes;
   uint64_t max_cpu_memory_bytes;
   uint32_t decode_workers;
+  uint32_t chunks_per_input_buffer;
   int cpu;
   uint32_t max_chunk_uncompressed_bytes; // 0 → tuning_defaults() baseline
   uint64_t max_read_op_bytes;            // 0 → tuning_defaults() baseline
@@ -451,6 +452,10 @@ parse_scenario(struct cslice src, struct scenario* sc)
     static const struct json_query p_workers[] = {
       { QUERY_KEY, .key = "pipeline" }, { QUERY_KEY, .key = "decode_workers" }
     };
+    static const struct json_query p_buffer_chunks[] = {
+      { QUERY_KEY, .key = "pipeline" },
+      { QUERY_KEY, .key = "chunks_per_input_buffer" }
+    };
     read_uint_opt(src, p_cpu, countof(p_cpu), &v, 0);
     if (v > (UINT64_MAX >> 20) || (sc->cpu && !v))
       return 1;
@@ -459,6 +464,10 @@ parse_scenario(struct cslice src, struct scenario* sc)
     if (!v || v > UINT32_MAX)
       return 1;
     sc->decode_workers = (uint32_t)v;
+    read_uint_opt(src, p_buffer_chunks, countof(p_buffer_chunks), &v, 256);
+    if (!v || v > UINT32_MAX)
+      return 1;
+    sc->chunks_per_input_buffer = (uint32_t)v;
     read_uint_opt(src, p_g, countof(p_g), &v, 0);
     sc->max_gpu_memory_bytes = v << 20;
     read_uint_opt(src, p_c, countof(p_c), &v, 0);
@@ -1134,7 +1143,8 @@ pipeline_create(const struct scenario* scenario,
       .decode_workers = scenario->decode_workers,
       .max_encoded_chunk_bytes = (uint32_t)cfg->tuning.max_read_op_bytes,
       .max_decoded_chunk_bytes = cfg->tuning.max_chunk_uncompressed_bytes,
-      .max_memory_bytes = scenario->max_cpu_memory_bytes },
+      .max_memory_bytes = scenario->max_cpu_memory_bytes,
+      .chunks_per_input_buffer = scenario->chunks_per_input_buffer },
     &pipeline->executor);
   if (status != DAMACY_OK)
     return status;

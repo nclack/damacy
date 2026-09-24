@@ -87,10 +87,12 @@ reuse can be optimized separately.
 ## Resources and ownership
 
 CPU I/O workers and decode workers are configured independently. There are two
-input groups and two output buffers. Each input group holds at most 256 chunks
-and `256 * max_encoded_chunk_bytes` encoded bytes, independently of the worker
-count. Merged reads contain at most `min(decode_workers, 256)` chunks, and their
-count respects the reader capacity. Decoding uses a bounded per-worker output
+input groups and two output buffers. Each input group holds at most
+`chunks_per_input_buffer` chunks and
+`chunks_per_input_buffer * max_encoded_chunk_bytes` encoded bytes. The setting
+is at least `decode_workers`, so every worker can get a chunk. Merged reads
+contain at most `chunks_per_input_buffer` chunks, and their count respects the
+reader capacity. Decoding uses a bounded per-worker output
 buffer and zstd context; memory admission also reserves conservative Blosc
 workspace. The memory cap
 covers executor buffers, active read plans, and temporary read-planning

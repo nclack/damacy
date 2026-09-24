@@ -57,7 +57,8 @@ create_components(struct components* c)
            &(struct damacy_cpu_config){ .decode_workers = 2,
                                         .max_encoded_chunk_bytes = 1024,
                                         .max_decoded_chunk_bytes = 1 << 20,
-                                        .max_memory_bytes = 32 << 20 },
+                                        .max_memory_bytes = 32 << 20,
+                                        .chunks_per_input_buffer = 256 },
            &c->executor) == DAMACY_OK);
   return 0;
 }

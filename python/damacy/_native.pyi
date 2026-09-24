@@ -214,7 +214,13 @@ def create_planner(
     /,
 ) -> object: ...
 def create_cpu_executor(
-    reader: object, workers: int, max_encoded: int, max_decoded: int, max_memory: int, /
+    reader: object,
+    workers: int,
+    max_encoded: int,
+    max_decoded: int,
+    max_memory: int,
+    chunks_per_input_buffer: int,
+    /,
 ) -> object: ...
 def create_cuda_executor(
     reader: object,

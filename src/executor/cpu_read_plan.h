@@ -4,11 +4,6 @@
 #include "executor/dispatch.h"
 #include "planner/plan.h"
 
-enum
-{
-  CPU_READ_BUFFER_CHUNKS = 256
-};
-
 struct cpu_chunk_read
 {
   uint32_t offset;

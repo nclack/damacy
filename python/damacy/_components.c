@@ -186,12 +186,13 @@ create_cpu_executor(PyObject* self, PyObject* args)
   unsigned long long bytes;
   struct damacy_cpu_config config;
   if (!PyArg_ParseTuple(args,
-                        "OIIIK",
+                        "OIIIKI",
                         &reader_object,
                         &config.decode_workers,
                         &config.max_encoded_chunk_bytes,
                         &config.max_decoded_chunk_bytes,
-                        &bytes))
+                        &bytes,
+                        &config.chunks_per_input_buffer))
     return NULL;
   config.max_memory_bytes = bytes;
   struct damacy_reader* reader = component_value(reader_object, READER);

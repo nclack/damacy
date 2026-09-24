@@ -47,6 +47,7 @@ extern "C"
     uint32_t max_encoded_chunk_bytes;
     uint32_t max_decoded_chunk_bytes;
     uint64_t max_memory_bytes;
+    uint32_t chunks_per_input_buffer;
   };
 
   struct damacy_cuda_config

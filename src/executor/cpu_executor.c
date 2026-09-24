@@ -8,6 +8,7 @@
 #include "damacy_stats.h"
 #include "executor/coalesce.h"
 #include "executor/cpu_read_plan.h"
+#include "log/log.h"
 #include "threadpool/threadpool.h"
 
 #include <stdlib.h>
@@ -120,9 +121,7 @@ cpu_read_plan_build(const struct prepared_plan* plan,
                                          .file_offset = chunk->offset,
                                          .nbytes = chunk->encoded_bytes };
   }
-  uint32_t read_chunks = config->decode_workers;
-  if (read_chunks > CPU_READ_BUFFER_CHUNKS)
-    read_chunks = CPU_READ_BUFFER_CHUNKS;
+  uint32_t read_chunks = config->chunks_per_input_buffer;
   uint32_t* read_index = indices + 2 * (size_t)count;
   uint32_t* offset_in_read = indices + 3 * (size_t)count;
   reads.count = count;
@@ -446,21 +445,15 @@ cpu_start(struct damacy_executor* base,
     2 * (sizeof(struct store_read) + sizeof(struct cpu_chunk_input) +
          sizeof(enum damacy_status) + 2 * sizeof(float) + sizeof(uint64_t));
   uint64_t fixed = sizeof(*self) + 2 * sizeof(struct damacy_buffer);
+  uint64_t chunks = self->config.chunks_per_input_buffer;
+  uint64_t input = per_read_chunk * chunks;
+  uint64_t decode = per_worker * workers;
   uint64_t budget = self->config.max_memory_bytes;
-  if (fixed > budget || per_worker > budget / workers ||
-      per_read_chunk > budget / CPU_READ_BUFFER_CHUNKS || bytes > budget / 2 ||
-      CPU_READ_BUFFER_CHUNKS > SIZE_MAX / self->config.max_encoded_chunk_bytes)
+  uint64_t need = fixed + input + decode;
+  if (chunks > SIZE_MAX / self->config.max_encoded_chunk_bytes ||
+      need > budget || bytes > (budget - need) / 2)
     return DAMACY_BUDGET;
-  uint64_t need = fixed;
-  uint64_t parts[] = { per_worker * workers,
-                       per_read_chunk * CPU_READ_BUFFER_CHUNKS,
-                       2 * bytes };
-  for (unsigned i = 0; i < sizeof(parts) / sizeof(*parts); ++i) {
-    if (parts[i] > budget - need)
-      return DAMACY_BUDGET;
-    need += parts[i];
-  }
-  self->committed = need;
+  self->committed = need + 2 * bytes;
   for (unsigned i = 0; i < 2; ++i) {
     struct damacy_buffer* buffer = calloc(1, sizeof(*buffer));
     if (!buffer)
@@ -474,16 +467,13 @@ cpu_start(struct damacy_executor* base,
     if (!buffer->data)
       goto Fail;
     struct cpu_wave* wave = &self->waves[i];
-    wave->input = malloc((size_t)CPU_READ_BUFFER_CHUNKS *
-                         self->config.max_encoded_chunk_bytes);
-    wave->reads = calloc(CPU_READ_BUFFER_CHUNKS, sizeof(*wave->reads));
-    wave->chunks = calloc(CPU_READ_BUFFER_CHUNKS, sizeof(*wave->chunks));
-    wave->results = calloc(CPU_READ_BUFFER_CHUNKS, sizeof(*wave->results));
-    wave->decode_ms = calloc(CPU_READ_BUFFER_CHUNKS, sizeof(*wave->decode_ms));
-    wave->assemble_ms =
-      calloc(CPU_READ_BUFFER_CHUNKS, sizeof(*wave->assemble_ms));
-    wave->output_bytes =
-      calloc(CPU_READ_BUFFER_CHUNKS, sizeof(*wave->output_bytes));
+    wave->input = malloc((size_t)chunks * self->config.max_encoded_chunk_bytes);
+    wave->reads = calloc((size_t)chunks, sizeof(*wave->reads));
+    wave->chunks = calloc((size_t)chunks, sizeof(*wave->chunks));
+    wave->results = calloc((size_t)chunks, sizeof(*wave->results));
+    wave->decode_ms = calloc((size_t)chunks, sizeof(*wave->decode_ms));
+    wave->assemble_ms = calloc((size_t)chunks, sizeof(*wave->assemble_ms));
+    wave->output_bytes = calloc((size_t)chunks, sizeof(*wave->output_bytes));
     if (!wave->input || !wave->reads || !wave->chunks || !wave->results ||
         !wave->decode_ms || !wave->assemble_ms || !wave->output_bytes)
       goto Fail;
@@ -574,16 +564,16 @@ cpu_dispatch(struct cpu_executor* self, struct cpu_wave* wave, int* changed)
   uint32_t count = 0;
   uint32_t n_reads = 0;
   uint64_t bytes = 0;
+  uint32_t chunk_capacity = self->config.chunks_per_input_buffer;
   uint64_t capacity =
-    (uint64_t)CPU_READ_BUFFER_CHUNKS * self->config.max_encoded_chunk_bytes;
+    (uint64_t)chunk_capacity * self->config.max_encoded_chunk_bytes;
   while (next_read < plan->count) {
     const struct read_op* read = &plan->reads[next_read];
     uint32_t n_chunks = 0;
     for (uint32_t c = plan->first_chunks[next_read]; c != UINT32_MAX;
          c = plan->chunks[c].next)
       ++n_chunks;
-    if (n_chunks > CPU_READ_BUFFER_CHUNKS - count ||
-        read->nbytes > capacity - bytes ||
+    if (n_chunks > chunk_capacity - count || read->nbytes > capacity - bytes ||
         (read->nbytes && n_reads == self->reader->max_inflight_reads))
       break;
     for (uint32_t c = plan->first_chunks[next_read]; c != UINT32_MAX;
@@ -755,6 +745,14 @@ damacy_cpu_executor_create(struct damacy_reader* reader,
       !config->max_encoded_chunk_bytes || !config->max_decoded_chunk_bytes ||
       !config->max_memory_bytes)
     return DAMACY_INVAL;
+  if (config->chunks_per_input_buffer < config->decode_workers ||
+      config->chunks_per_input_buffer > DAMACY_MAX_CHUNKS_PER_BATCH) {
+    log_error("chunks_per_input_buffer=%u out of range (decode_workers=%u..%u)",
+              config->chunks_per_input_buffer,
+              config->decode_workers,
+              DAMACY_MAX_CHUNKS_PER_BATCH);
+    return DAMACY_INVAL;
+  }
   struct cpu_executor* self = calloc(1, sizeof(*self));
   if (!self)
     return DAMACY_OOM;
