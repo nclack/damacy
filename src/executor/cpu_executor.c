@@ -283,7 +283,7 @@ gather_chunk(struct cpu_executor* self,
     if (!chunk->missing && meta->dtype == dtype_f32 &&
         self->output.dtype == DAMACY_F32)
       memcpy((float*)slot->buffer->data + destination,
-             (const float*)decoded + source,
+             (const char*)decoded + source * sizeof(float),
              width * sizeof(float));
     else {
       for (uint64_t j = 0; j < width; ++j) {
