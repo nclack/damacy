@@ -796,7 +796,7 @@ capacities. Defaults come from the Python value objects.</p>
 </tr>
 <tr>
 <td><code>CpuLimits.max_memory_bytes</code></td>
-<td>CPU executor's buffers, codec workspace, active read plans, and temporary read-planning scratch.</td>
+<td>CPU executor's input, decoded, codec-workspace, and two output buffers.</td>
 </tr>
 <tr>
 <td><code>CpuLimits.decode_workers</code></td>
@@ -822,21 +822,10 @@ The metadata cache requires at least <code>floor</code> array entries and
 cover pending samples and the batch being prepared. Queued plans own their
 metadata and do not pin cache entries. The legacy <code>Config</code> adapter retains its
 older, stricter cache validation.</p>
-<p>The CPU executor merges adjacent or overlapping encoded ranges within each
-shard, then interleaves the reads across shards. It decodes each unique source
-chunk once per batch, including when several output samples use that chunk.
-Both input groups stay within the decode-worker, encoded-byte, and reader
-limits; merging does not increase the number of decode workers.</p>
-<p>CPU memory admission includes active read plans, temporary planning scratch,
-and a conservative allowance for Blosc scratch storage.
-<code>Stats.host_bytes_committed</code> reports current buffers, read plans, and codec
-reservations, which can exceed the bytes actually touched. Temporary planning
-scratch is checked against the cap and released before submission returns.
-If an active batch's read plan temporarily prevents admission, submission
-retries after that batch completes. A plan that cannot fit by itself reports
-<code>BUDGET</code>.
-The cap excludes metadata caches, prepared plans, reader queues, thread stacks,
-and allocator overhead: it is not a process RSS limit.
+<p>CPU memory admission includes a conservative allowance for Blosc scratch
+storage. <code>Stats.host_bytes_committed</code> reports that reservation, which can exceed
+the bytes actually touched. It excludes metadata caches, prepared plans, reader
+queues, thread stacks, and allocator overhead: it is not a process RSS limit.
 Queued plan storage is bounded separately by
 <code>prepared_batches * max_plan_bytes</code>, with up to two accepted plans and one plan
 being built in addition. Retaining results across repeated pipeline restarts
@@ -852,10 +841,12 @@ and memory-limit failures normally surface at pop. A terminal execution error
 requires closing the pipeline and constructing another one.</p>
 <h2 id="lifetimes-and-interoperation">Lifetimes and interoperation<a class="headerlink" href="#lifetimes-and-interoperation" title="Permanent link">&para;</a></h2>
 <p>Use a context manager or call <code>Pipeline.close()</code>. Python retains the injected
-components and their dependencies. Planners, executors, metadata providers,
-and metadata readers each serve one active pipeline; simultaneous reuse is
-rejected. They may be reused after close. Closing stops pending work and wakes
-blocked pops. Reuse creates fresh active caches and execution resources.</p>
+components and their dependencies. Planners and executors each serve one
+active pipeline; simultaneous reuse is rejected. They may be reused after
+close. Metadata providers and metadata readers hold only settings. Each planner
+copies them and builds its own caches, so any number of planners may share one.
+Closing stops pending work and wakes blocked pops. Reuse creates fresh active
+caches and execution resources.</p>
 <p><code>np.from_dlpack(batch)</code> produces a CPU view; <code>torch.from_dlpack(batch)</code> accepts
 CPU or CUDA results. A DLPack view remains valid after releasing the <code>Batch</code> and
 closing the pipeline. Releasing the Python batch does not force a live view's
