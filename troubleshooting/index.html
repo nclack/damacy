@@ -6,7 +6,7 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="Streamed assembly of tensors from Zarr sources into RAM or GPU memory.">
+        <meta name="description" content="High-speed streamed assembly of tensors from zarr sources to GPU.">
       
       
       
@@ -289,33 +289,6 @@
   
   
     <li class="md-nav__item">
-      <a href="../pipeline/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Pipeline composition
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    <li class="md-nav__item">
       <a href="../budget/" class="md-nav__link">
         
   
@@ -468,10 +441,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#pipeline-construction-fails-during-metadata-io-setup" class="md-nav__link">
+  <a href="#invalidargument-at-pipelinecfg-from-metadata-io-setup" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Pipeline construction fails during metadata I/O setup
+        InvalidArgument at Pipeline(cfg) from metadata I/O setup
       
     </span>
   </a>
@@ -606,10 +579,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#pipeline-construction-fails-during-metadata-io-setup" class="md-nav__link">
+  <a href="#invalidargument-at-pipelinecfg-from-metadata-io-setup" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Pipeline construction fails during metadata I/O setup
+        InvalidArgument at Pipeline(cfg) from metadata I/O setup
       
     </span>
   </a>
@@ -693,8 +666,7 @@
 
 <h1 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h1>
 <p>Common errors and what to check first. For multi-GPU specifics,
-see <a href="../distributed/#common-failures">Distributed → Common failures</a>.
-CPU construction and limits are described in <a href="../pipeline/">Pipeline composition</a>.</p>
+see <a href="../distributed/#common-failures">Distributed → Common failures</a>.</p>
 <h2 id="invalidargument-no-cucontext-is-current"><code>InvalidArgument: no CUcontext is current</code><a class="headerlink" href="#invalidargument-no-cucontext-is-current" title="Permanent link">&para;</a></h2>
 <p><code>Config.device</code> was not set and no CUDA context has been primed on
 the calling thread yet. Two fixes:</p>
@@ -705,14 +677,16 @@ the calling thread yet. Two fixes:</p>
 <li>Or prime a context implicitly before constructing the pipeline:
   <code>torch.empty(1, device="cuda")</code> is enough.</li>
 </ul>
-<h2 id="pipeline-construction-fails-during-metadata-io-setup">Pipeline construction fails during metadata I/O setup<a class="headerlink" href="#pipeline-construction-fails-during-metadata-io-setup" title="Permanent link">&para;</a></h2>
-<p>The CPU and CUDA metadata paths use io_uring for Zarr metadata and shard indexes. At construction damacy requires kernel support for
+<h2 id="invalidargument-at-pipelinecfg-from-metadata-io-setup"><code>InvalidArgument</code> at <code>Pipeline(cfg)</code> from metadata I/O setup<a class="headerlink" href="#invalidargument-at-pipelinecfg-from-metadata-io-setup" title="Permanent link">&para;</a></h2>
+<p>The Linux metadata path uses io_uring for zarr metadata, shard-index, and
+chunk-layout reads. At construction damacy requires kernel support for
 <code>IORING_OP_STATX</code>, <code>IORING_OP_OPENAT2</code>, <code>IORING_OP_READ</code>, and
 <code>IORING_OP_CLOSE</code>. If ring creation or the operation probe fails,
-pipeline construction fails without a thread-pool fallback. Check the native log for the exact io_uring failure.</p>
+<code>Pipeline(cfg)</code> raises <code>InvalidArgument</code> rather than falling back to a legacy
+thread pool. Check the native log for the exact io_uring failure.</p>
 <p>On supported kernels, an unusually high <code>metadata_io_concurrency</code> can also
 stress process file-descriptor limits because each in-flight metadata read can
-hold an open fd. The default is 64; for much deeper settings, check
+hold an open fd. The default is 32; for much deeper settings, check
 <code>ulimit -n</code> and remember to multiply by ranks per node.</p>
 <h2 id="budgetexceeded-at-pipelinecfg"><code>BudgetExceeded</code> at <code>Pipeline(cfg)</code><a class="headerlink" href="#budgetexceeded-at-pipelinecfg" title="Permanent link">&para;</a></h2>
 <p><code>max_gpu_memory_bytes</code> is too small for the requested batch
@@ -722,10 +696,9 @@ refuses</a> for the full fix list;
 the usual answer is to raise the cap.</p>
 <h2 id="budgetexceeded-mid-stream"><code>BudgetExceeded</code> mid-stream<a class="headerlink" href="#budgetexceeded-mid-stream" title="Permanent link">&para;</a></h2>
 <p>A chunk's actual uncompressed size exceeds
-<code>PlanLimits.max_chunk_bytes</code> or <code>Config.max_chunk_uncompressed_bytes</code> (default 2 MiB). Raise
+<code>Config.max_chunk_uncompressed_bytes</code> (default 512 KiB). Raise
 that cap to fit the dataset, and raise <code>max_gpu_memory_bytes</code>
-along with it if needed. CPU executors also enforce <code>CpuLimits</code> for encoded
-chunks, decoded chunks, and total executor buffers. See
+along with it if needed. See
 <a href="../budget/#when-the-budget-refuses">GPU memory budget</a>.</p>
 <h2 id="notfound-or-dtypemismatch-from-pop-not-push"><code>NotFound</code> or <code>DtypeMismatch</code> from <code>pop()</code> (not <code>push()</code>)<a class="headerlink" href="#notfound-or-dtypemismatch-from-pop-not-push" title="Permanent link">&para;</a></h2>
 <p><code>push()</code> only validates what's locally checkable — sample shape and
@@ -749,7 +722,7 @@ recover.</p>
 from previous batches — for example, stashing them in a list —
 which prevents damacy from reusing the underlying slot. Drop the
 references before the next <code>pop()</code>, or <code>.clone()</code> if you
-need to keep them. For a NumPy CPU view, use <code>.copy()</code>.</p>
+genuinely need to keep them.</p>
 <h2 id="pop-blocks-forever"><code>pop()</code> blocks forever<a class="headerlink" href="#pop-blocks-forever" title="Permanent link">&para;</a></h2>
 <p>The push didn't reach the lookahead, or the consumer never frees
 a slot:</p>
