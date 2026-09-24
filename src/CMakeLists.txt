@@ -32,8 +32,8 @@ add_src_lib(lru    SOURCES util/lru.c    util/lru.h LINKS log)
 add_src_lib(pool   SOURCES util/pool.c   util/pool.h LINKS log platform)
 add_src_lib(path_intern SOURCES util/path_intern.c util/path_intern.h LINKS hash)
 
-# Platform abstraction: CMake selects Mach implementations on macOS and
-# POSIX implementations on Linux. Shared POSIX file I/O works on both.
+# Platform abstraction: POSIX sources on Linux and macOS. macOS has no NUMA
+# or CPU affinity controls, so it builds the numa.darwin.c stub instead.
 # platform.posix.c uses dlopen for platform_dl*; numa.posix.c uses libnuma via
 # platform_dl* so a single binary works on hosts with or without libnuma installed.
 add_src_lib(platform

@@ -31,8 +31,7 @@ function(add_cuda_lib TARGET)
     add_src_lib(${TARGET} ${ARGN})
 endfunction()
 
-# Appends basename.win32.c or basename.posix.c (.mach.c on macOS, when
-# present, with a legacy .darwin.c fallback)
+# Appends basename.win32.c or basename.posix.c (or .darwin.c if it exists)
 # to TARGET's sources. BASENAME defaults to TARGET.
 function(add_platform_sources TARGET)
     if(ARGC GREATER 1)
@@ -42,8 +41,6 @@ function(add_platform_sources TARGET)
     endif()
     if(WIN32)
         target_sources(${TARGET} PRIVATE ${BASE}.win32.c)
-    elseif(APPLE AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${BASE}.mach.c")
-        target_sources(${TARGET} PRIVATE ${BASE}.mach.c)
     elseif(APPLE AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${BASE}.darwin.c")
         target_sources(${TARGET} PRIVATE ${BASE}.darwin.c)
     else()

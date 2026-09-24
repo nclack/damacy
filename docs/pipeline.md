@@ -207,8 +207,8 @@ The extension has no CUDA or nvCOMP dependency in this configuration.
 `CudaExecutor` reports that CUDA support was not built. Linux retains its
 io_uring metadata requirements. macOS uses a POSIX metadata worker pool,
 with one worker per `metadata_io_concurrency`, and shared POSIX bulk reads.
-CMake selects `platform.mach.c` and `numa.mach.c`; NUMA placement and CPU
-affinity are unavailable. CUDA defaults off on macOS and cannot be enabled.
+NUMA placement and CPU affinity are unavailable. CUDA defaults off on macOS
+and cannot be enabled.
 On Linux CUDA defaults on, builds both executors, and requires the CUDA toolkit,
 nvCOMP, and a runtime NVIDIA driver. GDS requires a CUDA build.
 
