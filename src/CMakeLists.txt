@@ -278,7 +278,7 @@ if(NOT DAMACY_FUZZ)
         LINKS pipeline_components plan_builder prefetcher array_meta shard_index
               metadata_store_async lookahead
     )
-    add_src_lib(cpu_executor SOURCES executor/cpu_executor.c
+    add_src_lib(cpu_executor SOURCES executor/cpu_executor.c executor/cpu_read_plan.h
         LINKS pipeline_components prepared_plan dispatch_utils threadpool damacy_stats
               PkgConfig::ZSTD PkgConfig::BLOSC
     )

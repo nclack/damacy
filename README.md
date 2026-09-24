@@ -34,7 +34,7 @@ metadata = damacy.ZarrMetadata(
 planner = damacy.ChunkPlanner(metadata=metadata, limits=damacy.PlanLimits())
 executor = damacy.CpuExecutor(
     reader=chunk_reader,
-    limits=damacy.CpuLimits(max_memory_bytes=1 << 30, decode_workers=8),
+    limits=damacy.CpuLimits(max_memory_bytes=3 << 30, decode_workers=8),
 )
 
 with damacy.Pipeline(

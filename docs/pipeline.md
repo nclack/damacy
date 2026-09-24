@@ -29,7 +29,7 @@ planner = damacy.ChunkPlanner(
 executor = damacy.CpuExecutor(
     reader=chunk_reader,
     limits=damacy.CpuLimits(
-        max_memory_bytes=1 << 30,
+        max_memory_bytes=3 << 30,
         decode_workers=8,
         max_encoded_chunk_bytes=4 << 20,
         max_decoded_chunk_bytes=2 << 20,
@@ -126,8 +126,16 @@ older, stricter cache validation.
 The CPU executor merges adjacent or overlapping encoded ranges within each
 shard, then interleaves the reads across shards. It decodes each unique source
 chunk once per batch, including when several output samples use that chunk.
-Both input groups stay within the decode-worker, encoded-byte, and reader
-limits; merging does not increase the number of decode workers.
+Each of its two encoded-input buffers holds up to 256 chunks, independently
+of the decode-worker count. Merged reads contain at most
+`min(decode_workers, 256)` chunks; submission also respects the reader limit.
+Decoder workspaces remain per worker.
+
+The two input buffers reserve `512 * max_encoded_chunk_bytes` bytes, plus
+per-chunk bookkeeping. The default 4 MiB encoded-chunk bound therefore reserves
+2 GiB before decoder workspaces and output buffers. Set the bound to match the
+largest encoded chunk expected, and include this reserve in `max_memory_bytes`;
+insufficient budgets report `BUDGET`.
 
 CPU memory admission includes active read plans, temporary planning scratch,
 and a conservative allowance for Blosc scratch storage.

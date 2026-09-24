@@ -52,13 +52,13 @@ create_components(struct components* c)
                                          .max_shards_per_sample = 4,
                                          .max_plan_bytes = 1 << 20 },
            &c->planner) == DAMACY_OK);
-  EXPECT(damacy_cpu_executor_create(c->reader,
-                                    &(struct damacy_cpu_config){
-                                      .decode_workers = 2,
-                                      .max_encoded_chunk_bytes = (1 << 20) + 1,
-                                      .max_decoded_chunk_bytes = 1 << 20,
-                                      .max_memory_bytes = 32 << 20 },
-                                    &c->executor) == DAMACY_OK);
+  EXPECT(damacy_cpu_executor_create(
+           c->reader,
+           &(struct damacy_cpu_config){ .decode_workers = 2,
+                                        .max_encoded_chunk_bytes = 1024,
+                                        .max_decoded_chunk_bytes = 1 << 20,
+                                        .max_memory_bytes = 32 << 20 },
+           &c->executor) == DAMACY_OK);
   return 0;
 }
 
