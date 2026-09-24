@@ -74,11 +74,35 @@ extern "C"
     uint8_t rank;
   };
 
-  // One sample request.
+  struct damacy_index_array
+  {
+    const int64_t* values;
+    uint32_t count;
+  };
+
+  enum damacy_axis_kind
+  {
+    DAMACY_AXIS_INTERVAL = 1,
+    DAMACY_AXIS_INDICES = 2,
+  };
+
+  struct damacy_axis_selection
+  {
+    enum damacy_axis_kind kind;
+    union
+    {
+      struct damacy_interval interval;
+      struct damacy_index_array indices;
+    };
+  };
+
+  // Axes combine as a Cartesian product, preserving index order and duplicates.
+  // Accepted samples own a copy of the URI and index values.
   struct damacy_sample
   {
-    const char* uri; // null-terminated; copied internally
-    struct damacy_aabb aabb;
+    const char* uri;
+    uint8_t rank;
+    struct damacy_axis_selection axes[DAMACY_MAX_RANK];
   };
 
   // Caller-owned slice of samples to push.
@@ -96,6 +120,11 @@ extern "C"
     // Required — no default; a value too small for the requested
     // geometry returns DAMACY_BUDGET from damacy_create.
     uint64_t max_gpu_memory_bytes;
+    // Index storage per batch, 8 bytes per index, counted against
+    // max_gpu_memory_bytes. Must be 0, which rejects indexed samples at
+    // push, or in [8 * samples_per_batch * sum(sample_shape), 8 * UINT32_MAX]
+    // so a batch can never run out.
+    uint64_t max_index_bytes;
     // Required: must be in [1, DAMACY_MAX_CHUNK_BYTES].
     uint32_t max_chunk_uncompressed_bytes;
     // Required: must be in [1, UINT32_MAX] (read_op.nbytes is uint32_t).
@@ -169,7 +198,7 @@ extern "C"
     // Destination dtype of assembled batches.
     enum damacy_dtype dtype;
     // Per-sample output extents (in voxels) along the zarr's axis order — same
-    // layout damacy_sample.aabb uses. sample_rank must be in
+    // axis order damacy_sample.axes uses. sample_rank must be in
     // [1, DAMACY_MAX_RANK]; every sample_shape[d] must be > 0.
     int64_t sample_shape[DAMACY_MAX_RANK];
     uint8_t sample_rank;
@@ -243,6 +272,8 @@ extern "C"
   //             a batch (or wait) and retry with the returned suffix
   //   INVAL     bad arguments (samples.beg > samples.end, null d, etc.)
   //   RANK      sample rank incompatible with cfg.sample_rank
+  //   BUDGET    the sample's index arrays exceed the plan storage limit, or
+  //             it has index arrays and tuning.max_index_bytes is 0
   //   SHUTDOWN  instance is in a failed state or being destroyed
   // Store-derived errors (missing uri, unsupported source dtype, per-array
   // rank mismatch, decode failures) surface asynchronously from damacy_pop.

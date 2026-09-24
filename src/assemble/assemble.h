@@ -2,11 +2,13 @@
 // device arena into the output batch tensor, casting source elements to
 // the destination dtype on the fly.
 //
-// The kernel iterates the union of chunks for each sample (a single
-// rectangle per sample, U[d] = N[d] * S[d]) and culls voxels outside
-// the sample's tight AABB at write time. Per-sample constants live in
-// `struct sample_plan` (planner.h); per-wave-chunk records carry the
-// arena offset and the chunk's grid position. Source dtype is read off
+// For a rectangular sample the kernel iterates the union of its chunks
+// (U[d] = N[d] * S[d]) and culls voxels outside the sample's tight AABB at
+// write time. For an indexed sample each chunk writes only the Cartesian
+// product of its selected positions, described by the sample's gather_dims
+// and indices. Per-sample constants live in `struct sample_plan`
+// (dispatch.h); per-wave-chunk records carry the arena offset and either the
+// chunk's grid position or its gather_dims offset. Source dtype is read off
 // the sample_plan; destination dtype is fixed for the launch.
 #pragma once
 
@@ -46,6 +48,7 @@ extern "C"
     uint8_t shuffle_mode;              // enum assemble_shuffle_mode
     uint8_t shuffle_typesize;          // 1, 2, 4, 8; 0 if NONE
     uint8_t is_fill;                   // 1 = broadcast sample.fill_value
+    uint32_t gather_offset;            // index into sample.gather_dims[]
     uint32_t chunk_d[DAMACY_MAX_RANK]; // chunk grid position within sample
   };
 
@@ -84,6 +87,8 @@ extern "C"
   // Compute blocks-per-chunk for a sample given its dims and the kernel's
   // block-tile shape. Host-side helper used by wave orchestration when
   // packing the wave's metadata. Returns 0 for unsupported ranks.
+  uint32_t assemble_gather_blocks(uint64_t elements);
+
   uint32_t assemble_blocks_per_chunk(uint8_t rank,
                                      const struct sample_dim* dims);
 

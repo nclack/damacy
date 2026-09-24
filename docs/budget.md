@@ -27,7 +27,8 @@ configuration — then round up generously:
 pool_reservation       = 2 × samples_per_batch × prod(sample_shape) × dtype_bytes
 one_chunk_per_wave     ≈ max_chunk_uncompressed_bytes × 2   # compressed + decoded buffers, one chunk
 both_waves_one_chunk   ≈ 2 × one_chunk_per_wave             # two GPU waves resident at once
-budget_floor           ≈ pool_reservation + both_waves_one_chunk + scratch_slack
+index_reservation      = 2 × (8 × samples_per_batch × sum(sample_shape) + 16 × 16384 × rank)   # 0 if max_index_bytes = 0
+budget_floor           ≈ pool_reservation + index_reservation + both_waves_one_chunk + scratch_slack
 ```
 
 The `2 ×` in `pool_reservation` is output-side double-buffering.
@@ -99,17 +100,23 @@ budget.
 
 ### Where the budget is spent
 
-Four buckets share `max_gpu_memory_bytes`:
+These allocations share `max_gpu_memory_bytes`:
 
 | Bucket                  | What it holds                                              | Scales with                                              |
 | ----------------------- | ---------------------------------------------------------- | -------------------------------------------------------- |
 | Output batch pool       | The batches you `pop`, double-buffered                     | `samples_per_batch`, `sample_shape`, dtype                      |
 | Wave-resident buffers   | Compressed + decoded chunk bytes for the two in-flight waves | budget headroom, in `max_chunk_uncompressed_bytes` steps |
 | Decoder scratch         | nvcomp's working memory                                    | Peak sub-stream count in the dataset                     |
-| Per-wave metadata       | Pointer/size arrays for the decoder                        | Peak sub-stream count                                    |
+| Per-wave metadata       | Pointer/size arrays for the decoder and assembly           | Peak sub-stream and chunk counts                         |
+| Indexed-query data      | Source/output index pairs and per-chunk selection ranges for two batch slots | Output shape and rank; none when `max_index_bytes=0` |
 
-The first two are the large ones; the last two are small but
-*depend on the data*. damacy cannot know the sub-stream count of
+Index storage is reserved at construction from the output shape. A nonzero
+`max_index_bytes` below `8 × samples_per_batch × sum(sample_shape)` raises
+`BudgetExceeded` from `Pipeline(cfg)`. Each slot also reserves 16 bytes per
+axis for up to 16384 chunks, to record which part of each chunk an indexed
+query selects. Setting `max_index_bytes=0` drops both reservations; `push`
+then rejects indexed queries.
+Decoder scratch and fanout storage depend on the data. damacy cannot know the sub-stream count of
 a chunk until it inspects the chunk's header, so damacy picks
 per-wave geometry such that even after adaptive growth to the
 structural ceiling, the total fits inside the cap. Grows commit

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "query/selection.h"
+
 #include "damacy.h"
 
 #include <stdint.h>
@@ -11,6 +13,7 @@ struct damacy_sample_slot
 {
   char* uri;
   struct damacy_aabb aabb;
+  struct query_axis axes[DAMACY_MAX_RANK];
   uint64_t sample_seq;
 };
 

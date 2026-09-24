@@ -211,12 +211,12 @@ create_cuda_executor(PyObject* self, PyObject* args)
 {
   (void)self;
   PyObject* reader_object;
-  unsigned long long memory, read_bytes;
+  unsigned long long memory, read_bytes, index_bytes;
   unsigned int buffers;
   int numa, gds;
   struct damacy_cuda_config config = { 0 };
   if (!PyArg_ParseTuple(args,
-                        "OiKIKIIIIiii",
+                        "OiKIKIIIIiiiK",
                         &reader_object,
                         &config.device,
                         &memory,
@@ -228,13 +228,15 @@ create_cuda_executor(PyObject* self, PyObject* args)
                         &config.chunk_layout_entries,
                         &numa,
                         &config.numa_node,
-                        &gds))
+                        &gds,
+                        &index_bytes))
     return NULL;
   if (buffers > UINT8_MAX) {
     PyErr_SetString(PyExc_ValueError, "host_buffer_waves is too large");
     return NULL;
   }
   config.max_gpu_memory_bytes = memory;
+  config.max_index_bytes = index_bytes;
   config.max_read_bytes = read_bytes;
   config.host_buffer_waves = (uint8_t)buffers;
   config.numa_strategy = (enum damacy_numa_strategy)numa;

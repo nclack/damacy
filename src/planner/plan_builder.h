@@ -1,5 +1,7 @@
 #pragma once
 
+#include "query/selection.h"
+
 #include "planner/plan.h"
 #include "prefetch/prefetch_handle.h"
 
@@ -7,6 +9,7 @@ struct planner_sample
 {
   const char* uri;
   struct damacy_aabb aabb;
+  struct query_axis axes[DAMACY_MAX_RANK];
   struct prefetch_handle h_meta;
   struct prefetch_handle* h_shards;
   uint32_t n_shards;

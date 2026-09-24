@@ -48,6 +48,8 @@ validate_config(const struct damacy_config* cfg)
   CHECK_SILENT(Invalid, cfg);
   CHECK_SILENT(Invalid, cfg->samples_per_batch > 0);
   CHECK_SILENT(Invalid, cfg->tuning.max_gpu_memory_bytes > 0);
+  CHECK_SILENT(Invalid,
+               cfg->tuning.max_index_bytes <= UINT64_C(8) * UINT32_MAX);
   CHECK_SILENT(Invalid, cfg->lookahead_samples >= cfg->samples_per_batch);
   CHECK_SILENT(Invalid, cfg->tuning.n_io_threads > 0);
   CHECK_SILENT(Invalid, cfg->tuning.n_io_threads <= DAMACY_MAX_IO_THREADS);
@@ -107,8 +109,8 @@ validate_config(const struct damacy_config* cfg)
   // name the knob, observed vs required value, and the fix. See
   // dev/metadata_prefetch.md.
   {
-    uint64_t meta_floor =
-      (uint64_t)cfg->lookahead_samples + 2ull * (uint64_t)cfg->samples_per_batch;
+    uint64_t meta_floor = (uint64_t)cfg->lookahead_samples +
+                          2ull * (uint64_t)cfg->samples_per_batch;
     if ((uint64_t)cfg->tuning.n_array_meta_cache < meta_floor) {
       log_error("n_array_meta_cache=%u is too small: requires >= "
                 "lookahead_samples(%u) + 2*samples_per_batch(%u) = %llu. Raise "
@@ -183,6 +185,7 @@ damacy_tuning_defaults(void)
   return (struct damacy_tuning){
     .max_chunk_uncompressed_bytes = 2 * 1024 * 1024,
     .max_read_op_bytes = 4 * 1024 * 1024,
+    .max_index_bytes = 64ull << 20,
     .host_buffer_waves = DAMACY_DEFAULT_HOST_BUFFER_WAVES,
     .max_chunks_per_wave = DAMACY_DEFAULT_MAX_CHUNKS_PER_WAVE,
     .max_substreams_per_chunk = DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK,

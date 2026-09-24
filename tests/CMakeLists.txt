@@ -52,6 +52,7 @@ add_damacy_test(
 add_damacy_test(test_coalesce dispatch_utils path_intern log)
 add_damacy_test(test_path_intern path_intern hash log)
 add_damacy_test(test_group_chunks dispatch_utils log)
+add_damacy_test(test_selection query_selection log)
 add_damacy_test(test_lookahead lookahead log platform)
 add_damacy_test(test_prefetch_cache prefetch_cache log)
 add_damacy_test(test_array_meta array_meta prefetch_cache zarr store test_fixture)

@@ -414,7 +414,6 @@ test_single_chunk_aligned(void)
   EXPECT(sp->rank == 2);
   EXPECT(sp->batch_pool_slot == 0);
   EXPECT(sp->sample_idx_in_batch == 0);
-  EXPECT(sp->chunk_count == 1);
   EXPECT(sp->dims[0].chunk_shape == 2 && sp->dims[1].chunk_shape == 4);
   EXPECT(sp->dims[0].chunk_grid_extent == 1 &&
          sp->dims[1].chunk_grid_extent == 1);
@@ -489,7 +488,6 @@ test_multi_chunk_partial(void)
 
   struct sample_plan* sp = &samples[0];
   EXPECT(sp->rank == 2);
-  EXPECT(sp->chunk_count == 4);
   EXPECT(sp->dims[0].chunk_grid_extent == 2 &&
          sp->dims[1].chunk_grid_extent == 2);
   EXPECT(sp->dims[0].aabb_lo_relative == 1 &&
@@ -542,7 +540,6 @@ test_two_samples_indices(void)
 
   EXPECT(samples[0].sample_dst_off_elems == 0);
   EXPECT(samples[1].sample_dst_off_elems == 8); // sample_idx=1 * stride[0]=8
-  EXPECT(samples[0].chunk_count == 1 && samples[1].chunk_count == 1);
 
   fixture_destroy(&f);
   return 0;
@@ -1480,9 +1477,109 @@ test_coalesce_cross_sample(void)
   return 0;
 }
 
+static int
+test_owned_index_plan(void)
+{
+  const uint64_t offsets[4] = { 0, 100, 200, 300 };
+  const uint64_t nbytes[4] = { 32, 32, 32, 32 };
+  struct fixture f = { 0 };
+  EXPECT(fixture_init(&f, offsets, nbytes) == 0);
+  struct planner_sample samples[2];
+  EXPECT(mk_sample(&f, 0, 4, 0, 8, &samples[0]) == 0);
+  struct query_index rows[] = { { 0, 1 }, { 3, 0 }, { 3, 2 } };
+  struct query_index cols[] = { { 0, 2 }, { 3, 1 }, { 7, 0 }, { 7, 3 } };
+  samples[0].axes[0] = (struct query_axis){ rows, 3 };
+  samples[0].axes[1] = (struct query_axis){ cols, 4 };
+  samples[1] = samples[0];
+  struct damacy_batch_spec output = { .dtype = DAMACY_F32,
+                                      .sample_rank = 2,
+                                      .sample_shape = { 3, 4 },
+                                      .samples_per_batch = 2 };
+  struct damacy_plan_limits limits = { .max_chunks = 8,
+                                       .max_chunk_bytes = 1024,
+                                       .max_shards_per_sample = 1,
+                                       .max_plan_bytes = 1 << 20 };
+  struct prepared_plan* plan = NULL;
+  EXPECT(prepared_plan_build(f.array_meta_cache,
+                             f.shard_index_cache,
+                             samples,
+                             2,
+                             &output,
+                             &limits,
+                             &plan) == DAMACY_OK);
+  EXPECT(plan->n_chunks == 4 && plan->n_uses == 8 && plan->n_arrays == 1);
+  EXPECT(plan->regions[0].operation == PLAN_GATHER);
+  EXPECT(plan->regions[0].axes[0].indices != rows);
+  EXPECT(plan->regions[0].axes[1].indices != cols);
+  limits.max_plan_bytes = plan->allocated_bytes - 1;
+  struct prepared_plan* rejected = NULL;
+  EXPECT(prepared_plan_build(f.array_meta_cache,
+                             f.shard_index_cache,
+                             samples,
+                             2,
+                             &output,
+                             &limits,
+                             &rejected) == DAMACY_BUDGET);
+  EXPECT(!rejected);
+  ++limits.max_plan_bytes;
+  EXPECT(prepared_plan_build(f.array_meta_cache,
+                             f.shard_index_cache,
+                             samples,
+                             2,
+                             &output,
+                             &limits,
+                             &rejected) == DAMACY_OK);
+  prepared_plan_destroy(rejected);
+  memset(rows, 0, sizeof(rows));
+  memset(cols, 0, sizeof(cols));
+  fixture_destroy(&f);
+  EXPECT(plan->regions[0].axes[0].indices[1].source == 3);
+  EXPECT(plan->regions[1].axes[1].indices[2].output == 0);
+  EXPECT(plan->arrays[0].metadata.inner_chunk_shape[0] == 2);
+  EXPECT(!strcmp(plan->chunks[0].path, "foo/c/0/0"));
+  struct dispatch_output dispatch = {
+    .read_ops = (struct read_op[8]){ 0 },
+    .read_ops_cap = 8,
+    .chunk_plans = (struct chunk_plan[8]){ 0 },
+    .chunk_plans_cap = 8,
+    .sample_plans = (struct sample_plan[2]){ 0 },
+    .sample_plans_cap = 2,
+    .read_op_groups = (struct read_op_group[8]){ 0 },
+    .read_op_groups_cap = 8,
+    .indices = (struct gather_index[14]){ 0 },
+    .indices_cap = 13,
+    .gather_dims = (struct gather_dim[16]){ 0 },
+    .gather_dims_cap = 15,
+    .paths = &(struct path_intern){ 0 }
+  };
+  struct dispatch_scratch scratch = { 0 };
+  EXPECT(dispatch_plan_build(plan, 0, PAGE, PAGE, 8, &dispatch, &scratch) ==
+         DAMACY_BUDGET);
+  dispatch.indices_cap = 14;
+  EXPECT(dispatch_plan_build(plan, 0, PAGE, PAGE, 8, &dispatch, &scratch) ==
+         DAMACY_BUDGET);
+  dispatch.gather_dims_cap = 16;
+  EXPECT(dispatch_plan_build(plan, 0, PAGE, PAGE, 8, &dispatch, &scratch) ==
+         DAMACY_OK);
+  EXPECT(dispatch.n_indices == 14 && dispatch.n_gather_dims == 16);
+  EXPECT(dispatch.sample_plans[0].indexed);
+  uint64_t elements = 0;
+  for (uint32_t i = 0; i < dispatch.n_chunk_plans; ++i) {
+    const struct gather_dim* gather =
+      dispatch.gather_dims + dispatch.chunk_plans[i].gather_offset;
+    elements += (uint64_t)gather[0].count * gather[1].count;
+  }
+  EXPECT(elements == 24);
+  path_intern_free(dispatch.paths);
+  dispatch_scratch_destroy(&scratch);
+  prepared_plan_destroy(plan);
+  return 0;
+}
+
 int
 main(void)
 {
+  RUN(test_owned_index_plan);
   RUN(test_single_chunk_aligned);
   RUN(test_multi_chunk_partial);
   RUN(test_two_samples_indices);

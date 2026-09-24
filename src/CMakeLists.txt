@@ -79,8 +79,10 @@ add_src_lib(damacy_config SOURCES damacy_config.h damacy_config.c
     LINKS dtype log platform
 )
 
+add_src_lib(query_selection SOURCES query/selection.h query/selection.c)
+
 add_src_lib(lookahead SOURCES lookahead/lookahead.h lookahead/lookahead.c
-    LINKS log platform
+    LINKS log platform query_selection
 )
 
 add_src_lib(prefetch_cache SOURCES prefetch/prefetch_cache.h prefetch/prefetch_cache.c
@@ -147,7 +149,7 @@ add_cuda_lib(fanout SOURCES wave/fanout.h wave/fanout.c
 # cuStreamSynchronize.
 add_cuda_lib(wave_budget
     SOURCES wave/input_transfer.h wave/wave_budget.h wave/wave_budget.c
-    LINKS input_transfer decoder fanout dispatch_utils assemble gpu_budget
+    LINKS input_transfer decoder fanout dispatch_utils execution_plan assemble gpu_budget
           damacy_config log
           CUDA::cuda_driver
 )
@@ -260,7 +262,9 @@ add_cuda_lib(assemble SOURCES assemble/assemble.h assemble/assemble.cu
     LINKS CUDA::cudart_static CUDA::cuda_driver log
 )
 
-add_src_lib(prepared_plan SOURCES planner/plan.h planner/plan.c)
+add_src_lib(prepared_plan SOURCES planner/plan.h planner/plan.c
+    LINKS query_selection
+)
 
 add_src_lib(plan_builder SOURCES planner/plan_builder.h planner/plan_builder.c
     LINKS prepared_plan prefetch_cache shard_index zarr damacy_config strbuf hash
@@ -287,6 +291,7 @@ if(NOT DAMACY_FUZZ)
                 damacy_lifecycle.c damacy_push.c damacy_plan.c damacy_pop.c
                 damacy_scheduler.c
         LINKS pipeline_components metadata_planner cpu_executor scheduler damacy_stats
+              query_selection
     )
     if(DAMACY_CUDA)
         add_cuda_lib(cuda_executor
