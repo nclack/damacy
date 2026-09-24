@@ -390,6 +390,41 @@ test_single_worker_and_fills(void)
 }
 
 static int
+test_fills_share_merged_input(void)
+{
+  const struct test_chunk chunks[] = {
+    { .shard = 1, .offset = 16 }, { .missing = 1 },
+    { .shard = 1, .offset = 24 }, { .missing = 1 },
+    { .shard = 0, .offset = 0 },  { .shard = 0, .offset = 8 },
+  };
+  struct test_store store;
+  store_init(&store, 2);
+  struct damacy_reader reader = { .store = &store.base,
+                                  .max_inflight_reads = 2 };
+  struct damacy_stats stats = { 0 };
+  struct damacy_executor* executor = NULL;
+  EXPECT(start_executor(&reader, 6, 6, 8 << 20, &stats, &executor) == 0);
+  struct prepared_plan* plan = make_plan(chunks, 6);
+  EXPECT(plan);
+  EXPECT(executor->ops->submit(executor, plan, 0) == DAMACY_OK);
+  struct damacy_batch* batch = NULL;
+  EXPECT(finish_batch(executor, &batch) == 0);
+  EXPECT(check_output(batch, &store, chunks, 6) == 0);
+  EXPECT(store.n_events == 1 && store.events[0].count == 2);
+  EXPECT(store.records[0].shard == 0 && store.records[0].offset == 0);
+  EXPECT(store.records[1].shard == 1 && store.records[1].offset == 16);
+  EXPECT(store.records[0].bytes == 2 * CHUNK_BYTES);
+  EXPECT(store.records[1].bytes == 2 * CHUNK_BYTES);
+  EXPECT(stats.waves_emitted == 1 && stats.reads_issued == 2);
+  EXPECT(stats.chunks_dispatched == 6 && stats.decode.count == 6);
+  EXPECT(stats.decode.input_bytes == 4 * CHUNK_BYTES);
+  EXPECT(stats.io.input_bytes == 4 * CHUNK_BYTES);
+  damacy_batch_release(batch);
+  damacy_executor_destroy(executor);
+  return 0;
+}
+
+static int
 test_batch_order_and_retained_output(void)
 {
   const struct test_chunk chunks[] = { { .offset = 8 }, { .offset = 0 } };
@@ -570,6 +605,7 @@ main(void)
   RUN(test_reader_limit_and_retry);
   RUN(test_overlapping_ranges);
   RUN(test_single_worker_and_fills);
+  RUN(test_fills_share_merged_input);
   RUN(test_batch_order_and_retained_output);
   RUN(test_plan_memory_budget);
   RUN(test_plan_memory_retry);
