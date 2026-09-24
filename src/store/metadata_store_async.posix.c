@@ -221,12 +221,21 @@ metadata_store_async_create(int concurrency,
     goto Fail;
   }
   for (int i = 0; i < concurrency; ++i) {
-    if (pthread_create(&s->workers[i], NULL, worker_main, s)) {
+    int rc = pthread_create(&s->workers[i], NULL, worker_main, s);
+    if (rc) {
+      log_error("metadata_store_async: pthread_create failed for worker %d "
+                "of %d: %s",
+                i + 1,
+                concurrency,
+                strerror(rc));
       metadata_store_async_destroy(s);
       return NULL;
     }
     ++s->started;
   }
+  log_info("metadata_store_async: using POSIX worker metadata path "
+           "(workers=%d)",
+           concurrency);
   return s;
 Fail:
   free(s->workers);
