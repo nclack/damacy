@@ -318,6 +318,8 @@ cpu_stop(struct damacy_executor* base)
     free(wave->assemble_ms);
     free(wave->output_bytes);
     *wave = (struct cpu_wave){ 0 };
+  }
+  for (unsigned i = 0; i < 2; ++i) {
     prepared_plan_destroy(self->slots[i].plan);
     buffer_release(self->slots[i].buffer);
     self->slots[i] = (struct cpu_slot){ 0 };

@@ -64,6 +64,7 @@ add_damacy_test(test_scheduler scheduler platform log)
 if(NOT DAMACY_FUZZ)
     add_damacy_test(test_damacy_plan damacy)
     add_damacy_test(test_cpu_pipeline damacy test_fixture Threads::Threads)
+    add_damacy_test(test_cpu_executor cpu_executor)
     set_tests_properties(test_cpu_pipeline PROPERTIES TIMEOUT 120)
 endif()
 
