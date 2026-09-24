@@ -16,6 +16,13 @@ from . import (
     _positive_int,
 )
 
+_FILTERS = {"nearest": _native.FILTER_NEAREST, "linear": _native.FILTER_LINEAR}
+_BOUNDARIES = {
+    "error": _native.BOUNDARY_ERROR,
+    "constant": _native.BOUNDARY_CONSTANT,
+    "clamp": _native.BOUNDARY_CLAMP,
+}
+
 
 def _index(value: int, name: str) -> int:
     if isinstance(value, bool):
@@ -146,10 +153,10 @@ class NgffImage(_NativeImage):
             self._native,
             output_shape,
             query.output_to_reference,
-            {"nearest": 1, "linear": 2}[query.sampler.filter],
-            {"error": 1, "constant": 2, "clamp": 3}[query.sampler.boundary],
+            _FILTERS[query.sampler.filter],
+            _BOUNDARIES[query.sampler.boundary],
             query.sampler.constant_value,
-            -1 if query.level == "auto" else query.level,
+            _native.LEVEL_AUTO if query.level == "auto" else query.level,
         )
         return ResolvedSpatialQuery._from_native(info, query.sampler)
 

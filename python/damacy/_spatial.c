@@ -309,5 +309,20 @@ static PyMethodDef methods[] = {
 int
 spatial_register(PyObject* module)
 {
+  static const struct
+  {
+    const char* name;
+    int value;
+  } constants[] = {
+    { "FILTER_NEAREST", DAMACY_FILTER_NEAREST },
+    { "FILTER_LINEAR", DAMACY_FILTER_LINEAR },
+    { "BOUNDARY_ERROR", DAMACY_BOUNDARY_ERROR },
+    { "BOUNDARY_CONSTANT", DAMACY_BOUNDARY_CONSTANT },
+    { "BOUNDARY_CLAMP", DAMACY_BOUNDARY_CLAMP },
+    { "LEVEL_AUTO", DAMACY_LEVEL_AUTO },
+  };
+  for (size_t i = 0; i < sizeof(constants) / sizeof(*constants); ++i)
+    if (PyModule_AddIntConstant(module, constants[i].name, constants[i].value))
+      return -1;
   return PyModule_AddFunctions(module, methods);
 }

@@ -52,6 +52,15 @@ GDS_AUTO: Final[int]
 GDS_ON: Final[int]
 GDS_OFF: Final[int]
 
+# ---- spatial sampler and level integers (mirror damacy_spatial.h) --------
+
+FILTER_NEAREST: Final[int]
+FILTER_LINEAR: Final[int]
+BOUNDARY_ERROR: Final[int]
+BOUNDARY_CONSTANT: Final[int]
+BOUNDARY_CLAMP: Final[int]
+LEVEL_AUTO: Final[int]
+
 # ---- exceptions ---------------------------------------------------------
 
 class DamacyError(RuntimeError):
