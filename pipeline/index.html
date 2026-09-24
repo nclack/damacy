@@ -841,12 +841,10 @@ and memory-limit failures normally surface at pop. A terminal execution error
 requires closing the pipeline and constructing another one.</p>
 <h2 id="lifetimes-and-interoperation">Lifetimes and interoperation<a class="headerlink" href="#lifetimes-and-interoperation" title="Permanent link">&para;</a></h2>
 <p>Use a context manager or call <code>Pipeline.close()</code>. Python retains the injected
-components and their dependencies. Planners and executors each serve one
-active pipeline; simultaneous reuse is rejected. They may be reused after
-close. Metadata providers and metadata readers hold only settings. Each planner
-copies them and builds its own caches, so any number of planners may share one.
-Closing stops pending work and wakes blocked pops. Reuse creates fresh active
-caches and execution resources.</p>
+components and their dependencies. Planners, executors, metadata providers,
+and metadata readers each serve one active pipeline; simultaneous reuse is
+rejected. They may be reused after close. Closing stops pending work and wakes
+blocked pops. Reuse creates fresh active caches and execution resources.</p>
 <p><code>np.from_dlpack(batch)</code> produces a CPU view; <code>torch.from_dlpack(batch)</code> accepts
 CPU or CUDA results. A DLPack view remains valid after releasing the <code>Batch</code> and
 closing the pipeline. Releasing the Python batch does not force a live view's
@@ -869,21 +867,30 @@ Operation tables and prepared-plan records are private implementation APIs.</p>
 <p>On Linux, install C/C++ build tools, CMake, Ninja, pkg-config, liburing, zstd,
 and C-Blosc development packages. For example, Ubuntu packages are
 <code>build-essential cmake ninja-build pkg-config python3-dev liburing-dev libzstd-dev libblosc-dev</code>.</p>
-<div class="language-sh highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>cmake<span class="w"> </span>--preset<span class="w"> </span>cpu
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>cmake<span class="w"> </span>--build<span class="w"> </span>build
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>ctest<span class="w"> </span>--test-dir<span class="w"> </span>build<span class="w"> </span>--output-on-failure
+<p>On macOS, install the native dependencies with Homebrew:</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>brew<span class="w"> </span>install<span class="w"> </span>cmake<span class="w"> </span>ninja<span class="w"> </span>pkg-config<span class="w"> </span>zstd<span class="w"> </span>c-blosc<span class="w"> </span>uv
+</span></code></pre></div>
+<p>Then build and test on either platform:</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>cmake<span class="w"> </span>--preset<span class="w"> </span>cpu
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>cmake<span class="w"> </span>--build<span class="w"> </span>build
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>ctest<span class="w"> </span>--test-dir<span class="w"> </span>build<span class="w"> </span>--output-on-failure
 </span></code></pre></div>
 <p>The examples use NumPy (<code>pip install numpy</code>). The fixture generator uses <code>uv</code>.
 Enable <code>DAMACY_PYTHON=ON</code> and provide a Python 3.11+ interpreter with pytest,
 pytest-cov, and NumPy to include Python tests.
 Build a CPU wheel with:</p>
-<div class="language-sh highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>pip<span class="w"> </span>install<span class="w"> </span>.<span class="w"> </span>--config-settings<span class="o">=</span>cmake.define.DAMACY_CUDA<span class="o">=</span>OFF
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>pip<span class="w"> </span>install<span class="w"> </span>.<span class="w"> </span>--config-settings<span class="o">=</span>cmake.define.DAMACY_CUDA<span class="o">=</span>OFF
 </span></code></pre></div>
 <p>The extension has no CUDA or nvCOMP dependency in this configuration.
-<code>CudaExecutor</code> reports that CUDA support was not built. CPU builds retain the
-Linux io_uring metadata requirements. CUDA support is enabled by default;
-turning it on builds both executors and requires the CUDA toolkit, nvCOMP, and
-a runtime NVIDIA driver. GDS requires a CUDA build.</p>
+<code>CudaExecutor</code> reports that CUDA support was not built. Linux retains its
+io_uring metadata requirements. macOS uses a POSIX metadata worker pool,
+with one worker per <code>metadata_io_concurrency</code>, and shared POSIX bulk reads.
+NUMA placement and CPU affinity are unavailable. CUDA defaults off on macOS
+and cannot be enabled. On either platform, <code>FileReader(workers=...)</code> and the
+legacy <code>Config.n_io_threads</code> cannot exceed the online CPU count; larger values
+raise <code>InvalidArgument</code>.
+On Linux CUDA defaults on, builds both executors, and requires the CUDA toolkit,
+nvCOMP, and a runtime NVIDIA driver. GDS requires a CUDA build.</p>
 <h2 id="future-queries">Future queries<a class="headerlink" href="#future-queries" title="Permanent link">&para;</a></h2>
 <p>The first milestone implements rectangular copy/cast queries. Index-array
 queries can add ordered selections and repeated indices without a separate
