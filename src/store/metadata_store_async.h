@@ -92,6 +92,12 @@ extern "C"
   void metadata_store_async_op_latency_stats_reset(
     struct metadata_store_async* s);
 
+  int metadata_store_async_read_file_bounded(struct metadata_store_async* s,
+                                             const char* key,
+                                             size_t max_bytes,
+                                             metadata_store_read_cb cb,
+                                             void* user);
+
   int metadata_store_async_read_file(struct metadata_store_async* s,
                                      const char* key,
                                      metadata_store_read_cb cb,

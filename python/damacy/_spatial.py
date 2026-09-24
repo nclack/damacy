@@ -1,0 +1,274 @@
+from __future__ import annotations
+
+import math
+import operator
+import os
+from collections.abc import Iterable
+from dataclasses import dataclass
+from typing import Any, Literal, NoReturn
+
+from . import (
+    FileMetadataReader,
+    Status,
+    UnsupportedOperation,
+    _component,
+    _native,
+    _positive_int,
+)
+
+_FILTERS = {"nearest": _native.FILTER_NEAREST, "linear": _native.FILTER_LINEAR}
+_BOUNDARIES = {
+    "error": _native.BOUNDARY_ERROR,
+    "constant": _native.BOUNDARY_CONSTANT,
+    "clamp": _native.BOUNDARY_CLAMP,
+}
+
+
+def _index(value: int, name: str) -> int:
+    if isinstance(value, bool):
+        raise TypeError(f"{name} must be an integer")
+    result = operator.index(value)
+    if not 0 <= result <= (1 << 31) - 1:
+        raise ValueError(f"{name} must be between 0 and 2**31 - 1")
+    return result
+
+
+def _finite_number(value: float) -> float:
+    if isinstance(value, (str, bytes, bool)):
+        raise TypeError("transform and sampler values must be numbers")
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError("transform and sampler values must be finite")
+    return result
+
+
+@dataclass(frozen=True, slots=True)
+class NgffLimits:
+    """Maximum levels and total JSON bytes read when loading an image."""
+
+    max_levels: int = 32
+    max_metadata_bytes: int = 4 << 20
+
+    def __post_init__(self) -> None:
+        _positive_int(self.max_levels, "max_levels", (1 << 31) - 1)
+        _positive_int(self.max_metadata_bytes, "max_metadata_bytes", (1 << 64) - 1)
+
+
+@dataclass(frozen=True, slots=True)
+class NgffAxis:
+    """An axis in the array's dimension order, with its declared NGFF unit."""
+
+    name: str
+    kind: Literal["space", "time", "channel"]
+    unit: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class NgffLevel:
+    """A source array and its voxel-corner mapping into reference-level indices."""
+
+    uri: str
+    shape: tuple[int, ...]
+    scale_to_reference: tuple[float, ...]
+    origin_reference_index: tuple[float, ...]
+
+
+class _NativeImage:
+    # Keeps the native handle out of the dataclass fields, so repr, ==, hash,
+    # and asdict() see only the metadata.
+    __slots__ = ("_native",)
+    _native: object
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class NgffImage(_NativeImage):
+    """Load an immutable OME-Zarr 0.5 image description through the given reader.
+
+    Loading reads the image group's metadata and each level's array metadata.
+    It finishes before returning.
+    ``multiscale_index`` explicitly selects an entry in ``ome.multiscales``.
+    """
+
+    axes: tuple[NgffAxis, ...]
+    levels: tuple[NgffLevel, ...]
+    data_type: str
+
+    def __init__(
+        self,
+        uri: str | os.PathLike[str],
+        *,
+        reader: FileMetadataReader,
+        multiscale_index: int,
+        limits: NgffLimits | None = None,
+    ) -> None:
+        if not isinstance(reader, FileMetadataReader):
+            raise TypeError("reader must be a FileMetadataReader")
+        if limits is None:
+            limits = NgffLimits()
+        if not isinstance(limits, NgffLimits):
+            raise TypeError("limits must be NgffLimits")
+        path = os.fspath(uri)
+        if not isinstance(path, str) or not path or "\0" in path:
+            raise ValueError("uri must be a nonempty path without NUL characters")
+        native = _component(
+            _native.ngff_load,
+            reader._native,
+            path,
+            _index(multiscale_index, "multiscale_index"),
+            limits.max_levels,
+            limits.max_metadata_bytes,
+        )
+        info = _native.ngff_info(native)
+        object.__setattr__(self, "_native", native)
+        object.__setattr__(
+            self, "axes", tuple(NgffAxis(*axis) for axis in info["axes"])
+        )
+        object.__setattr__(
+            self, "levels", tuple(NgffLevel(**level) for level in info["levels"])
+        )
+        object.__setattr__(self, "data_type", info["data_type"])
+
+    def __copy__(self) -> NgffImage:
+        return self
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> NgffImage:
+        return self
+
+    def __reduce__(self) -> NoReturn:
+        raise TypeError("NgffImage cannot be pickled; load it in each process")
+
+    def resolve(
+        self, query: SpatialQuery, *, shape: Iterable[int]
+    ) -> ResolvedSpatialQuery:
+        """Resolve source geometry without I/O, batching, or output allocation."""
+        if not isinstance(query, SpatialQuery):
+            raise TypeError("query must be a SpatialQuery")
+        output_shape = tuple(
+            _positive_int(value, "shape extent", (1 << 52) - 1) for value in shape
+        )
+        if len(output_shape) != len(self.axes):
+            raise ValueError("output rank must match the NGFF image")
+        info = _component(
+            _native.spatial_resolve,
+            self._native,
+            output_shape,
+            query.output_to_reference,
+            _FILTERS[query.sampler.filter],
+            _BOUNDARIES[query.sampler.boundary],
+            query.sampler.constant_value,
+            _native.LEVEL_AUTO if query.level == "auto" else query.level,
+        )
+        return ResolvedSpatialQuery._from_native(info, query.sampler)
+
+
+@dataclass(frozen=True, slots=True)
+class Sampler:
+    """Point interpolation and treatment of source indices outside spatial axes.
+
+    Nearest selects ``floor(source_corner)``. Linear interpolates between
+    centers at ``index + 0.5``. Constant extends the source with
+    ``constant_value``; clamp repeats the closest edge value; error rejects
+    a query needing out-of-bounds samples. No extra antialias filter is applied.
+    """
+
+    filter: Literal["nearest", "linear"] = "linear"
+    boundary: Literal["error", "constant", "clamp"] = "error"
+    constant_value: float = 0
+
+    def __post_init__(self) -> None:
+        if self.filter not in ("nearest", "linear"):
+            raise ValueError("filter must be 'nearest' or 'linear'")
+        if self.boundary not in ("error", "constant", "clamp"):
+            raise ValueError("boundary must be 'error', 'constant', or 'clamp'")
+        value = _finite_number(self.constant_value)
+        if self.boundary != "constant" and value != 0:
+            raise ValueError("constant_value requires boundary='constant'")
+        object.__setattr__(self, "constant_value", value)
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class SpatialQuery:
+    """Map a fixed output grid into reference-level voxel-corner coordinates.
+
+    ``output_to_reference`` has rank rows and rank + 1 columns. The last
+    column is the translation; the preceding columns are the linear map.
+    Rows and columns follow NGFF array axis order, including time/channel
+    dimensions, which only allow identity plus integer translation.
+    ``level='auto'`` selects the coarsest level no coarser than the output
+    spacing in any direction, falling back to level zero for upsampling.
+    """
+
+    output_to_reference: tuple[tuple[float, ...], ...]
+    sampler: Sampler
+    level: int | Literal["auto"]
+
+    def __init__(
+        self,
+        *,
+        output_to_reference: Iterable[Iterable[float]],
+        sampler: Sampler,
+        level: int | Literal["auto"] = "auto",
+    ) -> None:
+        if not isinstance(sampler, Sampler):
+            raise TypeError("sampler must be a Sampler")
+        matrix = tuple(
+            tuple(_finite_number(v) for v in row) for row in output_to_reference
+        )
+        rank = len(matrix)
+        if not 2 <= rank <= _native.MAX_RANK or any(
+            len(row) != rank + 1 for row in matrix
+        ):
+            raise ValueError(
+                "output_to_reference must have rank rows and rank + 1 columns"
+            )
+        if isinstance(level, str):
+            if level != "auto":
+                raise ValueError("level must be 'auto' or a nonnegative integer")
+        else:
+            level = _index(level, "level")
+        object.__setattr__(self, "output_to_reference", matrix)
+        object.__setattr__(self, "sampler", sampler)
+        object.__setattr__(self, "level", level)
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class ResolvedSpatialQuery:
+    """Owned source geometry returned by NgffImage.resolve().
+
+    Aligned results can be pushed to a Pipeline. Other results raise
+    UnsupportedOperation when pushed; their geometry remains inspectable.
+    """
+
+    uri: str
+    level: int
+    shape: tuple[int, ...]
+    source_shape: tuple[int, ...]
+    output_to_source: tuple[tuple[float, ...], ...]
+    sampler: Sampler
+    source_bounds_index: tuple[tuple[int, int], ...]
+    read_bounds_index: tuple[tuple[int, int], ...]
+    requires_resampling: bool
+
+    def __init__(self) -> None:
+        raise TypeError("use NgffImage.resolve() to create a ResolvedSpatialQuery")
+
+    @classmethod
+    def _from_native(
+        cls, info: dict[str, Any], sampler: Sampler
+    ) -> ResolvedSpatialQuery:
+        result = object.__new__(cls)
+        object.__setattr__(result, "sampler", sampler)
+        for name, value in info.items():
+            object.__setattr__(result, name, value)
+        return result
+
+    def _to_native(self) -> dict[str, Any]:
+        if self.requires_resampling:
+            error = UnsupportedOperation("submit spatial query: resampling required")
+            error.status = Status.UNSUPPORTED
+            error.what = "submit spatial query: resampling required"
+            raise error
+        return {
+            "uri": self.uri,
+            "axes": [("interval", span) for span in self.source_bounds_index],
+        }

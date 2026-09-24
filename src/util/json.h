@@ -66,6 +66,18 @@ extern "C"
     struct cslice s; // span into src (between quotes for strings)
   };
 
+  struct json_object_iter
+  {
+    struct cslice remaining;
+    int first;
+  };
+
+  enum json_err json_object_iter_init(struct json_node node,
+                                      struct json_object_iter* it);
+  enum json_err json_object_iter_next(struct json_object_iter* it,
+                                      struct json_node* key,
+                                      struct json_node* value);
+
   // Position info for parse failures. offset is the byte offset into the
   // src cslice where the lexer gave up. Filled in by json_resolve and
   // json_iter_init when the caller passes a non-NULL err.

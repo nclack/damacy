@@ -324,6 +324,34 @@ test_err_offset_set(void)
   return 0;
 }
 
+static int
+test_object_iterator(void)
+{
+  struct json_node root, key, value;
+  struct json_object_iter it;
+  EXPECT(json_resolve(
+           SRC("{\"name\":\"x\",\"values\":[1,2]}"), NULL, 0, &root, NULL) ==
+         JSON_OK);
+  EXPECT(json_object_iter_init(root, &it) == JSON_OK);
+  EXPECT(json_object_iter_next(&it, &key, &value) == JSON_OK);
+  EXPECT(json_str_eq(key, "name") && json_str_eq(value, "x"));
+  EXPECT(json_object_iter_next(&it, &key, &value) == JSON_OK);
+  EXPECT(json_str_eq(key, "values") && value.type == JSON_ARRAY);
+  EXPECT(json_object_iter_next(&it, &key, &value) == JSON_ERR_NOT_FOUND);
+  EXPECT(json_object_iter_next(&it, &key, &value) == JSON_ERR_NOT_FOUND);
+  EXPECT(json_object_iter_init(value, &it) == JSON_ERR_TYPE);
+  EXPECT(json_object_iter_init(root, NULL) == JSON_ERR_INVALID);
+  EXPECT(json_object_iter_next(NULL, &key, &value) == JSON_ERR_INVALID);
+  EXPECT(json_resolve(SRC("{\"a\":1,}"), NULL, 0, &root, NULL) == JSON_OK);
+  EXPECT(json_object_iter_init(root, &it) == JSON_OK);
+  EXPECT(json_object_iter_next(&it, &key, &value) == JSON_OK);
+  EXPECT(json_object_iter_next(&it, &key, &value) == JSON_ERR_PARSE);
+  EXPECT(json_resolve(SRC("{}"), NULL, 0, &root, NULL) == JSON_OK);
+  EXPECT(json_object_iter_init(root, &it) == JSON_OK);
+  EXPECT(json_object_iter_next(&it, &key, &value) == JSON_ERR_NOT_FOUND);
+  return 0;
+}
+
 int
 main(void)
 {
@@ -344,6 +372,7 @@ main(void)
   RUN(test_primitive_conversions);
   RUN(test_null_args);
   RUN(test_err_offset_set);
+  RUN(test_object_iterator);
   log_info("all tests passed");
   return 0;
 }

@@ -33,6 +33,7 @@ STATUS_CUDA: Final[int]
 STATUS_OOM: Final[int]
 STATUS_BUDGET: Final[int]
 STATUS_SHUTDOWN: Final[int]
+STATUS_UNSUPPORTED: Final[int]
 
 # ---- damacy_dtype integers ----------------------------------------------
 
@@ -50,6 +51,15 @@ NUMA_PIN_TO: Final[int]
 GDS_AUTO: Final[int]
 GDS_ON: Final[int]
 GDS_OFF: Final[int]
+
+# ---- spatial sampler and level integers (mirror damacy_spatial.h) --------
+
+FILTER_NEAREST: Final[int]
+FILTER_LINEAR: Final[int]
+BOUNDARY_ERROR: Final[int]
+BOUNDARY_CONSTANT: Final[int]
+BOUNDARY_CLAMP: Final[int]
+LEVEL_AUTO: Final[int]
 
 # ---- exceptions ---------------------------------------------------------
 
@@ -252,3 +262,22 @@ def compose_pipeline(
     prepared_batches: int,
     /,
 ) -> Pipeline: ...
+def ngff_load(
+    reader: object,
+    uri: str,
+    multiscale_index: int,
+    max_levels: int,
+    max_metadata_bytes: int,
+    /,
+) -> object: ...
+def ngff_info(image: object, /) -> dict[str, Any]: ...
+def spatial_resolve(
+    image: object,
+    shape: tuple[int, ...],
+    transform: tuple[tuple[float, ...], ...],
+    filter: int,
+    boundary: int,
+    constant_value: float,
+    level: int,
+    /,
+) -> dict[str, Any]: ...
