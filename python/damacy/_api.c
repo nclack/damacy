@@ -16,6 +16,7 @@
 
 #include "_api.h"
 #include "damacy.h"
+#include "damacy_config.h"
 
 #ifdef DAMACY_HAS_CUDA
 #include <cuda.h>
@@ -139,7 +140,9 @@ parse_dtype(PyObject* obj, enum damacy_dtype* out)
 {
   if (PyLong_Check(obj)) {
     long v = PyLong_AsLong(obj);
-    if (v < 0 || v > DAMACY_BF16) {
+    if (PyErr_Occurred())
+      return -1;
+    if (v < 0 || v > DAMACY_I64) {
       PyErr_SetString(PyExc_ValueError, "dtype out of range");
       return -1;
     }
@@ -149,28 +152,10 @@ parse_dtype(PyObject* obj, enum damacy_dtype* out)
   const char* s = PyUnicode_AsUTF8(obj);
   if (!s)
     return -1;
-  if (!strcmp(s, "f32") || !strcmp(s, "float32")) {
-    *out = DAMACY_F32;
+  if (damacy_dtype_from_string(s, strlen(s), out) == 0)
     return 0;
-  }
-  if (!strcmp(s, "bf16") || !strcmp(s, "bfloat16")) {
-    *out = DAMACY_BF16;
-    return 0;
-  }
   PyErr_Format(PyExc_ValueError, "unknown dtype: %s", s);
   return -1;
-}
-
-static const char*
-dtype_name(enum damacy_dtype d)
-{
-  switch (d) {
-    case DAMACY_F32:
-      return "f32";
-    case DAMACY_BF16:
-      return "bf16";
-  }
-  return "?";
 }
 
 // Module-owned exception type. Subclasses RuntimeError so legacy callers
@@ -330,7 +315,7 @@ Batch_info(BatchObj* self, void* Py_UNUSED(closure))
                        "shape",
                        shape,
                        "dtype",
-                       dtype_name(info.dtype),
+                       damacy_dtype_name(info.dtype),
                        "ready_stream",
                        (unsigned long long)(uintptr_t)info.ready_stream,
                        "batch_id",
@@ -343,17 +328,32 @@ Batch_info(BatchObj* self, void* Py_UNUSED(closure))
 static int
 dtype_to_dl(enum damacy_dtype dt, DLDataType* out_dt, uint8_t* out_bpe)
 {
+  uint8_t code;
   switch (dt) {
     case DAMACY_F32:
-      *out_dt = (DLDataType){ .code = kDLFloat, .bits = 32, .lanes = 1 };
-      *out_bpe = 4;
-      return 0;
+      code = kDLFloat;
+      break;
     case DAMACY_BF16:
-      *out_dt = (DLDataType){ .code = kDLBfloat, .bits = 16, .lanes = 1 };
-      *out_bpe = 2;
-      return 0;
+      code = kDLBfloat;
+      break;
+    case DAMACY_U8:
+    case DAMACY_U16:
+    case DAMACY_U32:
+    case DAMACY_U64:
+      code = kDLUInt;
+      break;
+    case DAMACY_I8:
+    case DAMACY_I16:
+    case DAMACY_I32:
+    case DAMACY_I64:
+      code = kDLInt;
+      break;
+    default:
+      return -1;
   }
-  return -1;
+  *out_bpe = (uint8_t)damacy_dtype_bpe(dt);
+  *out_dt = (DLDataType){ .code = code, .bits = 8 * *out_bpe, .lanes = 1 };
+  return 0;
 }
 
 // Storage layout for one exported tensor. Holds both v0 and v1 managed
@@ -1341,12 +1341,20 @@ api_register_types(PyObject* m)
       return -1;
   }
 
-  // dtype enum mirrors damacy_dtype. Tagged DTYPE_ to avoid collision
-  // with future U16/I32/... source-side dtype constants.
-  if (PyModule_AddIntConstant(m, "DTYPE_F32", DAMACY_F32) < 0)
-    return -1;
-  if (PyModule_AddIntConstant(m, "DTYPE_BF16", DAMACY_BF16) < 0)
-    return -1;
+  const struct
+  {
+    const char* name;
+    enum damacy_dtype value;
+  } dtypes[] = {
+    { "DTYPE_F32", DAMACY_F32 }, { "DTYPE_BF16", DAMACY_BF16 },
+    { "DTYPE_U8", DAMACY_U8 },   { "DTYPE_U16", DAMACY_U16 },
+    { "DTYPE_U32", DAMACY_U32 }, { "DTYPE_U64", DAMACY_U64 },
+    { "DTYPE_I8", DAMACY_I8 },   { "DTYPE_I16", DAMACY_I16 },
+    { "DTYPE_I32", DAMACY_I32 }, { "DTYPE_I64", DAMACY_I64 },
+  };
+  for (size_t i = 0; i < sizeof(dtypes) / sizeof(dtypes[0]); ++i)
+    if (PyModule_AddIntConstant(m, dtypes[i].name, dtypes[i].value) < 0)
+      return -1;
 
   if (PyModule_AddIntConstant(m, "NUMA_AUTO", DAMACY_NUMA_AUTO) < 0)
     return -1;

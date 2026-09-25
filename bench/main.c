@@ -6,6 +6,7 @@
 //
 // All path/timestamp orchestration belongs in bench/run.py; this binary
 // is the timing core only.
+#include "damacy_config.h"
 #include "damacy_pipeline.h"
 
 #include "util/json.h"
@@ -275,28 +276,7 @@ parse_dtype(struct cslice src,
   struct json_node n;
   if (json_resolve(src, parts, n_parts, &n, NULL) || n.type != JSON_STRING)
     return 1;
-  if (json_str_eq(n, "f32")) {
-    *out = DAMACY_F32;
-    return 0;
-  }
-  if (json_str_eq(n, "bf16")) {
-    *out = DAMACY_BF16;
-    return 0;
-  }
-  return 1;
-}
-
-// Bytes per element for the dtype enum (mirrors damacy_dtype_bpe).
-static uint64_t
-dtype_bpe(enum damacy_dtype d)
-{
-  switch (d) {
-    case DAMACY_BF16:
-      return 2;
-    case DAMACY_F32:
-      return 4;
-  }
-  return 0;
+  return damacy_dtype_from_string(n.s.beg, cslice_len(n.s), out);
 }
 
 static int
@@ -1032,7 +1012,7 @@ emit_results(const struct scenario* sc, const struct run_metrics* rm, FILE* out)
   jw_object_end(&jw);
 
   // Derived numbers.
-  uint64_t bpe = dtype_bpe(sc->dtype);
+  uint64_t bpe = damacy_dtype_bpe(sc->dtype);
   uint64_t sample_volume = bpe;
   for (uint8_t d = 0; d < sc->rank; ++d)
     sample_volume *= (uint64_t)sc->sample_shape[d];

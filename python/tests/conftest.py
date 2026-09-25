@@ -131,9 +131,7 @@ def multishard_zarr(tmp_path: Path, write_zarr_script: Path) -> str:
 
 @pytest.fixture
 def tiny_zarr_no_cast(tmp_path: Path, write_zarr_script: Path) -> str:
-    """Same shape as tiny_zarr but int64 — has no cast path to f32/bf16
-    (post-#16: only u8/u16/i16/u32/i32/f16/f32 sources are supported).
-    Used to drive the DAMACY_DTYPE error path."""
+    """A float64 source, which has no supported output conversion."""
     if not _have_uv():
         pytest.skip("uv not on PATH; needed to materialise the zarr fixture")
     out = tmp_path / "bar"
@@ -151,7 +149,7 @@ def tiny_zarr_no_cast(tmp_path: Path, write_zarr_script: Path) -> str:
         "--shard",
         "8,16",
         "--dtype",
-        "int64",
+        "float64",
         "--codec",
         "blosc-zstd",
     ]

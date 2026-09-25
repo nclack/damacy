@@ -9,6 +9,14 @@
 uint32_t
 damacy_dtype_bpe(enum damacy_dtype dt);
 
+const char*
+damacy_dtype_name(enum damacy_dtype dt);
+
+int
+damacy_dtype_from_string(const char* name,
+                         size_t length,
+                         enum damacy_dtype* out);
+
 // 1 if the assemble kernel will accept (src, dst).
 int
 cast_path_supported(enum damacy_dtype dst, enum dtype src);
@@ -52,7 +60,7 @@ resolve_sample_shape(const struct damacy_config* cfg,
 
 // product(sample_shape) × samples_per_batch × dtype_bpe(dtype). Writes the
 // value into *out_bytes. Returns DAMACY_INVAL on a bad sample_shape /
-// rank (same conditions as resolve_sample_shape).
+// rank (same conditions as resolve_sample_shape), or DAMACY_BUDGET on overflow.
 enum damacy_status
 resolve_sample_volume_bytes(const struct damacy_config* cfg,
                             uint64_t* out_bytes);

@@ -8,38 +8,76 @@
 #include <math.h>
 #include <string.h>
 
+static const struct
+{
+  const char* name;
+  const char* full_name;
+  uint32_t bytes;
+} output_types[] = {
+  [DAMACY_F32] = { "f32", "float32", 4 },
+  [DAMACY_BF16] = { "bf16", "bfloat16", 2 },
+  [DAMACY_U8] = { "u8", "uint8", 1 },
+  [DAMACY_U16] = { "u16", "uint16", 2 },
+  [DAMACY_U32] = { "u32", "uint32", 4 },
+  [DAMACY_U64] = { "u64", "uint64", 8 },
+  [DAMACY_I8] = { "i8", "int8", 1 },
+  [DAMACY_I16] = { "i16", "int16", 2 },
+  [DAMACY_I32] = { "i32", "int32", 4 },
+  [DAMACY_I64] = { "i64", "int64", 8 },
+};
+
 uint32_t
 damacy_dtype_bpe(enum damacy_dtype dt)
 {
-  switch (dt) {
-    case DAMACY_BF16:
-      return 2;
-    case DAMACY_F32:
-      return 4;
+  return (unsigned)dt < sizeof(output_types) / sizeof(output_types[0])
+           ? output_types[dt].bytes
+           : 0;
+}
+
+const char*
+damacy_dtype_name(enum damacy_dtype dt)
+{
+  return damacy_dtype_bpe(dt) ? output_types[dt].name : "?";
+}
+
+int
+damacy_dtype_from_string(const char* name,
+                         size_t length,
+                         enum damacy_dtype* out)
+{
+  for (unsigned i = 0; i < sizeof(output_types) / sizeof(output_types[0]);
+       ++i) {
+    if ((strlen(output_types[i].name) == length &&
+         memcmp(name, output_types[i].name, length) == 0) ||
+        (strlen(output_types[i].full_name) == length &&
+         memcmp(name, output_types[i].full_name, length) == 0)) {
+      *out = (enum damacy_dtype)i;
+      return 0;
+    }
   }
-  return 0;
+  return -1;
 }
 
 int
 cast_path_supported(enum damacy_dtype dst, enum dtype src)
 {
-  switch (dst) {
-    case DAMACY_F32:
-    case DAMACY_BF16:
-      switch (src) {
-        case dtype_u8:
-        case dtype_u16:
-        case dtype_i16:
-        case dtype_u32:
-        case dtype_i32:
-        case dtype_f16:
-        case dtype_f32:
-          return 1;
-        default:
-          return 0;
-      }
+  if (!damacy_dtype_bpe(dst))
+    return 0;
+  switch (src) {
+    case dtype_u8:
+    case dtype_u16:
+    case dtype_u32:
+    case dtype_u64:
+    case dtype_i8:
+    case dtype_i16:
+    case dtype_i32:
+    case dtype_i64:
+    case dtype_f16:
+    case dtype_f32:
+      return 1;
+    default:
+      return 0;
   }
-  return 0;
 }
 
 enum damacy_status
@@ -276,10 +314,15 @@ resolve_sample_volume_bytes(const struct damacy_config* cfg,
   enum damacy_status s = resolve_sample_shape(cfg, shape, &rank);
   if (s != DAMACY_OK)
     return s;
-  uint64_t volume = 1;
-  for (uint8_t d = 0; d < rank; ++d)
+  uint32_t bpe = damacy_dtype_bpe(cfg->dtype);
+  if (!bpe || !cfg->samples_per_batch)
+    return DAMACY_INVAL;
+  uint64_t volume = (uint64_t)cfg->samples_per_batch * bpe;
+  for (uint8_t d = 0; d < rank; ++d) {
+    if (volume > UINT64_MAX / (uint64_t)shape[d])
+      return DAMACY_BUDGET;
     volume *= (uint64_t)shape[d];
-  *out_bytes =
-    volume * (uint64_t)cfg->samples_per_batch * damacy_dtype_bpe(cfg->dtype);
+  }
+  *out_bytes = volume;
   return DAMACY_OK;
 }

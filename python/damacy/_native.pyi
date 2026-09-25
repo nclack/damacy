@@ -39,6 +39,14 @@ STATUS_UNSUPPORTED: Final[int]
 
 DTYPE_F32: Final[int]
 DTYPE_BF16: Final[int]
+DTYPE_U8: Final[int]
+DTYPE_U16: Final[int]
+DTYPE_U32: Final[int]
+DTYPE_U64: Final[int]
+DTYPE_I8: Final[int]
+DTYPE_I16: Final[int]
+DTYPE_I32: Final[int]
+DTYPE_I64: Final[int]
 
 # ---- damacy_numa_strategy integers --------------------------------------
 

@@ -67,7 +67,7 @@ You hand damacy a stream of `Sample`s; it returns a stream of
 `samples_per_batch`, `sample_shape`, and `max_gpu_memory_bytes` are required
 on `Config`; everything else has a sensible default. Assembly casts heterogeneous source dtypes
 (`u8`/`u16`/`i16`/`u32`/`i32`/`f16`/`f32`) to the configured
-destination `dtype` (`f32` or `bf16`) on the way out, so your zarrs
+destination [output type](dtypes.md) on the way out, so your zarrs
 do not need to match it.
 
 ## Public surface

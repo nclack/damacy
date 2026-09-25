@@ -69,7 +69,7 @@ extern "C"
   //                          side; chunks with fewer blocks early-return
   //                          on the surplus.
   //   arena_base / output_base — base device pointers
-  //   dst_dtype      — destination dtype (DAMACY_F32 or DAMACY_BF16);
+  //   dst_dtype      — destination dtype (enum damacy_dtype);
   //                    sets the kernel's write type
   //
   // Returns 0 on success, non-zero on launch error.

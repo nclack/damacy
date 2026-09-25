@@ -180,7 +180,8 @@ test_validate_tuning_fields_reject_out_of_range(void)
   cfg = mk_valid_cfg();
   cfg.tuning.max_substreams_per_chunk = 0;
   EXPECT(validate_config(&cfg) == DAMACY_INVAL);
-  cfg.tuning.max_substreams_per_chunk = DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK + 1;
+  cfg.tuning.max_substreams_per_chunk =
+    DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK + 1;
   EXPECT(validate_config(&cfg) == DAMACY_INVAL);
   return 0;
 }
@@ -306,6 +307,66 @@ test_validate_floors_satisfied_ok(void)
   return 0;
 }
 
+static int
+test_output_types(void)
+{
+  const struct
+  {
+    enum damacy_dtype type;
+    const char* name;
+    const char* full_name;
+    uint32_t bytes;
+  } cases[] = {
+    { DAMACY_F32, "f32", "float32", 4 }, { DAMACY_BF16, "bf16", "bfloat16", 2 },
+    { DAMACY_U8, "u8", "uint8", 1 },     { DAMACY_U16, "u16", "uint16", 2 },
+    { DAMACY_U32, "u32", "uint32", 4 },  { DAMACY_U64, "u64", "uint64", 8 },
+    { DAMACY_I8, "i8", "int8", 1 },      { DAMACY_I16, "i16", "int16", 2 },
+    { DAMACY_I32, "i32", "int32", 4 },   { DAMACY_I64, "i64", "int64", 8 },
+  };
+  EXPECT(DAMACY_F32 == 0 && DAMACY_BF16 == 1);
+  for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+    struct damacy_config config = mk_valid_cfg();
+    config.dtype = cases[i].type;
+    config.sample_rank = 2;
+    config.sample_shape[0] = 7;
+    config.sample_shape[1] = 13;
+    config.samples_per_batch = 2;
+    config.lookahead_samples = 2;
+    EXPECT(validate_config(&config) == DAMACY_OK);
+    EXPECT(damacy_dtype_bpe(config.dtype) == cases[i].bytes);
+    EXPECT(strcmp(damacy_dtype_name(config.dtype), cases[i].name) == 0);
+    enum damacy_dtype parsed;
+    EXPECT(damacy_dtype_from_string(
+             cases[i].name, strlen(cases[i].name), &parsed) == 0);
+    EXPECT(parsed == config.dtype);
+    EXPECT(damacy_dtype_from_string(
+             cases[i].full_name, strlen(cases[i].full_name), &parsed) == 0);
+    EXPECT(parsed == config.dtype);
+    uint64_t bytes = 0;
+    EXPECT(resolve_sample_volume_bytes(&config, &bytes) == DAMACY_OK);
+    EXPECT(bytes == 2 * 7 * 13 * cases[i].bytes);
+    for (enum dtype source = dtype_u8; source <= dtype_f32; ++source)
+      EXPECT(cast_path_supported(config.dtype, source));
+    EXPECT(!cast_path_supported(config.dtype, dtype_f64));
+    EXPECT(!cast_path_supported(config.dtype, (enum dtype) - 1));
+    EXPECT(!cast_path_supported(config.dtype, (enum dtype)99));
+  }
+  enum damacy_dtype parsed;
+  EXPECT(damacy_dtype_from_string("f64", 3, &parsed) != 0);
+  EXPECT(damacy_dtype_from_string("uint16extra", 11, &parsed) != 0);
+  EXPECT(damacy_dtype_bpe((enum damacy_dtype) - 1) == 0);
+  EXPECT(damacy_dtype_bpe((enum damacy_dtype)99) == 0);
+  EXPECT(!cast_path_supported((enum damacy_dtype)99, dtype_u16));
+  struct damacy_config config = mk_valid_cfg();
+  config.dtype = DAMACY_U64;
+  config.sample_shape[0] = INT64_MAX / 4 + 1;
+  uint64_t bytes = 0;
+  EXPECT(resolve_sample_volume_bytes(&config, &bytes) == DAMACY_BUDGET);
+  config.dtype = (enum damacy_dtype)99;
+  EXPECT(resolve_sample_volume_bytes(&config, &bytes) == DAMACY_INVAL);
+  return 0;
+}
+
 int
 main(void)
 {
@@ -315,6 +376,7 @@ main(void)
   RUN(test_resolve_enable_gds_off_overrides_env);
   RUN(test_resolve_enable_gds_zero_init_is_auto);
   RUN(test_tuning_defaults_thread_counts);
+  RUN(test_output_types);
   RUN(test_resolve_metadata_io_concurrency_explicit);
   RUN(test_validate_accepts_tuning_defaults);
   RUN(test_validate_metadata_io_concurrency_reject_zero);
