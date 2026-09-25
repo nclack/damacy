@@ -165,7 +165,7 @@ def test_dtype_coerce():
     assert damacy.Dtype.coerce(0) is damacy.Dtype.F32
     assert damacy.Dtype.coerce(damacy.Dtype.BF16) is damacy.Dtype.BF16
     with pytest.raises(ValueError, match="unknown dtype"):
-        damacy.Dtype.coerce("u16")
+        damacy.Dtype.coerce("f64")
 
 
 # ---- construction & validation ------------------------------------------
