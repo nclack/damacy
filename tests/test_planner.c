@@ -943,12 +943,12 @@ test_codec_id_blosc_unknown_cname(void)
 static int
 test_unsupported_source_dtype(void)
 {
-  static const char* U64_ZARR_JSON =
+  static const char* F64_ZARR_JSON =
     "{"
     "\"zarr_format\":3,"
     "\"node_type\":\"array\","
     "\"shape\":[4,8],"
-    "\"data_type\":\"uint64\","
+    "\"data_type\":\"float64\","
     "\"chunk_grid\":{\"name\":\"regular\",\"configuration\":{"
     "\"chunk_shape\":[4,8]}},"
     "\"chunk_key_encoding\":{\"name\":\"default\",\"configuration\":{"
@@ -966,7 +966,7 @@ test_unsupported_source_dtype(void)
   const uint64_t offsets[4] = { 0, 128, 256, 384 };
   const uint64_t nbytes[4] = { 64, 64, 64, 64 };
   struct fixture f = { 0 };
-  if (fixture_init_with_json(&f, U64_ZARR_JSON, offsets, nbytes))
+  if (fixture_init_with_json(&f, F64_ZARR_JSON, offsets, nbytes))
     return 1;
 
   struct planner_sample s;

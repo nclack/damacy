@@ -20,8 +20,16 @@ extern "C"
   // Output dtype of an assembled batch.
   enum damacy_dtype
   {
-    DAMACY_F32,
-    DAMACY_BF16,
+    DAMACY_F32 = 0,
+    DAMACY_BF16 = 1,
+    DAMACY_U8,
+    DAMACY_U16,
+    DAMACY_U32,
+    DAMACY_U64,
+    DAMACY_I8,
+    DAMACY_I16,
+    DAMACY_I32,
+    DAMACY_I64,
   };
 
   // NUMA placement strategy for pinned-host allocations and worker threads.

@@ -1,7 +1,7 @@
 #include "assemble/assemble.h"
 
 #include "damacy_limits.h"
-#include "dtype/dtype.h"
+#include "dtype/convert.h"
 #include "log/log.h"
 #include "util/prelude.h"
 
@@ -57,63 +57,13 @@ ceil_div_u32(uint32_t a, uint32_t b)
   return (a + b - 1u) / b;
 }
 
-// --- per-element read+cast --------------------------------------------------
-//
-// The cast is a per-thread switch on src_dtype. The branch is uniform
-// per block (one chunk → one sample → one src_dtype), so warp divergence
-// stays at the kernel-grid boundary, not within a warp.
-
-template<typename dst_t>
+template<enum damacy_dtype output, typename dst_t>
 __device__ __forceinline__ dst_t
-cast_to_dst(float v);
-
-template<>
-__device__ __forceinline__ float
-cast_to_dst<float>(float v)
+load_source(const uint8_t* source, uint8_t input)
 {
-  return v;
-}
-
-template<>
-__device__ __forceinline__ __nv_bfloat16
-cast_to_dst<__nv_bfloat16>(float v)
-{
-  return __float2bfloat16(v);
-}
-
-// Load one source element as float, given src_dtype. Reads exactly
-// sizeof(src_t) bytes from `src` and promotes to float for the cast
-// path. Unsupported src_dtype values are treated as zero — the host
-// side is expected to reject them at push.
-__device__ __forceinline__ float
-load_src_as_float(const uint8_t* src, uint8_t src_dtype)
-{
-  switch ((enum dtype)src_dtype) {
-    case dtype_u8:
-      return (float)(*src);
-    case dtype_i8:
-      return (float)*(const int8_t*)src;
-    case dtype_u16:
-      return (float)(*(const uint16_t*)src);
-    case dtype_i16:
-      return (float)(*(const int16_t*)src);
-    case dtype_u32:
-      return (float)(*(const uint32_t*)src);
-    case dtype_i32:
-      return (float)(*(const int32_t*)src);
-    case dtype_u64:
-      return (float)*(const uint64_t*)src;
-    case dtype_i64:
-      return (float)*(const int64_t*)src;
-    case dtype_f16:
-      return __half2float(*(const __half*)src);
-    case dtype_f32:
-      return *(const float*)src;
-    case dtype_f64:
-      return (float)*(const double*)src;
-    default:
-      return 0.0f;
-  }
+  dst_t value;
+  dtype_convert(&value, output, source, (enum dtype)input);
+  return value;
 }
 
 // Gather element `elem_idx` from a blosc byte-shuffled chunk. Within
@@ -121,12 +71,13 @@ load_src_as_float(const uint8_t* src, uint8_t src_dtype)
 // bytes), the shuffled layout puts byte b of element e at
 // `b*N + e`. Reassemble the T bytes locally, then go through the
 // existing dtype dispatch.
-__device__ __forceinline__ float
-load_src_as_float_unshuffled(const uint8_t* chunk_base,
-                             int64_t elem_idx,
-                             uint8_t typesize,
-                             uint32_t blocksize,
-                             uint8_t src_dtype)
+template<enum damacy_dtype output, typename dst_t>
+__device__ __forceinline__ dst_t
+load_unshuffled(const uint8_t* chunk_base,
+                int64_t elem_idx,
+                uint8_t typesize,
+                uint32_t blocksize,
+                uint8_t src_dtype)
 {
   const uint64_t elem_byte = (uint64_t)elem_idx * (uint64_t)typesize;
   const uint64_t block_idx = elem_byte / (uint64_t)blocksize;
@@ -139,19 +90,20 @@ load_src_as_float_unshuffled(const uint8_t* chunk_base,
   for (uint32_t t = 0; t < 8; ++t)
     if (t < typesize)
       tmp[t] = block[t * elems_per_block + within];
-  return load_src_as_float(tmp, src_dtype);
+  return load_source<output, dst_t>(tmp, src_dtype);
 }
 
 // Gather element `elem_idx` from a blosc bit-shuffled chunk. Each
 // block holds T*8 bit-planes of N bits packed LSB-first into N/8
 // bytes. Output byte bb of element e gets its bit bp from plane bb*8+bp
 // at byte (e>>3), bit (e&7).
-__device__ __forceinline__ float
-load_src_as_float_bitunshuffled(const uint8_t* chunk_base,
-                                int64_t elem_idx,
-                                uint8_t typesize,
-                                uint32_t blocksize,
-                                uint8_t src_dtype)
+template<enum damacy_dtype output, typename dst_t>
+__device__ __forceinline__ dst_t
+load_bitunshuffled(const uint8_t* chunk_base,
+                   int64_t elem_idx,
+                   uint8_t typesize,
+                   uint32_t blocksize,
+                   uint8_t src_dtype)
 {
   const uint32_t elems_per_block = blocksize / typesize;
   const uint32_t bytes_per_plane = elems_per_block >> 3;
@@ -175,7 +127,7 @@ load_src_as_float_bitunshuffled(const uint8_t* chunk_base,
     }
     tmp[bb] = out;
   }
-  return load_src_as_float(tmp, src_dtype);
+  return load_source<output, dst_t>(tmp, src_dtype);
 }
 
 // Bytes per source element for stride math. Mirrors dtype_bpe but as a
@@ -185,6 +137,7 @@ src_bpe(uint8_t src_dtype)
 {
   switch ((enum dtype)src_dtype) {
     case dtype_u8:
+    case dtype_i8:
       return 1u;
     case dtype_u16:
     case dtype_i16:
@@ -194,40 +147,44 @@ src_bpe(uint8_t src_dtype)
     case dtype_i32:
     case dtype_f32:
       return 4u;
+    case dtype_u64:
+    case dtype_i64:
+      return 8u;
     default:
       return 0u;
   }
 }
 
-__device__ __forceinline__ float
+template<enum damacy_dtype output, typename dst_t>
+__device__ __forceinline__ dst_t
 load_chunk_value(const struct sample_plan& s,
                  const struct assemble_chunk& c,
                  const uint8_t* arena_base,
                  uint64_t source)
 {
   if (c.is_fill)
-    return load_src_as_float(s.fill_value, s.src_dtype);
+    return load_source<output, dst_t>(s.fill_value, s.src_dtype);
   const uint8_t* chunk_base = arena_base + c.src_base_byte_off;
   switch ((enum assemble_shuffle_mode)c.shuffle_mode) {
     case ASSEMBLE_SHUFFLE_BYTE:
-      return load_src_as_float_unshuffled(chunk_base,
-                                          source,
-                                          c.shuffle_typesize,
-                                          c.shuffle_blocksize,
-                                          s.src_dtype);
+      return load_unshuffled<output, dst_t>(chunk_base,
+                                            source,
+                                            c.shuffle_typesize,
+                                            c.shuffle_blocksize,
+                                            s.src_dtype);
     case ASSEMBLE_SHUFFLE_BIT:
-      return load_src_as_float_bitunshuffled(chunk_base,
-                                             source,
-                                             c.shuffle_typesize,
-                                             c.shuffle_blocksize,
-                                             s.src_dtype);
+      return load_bitunshuffled<output, dst_t>(chunk_base,
+                                               source,
+                                               c.shuffle_typesize,
+                                               c.shuffle_blocksize,
+                                               s.src_dtype);
     default:
-      return load_src_as_float(chunk_base + source * src_bpe(s.src_dtype),
-                               s.src_dtype);
+      return load_source<output, dst_t>(
+        chunk_base + source * src_bpe(s.src_dtype), s.src_dtype);
   }
 }
 
-template<typename dst_t>
+template<enum damacy_dtype output, typename dst_t>
 __device__ __forceinline__ void
 gather_body(int rank,
             const struct sample_plan& s,
@@ -261,7 +218,7 @@ gather_body(int rank,
       destination += dst * s.dims[d].dst_stride;
     }
     ((dst_t*)output_base)[destination] =
-      cast_to_dst<dst_t>(load_chunk_value(s, c, arena_base, source));
+      load_chunk_value<output, dst_t>(s, c, arena_base, source);
   }
 }
 
@@ -269,7 +226,7 @@ gather_body(int rank,
 // per-dim accumulation of src/dst offsets and bounds fuse into one
 // reverse loop: the accumulators commute across d, so the row-major
 // modulus chain (innermost dim first) doesn't constrain the order.
-template<typename dst_t>
+template<enum damacy_dtype output, typename dst_t>
 __device__ __forceinline__ void
 assemble_body(int rank,
               const struct sample_plan& s,
@@ -304,12 +261,12 @@ assemble_body(int rank,
 
   dst_t* dst = (dst_t*)(output_base + dst_off_elems * (int64_t)sizeof(dst_t));
 
-  *dst = cast_to_dst<dst_t>(load_chunk_value(s, c, arena_base, src_off_elems));
+  *dst = load_chunk_value<output, dst_t>(s, c, arena_base, src_off_elems);
 }
 
 // Single kernel template covering both the templated-rank fast path
 // (RANK_TPL > 0) and the runtime-rank fallback (RANK_TPL == 0).
-template<int RANK_TPL, typename dst_t>
+template<int RANK_TPL, enum damacy_dtype output, typename dst_t>
 __global__ void
 assemble_kernel(const struct sample_plan* __restrict__ d_samples,
                 const struct assemble_chunk* __restrict__ d_chunks,
@@ -320,16 +277,16 @@ assemble_kernel(const struct sample_plan* __restrict__ d_samples,
   const struct sample_plan& s = d_samples[c.sample_idx_in_batch];
   const int rank = (RANK_TPL == 0) ? (int)s.rank : RANK_TPL;
   if (s.indexed)
-    gather_body<dst_t>(rank, s, c, arena_base, output_base);
+    gather_body<output, dst_t>(rank, s, c, arena_base, output_base);
   else
-    assemble_body<dst_t>(rank, s, c, arena_base, output_base);
+    assemble_body<output, dst_t>(rank, s, c, arena_base, output_base);
 }
 
 // Dispatch kernel launch over destination dtype. RANK_TPL_VAL == 0
 // selects the runtime-rank kernel; otherwise it's the compile-time rank.
 #define DST_CASE(DST_VAL, DST_T)                                               \
   case DST_VAL:                                                                \
-    assemble_kernel<kRankTpl, DST_T>                                           \
+    assemble_kernel<kRankTpl, DST_VAL, DST_T>                                  \
       <<<grid, block, 0, stream>>>(d_samples, d_chunks, arena_b, output_b);    \
     break
 
@@ -338,7 +295,15 @@ assemble_kernel(const struct sample_plan* __restrict__ d_samples,
     constexpr int kRankTpl = (RANK_TPL_VAL);                                   \
     switch (dst_dtype) {                                                       \
       DST_CASE(DAMACY_F32, float);                                             \
-      DST_CASE(DAMACY_BF16, __nv_bfloat16);                                    \
+      DST_CASE(DAMACY_BF16, uint16_t);                                         \
+      DST_CASE(DAMACY_U8, uint8_t);                                            \
+      DST_CASE(DAMACY_U16, uint16_t);                                          \
+      DST_CASE(DAMACY_U32, uint32_t);                                          \
+      DST_CASE(DAMACY_U64, uint64_t);                                          \
+      DST_CASE(DAMACY_I8, int8_t);                                             \
+      DST_CASE(DAMACY_I16, int16_t);                                           \
+      DST_CASE(DAMACY_I32, int32_t);                                           \
+      DST_CASE(DAMACY_I64, int64_t);                                           \
       default:                                                                 \
         log_error("assemble: unsupported dst_dtype=%d", (int)dst_dtype);       \
         return 1;                                                              \

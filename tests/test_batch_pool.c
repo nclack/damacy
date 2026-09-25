@@ -134,10 +134,34 @@ test_reset_for_reuse(void)
   return 0;
 }
 
+static int
+test_output_widths_and_overflow(void)
+{
+  const uint32_t widths[] = { 1, 2, 4, 8 };
+  const int64_t shape[] = { 7, 13 };
+  for (unsigned i = 0; i < 4; ++i) {
+    struct damacy_batch_pool pool = { 0 };
+    EXPECT(batch_pool_compute_layout(&pool, shape, 2, 3, widths[i]) ==
+           DAMACY_OK);
+    EXPECT(pool.n_bytes == 3 * 7 * 13 * widths[i]);
+    EXPECT(pool.strides[0] == 7 * 13 && pool.strides[1] == 13 &&
+           pool.strides[2] == 1);
+  }
+  struct damacy_batch_pool pool = { 0 };
+  const int64_t huge[] = { INT64_MAX / 4 + 1 };
+  EXPECT(batch_pool_compute_layout(&pool, huge, 1, 1, 8) == DAMACY_BUDGET);
+  EXPECT(!pool.layout_set);
+  const int64_t overflow[] = { INT64_MAX, 2 };
+  EXPECT(batch_pool_compute_layout(&pool, overflow, 2, 1, 1) == DAMACY_INVAL);
+  EXPECT(!pool.layout_set);
+  return 0;
+}
+
 int
 main(void)
 {
   RUN(test_compute_layout_simple);
+  RUN(test_output_widths_and_overflow);
   RUN(test_compute_layout_idempotent);
   RUN(test_compute_layout_rejects_zero_extent);
   RUN(test_state_predicates);

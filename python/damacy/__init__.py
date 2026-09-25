@@ -121,10 +121,18 @@ class Dtype(IntEnum):
 
     F32 = _native.DTYPE_F32
     BF16 = _native.DTYPE_BF16
+    U8 = _native.DTYPE_U8
+    U16 = _native.DTYPE_U16
+    U32 = _native.DTYPE_U32
+    U64 = _native.DTYPE_U64
+    I8 = _native.DTYPE_I8
+    I16 = _native.DTYPE_I16
+    I32 = _native.DTYPE_I32
+    I64 = _native.DTYPE_I64
 
     @classmethod
     def coerce(cls, value: str | int | Dtype) -> Dtype:
-        """Accept enum / int / one of {"f32", "float32", "bf16", "bfloat16"}.
+        """Accept an enum, its integer value, or a short or full dtype name.
 
         ```pycon
         >>> Dtype.coerce("f32") is Dtype.F32
@@ -145,11 +153,22 @@ class Dtype(IntEnum):
         if isinstance(value, int):
             return cls(value)
         s = str(value).lower()
-        if s in ("f32", "float32"):
-            return cls.F32
-        if s in ("bf16", "bfloat16"):
-            return cls.BF16
-        raise ValueError(f"unknown dtype: {value!r}")
+        names = {
+            "float32": "F32",
+            "bfloat16": "BF16",
+            "uint8": "U8",
+            "uint16": "U16",
+            "uint32": "U32",
+            "uint64": "U64",
+            "int8": "I8",
+            "int16": "I16",
+            "int32": "I32",
+            "int64": "I64",
+        }
+        try:
+            return cls[names.get(s, s.upper())]
+        except KeyError:
+            raise ValueError(f"unknown dtype: {value!r}") from None
 
 
 class NumaStrategy(IntEnum):
@@ -565,7 +584,7 @@ class Config:
 
     Validation runs in ``__init__`` so invalid configs fail before we
     touch CUDA. The constructor accepts :class:`Dtype`, an int, or one
-    of ``"f32"`` / ``"float32"`` / ``"bf16"`` / ``"bfloat16"`` for the
+    of the short or full names (such as ``"u16"`` / ``"uint16"``) for the
     ``dtype`` argument; the stored field is always a :class:`Dtype`.
 
     ```pycon

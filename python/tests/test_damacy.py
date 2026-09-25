@@ -117,7 +117,7 @@ def _base_config(dtype: str | int | damacy.Dtype = "f32") -> Config:
     """Minimum-viable Config for tests.
 
     Mirrors the defaults used by tests/test_damacy_caps.c::mk_cfg.
-    `dtype` is the *destination* batch dtype (#16): F32 or BF16. Source
+    `dtype` is the destination batch dtype. Source
     zarrs cast in-kernel; tiny_zarr is u16 → f32 here.
     """
     return Config(
@@ -165,7 +165,7 @@ def test_dtype_coerce():
     assert damacy.Dtype.coerce(0) is damacy.Dtype.F32
     assert damacy.Dtype.coerce(damacy.Dtype.BF16) is damacy.Dtype.BF16
     with pytest.raises(ValueError, match="unknown dtype"):
-        damacy.Dtype.coerce("u16")
+        damacy.Dtype.coerce("f64")
 
 
 # ---- construction & validation ------------------------------------------
@@ -269,7 +269,7 @@ def test_dtype_int_form_accepted(tiny_zarr):
 def test_dtype_unknown_string_raises():
     # Validation runs in Config.__init__ — fails before we touch CUDA.
     with pytest.raises(ValueError, match="unknown dtype"):
-        _base_config(dtype="u16")
+        _base_config(dtype="f64")
 
 
 # ---- end-to-end push / pop / release ------------------------------------

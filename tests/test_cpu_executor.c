@@ -843,6 +843,59 @@ test_input_memory_budget(void)
   return 0;
 }
 
+static int
+test_output_memory_budget(void)
+{
+  const struct
+  {
+    enum damacy_dtype type;
+    uint64_t bytes;
+  } cases[] = {
+    { DAMACY_U8, 1 },   { DAMACY_I8, 1 },  { DAMACY_U16, 2 }, { DAMACY_I16, 2 },
+    { DAMACY_BF16, 2 }, { DAMACY_U32, 4 }, { DAMACY_I32, 4 }, { DAMACY_F32, 4 },
+    { DAMACY_U64, 8 },  { DAMACY_I64, 8 },
+  };
+  struct test_store store;
+  store_init(&store, 2);
+  struct damacy_reader reader = { .store = &store.base,
+                                  .max_inflight_reads = 2 };
+  struct damacy_cpu_config config = { .decode_workers = 2,
+                                      .max_encoded_chunk_bytes = CHUNK_BYTES,
+                                      .max_decoded_chunk_bytes = CHUNK_BYTES,
+                                      .chunks_per_input_buffer = 4 };
+  uint64_t fixed = 0;
+  for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+    struct damacy_batch_spec output = output_spec(2);
+    output.dtype = cases[i].type;
+    struct damacy_executor* executor = NULL;
+    struct damacy_stats stats = { 0 };
+    config.max_memory_bytes = 8 << 20;
+    EXPECT(damacy_cpu_executor_create(&reader, &config, &executor) ==
+           DAMACY_OK);
+    EXPECT(executor->ops->start(executor, &output, &stats) == DAMACY_OK);
+    executor->ops->stats(executor, &stats);
+    uint64_t required = stats.host_bytes_committed;
+    uint64_t batch_bytes = 2 * 8 * cases[i].bytes;
+    if (!i)
+      fixed = required - 2 * batch_bytes;
+    EXPECT(required == fixed + 2 * batch_bytes);
+    int64_t shape[DAMACY_MAX_RANK + 1], strides[DAMACY_MAX_RANK + 1];
+    uint64_t bytes = 0;
+    EXPECT(batch_spec_layout(&output, shape, strides, &bytes) == DAMACY_OK);
+    EXPECT(bytes == batch_bytes && strides[0] == 8 && strides[1] == 1);
+    damacy_executor_destroy(executor);
+    for (unsigned enough = 0; enough < 2; ++enough) {
+      config.max_memory_bytes = required - 1 + enough;
+      EXPECT(damacy_cpu_executor_create(&reader, &config, &executor) ==
+             DAMACY_OK);
+      EXPECT(executor->ops->start(executor, &output, &stats) ==
+             (enough ? DAMACY_OK : DAMACY_BUDGET));
+      damacy_executor_destroy(executor);
+    }
+  }
+  return 0;
+}
+
 int
 main(void)
 {
@@ -859,6 +912,7 @@ main(void)
   RUN(test_merged_read_limit);
   RUN(test_read_plan_many_workers);
   RUN(test_input_memory_budget);
+  RUN(test_output_memory_budget);
   RUN(test_input_buffer_validation);
   return 0;
 }

@@ -11,8 +11,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-SrcDType = Literal["u8", "u16", "i16", "u32", "i32", "f16", "f32"]
-DstDType = Literal["f32", "bf16"]
+SrcDType = Literal["u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f16", "f32"]
+DstDType = Literal["f32", "bf16", "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64"]
 Codec = Literal["none", "zstd", "blosc-zstd"]
 
 NUMPY_DTYPE = {
@@ -20,6 +20,9 @@ NUMPY_DTYPE = {
     "u16": "uint16",
     "i16": "int16",
     "u32": "uint32",
+    "u64": "uint64",
+    "i8": "int8",
+    "i64": "int64",
     "i32": "int32",
     "f16": "float16",
     "f32": "float32",
@@ -59,11 +62,17 @@ class Dataset(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def _gen_fields_present(self) -> "Dataset":
+    def _gen_fields_present(self) -> Dataset:
         if self.uris is None:
             missing = [
                 f
-                for f in ("uri_fmt", "zarr_shape", "chunk_shape", "shard_shape", "dtypes")
+                for f in (
+                    "uri_fmt",
+                    "zarr_shape",
+                    "chunk_shape",
+                    "shard_shape",
+                    "dtypes",
+                )
                 if getattr(self, f) is None
             ]
             if missing:
@@ -93,6 +102,7 @@ class Sampling(BaseModel):
 class Pipeline(BaseModel):
     # Destination dtype on the assembled batch. Sources cast to this.
     dtype: DstDType = "f32"
+
     lookahead_samples: int = Field(gt=0)
     n_io_threads: int = Field(gt=0)
     metadata_io_concurrency: int = Field(default=32, gt=0)
@@ -111,6 +121,16 @@ class Pipeline(BaseModel):
     # assemble time. IO and input transfer still run; assemble broadcasts the
     # array's fill_value. Useful for isolating decode cost.
     bypass_decode: bool = False
+
+    @field_validator("dtype", mode="before")
+    @classmethod
+    def _dtype_name(cls, value):
+        if value == "bfloat16":
+            return "bf16"
+        for short, full in NUMPY_DTYPE.items():
+            if value == full:
+                return short
+        return value
 
 
 class Consumer(BaseModel):

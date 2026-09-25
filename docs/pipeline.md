@@ -174,7 +174,7 @@ from the Python value objects.
 
 | Setting | Scope |
 | --- | --- |
-| `BatchSpec` | Samples per batch, per-sample output shape, and `f32` or `bf16` output dtype. |
+| `BatchSpec` | Samples per batch, per-sample output shape, and [output dtype](dtypes.md). |
 | `QueueLimits.lookahead_samples` | Sample requests waiting for metadata/preparation; at least one full batch. |
 | `QueueLimits.prepared_batches` | Complete owned plans waiting for execution. |
 | `MetadataCache` | Number of array descriptions and shard indexes retained by preparation. |
@@ -266,7 +266,7 @@ caches and execution resources.
 CPU or CUDA results. A DLPack view remains valid after releasing the `Batch` and
 closing the pipeline. Releasing the Python batch does not force a live view's
 buffer back into the output pool. NumPy does not support `bf16` through DLPack;
-use `f32` or a consumer with bfloat16 support.
+use an integer type, `f32`, or a consumer with bfloat16 support.
 
 CPU batches report DLPack device `(1, 0)` and reject a stream argument other than
 `None`. CUDA batches report `(2, device_id)` and preserve the existing stream

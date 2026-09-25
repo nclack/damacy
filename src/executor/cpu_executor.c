@@ -6,6 +6,7 @@
 
 #include "damacy_config.h"
 #include "damacy_stats.h"
+#include "dtype/convert.h"
 #include "executor/coalesce.h"
 #include "executor/cpu_read_plan.h"
 #include "log/log.h"
@@ -163,83 +164,47 @@ Done:
   return status;
 }
 
-static float
-half_to_float(uint16_t half)
+static void
+copy_row(void* destination,
+         enum damacy_dtype output,
+         const void* source,
+         enum dtype input,
+         uint64_t count,
+         int fill)
 {
-  uint32_t sign = (uint32_t)(half & 0x8000) << 16;
-  uint32_t exponent = (half >> 10) & 31;
-  uint32_t mantissa = half & 1023;
-  uint32_t bits;
-  if (!exponent) {
-    if (!mantissa)
-      bits = sign;
-    else {
-      int shift = 0;
-      while (!(mantissa & 1024)) {
-        mantissa <<= 1;
-        ++shift;
-      }
-      bits = sign | (uint32_t)(113 - shift) << 23 | (mantissa & 1023) << 13;
-    }
-  } else {
-    bits =
-      sign | (exponent == 31 ? 255 : exponent + 112) << 23 | mantissa << 13;
+  size_t source_bytes = dtype_bpe(input);
+  if (!fill && dtype_matches(output, input)) {
+    memcpy(destination, source, count * source_bytes);
+    return;
   }
-  float value;
-  memcpy(&value, &bits, sizeof(value));
-  return value;
-}
-
-static uint16_t
-float_to_bfloat(float value)
-{
-  uint32_t bits;
-  memcpy(&bits, &value, sizeof(bits));
-  if ((bits & 0x7fffffff) > 0x7f800000)
-    return 0x7fff;
-  return (uint16_t)((bits + 0x7fff + ((bits >> 16) & 1)) >> 16);
-}
-
-static float
-source_value(const void* source, enum dtype dtype, uint64_t index)
-{
-  const unsigned char* bytes = source;
-  switch (dtype) {
-    case dtype_u8:
-      return bytes[index];
-    case dtype_u16: {
-      uint16_t value;
-      memcpy(&value, bytes + index * sizeof(value), sizeof(value));
-      return value;
-    }
-    case dtype_i16: {
-      int16_t value;
-      memcpy(&value, bytes + index * sizeof(value), sizeof(value));
-      return value;
-    }
-    case dtype_u32: {
-      uint32_t value;
-      memcpy(&value, bytes + index * sizeof(value), sizeof(value));
-      return (float)value;
-    }
-    case dtype_i32: {
-      int32_t value;
-      memcpy(&value, bytes + index * sizeof(value), sizeof(value));
-      return (float)value;
-    }
-    case dtype_f16: {
-      uint16_t value;
-      memcpy(&value, bytes + index * sizeof(value), sizeof(value));
-      return half_to_float(value);
-    }
-    case dtype_f32: {
-      float value;
-      memcpy(&value, bytes + index * sizeof(value), sizeof(value));
-      return value;
-    }
-    default:
-      return 0;
+#define COPY_ROW(OUTPUT, TYPE)                                                 \
+  case OUTPUT: {                                                               \
+    TYPE* dst = destination;                                                   \
+    if (fill) {                                                                \
+      TYPE value;                                                              \
+      dtype_convert(&value, OUTPUT, source, input);                            \
+      for (uint64_t i = 0; i < count; ++i)                                     \
+        dst[i] = value;                                                        \
+    } else {                                                                   \
+      const uint8_t* src = source;                                             \
+      for (uint64_t i = 0; i < count; ++i)                                     \
+        dtype_convert(&dst[i], OUTPUT, src + i * source_bytes, input);         \
+    }                                                                          \
+    break;                                                                     \
   }
+  switch (output) {
+    COPY_ROW(DAMACY_F32, float)
+    COPY_ROW(DAMACY_BF16, uint16_t)
+    COPY_ROW(DAMACY_U8, uint8_t)
+    COPY_ROW(DAMACY_U16, uint16_t)
+    COPY_ROW(DAMACY_U32, uint32_t)
+    COPY_ROW(DAMACY_U64, uint64_t)
+    COPY_ROW(DAMACY_I8, int8_t)
+    COPY_ROW(DAMACY_I16, int16_t)
+    COPY_ROW(DAMACY_I32, int32_t)
+    COPY_ROW(DAMACY_I64, int64_t)
+  }
+#undef COPY_ROW
 }
 
 static uint64_t
@@ -248,8 +213,7 @@ gather_chunk(struct cpu_executor* self,
              const struct plan_chunk* chunk,
              const struct plan_region* region,
              const struct zarr_metadata* meta,
-             const void* decoded,
-             float fill)
+             const void* decoded)
 {
   struct selection_span spans[DAMACY_MAX_RANK];
   uint64_t origin[DAMACY_MAX_RANK];
@@ -280,23 +244,15 @@ gather_chunk(struct cpu_executor* self,
       source = source * meta->inner_chunk_shape[d] + coordinate - origin[d];
       destination += output * (uint64_t)self->strides[d + 1];
     }
-    if (!chunk->missing && meta->dtype == dtype_f32 &&
-        self->output.dtype == DAMACY_F32)
-      memcpy((float*)slot->buffer->data + destination,
-             (const char*)decoded + source * sizeof(float),
-             width * sizeof(float));
-    else {
-      for (uint64_t j = 0; j < width; ++j) {
-        float value = chunk->missing
-                        ? fill
-                        : source_value(decoded, meta->dtype, source + j);
-        if (self->output.dtype == DAMACY_F32)
-          ((float*)slot->buffer->data)[destination + j] = value;
-        else
-          ((uint16_t*)slot->buffer->data)[destination + j] =
-            float_to_bfloat(value);
-      }
-    }
+    copy_row((uint8_t*)slot->buffer->data +
+               destination * damacy_dtype_bpe(self->output.dtype),
+             self->output.dtype,
+             chunk->missing
+               ? meta->fill_value
+               : (const uint8_t*)decoded + source * dtype_bpe(meta->dtype),
+             meta->dtype,
+             width,
+             chunk->missing);
     int d = region->axes[last].count ? last : (int)last - 1;
     for (; d >= 0; --d) {
       if (++position[d] < spans[d].count)
@@ -317,13 +273,11 @@ assemble_chunk(struct cpu_executor* self,
 {
   const struct prepared_plan* plan = slot->plan;
   const struct zarr_metadata* meta = &plan->arrays[chunk->array].metadata;
-  float fill = source_value(meta->fill_value, meta->dtype, 0);
   uint64_t output_bytes = 0;
   for (uint32_t u = chunk->first_use; u != UINT32_MAX; u = plan->uses[u].next) {
     const struct plan_region* region = &plan->regions[plan->uses[u].region];
     if (region->operation == PLAN_GATHER) {
-      output_bytes +=
-        gather_chunk(self, slot, chunk, region, meta, decoded, fill);
+      output_bytes += gather_chunk(self, slot, chunk, region, meta, decoded);
       continue;
     }
     uint64_t lo[DAMACY_MAX_RANK], hi[DAMACY_MAX_RANK];
@@ -351,24 +305,15 @@ assemble_chunk(struct cpu_executor* self,
         destination += (coordinate[d] - (uint64_t)region->source.dims[d].beg) *
                        (uint64_t)self->strides[d + 1];
       }
-      if (!chunk->missing && meta->dtype == dtype_f32 &&
-          self->output.dtype == DAMACY_F32)
-        memcpy((float*)slot->buffer->data + destination,
-               (const char*)decoded + source * sizeof(float),
-               width * sizeof(float));
-      else if (self->output.dtype == DAMACY_F32) {
-        float* dst = (float*)slot->buffer->data + destination;
-        for (uint64_t j = 0; j < width; ++j)
-          dst[j] = chunk->missing
-                     ? fill
-                     : source_value(decoded, meta->dtype, source + j);
-      } else {
-        uint16_t* dst = (uint16_t*)slot->buffer->data + destination;
-        for (uint64_t j = 0; j < width; ++j)
-          dst[j] = float_to_bfloat(
-            chunk->missing ? fill
-                           : source_value(decoded, meta->dtype, source + j));
-      }
+      copy_row((uint8_t*)slot->buffer->data +
+                 destination * damacy_dtype_bpe(self->output.dtype),
+               self->output.dtype,
+               chunk->missing
+                 ? meta->fill_value
+                 : (const uint8_t*)decoded + source * dtype_bpe(meta->dtype),
+               meta->dtype,
+               width,
+               chunk->missing);
       int finished = 1;
       for (int d = (int)last - 1; d >= 0; --d) {
         if (++coordinate[d] < hi[d]) {

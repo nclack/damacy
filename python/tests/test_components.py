@@ -326,7 +326,7 @@ def test_cuda_composition_matches_cpu(tiny_zarr, read_capacity):
     copy = driver.cuMemcpyDtoH_v2
     copy.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_size_t]
     copy.restype = ctypes.c_int
-    with pipeline(shape=(6, 9), executor=cuda) as p:
+    with pipeline(shape=(6, 9), executor=cuda, pop_timeout_s=30.0) as p:
         p.push([sample(tiny_zarr, 1, 3, (6, 9))])
         batch = p.pop()
         assert batch.__dlpack_device__() == (2, 0)

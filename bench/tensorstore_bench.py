@@ -48,7 +48,18 @@ from scenario import (  # noqa: E402
 )
 
 DEFAULT_THREADS = [1, 2, 4, 8, 16, 32]
-DST_ITEMSIZE = {"f32": 4, "bf16": 2}
+DST_ITEMSIZE = {
+    "f32": 4,
+    "bf16": 2,
+    "u8": 1,
+    "u16": 2,
+    "u32": 4,
+    "u64": 8,
+    "i8": 1,
+    "i16": 2,
+    "i32": 4,
+    "i64": 8,
+}
 
 
 class Xorshift64Star:
