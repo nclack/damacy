@@ -2,34 +2,38 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://nclack.github.io/damacy/</loc>
-         <lastmod>2026-09-24</lastmod>
+         <lastmod>2026-09-25</lastmod>
     </url>
     <url>
          <loc>https://nclack.github.io/damacy/api/</loc>
-         <lastmod>2026-09-24</lastmod>
+         <lastmod>2026-09-25</lastmod>
     </url>
     <url>
          <loc>https://nclack.github.io/damacy/budget/</loc>
-         <lastmod>2026-09-24</lastmod>
+         <lastmod>2026-09-25</lastmod>
     </url>
     <url>
          <loc>https://nclack.github.io/damacy/distributed/</loc>
-         <lastmod>2026-09-24</lastmod>
+         <lastmod>2026-09-25</lastmod>
+    </url>
+    <url>
+         <loc>https://nclack.github.io/damacy/dtypes/</loc>
+         <lastmod>2026-09-25</lastmod>
     </url>
     <url>
          <loc>https://nclack.github.io/damacy/pipeline/</loc>
-         <lastmod>2026-09-24</lastmod>
+         <lastmod>2026-09-25</lastmod>
     </url>
     <url>
          <loc>https://nclack.github.io/damacy/prefetch/</loc>
-         <lastmod>2026-09-24</lastmod>
+         <lastmod>2026-09-25</lastmod>
     </url>
     <url>
          <loc>https://nclack.github.io/damacy/spatial/</loc>
-         <lastmod>2026-09-24</lastmod>
+         <lastmod>2026-09-25</lastmod>
     </url>
     <url>
          <loc>https://nclack.github.io/damacy/troubleshooting/</loc>
-         <lastmod>2026-09-24</lastmod>
+         <lastmod>2026-09-25</lastmod>
     </url>
 </urlset>

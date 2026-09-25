@@ -16,7 +16,7 @@
         <link rel="prev" href="..">
       
       
-        <link rel="next" href="../spatial/">
+        <link rel="next" href="../dtypes/">
       
       
         
@@ -429,6 +429,33 @@
   
 </nav>
       
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../dtypes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Output types
+  
+
+    
+  </span>
+  
+  
+
+      </a>
     </li>
   
 
@@ -873,7 +900,7 @@ from the Python value objects.</p>
 <tbody>
 <tr>
 <td><code>BatchSpec</code></td>
-<td>Samples per batch, per-sample output shape, and <code>f32</code> or <code>bf16</code> output dtype.</td>
+<td>Samples per batch, per-sample output shape, and <a href="../dtypes/">output dtype</a>.</td>
 </tr>
 <tr>
 <td><code>QueueLimits.lookahead_samples</code></td>
@@ -1000,7 +1027,7 @@ caches and execution resources.</p>
 CPU or CUDA results. A DLPack view remains valid after releasing the <code>Batch</code> and
 closing the pipeline. Releasing the Python batch does not force a live view's
 buffer back into the output pool. NumPy does not support <code>bf16</code> through DLPack;
-use <code>f32</code> or a consumer with bfloat16 support.</p>
+use an integer type, <code>f32</code>, or a consumer with bfloat16 support.</p>
 <p>CPU batches report DLPack device <code>(1, 0)</code> and reject a stream argument other than
 <code>None</code>. CUDA batches report <code>(2, device_id)</code> and preserve the existing stream
 handoff. <code>BatchInfo.data</code> is the address on either device; <code>device_ptr</code> remains

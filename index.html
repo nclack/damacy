@@ -405,6 +405,33 @@
   
   
     <li class="md-nav__item">
+      <a href="dtypes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Output types
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="spatial/" class="md-nav__link">
         
   
@@ -708,7 +735,7 @@ binding model and a torchrun example.</p>
 <p><code>samples_per_batch</code>, <code>sample_shape</code>, and <code>max_gpu_memory_bytes</code> are required
 on <code>Config</code>; everything else has a sensible default. Assembly casts heterogeneous source dtypes
 (<code>u8</code>/<code>u16</code>/<code>i16</code>/<code>u32</code>/<code>i32</code>/<code>f16</code>/<code>f32</code>) to the configured
-destination <code>dtype</code> (<code>f32</code> or <code>bf16</code>) on the way out, so your zarrs
+destination <a href="dtypes/">output type</a> on the way out, so your zarrs
 do not need to match it.</p>
 <h2 id="public-surface">Public surface<a class="headerlink" href="#public-surface" title="Permanent link">&para;</a></h2>
 <p>The published API lives entirely under the top-level <code>damacy</code> package.
