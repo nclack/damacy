@@ -302,7 +302,7 @@ def test_float_to_integer(output_executor, tmp_path, source_dtype, output_dtype)
     for power in (7, 8, 15, 16, 31, 32, 63, 64):
         for sign in (-1, 1):
             boundary = sign * 2.0**power
-            if abs(boundary) <= np.finfo(source_dtype).max:
+            if abs(boundary) <= float(np.finfo(source_dtype).max):
                 value = np.array(boundary, dtype=source_dtype)
                 values.extend(
                     [
