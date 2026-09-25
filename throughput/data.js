@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790254017486,
+  "lastUpdate": 1790340628425,
   "repoUrl": "https://github.com/nclack/damacy",
   "entries": {
     "damacy throughput": [
@@ -3615,6 +3615,38 @@ window.BENCHMARK_DATA = {
           {
             "name": "damacy/mixed/throughput",
             "value": 5628.83,
+            "unit": "MB/s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Nathan Clack",
+            "username": "nclack",
+            "email": "nclack@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "6e87e2b7d68b7afaf8b2ba05bf7e23835666bc1d",
+          "message": "Resolve spatial queries from NGFF metadata (#162)\n\nSpatial queries can now resolve a fixed output grid against OME-Zarr 0.5\nmetadata before chunk planning. Resolution chooses a source level using\nthe full affine sampling scale, including rotation and anisotropy.\nAligned crops run on either CPU or CUDA; queries that still require\nresampling fail explicitly when submitted. This PR does not implement a\nresampler.\n\nLoad an immutable `NgffImage` through an injected metadata reader, then\ncall `image.resolve(query, shape=output.shape)`. Resolution performs no\nI/O and depends only on the requested sample shape. Batching, output\nallocation, and dtype conversion remain downstream. Each query carries\nits full-rank transform, sampler, boundary behavior, and automatic or\nexplicit level choice.\n\nResults own their source URI and geometry independently of the image.\nPython returns one immutable, serializable value that can be pushed\ndirectly. C fills a caller-owned `damacy_spatial_resolution` with\ndirectly readable fields and a `clear()` operation; the existing sample\nconversion is the compatibility bridge to C submission.\n\nPublic coordinates use reference-level voxel corners, with identity\nmatching integer crops. NGFF center coordinates are converted at\nmetadata loading. Loading also removes floating-point rounding error\nfrom each level's scale ratio and origin, so crops built from the\nreported level values are exact; the resolver itself never rounds a\nquery into a crop. Validation checks consumed fields needed for array\nlayout and coordinate interpretation, including ambiguous duplicate\nfields and finite transforms. Unused metadata, shared transforms that\ncancel in reference coordinates, and trailing content are left\nuninterpreted.\n\nLoading caps each `zarr.json` read at the part of\n`NgffLimits.max_metadata_bytes` still unused; a larger file fails with\n`DAMACY_BUDGET`. Whole-file metadata reads, capped or not, also fail\nthat way above `UINT32_MAX` bytes. On macOS the metadata reader is the\nPOSIX worker pool from #167, which had no capped read; this PR adds one\nthere with the same behavior as Linux.\n\nSee the [spatial query API and\ncontracts](https://github.com/nclack/damacy/blob/ngff-resolution/docs/spatial.md)\nfor C/Python examples, coordinate conversion, level selection,\nownership, and the next executor operation.\n\nStacked on #161 (`indexed-queries`).\n\nValidation:\n\n- CI at `382d921`: the [CPU\nworkflow](https://github.com/nclack/damacy/actions/runs/36066539561)\npasses 26/26 CTest entries on Ubuntu and 27/27 on\n[macOS](https://github.com/nclack/damacy/actions/runs/36066539561/job/107857506786),\nwhere the metadata budget tests use the new capped read.\n[CUDA](https://github.com/nclack/damacy/actions/runs/36066541831) passes\n38/38, including the native and Python spatial tests.\n[TSan](https://github.com/nclack/damacy/actions/runs/36066544271) passes\n2/2, the prefetcher and spatial tests, and the\n[build](https://github.com/nclack/damacy/actions/runs/36066537440)\npasses.\n- Before the review fixes, CPU: 25/25 CTest targets passed; spatial\nPython tests: 62 passed, 7 CUDA cases skipped.\n- Before the review fixes, L40: native spatial tests and all 69 Python\nspatial tests passed; all 7 CUDA memory-check cases passed with zero\nsanitizer errors.\n- Before the review fixes, ASan/UBSan: JSON and spatial tests passed,\nincluding C result ownership and cleanup.\n- Ruff, Pyright for the package and spatial tests, strict documentation\nbuild, and C example syntax passed.\n- Regression coverage includes NGFF center/corner conversion,\nanisotropic level selection, interpolation bounds, permissive handling\nof unused metadata, invalid consumed fields, result serialization and\nownership, fixed output shapes, 128 collapsed transforms, large\ndifferences in sampling scale, floating-point rounding in level scales\nand translations, unrelated keys that do not decode, and image\ncomparison and copies.\n\n---------\n\nCo-authored-by: Nathan Clack <nclack@biohub.org>",
+          "timestamp": "2026-09-24T23:34:55Z",
+          "url": "https://github.com/nclack/damacy/commit/6e87e2b7d68b7afaf8b2ba05bf7e23835666bc1d"
+        },
+        "date": 1790340627439,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "damacy/default/throughput",
+            "value": 5520.88,
+            "unit": "MB/s"
+          },
+          {
+            "name": "damacy/mixed/throughput",
+            "value": 5454.82,
             "unit": "MB/s"
           }
         ]
