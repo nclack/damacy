@@ -332,6 +332,7 @@ test_output_types(void)
     config.sample_shape[1] = 13;
     config.samples_per_batch = 2;
     config.lookahead_samples = 2;
+    config.tuning.max_shards_per_sample = 4;
     EXPECT(validate_config(&config) == DAMACY_OK);
     EXPECT(damacy_dtype_bpe(config.dtype) == cases[i].bytes);
     EXPECT(strcmp(damacy_dtype_name(config.dtype), cases[i].name) == 0);

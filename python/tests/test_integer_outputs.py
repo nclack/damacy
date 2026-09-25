@@ -57,7 +57,7 @@ def pipeline(executor, dtype, shape, *, samples=1):
                 cache=damacy.MetadataCache(array_entries=16, shard_index_entries=64),
             ),
             limits=damacy.PlanLimits(
-                max_chunks=128, max_chunk_bytes=4096, max_shards_per_sample=16
+                max_chunks=128, max_chunk_bytes=4096, max_shards_per_sample=4
             ),
         ),
         executor=executor,
