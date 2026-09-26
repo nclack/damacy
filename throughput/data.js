@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790340628425,
+  "lastUpdate": 1790425089985,
   "repoUrl": "https://github.com/nclack/damacy",
   "entries": {
     "damacy throughput": [
@@ -3647,6 +3647,38 @@ window.BENCHMARK_DATA = {
           {
             "name": "damacy/mixed/throughput",
             "value": 5454.82,
+            "unit": "MB/s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Nathan Clack",
+            "username": "nclack",
+            "email": "nclack@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "8582377ff23db7ac766cfcd60640056f6b80d4b3",
+          "message": "Add signed and unsigned integer outputs (#171)\n\nInteger Zarr reads can now produce signed and unsigned 8-, 16-, 32-, and\n64-bit batches through the C API and Python `BatchSpec`. Integer\nidentity reads and lossless widening preserve values exactly, including\n64-bit limits. The existing float32/bfloat16 enum values and conversion\nbehavior are retained.\n\nCPU and CUDA share saturating integer conversions. Float16/float32\ninputs truncate toward zero, map NaN to zero, and clamp infinities and\nout-of-range values. Float64 sources remain explicitly unsupported.\nOutput allocation, memory budgets, fill assembly, byte counts, dtype\naliases, and DLPack exports use each type's width and signedness.\n\nRegression coverage includes every integer source/output pair, precision\nand range boundaries, crops across chunks and shards, indexed reads,\nmissing fills, byte/bit shuffle, NumPy/PyTorch dtypes, retained outputs,\nand buffer accounting. Matching uint16-output CPU and GPU benchmark\nscenarios are included alongside the existing float32 scenarios.\n\nValidation:\n\n- GitHub Actions passes: CPU (26 targets on Linux, 27 on macOS), the\nfull CUDA suite (38 targets), ThreadSanitizer (2 targets), release\nbuild, documentation, and coverage upload.\n- Ruff, Pyright for the package and new tests, and `git diff --check`\npass.\n- The CUDA composition test now uses the normal 30-second pipeline\ntimeout; its first batch exceeded the previous five-second test limit in\nthe debug CI build.\n- PyTorch-specific cases are skipped because PyTorch is not installed in\nCI.\n- No Slurm jobs or benchmark measurements were run, as requested.\nPerformance of the new uint16-output scenarios remains unmeasured.\n\nCloses #169\n\n---------\n\nCo-authored-by: Nathan Clack <nclack@biohub.org>",
+          "timestamp": "2026-09-25T16:57:16Z",
+          "url": "https://github.com/nclack/damacy/commit/8582377ff23db7ac766cfcd60640056f6b80d4b3"
+        },
+        "date": 1790425089108,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "damacy/default/throughput",
+            "value": 5512.6,
+            "unit": "MB/s"
+          },
+          {
+            "name": "damacy/mixed/throughput",
+            "value": 5447.63,
             "unit": "MB/s"
           }
         ]
