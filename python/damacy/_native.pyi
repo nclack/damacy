@@ -214,7 +214,9 @@ HARD_MAX_SUBSTREAMS_PER_CHUNK: Final[int]
 MAX_METADATA_IO_CONCURRENCY: Final[int]
 MAX_IO_THREADS: Final[int]
 
-def create_reader(workers: int, max_inflight_reads: int, /) -> object: ...
+def create_reader(
+    workers: int, max_inflight_reads: int, readahead: bool = True, /
+) -> object: ...
 def create_metadata_reader(
     concurrency: int,
     baseline_ns: int,

@@ -58,6 +58,20 @@ platform_file_close(platform_file* f)
 }
 
 int
+platform_file_disable_readahead(platform_file* f)
+{
+  if (!f)
+    return EINVAL;
+#if defined(__APPLE__)
+  return fcntl(f->fd, F_RDAHEAD, 0) < 0 ? errno : 0;
+#elif defined(POSIX_FADV_RANDOM)
+  return posix_fadvise(f->fd, 0, 0, POSIX_FADV_RANDOM);
+#else
+  return ENOTSUP;
+#endif
+}
+
+int
 platform_file_fd(platform_file* f)
 {
   return f ? f->fd : -1;

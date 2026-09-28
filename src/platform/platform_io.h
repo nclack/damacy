@@ -25,6 +25,9 @@ extern "C"
 
   void platform_file_close(platform_file* f);
 
+  // Returns zero on success, or an errno value on failure.
+  int platform_file_disable_readahead(platform_file* f);
+
   // Positional read. Returns bytes read on success (== len when not EOF),
   // -1 on error. Thread-safe per POSIX semantics.
   int64_t platform_file_pread(platform_file* f,

@@ -34,9 +34,9 @@ def planner(metadata=None, **limits):
     )
 
 
-def executor(**limits):
+def executor(*, reader=None, **limits):
     return damacy.CpuExecutor(
-        reader=damacy.FileReader(workers=2, max_inflight_reads=1),
+        reader=reader or damacy.FileReader(workers=2, max_inflight_reads=1),
         limits=damacy.CpuLimits(
             **(
                 {
@@ -102,9 +102,13 @@ def raw_array(path: Path, values, *, codec=None, payload=None, fill=0):
     return str(path)
 
 
-def test_cpu_numpy_and_reader_backpressure(tiny_zarr):
+@pytest.mark.parametrize(
+    "reader_options", [{}, {"readahead": True}, {"readahead": False}]
+)
+def test_cpu_numpy_and_reader_backpressure(tiny_zarr, reader_options):
     expected = np.arange(128, dtype=np.float32).reshape(8, 16)[1:7, 3:12]
-    with pipeline(shape=(6, 9), samples=2) as p:
+    reader = damacy.FileReader(workers=2, max_inflight_reads=1, **reader_options)
+    with pipeline(shape=(6, 9), samples=2, executor=executor(reader=reader)) as p:
         p.push(sample(tiny_zarr, 1, 3, (6, 9)) for _ in range(12))
         for i in range(6):
             with p.pop() as batch:
@@ -123,6 +127,18 @@ def test_cpu_numpy_and_reader_backpressure(tiny_zarr):
         assert 0 < stats.host_bytes_committed <= 8 << 20
         assert stats.chunks_dispatched < stats.chunks_planned
         assert p.device == -1
+
+
+@pytest.mark.parametrize("value", [None, 0, 1, "false", []])
+def test_reader_readahead_requires_bool(value):
+    with pytest.raises(TypeError, match="readahead must be a bool"):
+        damacy.FileReader(workers=1, readahead=value)
+    with pytest.raises(TypeError):
+        damacy._native.create_reader(1, 1, value)
+
+
+def test_native_reader_default_compatibility():
+    assert damacy._native.create_reader(1, 1) is not None
 
 
 def test_retained_numpy_views_and_shutdown(tiny_zarr):
@@ -311,9 +327,12 @@ def test_cpu_torch_consumer_retains_tensor(tiny_zarr, dtype):
 
 @pytest.mark.usefixtures("cuda_ctx")
 @pytest.mark.parametrize("read_capacity", [1, 16])
-def test_cuda_composition_matches_cpu(tiny_zarr, read_capacity):
+@pytest.mark.parametrize("readahead", [True, False])
+def test_cuda_composition_matches_cpu(tiny_zarr, read_capacity, readahead):
     cuda = damacy.CudaExecutor(
-        reader=damacy.FileReader(workers=2, max_inflight_reads=read_capacity),
+        reader=damacy.FileReader(
+            workers=2, max_inflight_reads=read_capacity, readahead=readahead
+        ),
         device=0,
         limits=damacy.CudaLimits(
             max_gpu_memory_bytes=1 << 30,

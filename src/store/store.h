@@ -36,6 +36,7 @@ extern "C"
     // 0 → library default. Running out stalls submission and reissues
     // a whole batch, so size for the worst case.
     uint32_t max_inflight_reads;
+    int disable_readahead;
   };
 
   // Create a filesystem-backed store (host-staging only). Returns NULL on

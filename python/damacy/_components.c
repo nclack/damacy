@@ -93,12 +93,19 @@ create_reader(PyObject* self, PyObject* args)
 {
   (void)self;
   unsigned int workers, reads;
-  if (!PyArg_ParseTuple(args, "II", &workers, &reads))
+  PyObject* readahead = Py_True;
+  if (!PyArg_ParseTuple(
+        args, "II|O!", &workers, &reads, &PyBool_Type, &readahead))
     return NULL;
+  const struct damacy_file_reader_config config = {
+    .workers = workers,
+    .max_inflight_reads = reads,
+    .readahead = readahead == Py_True,
+  };
   struct damacy_reader* reader = NULL;
   enum damacy_status status;
   Py_BEGIN_ALLOW_THREADS status =
-    damacy_file_reader_create(workers, reads, &reader);
+    damacy_file_reader_create_with_config(&config, &reader);
   Py_END_ALLOW_THREADS if (status != DAMACY_OK) return api_raise_status(
     status, "create reader");
   return component_new(READER, reader, NULL);

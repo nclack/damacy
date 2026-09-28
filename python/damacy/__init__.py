@@ -1010,15 +1010,30 @@ class CudaLimits:
 
 
 class FileReader:
-    """Read bulk encoded chunk data through a bounded filesystem I/O queue."""
+    """Read bulk encoded chunk data through a bounded filesystem I/O queue.
+
+    ``readahead=True`` preserves the operating system's default behavior.
+    ``False`` disables automatic file readahead for this reader's bulk reads
+    on Linux and macOS. This applies to buffered CPU and CUDA reads; metadata
+    reads use a separate reader. It does not clear or bypass the page cache.
+    """
 
     __slots__ = ("_native",)
 
-    def __init__(self, *, workers: int = 8, max_inflight_reads: int = 4096) -> None:
+    def __init__(
+        self,
+        *,
+        workers: int = 8,
+        max_inflight_reads: int = 4096,
+        readahead: bool = True,
+    ) -> None:
+        if not isinstance(readahead, bool):
+            raise TypeError("readahead must be a bool")
         self._native = _component(
             _native.create_reader,
             _positive_int(workers, "workers", _native.MAX_IO_THREADS),
             _positive_int(max_inflight_reads, "max_inflight_reads"),
+            readahead,
         )
 
 

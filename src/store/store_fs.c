@@ -188,6 +188,16 @@ store_fs_acquire(struct store_fs* fs,
     struct strbuf path = { 0 };
     CHECK_SILENT(OpenDone, strbuf_join_path(&path, fs->root, key) == 0);
     opened = platform_file_open_read(strbuf_cstr(&path), 0);
+    if (opened && fs->disable_readahead) {
+      int error = platform_file_disable_readahead(opened);
+      if (error) {
+        log_error("cannot disable readahead for %s: %s",
+                  strbuf_cstr(&path),
+                  strerror(error));
+        platform_file_close(opened);
+        opened = NULL;
+      }
+    }
   OpenDone:
     strbuf_free(&path);
   }
@@ -537,6 +547,7 @@ store_fs_create(const struct store_fs_config* cfg)
   fs = (struct store_fs*)calloc(1, sizeof(*fs));
   CHECK_SILENT(Fail, fs);
   fs->base.vt = &fs_vtable_host;
+  fs->disable_readahead = cfg->disable_readahead;
   fs->cache_lock = platform_mutex_new();
   CHECK_SILENT(Fail, fs->cache_lock);
   fs->cache_cond = platform_cond_new();
