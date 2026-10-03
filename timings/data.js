@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790514536795,
+  "lastUpdate": 1791031164670,
   "repoUrl": "https://github.com/nclack/damacy",
   "entries": {
     "damacy timings": [
@@ -9983,6 +9983,88 @@ window.BENCHMARK_DATA = {
           {
             "name": "damacy/mixed/assemble.ms_avg",
             "value": 2.50777,
+            "unit": "ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Nathan Clack",
+            "username": "nclack",
+            "email": "nclack@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "8582377ff23db7ac766cfcd60640056f6b80d4b3",
+          "message": "Add signed and unsigned integer outputs (#171)\n\nInteger Zarr reads can now produce signed and unsigned 8-, 16-, 32-, and\n64-bit batches through the C API and Python `BatchSpec`. Integer\nidentity reads and lossless widening preserve values exactly, including\n64-bit limits. The existing float32/bfloat16 enum values and conversion\nbehavior are retained.\n\nCPU and CUDA share saturating integer conversions. Float16/float32\ninputs truncate toward zero, map NaN to zero, and clamp infinities and\nout-of-range values. Float64 sources remain explicitly unsupported.\nOutput allocation, memory budgets, fill assembly, byte counts, dtype\naliases, and DLPack exports use each type's width and signedness.\n\nRegression coverage includes every integer source/output pair, precision\nand range boundaries, crops across chunks and shards, indexed reads,\nmissing fills, byte/bit shuffle, NumPy/PyTorch dtypes, retained outputs,\nand buffer accounting. Matching uint16-output CPU and GPU benchmark\nscenarios are included alongside the existing float32 scenarios.\n\nValidation:\n\n- GitHub Actions passes: CPU (26 targets on Linux, 27 on macOS), the\nfull CUDA suite (38 targets), ThreadSanitizer (2 targets), release\nbuild, documentation, and coverage upload.\n- Ruff, Pyright for the package and new tests, and `git diff --check`\npass.\n- The CUDA composition test now uses the normal 30-second pipeline\ntimeout; its first batch exceeded the previous five-second test limit in\nthe debug CI build.\n- PyTorch-specific cases are skipped because PyTorch is not installed in\nCI.\n- No Slurm jobs or benchmark measurements were run, as requested.\nPerformance of the new uint16-output scenarios remains unmeasured.\n\nCloses #169\n\n---------\n\nCo-authored-by: Nathan Clack <nclack@biohub.org>",
+          "timestamp": "2026-09-25T16:57:16Z",
+          "url": "https://github.com/nclack/damacy/commit/8582377ff23db7ac766cfcd60640056f6b80d4b3"
+        },
+        "date": 1791031163465,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "damacy/default/init",
+            "value": 297.421,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/time_to_first_batch",
+            "value": 9882.13,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/wall",
+            "value": 9745.77,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/io.ms_avg",
+            "value": 4.03852,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/input_transfer.ms_avg",
+            "value": 3.82871,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/assemble.ms_avg",
+            "value": 2.35336,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/init",
+            "value": 300.777,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/time_to_first_batch",
+            "value": 403.813,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/wall",
+            "value": 9818.44,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/io.ms_avg",
+            "value": 4.1311,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/input_transfer.ms_avg",
+            "value": 3.89584,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/assemble.ms_avg",
+            "value": 2.49833,
             "unit": "ms"
           }
         ]
