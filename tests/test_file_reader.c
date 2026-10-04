@@ -49,9 +49,9 @@ test_reader_settings(void)
   struct damacy_reader* readers[3] = { 0 };
   EXPECT(damacy_file_reader_create(1, 4, &readers[0]) == DAMACY_OK);
   for (uint8_t enabled = 0; enabled <= 1; ++enabled) {
-    const struct damacy_file_reader_config config = { .workers = 1,
-                                                      .max_inflight_reads = 4,
-                                                      .readahead = enabled };
+    const struct damacy_file_reader_config config = {
+      .workers = 1, .max_inflight_reads = 4, .enable_readahead = enabled
+    };
     EXPECT(damacy_file_reader_create_with_config(
              &config, &readers[enabled + 1]) == DAMACY_OK);
   }
@@ -114,14 +114,14 @@ test_invalid_config(void)
   struct damacy_reader* reader = NULL;
   struct damacy_file_reader_config config = { .workers = 1,
                                               .max_inflight_reads = 4,
-                                              .readahead = 1 };
+                                              .enable_readahead = 1 };
   EXPECT(damacy_file_reader_create_with_config(NULL, &reader) == DAMACY_INVAL);
   EXPECT(damacy_file_reader_create_with_config(&config, NULL) == DAMACY_INVAL);
-  config.readahead = 2;
+  config.enable_readahead = 2;
   EXPECT(damacy_file_reader_create_with_config(&config, &reader) ==
          DAMACY_INVAL);
   EXPECT(!reader);
-  config.readahead = 1;
+  config.enable_readahead = 1;
   config.workers = 0;
   EXPECT(damacy_file_reader_create_with_config(&config, &reader) ==
          DAMACY_INVAL);

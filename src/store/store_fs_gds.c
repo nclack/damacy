@@ -118,6 +118,7 @@ struct store_fs_gds
   char* root;       // owned
   void* gds_stream; // CUstream as void*
   uint8_t driver_opened;
+  int disable_readahead;
   struct platform_mutex* cache_lock;
   struct lru* cache;
 };
@@ -169,6 +170,15 @@ fs_gds_acquire(struct store_fs_gds* g, const char* key)
   CHECK_SILENT(Fail, strbuf_join_path(&path, g->root, key) == 0);
   f = platform_file_open_read(strbuf_cstr(&path), 0);
   CHECK_SILENT(Fail, f);
+  if (g->disable_readahead) {
+    int error = platform_file_disable_readahead(f);
+    if (error) {
+      log_error("cannot disable readahead for %s: %s",
+                strbuf_cstr(&path),
+                strerror(error));
+      goto Fail;
+    }
+  }
 
   {
     int fd = platform_file_fd(f);
@@ -506,6 +516,7 @@ store_fs_gds_create(const struct store_fs_gds_config* cfg)
   CHECK_SILENT(Fail, g);
   g->base.vt = &gds_vtable;
   g->driver_opened = 1;
+  g->disable_readahead = cfg->disable_readahead;
   g->root = strdup(cfg->root);
   CHECK_SILENT(Fail, g->root);
   g->cache_lock = platform_mutex_new();

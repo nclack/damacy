@@ -45,7 +45,7 @@ extern "C"
   {
     uint32_t workers;
     uint32_t max_inflight_reads;
-    uint8_t readahead;
+    uint8_t enable_readahead;
   };
 
   struct damacy_cpu_config

@@ -195,8 +195,8 @@ For scattered crops, try `FileReader(readahead=False)` and compare
 against the default on your storage. Keep readahead enabled for scans unless
 measurements show otherwise: disabling it can substantially reduce sequential
 throughput. This setting applies to buffered reads with either `CpuExecutor`
-or `CudaExecutor`. Metadata reads have a separate reader, and direct GDS reads
-bypass the page cache.
+or `CudaExecutor`, including cuFile compatibility mode. Metadata reads have a
+separate reader, and direct GDS reads bypass the page cache.
 
 On Linux, `False` requests `POSIX_FADV_RANDOM`; on macOS, it sets `F_RDAHEAD`
 to zero. The setting is applied whenever this reader opens a chunk or shard
@@ -205,7 +205,7 @@ settings. It does not clear the page cache or make reads cold. If the OS rejects
 the request, the read fails with an I/O error.
 
 C callers can use `damacy_file_reader_create_with_config` with explicit
-`workers`, `max_inflight_reads`, and `readahead` (0 or 1) fields in
+`workers`, `max_inflight_reads`, and `enable_readahead` (0 or 1) fields in
 `damacy_file_reader_config`. The existing `damacy_file_reader_create` entry
 point preserves OS readahead, as does the legacy `Config` adapter.
 

@@ -43,7 +43,7 @@ damacy_file_reader_create(uint32_t workers,
   const struct damacy_file_reader_config config = {
     .workers = workers,
     .max_inflight_reads = max_inflight_reads,
-    .readahead = 1,
+    .enable_readahead = 1,
   };
   return damacy_file_reader_create_with_config(&config, out);
 }
@@ -57,7 +57,7 @@ damacy_file_reader_create_with_config(
     return DAMACY_INVAL;
   *out = NULL;
   if (!config || !config->workers || config->workers > DAMACY_MAX_IO_THREADS ||
-      !config->max_inflight_reads || config->readahead > 1)
+      !config->max_inflight_reads || config->enable_readahead > 1)
     return DAMACY_INVAL;
   uint32_t workers = config->workers;
   int cpus = platform_default_thread_count();
@@ -73,11 +73,12 @@ damacy_file_reader_create_with_config(
   if (!reader)
     return DAMACY_OOM;
   reader->max_inflight_reads = config->max_inflight_reads;
-  reader->store = store_fs_create(
-    &(struct store_fs_config){ .root = "",
-                               .nthreads = (int)workers,
-                               .max_inflight_reads = config->max_inflight_reads,
-                               .disable_readahead = !config->readahead });
+  reader->enable_readahead = config->enable_readahead;
+  reader->store = store_fs_create(&(struct store_fs_config){
+    .root = "",
+    .nthreads = (int)workers,
+    .max_inflight_reads = config->max_inflight_reads,
+    .disable_readahead = !config->enable_readahead });
   if (!reader->store) {
     free(reader);
     return DAMACY_OOM;

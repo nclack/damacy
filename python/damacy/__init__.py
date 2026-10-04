@@ -1014,8 +1014,9 @@ class FileReader:
 
     ``readahead=True`` preserves the operating system's default behavior.
     ``False`` disables automatic file readahead for this reader's bulk reads
-    on Linux and macOS. This applies to buffered CPU and CUDA reads; metadata
-    reads use a separate reader. It does not clear or bypass the page cache.
+    on Linux and macOS. This applies to buffered CPU and CUDA reads, including
+    cuFile compatibility mode. Metadata reads use a separate reader. It does
+    not clear or bypass the page cache.
     """
 
     __slots__ = ("_native",)

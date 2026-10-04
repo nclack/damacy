@@ -100,7 +100,7 @@ create_reader(PyObject* self, PyObject* args)
   const struct damacy_file_reader_config config = {
     .workers = workers,
     .max_inflight_reads = reads,
-    .readahead = readahead == Py_True,
+    .enable_readahead = readahead == Py_True,
   };
   struct damacy_reader* reader = NULL;
   enum damacy_status status;
