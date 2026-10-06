@@ -20,6 +20,7 @@ extern "C"
   {
     const char* root;
     uint32_t fd_cache_capacity; // 0 → library default
+    int disable_readahead;      // also applies to cuFile buffered fallback
   };
 
   struct store* store_fs_gds_create(const struct store_fs_gds_config* cfg);

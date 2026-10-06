@@ -187,8 +187,27 @@ from the Python value objects.
 | `CpuLimits.chunks_per_input_buffer` | Chunks each of the two encoded-input buffers holds; from `decode_workers` to 16384. |
 | `FileReader.workers` | Bulk I/O workers, separate from decoding workers. |
 | `FileReader.max_inflight_reads` | Bulk read capacity; execution respects this bound and retries saturation. |
+| `FileReader.readahead` | Preserve OS readahead by default (`True`); `False` disables it for this reader's buffered bulk reads. |
 | `CudaLimits` | GPU memory and execution geometry, plus the CUDA codec-layout cache capacity. |
 | `CudaLimits.max_index_bytes` | Device index storage per batch: eight bytes per index across all indexed axes and samples. Zero, or at least `8 * samples * sum(shape)`. Default 64 MiB. |
+
+For scattered crops, try `FileReader(readahead=False)` and compare
+against the default on your storage. Keep readahead enabled for scans unless
+measurements show otherwise: disabling it can substantially reduce sequential
+throughput. This setting applies to buffered reads with either `CpuExecutor`
+or `CudaExecutor`, including cuFile compatibility mode. Metadata reads have a
+separate reader, and direct GDS reads bypass the page cache.
+
+On Linux, `False` requests `POSIX_FADV_RANDOM`; on macOS, it sets `F_RDAHEAD`
+to zero. The setting is applied whenever this reader opens a chunk or shard
+file, including after a file leaves its cache. Other readers keep their own
+settings. It does not clear the page cache or make reads cold. If the OS rejects
+the request, the read fails with an I/O error.
+
+C callers can use `damacy_file_reader_create_with_config` with explicit
+`workers`, `max_inflight_reads`, and `enable_readahead` (0 or 1) fields in
+`damacy_file_reader_config`. The existing `damacy_file_reader_create` entry
+point preserves OS readahead, as does the legacy `Config` adapter.
 
 CUDA reserves index storage for its two execution slots within
 `max_gpu_memory_bytes`. A nonzero `max_index_bytes` must hold every index a

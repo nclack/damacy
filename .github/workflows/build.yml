@@ -35,12 +35,14 @@ jobs:
         run: docker version
 
       - name: Build docker image
+        # auk: RTX 5070 Laptop GPU (compute capability 12.0).
         # Tag with the SHA so test.yml can reuse the same image (the
         # local layer cache on the self-hosted runner makes this cheap
         # on cache hits). Also tag :ci-latest as a moving alias for ad
         # hoc inspection.
         run: |
           docker build \
+            --build-arg CMAKE_CUDA_ARCHITECTURES=120-real \
             --tag damacy:${{ github.sha }} \
             --tag damacy:ci-latest \
             .

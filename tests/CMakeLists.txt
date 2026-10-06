@@ -62,12 +62,20 @@ add_damacy_test(test_prefetcher prefetcher chunk_layout shard_index array_meta p
 set_tests_properties(test_prefetcher PROPERTIES LABELS tsan)
 add_damacy_test(test_sample_shard_iterator zarr log)
 add_damacy_test(test_scheduler scheduler platform log)
+set_tests_properties(test_scheduler PROPERTIES TIMEOUT 30)
 
 # End-to-end smoke test: requires CUDA + nvCOMP, so guarded against
 # DAMACY_FUZZ (which disables the CUDA-linked damacy target). Also
 # requires `uv` on PATH at test time (provided by flake.nix devShell).
 if(NOT DAMACY_FUZZ)
     add_damacy_test(test_damacy_plan damacy)
+    add_damacy_test(test_file_reader damacy)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_link_options(
+            test_file_reader
+            PRIVATE "LINKER:--wrap=posix_fadvise"
+        )
+    endif()
     add_damacy_test(test_spatial damacy test_fixture)
     set_tests_properties(test_spatial PROPERTIES LABELS tsan TIMEOUT 120)
     add_damacy_test(test_cpu_pipeline damacy test_fixture Threads::Threads)
@@ -103,8 +111,15 @@ if(DAMACY_CUDA)
     add_damacy_test(test_assemble assemble CUDA::cuda_driver CUDA::cudart_static)
     add_damacy_test(test_decoder decoder CUDA::cuda_driver)
     if(DAMACY_ENABLE_GDS)
-        add_damacy_test(test_store_fs_gds store lru hash log cuda_test_util)
-        set_tests_properties(test_store_fs_gds PROPERTIES LABELS DAMACY_GDS)
+        add_damacy_test(test_store_fs_gds damacy lru hash log cuda_test_util)
+        target_link_options(
+            test_store_fs_gds
+            PRIVATE "LINKER:--wrap=posix_fadvise"
+        )
+        set_tests_properties(
+            test_store_fs_gds
+            PROPERTIES LABELS DAMACY_GDS TIMEOUT 60 SKIP_RETURN_CODE 77
+        )
     endif()
 endif()
 

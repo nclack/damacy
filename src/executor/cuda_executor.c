@@ -249,8 +249,8 @@ cuda_start(struct damacy_executor* base,
     goto Fail;
   gpu_budget_commit(self->budget, geometry.predicted.total);
   if (geometry.want_gds) {
-    self->gds =
-      store_fs_gds_create(&(struct store_fs_gds_config){ .root = "" });
+    self->gds = store_fs_gds_create(&(struct store_fs_gds_config){
+      .root = "", .disable_readahead = !self->reader->enable_readahead });
     if (!self->gds) {
       status = DAMACY_INVAL;
       goto Fail;

@@ -41,6 +41,13 @@ extern "C"
     uint32_t shard_entries;
   };
 
+  struct damacy_file_reader_config
+  {
+    uint32_t workers;
+    uint32_t max_inflight_reads;
+    uint8_t enable_readahead;
+  };
+
   struct damacy_cpu_config
   {
     uint32_t decode_workers;
@@ -70,6 +77,9 @@ extern "C"
   enum damacy_status damacy_file_reader_create(uint32_t workers,
                                                uint32_t max_inflight_reads,
                                                struct damacy_reader** out);
+  enum damacy_status damacy_file_reader_create_with_config(
+    const struct damacy_file_reader_config* config,
+    struct damacy_reader** out);
   void damacy_reader_destroy(struct damacy_reader* reader);
 
   enum damacy_status damacy_file_metadata_reader_create(

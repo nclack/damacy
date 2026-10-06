@@ -22,6 +22,7 @@ struct store_fs
   struct store base;
   char* root; // owned
   struct io_queue* q;
+  int disable_readahead;
 
   struct platform_mutex* cache_lock;
   struct platform_cond* cache_cond; // signals an open finishing

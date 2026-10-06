@@ -40,11 +40,26 @@ damacy_file_reader_create(uint32_t workers,
                           uint32_t max_inflight_reads,
                           struct damacy_reader** out)
 {
+  const struct damacy_file_reader_config config = {
+    .workers = workers,
+    .max_inflight_reads = max_inflight_reads,
+    .enable_readahead = 1,
+  };
+  return damacy_file_reader_create_with_config(&config, out);
+}
+
+enum damacy_status
+damacy_file_reader_create_with_config(
+  const struct damacy_file_reader_config* config,
+  struct damacy_reader** out)
+{
   if (!out)
     return DAMACY_INVAL;
   *out = NULL;
-  if (!workers || workers > DAMACY_MAX_IO_THREADS || !max_inflight_reads)
+  if (!config || !config->workers || config->workers > DAMACY_MAX_IO_THREADS ||
+      !config->max_inflight_reads || config->enable_readahead > 1)
     return DAMACY_INVAL;
+  uint32_t workers = config->workers;
   int cpus = platform_default_thread_count();
   if (workers > (uint32_t)cpus) {
     log_error("file reader workers (n_io_threads)=%u exceeds the %d online "
@@ -57,11 +72,13 @@ damacy_file_reader_create(uint32_t workers,
   struct damacy_reader* reader = calloc(1, sizeof(*reader));
   if (!reader)
     return DAMACY_OOM;
-  reader->max_inflight_reads = max_inflight_reads;
-  reader->store = store_fs_create(
-    &(struct store_fs_config){ .root = "",
-                               .nthreads = (int)workers,
-                               .max_inflight_reads = max_inflight_reads });
+  reader->max_inflight_reads = config->max_inflight_reads;
+  reader->enable_readahead = config->enable_readahead;
+  reader->store = store_fs_create(&(struct store_fs_config){
+    .root = "",
+    .nthreads = (int)workers,
+    .max_inflight_reads = config->max_inflight_reads,
+    .disable_readahead = !config->enable_readahead });
   if (!reader->store) {
     free(reader);
     return DAMACY_OOM;

@@ -47,7 +47,11 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build docker image (Release)
-        run: docker build --tag "$IMAGE" .
+        # auk: RTX 5070 Laptop GPU (compute capability 12.0).
+        run: |
+          docker build \
+            --build-arg CMAKE_CUDA_ARCHITECTURES=120-real \
+            --tag "$IMAGE" .
 
       - name: Run bench scenarios + adapt to GHA-bench format
         timeout-minutes: 20

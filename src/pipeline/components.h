@@ -11,6 +11,7 @@ struct damacy_reader
 {
   struct store* store;
   uint32_t max_inflight_reads;
+  uint8_t enable_readahead;
 };
 
 struct damacy_metadata_reader
