@@ -2,6 +2,8 @@
 #
 # Build:
 #   docker build -t damacy:dev .
+# Build for a specific GPU (120 = Blackwell RTX 50-series):
+#   docker build --build-arg CMAKE_CUDA_ARCHITECTURES=120-real -t damacy:dev .
 # Run (cluster, with GPU passthrough):
 #   docker run --rm --gpus all --security-opt seccomp=unconfined \
 #     damacy:dev ctest --test-dir build --output-on-failure
@@ -116,6 +118,10 @@ WORKDIR /workspace/damacy
 # .venv, .git, etc. are excluded).
 COPY . /workspace/damacy
 
+# Override for a specific GPU; explicit targets need no GPU in the builder.
+# Keep the default in sync with CMakeLists.txt for portable images.
+ARG CMAKE_CUDA_ARCHITECTURES="75-real;80-real;86-real;89-real;90-real;90-virtual"
+
 # Configure + build the C library, damacy_bench, and the Python extension.
 # DAMACY_PYTHON is disabled under TSan: scikit-build-core's editable
 # install would load a TSan-instrumented .so into the system Python
@@ -125,6 +131,7 @@ RUN cmake -S . -B build -G Ninja \
         -DDAMACY_PYTHON=$(if [ "${DAMACY_TSAN}" = "ON" ]; then echo OFF; else echo ON; fi) \
         -DDAMACY_COVERAGE=${DAMACY_COVERAGE} \
         -DDAMACY_TSAN=${DAMACY_TSAN} \
+        "-DCMAKE_CUDA_ARCHITECTURES=${CMAKE_CUDA_ARCHITECTURES}" \
         -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
 RUN cmake --build build
 
@@ -135,13 +142,15 @@ RUN cmake --build build
 RUN ctest --test-dir build --output-on-failure -E "test_damacy|test_assemble|python_pytest" \
  || (echo "WARN: ctest reported failures; continuing so the image still ships" >&2; true)
 
-# Editable install of the Python package. The .so was just built by cmake
-# above and lives at build/python/_native*.so; copy it next to __init__.py
-# so the editable install resolves `damacy._native` without rebuilding.
+# Editable install of the Python package. Keep the extension alongside the
+# Python sources, and pass the same architecture list to the editable
+# install's separate CMake build.
 # Skipped under TSan (the .so isn't built; the install would 404).
 RUN if [ "${DAMACY_TSAN}" != "ON" ]; then \
         cp build/python/damacy/_native*.so python/damacy/ && \
-        uv pip install --no-deps --no-build-isolation -e .; \
+        uv pip install --no-deps --no-build-isolation \
+            --config-settings="cmake.define.CMAKE_CUDA_ARCHITECTURES=${CMAKE_CUDA_ARCHITECTURES}" \
+            -e .; \
     fi
 
 # ----- runtime defaults ------------------------------------------------------

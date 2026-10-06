@@ -177,6 +177,24 @@ Not yet handled — arrays declaring any of these will fail to parse:
 
 If you have data that uses one of the unsupported codecs and you'd like it added, please open an issue with a sample `zarr.json`.
 
+## Docker builds
+
+The Docker image defaults to native CUDA targets 7.5, 8.0, 8.6, 8.9, and 9.0,
+plus PTX for 9.0. To shorten builds for a known GPU, select its compute
+capability explicitly. For example, the RTX 5070 Laptop GPU on the CI runner
+uses 12.0:
+
+```sh
+docker build --build-arg CMAKE_CUDA_ARCHITECTURES=120-real -t damacy:dev .
+```
+
+The selection applies to both the native build and the Python package build.
+Use a quoted semicolon-separated list for multiple targets, such as
+`--build-arg 'CMAKE_CUDA_ARCHITECTURES=80-real;90-real;90-virtual'`.
+`-real` emits GPU machine code; `-virtual` emits PTX for driver compilation.
+Choose targets for the GPUs that will run the image. Explicit targets work
+without a GPU exposed to the Docker builder.
+
 ## Runtime dependencies
 
 CPU builds support Linux and macOS and require the CPU codec libraries.
