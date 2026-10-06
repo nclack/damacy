@@ -951,6 +951,10 @@ from the Python value objects.</p>
 <td>Bulk read capacity; execution respects this bound and retries saturation.</td>
 </tr>
 <tr>
+<td><code>FileReader.readahead</code></td>
+<td>Preserve OS readahead by default (<code>True</code>); <code>False</code> disables it for this reader's buffered bulk reads.</td>
+</tr>
+<tr>
 <td><code>CudaLimits</code></td>
 <td>GPU memory and execution geometry, plus the CUDA codec-layout cache capacity.</td>
 </tr>
@@ -960,6 +964,21 @@ from the Python value objects.</p>
 </tr>
 </tbody>
 </table>
+<p>For scattered crops, try <code>FileReader(readahead=False)</code> and compare
+against the default on your storage. Keep readahead enabled for scans unless
+measurements show otherwise: disabling it can substantially reduce sequential
+throughput. This setting applies to buffered reads with either <code>CpuExecutor</code>
+or <code>CudaExecutor</code>, including cuFile compatibility mode. Metadata reads have a
+separate reader, and direct GDS reads bypass the page cache.</p>
+<p>On Linux, <code>False</code> requests <code>POSIX_FADV_RANDOM</code>; on macOS, it sets <code>F_RDAHEAD</code>
+to zero. The setting is applied whenever this reader opens a chunk or shard
+file, including after a file leaves its cache. Other readers keep their own
+settings. It does not clear the page cache or make reads cold. If the OS rejects
+the request, the read fails with an I/O error.</p>
+<p>C callers can use <code>damacy_file_reader_create_with_config</code> with explicit
+<code>workers</code>, <code>max_inflight_reads</code>, and <code>enable_readahead</code> (0 or 1) fields in
+<code>damacy_file_reader_config</code>. The existing <code>damacy_file_reader_create</code> entry
+point preserves OS readahead, as does the legacy <code>Config</code> adapter.</p>
 <p>CUDA reserves index storage for its two execution slots within
 <code>max_gpu_memory_bytes</code>. A nonzero <code>max_index_bytes</code> must hold every index a
 batch can contain, <code>8 * samples * sum(shape)</code> bytes, so an accepted query never
