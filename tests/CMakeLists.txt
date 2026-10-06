@@ -62,6 +62,7 @@ add_damacy_test(test_prefetcher prefetcher chunk_layout shard_index array_meta p
 set_tests_properties(test_prefetcher PROPERTIES LABELS tsan)
 add_damacy_test(test_sample_shard_iterator zarr log)
 add_damacy_test(test_scheduler scheduler platform log)
+set_tests_properties(test_scheduler PROPERTIES TIMEOUT 30)
 
 # End-to-end smoke test: requires CUDA + nvCOMP, so guarded against
 # DAMACY_FUZZ (which disables the CUDA-linked damacy target). Also
