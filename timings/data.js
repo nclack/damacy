@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793639729673,
+  "lastUpdate": 1793719241913,
   "repoUrl": "https://github.com/nclack/damacy",
   "entries": {
     "damacy timings": [
@@ -10147,6 +10147,88 @@ window.BENCHMARK_DATA = {
           {
             "name": "damacy/mixed/assemble.ms_avg",
             "value": 2.90836,
+            "unit": "ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Nathan Clack",
+            "username": "nclack",
+            "email": "nclack@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "3ccabe46d98a0f44849dea77bd61fd7bbd8fafef",
+          "message": "Add per-reader readahead control (#172)\n\nScattered crops can benefit from disabling OS file readahead, but scans\ncan slow down substantially. Add `FileReader(readahead=False)` so\napplications can choose per reader. The default remains `True`,\npreserving existing behavior.\n\nThe option applies to buffered bulk reads with both CPU and CUDA\nexecutors. Linux uses `POSIX_FADV_RANDOM`; macOS uses `F_RDAHEAD=0`.\nEach newly opened chunk or shard gets the setting, including after cache\neviction. A rejected OS request fails the read with an I/O error.\nMetadata readers remain independent; this option does not clear or\nbypass the page cache.\n\nC callers get an additive `damacy_file_reader_create_with_config`\nconstructor; the existing constructor and legacy `Config` adapter retain\nOS-default readahead.\n\nValidation:\n- Linux CPU: 27/27 CTest checks passed; macOS: 28/28; CUDA: 39/39. Each\nsuite includes Python tests.\n- Coverage includes per-reader isolation, default C constructor\ncompatibility, cached and reopened files, failed advice and retry,\nargument validation, and CPU/CUDA output correctness with readahead on\nand off.\n- Release build, documentation build, ThreadSanitizer, and coverage\nchecks passed.\n- Python lint/format checks and `git diff --check` passed.\n\n---------\n\nCo-authored-by: Nathan Clack <nclack@biohub.org>",
+          "timestamp": "2026-10-06T21:34:36Z",
+          "url": "https://github.com/nclack/damacy/commit/3ccabe46d98a0f44849dea77bd61fd7bbd8fafef"
+        },
+        "date": 1793719241076,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "damacy/default/init",
+            "value": 349.551,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/time_to_first_batch",
+            "value": 355.028,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/wall",
+            "value": 9740.39,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/io.ms_avg",
+            "value": 3.7402,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/input_transfer.ms_avg",
+            "value": 3.81744,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/assemble.ms_avg",
+            "value": 2.71281,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/init",
+            "value": 335.84,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/time_to_first_batch",
+            "value": 371.046,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/wall",
+            "value": 9873.69,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/io.ms_avg",
+            "value": 4.10751,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/input_transfer.ms_avg",
+            "value": 3.89793,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/assemble.ms_avg",
+            "value": 2.90314,
             "unit": "ms"
           }
         ]
