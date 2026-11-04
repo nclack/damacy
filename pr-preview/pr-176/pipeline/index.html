@@ -963,7 +963,7 @@ from the Python value objects.</p>
 </tr>
 <tr>
 <td><code>CpuLimits.decode_workers</code></td>
-<td>Total decoding/assembly workers, including the calling scheduler thread.</td>
+<td>Background decoding/assembly workers; the scheduler runs separately.</td>
 </tr>
 <tr>
 <td><code>CpuLimits.chunks_per_input_buffer</code></td>
@@ -1030,6 +1030,9 @@ Each of its two encoded-input buffers holds <code>chunks_per_input_buffer</code>
 <code>min(decode_workers, chunks_per_input_buffer)</code> chunks, so one buffer can hold
 several reads at once; with one decode worker, reads do not merge. Submission
 also respects the reader limit. Decoder workspaces remain per worker.</p>
+<p>Decoding and assembly run in the background. When a group finishes, the
+scheduler refills its input buffer while other reads or decoding continue.
+Shutdown waits for active readers and decoders before freeing their buffers.</p>
 <p>The two input buffers reserve
 <code>2 * chunks_per_input_buffer * max_encoded_chunk_bytes</code> bytes, plus per-chunk
 bookkeeping. With the defaults, 256 chunks and a 4 MiB encoded-chunk bound,
