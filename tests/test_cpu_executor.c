@@ -2,10 +2,145 @@
 #include "executor/cpu_read_plan.h"
 #include "expect.h"
 #include "pipeline/components.h"
+#include "platform/platform.h"
 #include "store/store_internal.h"
+#include "threadpool/threadpool.h"
 
+#include <limits.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef __linux__
+struct decode_gate
+{
+  struct platform_mutex* lock;
+  struct platform_cond* wake;
+  pthread_t caller;
+  unsigned groups;
+  unsigned released;
+  unsigned workers;
+  atomic_uint entered;
+  atomic_uint joins;
+  atomic_uint worker_mask;
+  atomic_int invalid_worker;
+  atomic_int timed_out;
+};
+
+static struct decode_gate* decoding;
+
+struct decode_call
+{
+  threadpool_index_fn fn;
+  void* arg;
+  struct decode_gate* gate;
+  unsigned group;
+};
+
+static void
+blocked_decode(size_t index, int tid, void* arg)
+{
+  struct decode_call* call = arg;
+  struct decode_gate* gate = call->gate;
+  platform_mutex_lock(gate->lock);
+  atomic_fetch_add(&gate->entered, 1);
+  atomic_fetch_or(&gate->worker_mask, 1u << tid);
+  if (pthread_equal(pthread_self(), gate->caller))
+    atomic_store(&gate->invalid_worker, 1);
+  platform_cond_broadcast(gate->wake);
+  while (gate->released < call->group) {
+    if (platform_cond_timedwait_ms(gate->wake, gate->lock, 5000)) {
+      atomic_store(&gate->timed_out, 1);
+      gate->released = UINT_MAX;
+      platform_cond_broadcast(gate->wake);
+    }
+  }
+  platform_mutex_unlock(gate->lock);
+  call->fn(index, tid, call->arg);
+}
+
+void
+__real_threadpool_for_n_dynamic(struct threadpool* pool,
+                                size_t count,
+                                threadpool_index_fn fn,
+                                void* arg);
+
+void
+__wrap_threadpool_for_n_dynamic(struct threadpool* pool,
+                                size_t count,
+                                threadpool_index_fn fn,
+                                void* arg)
+{
+  struct decode_gate* gate = decoding;
+  if (!gate) {
+    __real_threadpool_for_n_dynamic(pool, count, fn, arg);
+    return;
+  }
+  if (threadpool_size(pool) != (int)gate->workers)
+    atomic_store(&gate->invalid_worker, 1);
+  struct decode_call call = { fn, arg, gate, ++gate->groups };
+  __real_threadpool_for_n_dynamic(pool, count, blocked_decode, &call);
+}
+
+int
+__real_platform_thread_join(struct platform_thread* thread);
+
+int
+__wrap_platform_thread_join(struct platform_thread* thread)
+{
+  struct decode_gate* gate = decoding;
+  if (gate) {
+    platform_mutex_lock(gate->lock);
+    atomic_fetch_add(&gate->joins, 1);
+    platform_cond_broadcast(gate->wake);
+    platform_mutex_unlock(gate->lock);
+  }
+  return __real_platform_thread_join(thread);
+}
+
+static int
+gate_init(struct decode_gate* gate, unsigned workers)
+{
+  *gate = (struct decode_gate){ .lock = platform_mutex_new(),
+                                .wake = platform_cond_new(),
+                                .caller = pthread_self(),
+                                .workers = workers };
+  EXPECT(gate->lock && gate->wake);
+  decoding = gate;
+  return 0;
+}
+
+static int
+gate_wait(struct decode_gate* gate, atomic_uint* count, unsigned target)
+{
+  platform_mutex_lock(gate->lock);
+  while (atomic_load(count) < target)
+    if (platform_cond_timedwait_ms(gate->wake, gate->lock, 5000))
+      break;
+  platform_mutex_unlock(gate->lock);
+  EXPECT(atomic_load(count) >= target);
+  EXPECT(!atomic_load(&gate->timed_out));
+  EXPECT(!atomic_load(&gate->invalid_worker));
+  return 0;
+}
+
+static void
+gate_release(struct decode_gate* gate, unsigned count)
+{
+  platform_mutex_lock(gate->lock);
+  gate->released = count;
+  platform_cond_broadcast(gate->wake);
+  platform_mutex_unlock(gate->lock);
+}
+
+static void
+gate_destroy(struct decode_gate* gate)
+{
+  decoding = NULL;
+  platform_cond_free(gate->wake);
+  platform_mutex_free(gate->lock);
+}
+#endif
 
 enum
 {
@@ -237,13 +372,15 @@ start_executor(struct damacy_reader* reader,
 static int
 finish_batch(struct damacy_executor* executor, struct damacy_batch** out)
 {
-  for (unsigned i = 0; i < 2 * MAX_CHUNKS; ++i) {
+  for (unsigned i = 0; i < 5000; ++i) {
     int changed = 0;
     EXPECT(executor->ops->step(executor, &changed) == DAMACY_OK);
     enum damacy_status status = executor->ops->take(executor, out);
     if (status == DAMACY_OK)
       return 0;
-    EXPECT(status == DAMACY_AGAIN && changed);
+    EXPECT(status == DAMACY_AGAIN);
+    if (!changed)
+      platform_sleep_ns(1000000);
   }
   return 1;
 }
@@ -604,6 +741,171 @@ test_read_errors_and_shutdown(void)
   return 0;
 }
 
+#ifdef __linux__
+static int
+test_reads_during_decode(void)
+{
+  for (unsigned workers = 1; workers <= 4; workers *= 2) {
+    struct test_chunk chunks[12];
+    unsigned count = 3 * workers;
+    for (unsigned i = 0; i < count; ++i)
+      chunks[i] = (struct test_chunk){ .offset = i * CHUNK_BYTES };
+    struct test_store store;
+    store_init(&store, 2);
+    struct damacy_reader reader = { .store = &store.base,
+                                    .max_inflight_reads = 2 };
+    struct damacy_stats stats = { 0 };
+    struct damacy_executor* executor = NULL;
+    EXPECT(start_executor(
+             &reader, workers, workers, count, 8 << 20, &stats, &executor) ==
+           0);
+    struct decode_gate gate;
+    EXPECT(gate_init(&gate, workers) == 0);
+    struct prepared_plan* plan = make_plan(chunks, count);
+    EXPECT(plan);
+    EXPECT(executor->ops->submit(executor, plan, 0) == DAMACY_OK);
+    int changed = 0;
+    EXPECT(executor->ops->step(executor, &changed) == DAMACY_OK);
+    EXPECT(gate_wait(&gate, &gate.entered, workers) == 0);
+    EXPECT(atomic_load(&gate.worker_mask) == (1u << workers) - 1);
+    EXPECT(store.n_events == 2 && stats.decode.count == 0);
+    changed = 0;
+    EXPECT(executor->ops->step(executor, &changed) == DAMACY_OK);
+    EXPECT(!changed && store.n_events == 2);
+    gate_release(&gate, 1);
+    for (unsigned i = 0; i < 5000 && atomic_load(&gate.entered) < 2 * workers;
+         ++i) {
+      changed = 0;
+      EXPECT(executor->ops->step(executor, &changed) == DAMACY_OK);
+      platform_sleep_ns(1000000);
+    }
+    EXPECT(gate_wait(&gate, &gate.entered, 2 * workers) == 0);
+    EXPECT(stats.decode.count == workers);
+    EXPECT(store.n_events == 3 && stats.chunks_dispatched == count);
+    struct damacy_batch* batch = NULL;
+    EXPECT(executor->ops->take(executor, &batch) == DAMACY_AGAIN);
+    gate_release(&gate, UINT_MAX);
+    EXPECT(finish_batch(executor, &batch) == 0);
+    EXPECT(check_output(batch, &store, chunks, count) == 0);
+    EXPECT(stats.decode.count == count && store.pending == 0);
+    damacy_batch_release(batch);
+    damacy_executor_destroy(executor);
+    gate_destroy(&gate);
+  }
+  return 0;
+}
+
+struct stop_call
+{
+  struct damacy_executor* executor;
+  atomic_int done;
+};
+
+static void
+stop_executor(void* arg)
+{
+  struct stop_call* call = arg;
+  call->executor->ops->stop(call->executor);
+  atomic_store(&call->done, 1);
+}
+
+static int
+test_shutdown_during_decode(void)
+{
+  const struct test_chunk chunks[] = {
+    { .offset = 0 }, { .offset = 8 }, { .offset = 16 }, { .offset = 24 }
+  };
+  for (unsigned read_error = 0; read_error < 2; ++read_error) {
+    struct test_store store;
+    store_init(&store, 2);
+    struct damacy_reader reader = { .store = &store.base,
+                                    .max_inflight_reads = 2 };
+    struct damacy_stats stats = { 0 };
+    struct damacy_executor* executor = NULL;
+    EXPECT(start_executor(&reader, 2, 2, 4, 8 << 20, &stats, &executor) == 0);
+    struct prepared_plan* plan = make_plan(chunks, 4);
+    EXPECT(plan);
+    EXPECT(executor->ops->submit(executor, plan, 0) == DAMACY_OK);
+    struct damacy_batch* retained = NULL;
+    EXPECT(finish_batch(executor, &retained) == 0);
+    struct decode_gate gate;
+    EXPECT(gate_init(&gate, 2) == 0);
+    store.held_event = store.n_events + 2;
+    plan = make_plan(chunks, 4);
+    EXPECT(plan);
+    EXPECT(executor->ops->submit(executor, plan, 1) == DAMACY_OK);
+    int changed = 0;
+    EXPECT(executor->ops->step(executor, &changed) == DAMACY_OK);
+    EXPECT(gate_wait(&gate, &gate.entered, 2) == 0);
+    EXPECT(store.pending == 1);
+    if (read_error) {
+      store.held_event = 0;
+      store.read_status = DAMACY_IO;
+      EXPECT(executor->ops->step(executor, &changed) == DAMACY_IO);
+      EXPECT(store.pending == 0 && store.completion_errors == 1);
+    }
+    struct stop_call call = { .executor = executor };
+    struct platform_thread* thread =
+      platform_thread_start(stop_executor, &call);
+    EXPECT(thread);
+    EXPECT(gate_wait(&gate, &gate.joins, 1) == 0);
+    EXPECT(!atomic_load(&call.done));
+    gate_release(&gate, UINT_MAX);
+    EXPECT(platform_thread_join(thread) == 0);
+    EXPECT(atomic_load(&call.done) && store.pending == 0);
+    EXPECT(store.waited == (read_error ? 0u : 1u));
+    gate_destroy(&gate);
+    EXPECT(check_output(retained, &store, chunks, 4) == 0);
+    store.read_status = DAMACY_OK;
+    struct damacy_batch_spec output = output_spec(4);
+    EXPECT(executor->ops->start(executor, &output, &stats) == DAMACY_OK);
+    plan = make_plan(chunks, 4);
+    EXPECT(plan);
+    EXPECT(executor->ops->submit(executor, plan, 2) == DAMACY_OK);
+    struct damacy_batch* batch = NULL;
+    EXPECT(finish_batch(executor, &batch) == 0);
+    EXPECT(check_output(batch, &store, chunks, 4) == 0);
+    damacy_batch_release(batch);
+    damacy_executor_destroy(executor);
+    EXPECT(check_output(retained, &store, chunks, 4) == 0);
+    damacy_batch_release(retained);
+  }
+  return 0;
+}
+#endif
+
+static int
+test_decode_error_with_pending_reads(void)
+{
+  const struct test_chunk chunks[] = {
+    { .offset = 0 }, { .offset = 8 }, { .offset = 16 }, { .offset = 24 }
+  };
+  struct test_store store;
+  store_init(&store, 2);
+  store.held_event = 2;
+  struct damacy_reader reader = { .store = &store.base,
+                                  .max_inflight_reads = 2 };
+  struct damacy_stats stats = { 0 };
+  struct damacy_executor* executor = NULL;
+  EXPECT(start_executor(&reader, 2, 2, 4, 8 << 20, &stats, &executor) == 0);
+  struct prepared_plan* plan = make_plan(chunks, 4);
+  EXPECT(plan);
+  plan->arrays[0].metadata.inner_codec.id = CODEC_ZSTD;
+  EXPECT(executor->ops->submit(executor, plan, 0) == DAMACY_OK);
+  enum damacy_status status = DAMACY_OK;
+  for (unsigned i = 0; i < 5000 && status == DAMACY_OK; ++i) {
+    int changed = 0;
+    status = executor->ops->step(executor, &changed);
+    platform_sleep_ns(1000000);
+  }
+  EXPECT(status == DAMACY_DECODE && store.pending == 1);
+  struct damacy_batch* batch = NULL;
+  EXPECT(executor->ops->take(executor, &batch) == DAMACY_AGAIN);
+  damacy_executor_destroy(executor);
+  EXPECT(store.pending == 0 && store.waited == 1);
+  return 0;
+}
+
 static int
 test_read_buffer_capacity(void)
 {
@@ -908,6 +1210,11 @@ main(void)
   RUN(test_plan_memory_budget);
   RUN(test_plan_memory_retry);
   RUN(test_read_errors_and_shutdown);
+#ifdef __linux__
+  RUN(test_reads_during_decode);
+  RUN(test_shutdown_during_decode);
+#endif
+  RUN(test_decode_error_with_pending_reads);
   RUN(test_read_buffer_capacity);
   RUN(test_merged_read_limit);
   RUN(test_read_plan_many_workers);
