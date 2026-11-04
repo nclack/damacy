@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Read performance · Damacy</title>
+  <script src="appearance.js"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <a class="brand" href="../">Damacy</a>
+    <nav aria-label="Performance reports">
+      <a href="./" aria-current="page">Read performance</a>
+      <a href="https://nclack.github.io/damacy/throughput/">Throughput history</a>
+      <a href="https://nclack.github.io/damacy/timings/">Timing history</a>
+      <a href="../performance/">Method</a>
+    </nav>
+    <label class="appearance">Appearance<select id="appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+  </header>
+  <main>
+    <p class="eyebrow">CHUNKS · CODECS · READ PATTERNS</p>
+    <h1>Read throughput and storage tradeoffs</h1>
+    <p class="intro">Find the settings that deliver more useful image data per second while storing fewer bytes.</p>
+    <p id="status" role="status">Loading measurements…</p>
+    <noscript><p>Enable JavaScript for interactive plots. The <a href="data/index.json">study index</a> links to the measurements.</p></noscript>
+    <section id="workspace" hidden aria-label="Performance study">
+      <div class="filters">
+        <label>Study<select id="study"></select></label>
+        <label>Image input<select id="input"></select></label>
+        <label>Read pattern<select id="workload"></select></label>
+        <label>Plot<select id="view"></select></label>
+      </div>
+      <p id="cache-condition" class="note"></p>
+      <p id="context" class="note"></p>
+      <details class="more-filters">
+        <summary>Filter settings</summary>
+        <div class="filters">
+          <label>Codec<select id="codec"></select></label>
+          <label>Chunk size<select id="chunk"></select></label>
+          <label>Blosc block request<select id="block"></select></label>
+          <label class="check" id="frontier-filter"><input id="frontier-only" type="checkbox">Show frontier only</label>
+        </div>
+      </details>
+      <div class="toolbar">
+        <p id="count" role="status"></p>
+        <div><button id="csv" type="button">Download CSV</button> <a id="raw">Study JSON</a></div>
+      </div>
+      <div class="legend" aria-label="Codec colors">
+        <span><i class="none"></i>Uncompressed</span>
+        <span><i class="zstd"></i>Zstd</span>
+        <span><i class="blosc-zstd"></i>Blosc Zstd · bitshuffle</span>
+      </div>
+      <p class="note" id="plot-note"></p>
+      <div class="results">
+        <div>
+          <div id="plots" class="plots"></div>
+          <details class="measurements">
+            <summary>All configuration measurements</summary>
+            <div class="table-scroll">
+              <table>
+                <thead><tr><th>Setting</th><th>Backend</th><th>Chunk</th><th>Block request</th><th>Useful GiB/s</th><th>Application reads/s</th><th>Encoded GiB/s</th><th>Mean read</th><th>Compression ×</th><th>Repeats</th></tr></thead>
+                <tbody id="rows"></tbody>
+              </table>
+            </div>
+          </details>
+        </div>
+        <aside id="detail" aria-label="Selected configuration">
+          <h2>Configuration details</h2>
+          <div id="detail-content"><p>Select a point or table setting to inspect its layout, amplification, and timings.</p></div>
+        </aside>
+      </div>
+    </section>
+    <section class="method">
+      <h2>Reading the measurements</h2>
+      <p>Useful throughput counts the pixels requested by the read, in their source data type, divided by elapsed time. Converting uint16 pixels to float32 does not increase this rate. GPU measurements wait for the final device work to finish. Initialization and warmup are separate.</p>
+      <p>Compression divides the original image bytes by stored Zarr file bytes, including padding, shard indexes, and array metadata. The horizontal axis is logarithmic. Values below one mean the stored files are larger than the original image.</p>
+      <p>Application requests/s counts data reads after adjacent requests are combined, divided by elapsed time. Encoded bandwidth counts the bytes in those requests. Metadata reads are separate. Higher request rates can mean smaller reads, so the plot includes encoded bandwidth and the details show average request size. Application requests are distinct from filesystem, NFS, and NVMe operations.</p>
+      <p>A setting is on the observed frontier if no other tested setting in the same input, read pattern, backend, machine session, and storage condition is at least as good on both axes and better on one. Filters recompute that frontier. Raw controls remain in the comparison when filtering Blosc blocks. Connections join observations; they do not interpolate unmeasured performance.</p>
+      <p>Ranges are observed minima and maxima, not confidence intervals. Reference variation describes the bracketing control runs. Pilot studies cover a limited set of settings and establish measurement cost and repeatability; they do not establish a final frontier.</p>
+      <p>Preloaded files measure the reader with a small, cached image working set. Overlapping or repeated requests can share encoded reads, so read amplification can be below one even without compression. These rates do not establish disk or network bandwidth. Shard geometry and CPU worker counts are held fixed within a study. Stage intervals overlap and must not be added into an elapsed-time breakdown.</p>
+      <p>Cold studies verify local PCIe NVMe storage, clear each data file from the Linux page cache after warmup and before every timed batch, and verify zero resident pages. Cache clearing is excluded from time. NVMe counters cover the devices as a whole, including other jobs and readahead; details retain adjacent idle traffic. These small, repeated cold batches do not establish sustained streaming performance or control SSD/controller caches.</p>
+      <p><a href="../performance/">Measurement protocol and reproduction</a> · Design inspired by the <a href="https://acquire-project.github.io/chucky/microscopy.html">chucky microscopy analysis</a>.</p>
+    </section>
+  </main>
+  <script src="vendor/d3.v7.9.0.min.js"></script>
+  <script type="module" src="report.js"></script>
+</body>
+</html>

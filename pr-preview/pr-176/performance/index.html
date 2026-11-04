@@ -1,0 +1,1093 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Streamed assembly of tensors from Zarr sources into RAM or GPU memory.">
+      
+      
+      
+        <link rel="canonical" href="https://nclack.github.io/damacy/performance/">
+      
+      
+        <link rel="prev" href="..">
+      
+      
+        <link rel="next" href="../pipeline/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>Performance - damacy</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#read-performance" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="damacy" class="md-header__button md-logo" aria-label="damacy" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            damacy
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Performance
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/nclack/damacy" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    nclack/damacy
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="damacy" class="md-nav__button md-logo" aria-label="damacy" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    damacy
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/nclack/damacy" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    nclack/damacy
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-the-axes-count" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the axes count
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cold-nvme-pilot-results" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cold NVMe pilot results
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cold-nvme-protocol" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cold NVMe protocol
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cached-h100-pilot-results" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cached H100 pilot results
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#microscopy-study" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Microscopy study
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reproduce-a-study" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reproduce a study
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#preview-a-pull-request" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Preview a pull request
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pipeline composition
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../dtypes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Output types
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../spatial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Spatial queries
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../budget/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GPU memory budget
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../distributed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Distributed
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../prefetch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Async prefetch
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-the-axes-count" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the axes count
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cold-nvme-pilot-results" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cold NVMe pilot results
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cold-nvme-protocol" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cold NVMe protocol
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cached-h100-pilot-results" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cached H100 pilot results
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#microscopy-study" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Microscopy study
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reproduce-a-study" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reproduce a study
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#preview-a-pull-request" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Preview a pull request
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="read-performance">Read performance<a class="headerlink" href="#read-performance" title="Permanent link">&para;</a></h1>
+<p>The <a href="../pareto/">interactive Pareto report</a> compares useful read throughput
+with compression. Each point is a measured chunk, codec, and Blosc block setting.
+CPU and CUDA, image inputs, read patterns, machine sessions, and storage conditions
+have separate frontiers. Additional plots show application read requests and
+NVMe device IOPS against bandwidth. The appearance selector defaults to the
+system setting and remembers explicit light or dark choices.</p>
+<p>The existing <a href="https://nclack.github.io/damacy/throughput/">throughput history</a> and
+<a href="https://nclack.github.io/damacy/timings/">timing history</a> retain the daily CI
+measurements. Those fixed scenarios help track changes on the CI machine.
+The retained Pareto studies explore which settings work well on a recorded machine.</p>
+<h2 id="what-the-axes-count">What the axes count<a class="headerlink" href="#what-the-axes-count" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Measurement</th>
+<th>Definition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Useful GiB/s</td>
+<td>Requested pixels × source bytes per pixel ÷ elapsed seconds ÷ 2³⁰</td>
+</tr>
+<tr>
+<td>Compression fold</td>
+<td>Original image bytes ÷ stored Zarr file bytes</td>
+</tr>
+<tr>
+<td>Application reads/s</td>
+<td>Completed data read requests after combining adjacent requests ÷ elapsed seconds</td>
+</tr>
+<tr>
+<td>Encoded GiB/s</td>
+<td>Bytes in those application read requests ÷ elapsed seconds ÷ 2³⁰</td>
+</tr>
+<tr>
+<td>Mean application read</td>
+<td>Encoded read bytes ÷ application read requests</td>
+</tr>
+<tr>
+<td>Requests / useful GiB</td>
+<td>Application read requests ÷ useful source bytes × 2³⁰</td>
+</tr>
+<tr>
+<td>NVMe read IOPS</td>
+<td>Device read completions during measured batches ÷ elapsed seconds</td>
+</tr>
+<tr>
+<td>Device GiB/s</td>
+<td>Device sectors read × 512 ÷ elapsed seconds ÷ 2³⁰</td>
+</tr>
+<tr>
+<td>Read amplification</td>
+<td>Encoded bytes read by the pipeline ÷ useful source bytes returned</td>
+</tr>
+<tr>
+<td>Decode amplification</td>
+<td>Bytes reported by the decode stage ÷ useful source bytes returned</td>
+</tr>
+</tbody>
+</table>
+<p>Stored file bytes include edge padding, shard indexes, and array metadata. They
+are file lengths, not filesystem block allocation. Uncompressed settings can
+therefore have compression folds below one. A missing decode-byte counter is
+shown as unavailable. Overlapping or repeated requests can share encoded reads,
+so read amplification can be below one even without compression.</p>
+<p>Returned tensor throughput is available in configuration details. For uint16
+input converted to float32, it is twice the useful source-byte rate. The primary
+axis keeps this conversion from inflating the reported read speed.</p>
+<p>Elapsed measurement time includes pushing queries, reading, decoding, conversion,
+assembly, and waiting for the last CUDA work to finish. Setup and warmup are
+separate. Cold measurements also exclude cache clearing and counter collection.
+Stage intervals overlap and cannot be summed into elapsed time.</p>
+<p>Application requests use the native <code>reads_issued</code> counter, not I/O wave counts
+or accumulated stage time. They exclude metadata reads and are not counts of
+NFS requests or physical disk commands. The kernel can split or combine requests,
+serve them from RAM, or read ahead. Device counters are reported separately and
+are shared with other activity on those devices. Their adjacent idle rates are
+shown without subtracting an assumed background rate. A high IOPS value alone
+does not make a setting better; request size and useful throughput provide context.</p>
+<h2 id="cold-nvme-pilot-results">Cold NVMe pilot results<a class="headerlink" href="#cold-nvme-pilot-results" title="Permanent link">&para;</a></h2>
+<p>The <a href="../pareto/#study=5add8a3675356a860c8e">cold CPU pilot</a> contains
+72 executions of 24 settings on an AMD EPYC 9655P, with eight allowed logical
+CPUs and an array of eight 7.68 TB Intel PCIe NVMe drives. It covers BBBC010,
+DynaCell, and COSEM, both read patterns, and four layouts per input.</p>
+<p>All 24,825 measured batches passed the zero-resident-page check and recorded
+device reads. Device counters totaled 99.77 GiB read during the measured batches.
+The adjacent idle intervals recorded no device reads, but did record writes;
+the drives were not reserved exclusively for this study. The median throughput
+range across repeats was 3.0% of the median, with a maximum of 9.9%.
+Bracketing reference ranges also reached 9.9%. The
+<a href="../pareto/data/5add8a3675356a860c8e.json">retained JSON</a> includes cache checks,
+device counters, metadata activity, source hashes, and individual observations.</p>
+<p>This validates the cold protocol on local storage. It is a CPU-only pilot on a
+different machine from the cached H100 study; their rates are not a paired
+comparison of cache state. A cold CUDA study and the full layout matrix remain
+unmeasured.</p>
+<h2 id="cold-nvme-protocol">Cold NVMe protocol<a class="headerlink" href="#cold-nvme-protocol" title="Permanent link">&para;</a></h2>
+<p>The study definition now selects <code>"cache_policy": "cold"</code>. The earlier pilot
+below used preloaded files; it remains a separate cached study and is not
+evidence of cold NVMe performance.</p>
+<ol>
+<li>Copy prepared files to a private directory on the compute node. Resolve the
+   mounted XFS/ext4 block device through partitions and storage arrays to its
+   physical devices. Require PCIe NVMe, record device models, and reject network
+   mounts or storage whose backing devices cannot be verified.</li>
+<li>Warm the reader, codecs, and GPU. Retain startup metadata-operation counts,
+   including array metadata and shard-index cache misses, then reset measurement
+   counters. The native result records startup and measured metadata separately.</li>
+<li>Flush writes to the owned data files, then use <code>POSIX_FADV_DONTNEED</code> and
+   <code>mincore</code> to evict and check every data-file page before <strong>each</strong> measured batch.
+   A successful advisory call is insufficient: any remaining resident page fails
+   the run. This does not flush the whole node's cache or clear the reader's
+   metadata cache. The kernel documents both the advisory nature of
+   <a href="https://man7.org/linux/man-pages/man2/posix_fadvise.2.html">file-cache eviction</a>
+   and the snapshot nature of <a href="https://man7.org/linux/man-pages/man2/mincore.2.html">residency checks</a>.</li>
+<li>Time one batch through completion, including the final CUDA work. Repeat cold
+   batches until their summed elapsed time reaches the requested window. Cache
+   clearing, residency checks, initialization, and idle controls stay outside that
+   sum. The same query seed is used across layouts and backends. Whole-plane
+   batches contain at most the input's number of planes.</li>
+<li>Record NVMe read completions, bytes, and writes around each timed batch. Reject
+   a batch with no device reads. Retain 100 ms idle intervals before and after the
+   execution to expose background traffic. Device statistics follow the
+   <a href="https://docs.kernel.org/admin-guide/iostats.html">kernel counter definitions</a>.</li>
+</ol>
+<p>This measures <strong>Linux page-cache-cold batches with warmed codecs and metadata</strong>.
+SSD/controller caches are not controlled. Repeated small image packs do not
+establish sustained streaming bandwidth, and overlapping requests within a batch
+can share reads. Cold and cached runs have separate measurement conditions and
+frontiers. For a sustained-storage study, use a larger collection of distinct
+file extents and vary batch size and outstanding work; do not interpret this
+pilot as the drive's maximum bandwidth or IOPS.</p>
+<h2 id="cached-h100-pilot-results">Cached H100 pilot results<a class="headerlink" href="#cached-h100-pilot-results" title="Permanent link">&para;</a></h2>
+<p>The <a href="../pareto/#study=f0aa215f44b8b59093a0">November 4, 2026 pilot</a>
+contains 144 executions of 48 settings on an NVIDIA H100 80 GB and Intel Xeon
+Platinum 8462Y+, with 16 allowed logical CPUs. It uses BBBC010, DynaCell, and
+COSEM inputs, two process repetitions, eight CPU decode workers, and eight file
+workers. Files were copied to node-local XFS storage and preloaded into the page
+cache. The <a href="../pareto/data/f0aa215f44b8b59093a0.json">study JSON</a> retains individual
+measurements, the exact allocation, and source and binary hashes.</p>
+<p>The block-size tradeoff is already visible. For DynaCell whole-plane CUDA reads,
+with 256 KiB chunks and otherwise identical Blosc-Zstd settings:</p>
+<table>
+<thead>
+<tr>
+<th>Blosc block size</th>
+<th style="text-align: right;">Useful GiB/s, median</th>
+<th style="text-align: right;">Observed range</th>
+<th style="text-align: right;">Compression fold</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>16 KiB</td>
+<td style="text-align: right;">11.67</td>
+<td style="text-align: right;">11.48–11.85</td>
+<td style="text-align: right;">1.137×</td>
+</tr>
+<tr>
+<td>256 KiB</td>
+<td style="text-align: right;">1.102</td>
+<td style="text-align: right;">1.102–1.103</td>
+<td style="text-align: right;">1.151×</td>
+</tr>
+</tbody>
+</table>
+<p>The larger blocks reduce stored bytes by about 1.2% while reducing throughput
+by about 10.6-fold in this condition. These small, replayed image packs include
+overlapping and repeated requests; the rates describe those requests, not
+streaming through an equally large collection of distinct images.</p>
+<p>Across the 48 settings, the median min–max throughput spread was 1.9% of the
+median; the largest was 15.9%. Uncompressed medians from the 0.5-second windows
+were within 5.5% of the medians from the three-second reference windows.
+Reference ranges reached 9.4%. Small frontier differences need more repetitions
+and longer measurements before being treated as a reliable ordering.</p>
+<p>The measurement runner took 6.1 minutes, including 3.2 minutes of timed work.
+Applying its average process overhead to the cached full matrix gives approximately
+79 minutes before preparation and validation. Cold runs also spend time clearing
+and checking file pages, so that estimate does not apply to the cold protocol.
+The full matrix has not been measured.</p>
+<h2 id="microscopy-study">Microscopy study<a class="headerlink" href="#microscopy-study" title="Permanent link">&para;</a></h2>
+<p><a href="https://github.com/nclack/damacy/blob/main/bench/studies/microscopy.json"><code>bench/studies/microscopy.json</code></a>
+defines the matrix. It uses version 3 of the public
+<a href="https://github.com/nclack/chucky-benchmarks-data">microscopy corpus</a>, also used by
+the <a href="https://acquire-project.github.io/chucky/microscopy.html">chucky microscopy analysis</a>.
+Inputs retain their original pixel values, shape, type, checksum, and attribution.</p>
+<p>The seven inputs cover OpenCell DNA and protein, BBBC010 brightfield, JUMP-Scope
+fluorescence, DynaCell phase, COSEM EM, and BBBC022 MitoTracker. These are small
+image packs, not a representative sample of every microscopy workload.</p>
+<p>The study compares:</p>
+<ul>
+<li>Uncompressed bytes, Zstd level 3, and Blosc Zstd level 3 with bitshuffle.</li>
+<li>16, 64, 256, and 1024 KiB chunks, with a plane extent of one. The remaining
+  dimensions are powers of two, with the longer extent along X.</li>
+<li>Blosc block requests of 16 KiB and the whole chunk. Duplicate requests are
+  removed, and actual block sizes are read from the stored headers.</li>
+<li>Random 256 × 256 crops and sequential whole-plane reads.</li>
+<li>CPU and CUDA decoding, with the same encoded files and queries.</li>
+</ul>
+<p>Shard shape stays at <code>[1, 1024, 1024]</code>; CPU decode and file worker counts stay
+at eight. The reader allows 64 Blosc blocks per chunk to cover the full matrix.
+Both backends return float32. These are controlled comparisons at
+recorded resource limits, not claims about the best possible CPU worker count
+or shard geometry.</p>
+<p>Cold executions use the protocol above. An explicit <code>"preloaded files"</code> cache
+policy instead preloads encoded files and replays fixed query passes until both
+the work budget and minimum duration are satisfied. The <code>bytes_per_pass</code> profile
+field applies to that cached mode; cold mode always uses one batch per pass.</p>
+<p>The full matrix has 105 encoded layouts and 420 measurement settings. Three
+randomized rounds plus bracketing uncompressed controls make 1,428 executions.
+The pilot covers three inputs spanning uint8, uint16, and float32, four layouts
+per input, both backends, and both read patterns: 48 settings and 144 executions.
+Its requested measurement windows total 192 seconds before preparation, process
+startup, warmup, and work-budget overruns.</p>
+<p>Pilot results are labelled. Repeats report medians and observed min–max ranges;
+they are not confidence intervals. Controls before and after each condition
+show reference variation. The full study should follow a pilot review of
+runtime, repeatability, and agreement between the short and longer control windows.</p>
+<h2 id="reproduce-a-study">Reproduce a study<a class="headerlink" href="#reproduce-a-study" title="Permanent link">&para;</a></h2>
+<p>Use a materialized version-3 corpus with <code>manifest.json</code> and the declared raw
+files. Planning reads metadata only:</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>uv<span class="w"> </span>run<span class="w"> </span>--script<span class="w"> </span>bench/pareto.py<span class="w"> </span>plan<span class="w"> </span>bench/studies/microscopy.json<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span>--corpus<span class="w"> </span>/path/to/microscopy<span class="w"> </span>--pilot<span class="w"> </span>--output<span class="w"> </span>/shared/study/plan.json
+</span></code></pre></div>
+<p>Omit <code>--pilot</code> to plan all seven inputs and 105 layouts.</p>
+<p>Preparation and measurement belong on compute nodes. Build <code>damacy_bench</code> with
+CUDA enabled to measure both backends. Preparation checks input hashes, encodes
+each layout, verifies every decoded pixel, and records the stored files and
+Blosc headers:</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>uv<span class="w"> </span>run<span class="w"> </span>--script<span class="w"> </span>bench/pareto.py<span class="w"> </span>prepare<span class="w"> </span>/shared/study/plan.json<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span>--corpus<span class="w"> </span>/path/to/microscopy<span class="w"> </span>--output<span class="w"> </span>/shared/study/data
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>uv<span class="w"> </span>run<span class="w"> </span>--script<span class="w"> </span>bench/pareto.py<span class="w"> </span>run<span class="w"> </span>/shared/study/plan.json<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span>--data<span class="w"> </span>/node-local/study/data<span class="w"> </span>--output<span class="w"> </span>/shared/study/results<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span>--storage<span class="w"> </span><span class="s1">'Local NVMe; file cache checked cold before every batch'</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>uv<span class="w"> </span>run<span class="w"> </span>--script<span class="w"> </span>bench/pareto.py<span class="w"> </span>report<span class="w"> </span>/shared/study/results<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">  </span>--output<span class="w"> </span>docs/pareto/data
+</span></code></pre></div>
+<p>Copy the prepared data to the node-local path before running. <code>--backend cpu</code>
+selects only CPU measurements. Each process has a timeout; failures retain
+stdout, stderr, and its scenario. Repeating the same command resumes completed
+observations only when the plan, files, source, binary, machine, allocation,
+and resource settings still match. A new session needs a new result directory.</p>
+<p>The public export retains raw observations and file hashes and removes local
+input paths. It rejects incomplete studies and mismatched observations. Serve
+the report over HTTP, or build the documentation site; the page loads its study
+JSON separately. The daily CI workflow does not start these retained studies.</p>
+<h2 id="preview-a-pull-request">Preview a pull request<a class="headerlink" href="#preview-a-pull-request" title="Permanent link">&para;</a></h2>
+<p>The docs workflow builds and checks the page in Chromium. Pull requests from a
+branch in this repository publish their site under
+<code>https://nclack.github.io/damacy/pr-preview/pr-N/</code>, with the report at <code>pareto/</code>.
+The workflow summary links to the preview. Production docs and benchmark histories
+keep their existing URLs. Every docs build also uploads a <code>docs-site</code> artifact;
+download and unzip it, then run <code>python -m http.server</code> from that directory.
+Fork pull requests provide the artifact without publishing to Pages.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.tracking", "navigation.sections", "navigation.top", "content.code.copy", "content.code.annotate", "toc.follow"], "search": "../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>
