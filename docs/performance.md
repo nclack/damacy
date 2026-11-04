@@ -65,6 +65,9 @@ range across repeats was 3.0% of the median, with a maximum of 9.9%.
 Bracketing reference ranges also reached 9.9%. The
 [retained JSON](pareto/data/5add8a3675356a860c8e.json) includes cache checks,
 device counters, metadata activity, source hashes, and individual observations.
+Its metadata read-operation counts distinguish startup from timed work. The
+cache-miss fields in that retained native result are snapshots, so the page does
+not interpret them as additional timed metadata reads.
 
 This validates the cold protocol on local storage. It is a CPU-only pilot on a
 different machine from the cached H100 study; their rates are not a paired

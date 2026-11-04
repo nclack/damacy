@@ -132,6 +132,10 @@ endif()
 # pytest target alongside the C tests under a single BUILD_TESTING gate.
 include(CTest)
 
+if(BUILD_TESTING AND NOT DAMACY_FUZZ)
+    add_subdirectory(bench/tests)
+endif()
+
 if(DAMACY_PYTHON)
     add_subdirectory(python)
 endif()

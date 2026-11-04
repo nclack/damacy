@@ -92,14 +92,17 @@ function select(row) {
   const metadata = observations[0].result.metadata;
   if (metadata) {
     target.append(element("h3", "Metadata in this execution"));
-    fields(target, [
+    const counts = [
       ["Startup read operations", number(metadata.startup.read)],
       ["Measured read operations", number(metadata.measured.read)],
+    ];
+    if (metadata.version === 2) counts.push(
       ["Startup Zarr metadata misses", number(metadata.startup.array_metadata_misses)],
       ["Measured Zarr metadata misses", number(metadata.measured.array_metadata_misses)],
       ["Startup shard-index misses", number(metadata.startup.shard_index_misses)],
       ["Measured shard-index misses", number(metadata.measured.shard_index_misses)],
-    ]);
+    );
+    fields(target, counts);
   }
   target.append(element("h3", "Input and source"));
   const input = study.inputs.find(value => value.id === row.input_id);

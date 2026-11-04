@@ -51,7 +51,7 @@ open_paths(struct cslice source, const char* key, struct cold_read* state)
 {
   struct json_query query[] = { { QUERY_KEY, .key = "cache" },
                                 { QUERY_KEY, .key = key },
-                                { QUERY_ITER } };
+                                { .kind = QUERY_ITER } };
   struct json_iter it;
   if (json_iter_init(source, query, 3, &it, NULL))
     return 1;

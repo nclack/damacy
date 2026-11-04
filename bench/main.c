@@ -779,6 +779,7 @@ struct run_metrics
 {
   struct cold_read_result cold;
   struct damacy_stats startup_stats;
+  struct damacy_stats measurement_baseline;
   double warmup_ms;
   uint64_t measurement_passes;
   double init_ms;
@@ -974,19 +975,28 @@ emit_metadata_op_latency(struct json_writer* jw, const struct run_metrics* rm)
 }
 
 static void
-emit_metadata_counts(struct json_writer* jw, const struct damacy_stats* stats)
+emit_metadata_counts(struct json_writer* jw,
+                     const struct damacy_stats* stats,
+                     const struct damacy_stats* baseline)
 {
   static const char* names[] = { "statx", "open", "read", "close" };
+  const struct damacy_stats zero = { 0 };
+  if (!baseline)
+    baseline = &zero;
   jw_object_begin(jw);
   jw_key(jw, "array_metadata_misses");
-  jw_uint(jw, stats->array_meta.misses);
+  jw_uint(jw, stats->array_meta.misses - baseline->array_meta.misses);
   jw_key(jw, "shard_index_misses");
-  jw_uint(jw, stats->shard_index.misses);
+  jw_uint(jw, stats->shard_index.misses - baseline->shard_index.misses);
   jw_key(jw, "read_jobs");
-  jw_uint(jw, stats->metadata_backend.read_jobs);
+  jw_uint(jw,
+          stats->metadata_backend.read_jobs -
+            baseline->metadata_backend.read_jobs);
   for (unsigned i = 0; i < countof(names); ++i) {
     jw_key(jw, names[i]);
-    jw_uint(jw, stats->metadata_op_latency[i].count);
+    jw_uint(jw,
+            stats->metadata_op_latency[i].count -
+              baseline->metadata_op_latency[i].count);
   }
   jw_object_end(jw);
 }
@@ -1015,10 +1025,12 @@ emit_results(const struct scenario* sc, const struct run_metrics* rm, FILE* out)
 
   jw_key(&jw, "metadata");
   jw_object_begin(&jw);
+  jw_key(&jw, "version");
+  jw_uint(&jw, 2);
   jw_key(&jw, "startup");
-  emit_metadata_counts(&jw, &rm->startup_stats);
+  emit_metadata_counts(&jw, &rm->startup_stats, NULL);
   jw_key(&jw, "measured");
-  emit_metadata_counts(&jw, &rm->stats);
+  emit_metadata_counts(&jw, &rm->stats, &rm->measurement_baseline);
   jw_object_end(&jw);
 
   if (sc->cold_reads) {
@@ -1463,6 +1475,7 @@ main(int argc, char** argv)
   }
 
   rm.ttfb_ms = (t_first_pop > 0.0 ? (t_first_pop - t_first_push) : 0.0) * 1e3;
+  damacy_stats_get(d, &rm.measurement_baseline);
 
   struct cold_read* cold = NULL;
   if (sc.cold_reads && (cold_read_create(src, &cold) || cold_read_idle(cold))) {
