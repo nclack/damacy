@@ -12,6 +12,7 @@
 #include "log/log.h"
 #include "threadpool/threadpool.h"
 
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -47,6 +48,14 @@ struct cpu_chunk_input
   const void* input;
 };
 
+enum cpu_wave_state
+{
+  CPU_INPUT_FREE,
+  CPU_READING,
+  CPU_READ_READY,
+  CPU_DECODING
+};
+
 struct cpu_wave
 {
   struct store_event event;
@@ -61,7 +70,8 @@ struct cpu_wave
   uint32_t count;
   uint32_t slot;
   uint64_t input_bytes;
-  int active;
+  uint64_t sequence;
+  enum cpu_wave_state state;
 };
 
 struct cpu_executor
@@ -78,6 +88,13 @@ struct cpu_executor
   struct cpu_slot slots[2];
   struct cpu_wave waves[2];
   struct cpu_wave* decoding;
+  struct platform_thread* decode_thread;
+  struct platform_mutex* decode_lock;
+  struct platform_cond* decode_wake;
+  atomic_int decode_done;
+  int decode_pending;
+  int stopping;
+  uint64_t next_wave;
   uint64_t committed;
 };
 
@@ -409,6 +426,26 @@ decode_one(size_t index, int tid, void* arg)
 }
 
 static void
+decode_main(void* arg)
+{
+  struct cpu_executor* self = arg;
+  platform_mutex_lock(self->decode_lock);
+  for (;;) {
+    while (!self->decode_pending && !self->stopping)
+      platform_cond_wait(self->decode_wake, self->decode_lock);
+    if (self->stopping)
+      break;
+    struct cpu_wave* wave = self->decoding;
+    self->decode_pending = 0;
+    platform_mutex_unlock(self->decode_lock);
+    threadpool_for_n_dynamic(self->pool, wave->count, decode_one, self);
+    atomic_store_explicit(&self->decode_done, 1, memory_order_release);
+    platform_mutex_lock(self->decode_lock);
+  }
+  platform_mutex_unlock(self->decode_lock);
+}
+
+static void
 cpu_buffer_destroy(struct damacy_buffer* buffer)
 {
   free(buffer->data);
@@ -419,9 +456,27 @@ static void
 cpu_stop(struct damacy_executor* base)
 {
   struct cpu_executor* self = (void*)base;
+  if (self->decode_thread) {
+    platform_mutex_lock(self->decode_lock);
+    self->stopping = 1;
+    platform_cond_broadcast(self->decode_wake);
+    platform_mutex_unlock(self->decode_lock);
+    platform_thread_join(self->decode_thread);
+    self->decode_thread = NULL;
+  }
+  threadpool_free(self->pool);
+  self->pool = NULL;
+  platform_cond_free(self->decode_wake);
+  self->decode_wake = NULL;
+  platform_mutex_free(self->decode_lock);
+  self->decode_lock = NULL;
+  self->decoding = NULL;
+  self->decode_pending = 0;
+  self->stopping = 0;
+  atomic_store_explicit(&self->decode_done, 0, memory_order_relaxed);
   for (unsigned i = 0; i < 2; ++i) {
     struct cpu_wave* wave = &self->waves[i];
-    if (wave->active && wave->event.impl)
+    if (wave->event.impl)
       store_event_wait(self->reader->store, wave->event);
     free(wave->input);
     free(wave->reads);
@@ -438,8 +493,6 @@ cpu_stop(struct damacy_executor* base)
     buffer_release(self->slots[i].buffer);
     self->slots[i] = (struct cpu_slot){ 0 };
   }
-  threadpool_free(self->pool);
-  self->pool = NULL;
   if (self->workers) {
     for (uint32_t i = 0; i < self->config.decode_workers; ++i) {
       free(self->workers[i].decoded);
@@ -448,6 +501,7 @@ cpu_stop(struct damacy_executor* base)
     free(self->workers);
     self->workers = NULL;
   }
+  self->next_wave = 0;
   self->committed = 0;
 }
 
@@ -534,6 +588,13 @@ cpu_start(struct damacy_executor* base,
   }
   self->pool = threadpool_new((int)workers - 1);
   if (!self->pool)
+    goto Fail;
+  self->decode_lock = platform_mutex_new();
+  self->decode_wake = platform_cond_new();
+  if (!self->decode_lock || !self->decode_wake)
+    goto Fail;
+  self->decode_thread = platform_thread_start(decode_main, self);
+  if (!self->decode_thread)
     goto Fail;
   return DAMACY_OK;
 Fail:
@@ -638,10 +699,11 @@ cpu_dispatch(struct cpu_executor* self, struct cpu_wave* wave, int* changed)
   if (result.status != DAMACY_OK)
     return result.status;
   wave->event = result.event;
-  wave->active = 1;
+  wave->state = CPU_READING;
   wave->slot = (uint32_t)slot_index;
   wave->count = count;
   wave->input_bytes = bytes;
+  wave->sequence = self->next_wave++;
   slot->dispatched = next_read;
   self->stats->reads_issued += n_reads;
   self->stats->chunks_dispatched += count;
@@ -651,9 +713,46 @@ cpu_dispatch(struct cpu_executor* self, struct cpu_wave* wave, int* changed)
 }
 
 static enum damacy_status
+cpu_collect(struct cpu_executor* self, int* changed)
+{
+  struct cpu_wave* wave = self->decoding;
+  if (!wave || !atomic_load_explicit(&self->decode_done, memory_order_acquire))
+    return DAMACY_OK;
+  struct cpu_slot* slot = &self->slots[wave->slot];
+  for (uint32_t j = 0; j < wave->count; ++j) {
+    if (wave->results[j] != DAMACY_OK)
+      return wave->results[j];
+    const struct plan_chunk* chunk = wave->chunks[j].chunk;
+    metric_record(&self->stats->decode,
+                  wave->decode_ms[j],
+                  chunk->encoded_bytes,
+                  chunk->missing ? 0 : chunk->decoded_bytes);
+    metric_record(&self->stats->assemble,
+                  wave->assemble_ms[j],
+                  chunk->decoded_bytes,
+                  wave->output_bytes[j]);
+  }
+  slot->remaining -= wave->count;
+  wave->state = CPU_INPUT_FREE;
+  self->decoding = NULL;
+  if (!slot->remaining) {
+    slot->state = CPU_READY;
+    self->committed -= slot->read_plan.bytes;
+    cpu_read_plan_destroy(&slot->read_plan);
+    prepared_plan_destroy(slot->plan);
+    slot->plan = NULL;
+  }
+  *changed = 1;
+  return DAMACY_OK;
+}
+
+static enum damacy_status
 cpu_step(struct damacy_executor* base, int* changed)
 {
   struct cpu_executor* self = (void*)base;
+  enum damacy_status status = cpu_collect(self, changed);
+  if (status != DAMACY_OK)
+    return status;
   for (unsigned i = 0; i < 2; ++i) {
     struct cpu_slot* slot = &self->slots[i];
     if (slot->state == CPU_HELD && buffer_available(slot->buffer)) {
@@ -662,15 +761,15 @@ cpu_step(struct damacy_executor* base, int* changed)
     }
   }
   for (unsigned i = 0; i < 2; ++i) {
-    if (!self->waves[i].active) {
-      enum damacy_status status = cpu_dispatch(self, &self->waves[i], changed);
+    if (self->waves[i].state == CPU_INPUT_FREE) {
+      status = cpu_dispatch(self, &self->waves[i], changed);
       if (status != DAMACY_OK && status != DAMACY_AGAIN)
         return status;
     }
   }
   for (unsigned i = 0; i < 2; ++i) {
     struct cpu_wave* wave = &self->waves[i];
-    if (!wave->active)
+    if (wave->state != CPU_READING)
       continue;
     struct store_event_poll poll =
       store_event_query(self->reader->store, wave->event);
@@ -683,32 +782,27 @@ cpu_step(struct damacy_executor* base, int* changed)
                   platform_toc(&wave->clock) * 1000,
                   (double)wave->input_bytes,
                   (double)wave->input_bytes);
-    self->decoding = wave;
-    threadpool_for_n_dynamic(self->pool, wave->count, decode_one, self);
-    struct cpu_slot* slot = &self->slots[wave->slot];
-    for (uint32_t j = 0; j < wave->count; ++j) {
-      if (wave->results[j] != DAMACY_OK)
-        return wave->results[j];
-      const struct plan_chunk* chunk = wave->chunks[j].chunk;
-      metric_record(&self->stats->decode,
-                    wave->decode_ms[j],
-                    chunk->encoded_bytes,
-                    chunk->missing ? 0 : chunk->decoded_bytes);
-      metric_record(&self->stats->assemble,
-                    wave->assemble_ms[j],
-                    chunk->decoded_bytes,
-                    wave->output_bytes[j]);
-    }
-    slot->remaining -= wave->count;
-    wave->active = 0;
-    if (!slot->remaining) {
-      slot->state = CPU_READY;
-      self->committed -= slot->read_plan.bytes;
-      cpu_read_plan_destroy(&slot->read_plan);
-      prepared_plan_destroy(slot->plan);
-      slot->plan = NULL;
-    }
+    wave->state = CPU_READ_READY;
     *changed = 1;
+  }
+  if (!self->decoding) {
+    struct cpu_wave* next = NULL;
+    for (unsigned i = 0; i < 2; ++i) {
+      struct cpu_wave* wave = &self->waves[i];
+      if (wave->state == CPU_READ_READY &&
+          (!next || wave->sequence < next->sequence))
+        next = wave;
+    }
+    if (next) {
+      next->state = CPU_DECODING;
+      self->decoding = next;
+      atomic_store_explicit(&self->decode_done, 0, memory_order_relaxed);
+      platform_mutex_lock(self->decode_lock);
+      self->decode_pending = 1;
+      platform_cond_broadcast(self->decode_wake);
+      platform_mutex_unlock(self->decode_lock);
+      *changed = 1;
+    }
   }
   return DAMACY_OK;
 }
@@ -797,6 +891,7 @@ damacy_cpu_executor_create(struct damacy_reader* reader,
   struct cpu_executor* self = calloc(1, sizeof(*self));
   if (!self)
     return DAMACY_OOM;
+  atomic_init(&self->decode_done, 0);
   self->base.ops = &cpu_ops;
   self->base.device_type = DAMACY_DEVICE_CPU;
   self->base.accepts_indexed_samples = 1;
