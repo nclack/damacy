@@ -56,18 +56,23 @@
       <div class="results">
         <div>
           <div id="plots" class="plots"></div>
+          <div class="selection">
+            <p id="selection-status" role="status" aria-atomic="true">Select a point or table setting to inspect its measurements.</p>
+            <a id="selection-details" href="#detail-heading" hidden>View configuration details</a>
+          </div>
           <details class="measurements">
             <summary>All configuration measurements</summary>
             <div class="table-scroll">
               <table>
-                <thead><tr><th>Setting</th><th>Backend</th><th>Chunk</th><th>Block request</th><th>Useful GiB/s</th><th>Application reads/s</th><th>Encoded GiB/s</th><th>Mean read</th><th>Compression ×</th><th>Repeats</th></tr></thead>
+                <caption id="table-description"></caption>
+                <thead><tr id="columns"></tr></thead>
                 <tbody id="rows"></tbody>
               </table>
             </div>
           </details>
         </div>
         <aside id="detail" aria-label="Selected configuration">
-          <h2>Configuration details</h2>
+          <h2 id="detail-heading" tabindex="-1">Configuration details</h2>
           <div id="detail-content"><p>Select a point or table setting to inspect its layout, amplification, and timings.</p></div>
         </aside>
       </div>

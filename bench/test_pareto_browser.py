@@ -138,6 +138,15 @@ def fixture():
 
 
 def verify_scales(page, view="pareto"):
+    sizes = page.locator(".panel svg").evaluate_all("""svgs => svgs.map(svg => ({
+      width: svg.viewBox.baseVal.width, height: svg.viewBox.baseVal.height,
+      renderedWidth: svg.getBoundingClientRect().width,
+      renderedHeight: svg.getBoundingClientRect().height
+    }))""")
+    for size in sizes[1:]:
+        assert all(
+            math.isclose(size[key], sizes[0][key], abs_tol=1e-3) for key in size
+        ), sizes
     panels = page.locator(".panel svg").evaluate_all("""svgs => svgs.map(svg =>
       [...svg.querySelectorAll('circle.point')].map(point => ({
         x: +point.getAttribute('cx'), y: +point.getAttribute('cy'),
@@ -146,7 +155,14 @@ def verify_scales(page, view="pareto"):
         read_iops: point.__data__.metrics.read_iops?.median,
         read_gib_s: point.__data__.metrics.read_gib_s?.median,
         device_iops: point.__data__.metrics.device_iops?.median,
-        device_read_gib_s: point.__data__.metrics.device_read_gib_s?.median
+        device_read_gib_s: point.__data__.metrics.device_read_gib_s?.median,
+        metrics: point.__data__.metrics,
+        ranges: [...point.parentNode.querySelectorAll('path.range')].map(path => {
+          const box = path.getBBox();
+          return {x: box.x, y: box.y, width: box.width, height: box.height,
+            after: !!(point.compareDocumentPosition(path) & Node.DOCUMENT_POSITION_FOLLOWING),
+            pointer: getComputedStyle(path).pointerEvents};
+        })
       })))""")
     axes = {
         "pareto": (("fold", math.log, "x", 1), ("rate", float, "y", -1)),
@@ -173,6 +189,81 @@ def verify_scales(page, view="pareto"):
                     transform(point[key]) - transform(low[key])
                 )
                 assert math.isclose(point[coordinate], expected, abs_tol=1e-6)
+                if key == "fold":
+                    continue
+                metric = point["metrics"]["useful_gib_s" if key == "rate" else key]
+                limits = sorted(
+                    low[coordinate]
+                    + slope * (transform(metric[end]) - transform(low[key]))
+                    for end in ("min", "max")
+                )
+                bar = point["ranges"][0 if coordinate == "y" else 1]
+                extent = bar["height" if coordinate == "y" else "width"]
+                assert math.isclose(bar[coordinate], limits[0], abs_tol=1e-3)
+                assert math.isclose(bar[coordinate] + extent, limits[1], abs_tol=1e-3)
+                assert bar["after"] and bar["pointer"] == "none"
+
+
+def verify_table(page, rows, view):
+    headers = page.locator("#columns th").all_text_contents()
+    cells = page.locator("#rows tr").evaluate_all("""rows => rows.map(row => ({
+      id: row.querySelector('button').dataset.setting,
+      values: [...row.children].map(cell => ({text: cell.firstChild.textContent, range: cell.querySelector('.observed-range')?.textContent}))
+    }))""")
+    by_id = {row["id"]: row for row in rows}
+    metrics = [("Useful GiB/s", "useful_gib_s")]
+    if view == "device":
+        assert "Application reads/s" not in headers
+        metrics += [
+            ("NVMe read IOPS", "device_iops"),
+            ("Device read GiB/s", "device_read_gib_s"),
+        ]
+        assert "Mean device read" in headers
+    elif view == "io":
+        assert "NVMe read IOPS" not in headers
+        metrics += [
+            ("Application reads/s", "read_iops"),
+            ("Encoded read GiB/s", "read_gib_s"),
+        ]
+        assert "Mean encoded read" in headers
+    assert {row["id"] for row in cells} == set(by_id)
+    for row in cells:
+        original = by_id[row["id"]]
+        assert (
+            int(row["values"][headers.index("Repeats")]["text"])
+            == original["metrics"]["useful_gib_s"]["n"]
+        )
+        for heading, key in metrics:
+            cell = row["values"][headers.index(heading)]
+            metric = original["metrics"].get(key)
+            if metric is None:
+                assert cell["text"] == "—"
+                continue
+            median, limits = cell["text"], cell["range"]
+            values = [median, *limits.split("\N{EN DASH}")]
+            for value, name in zip(values, ("median", "min", "max")):
+                assert math.isclose(
+                    float(value.replace(",", "")), metric[name], rel_tol=5e-4
+                )
+
+
+def verify_mark_contrast(page):
+    assert page.locator("circle.point").evaluate_all(r"""points => {
+      const luminance = color => {
+        const rgb = color.match(/[\d.]+/g).slice(0, 3).map(Number).map(v => {
+          v /= 255;
+          return v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4;
+        });
+        return rgb[0] * .2126 + rgb[1] * .7152 + rgb[2] * .0722;
+      };
+      return points.every(point => {
+        const stroke = luminance(getComputedStyle(point).stroke);
+        const background = luminance(getComputedStyle(point.closest('.panel')).backgroundColor);
+        const contrast = (Math.max(stroke, background) + .05) / (Math.min(stroke, background) + .05);
+        return contrast >= 3 && getComputedStyle(point).opacity === '1'
+          && getComputedStyle(point.parentNode).opacity === '1';
+      });
+    }""")
 
 
 def verify_study(page, document):
@@ -196,6 +287,7 @@ def verify_study(page, document):
                 {row["condition_id"] for row in expected}
             )
             verify_scales(page)
+            verify_table(page, expected, "pareto")
             for view, metric in (
                 ("io", "read_iops"),
                 ("device", "device_iops"),
@@ -207,6 +299,7 @@ def verify_study(page, document):
                 assert page.locator("path.frontier").count() == 0
                 assert page.locator("#frontier-filter").is_hidden()
                 verify_scales(page, view)
+                verify_table(page, expected, view)
             page.select_option("#view", "pareto")
 
 
@@ -252,6 +345,7 @@ def check(assets, output, actual):
                     viewport={"width": 1440, "height": 1100},
                     device_scale_factor=1,
                     color_scheme="light",
+                    locale="en-US",
                 )
                 page.on("pageerror", lambda error: errors.append(str(error)))
                 url = f"http://127.0.0.1:{server.server_port}/pareto/"
@@ -272,13 +366,19 @@ def check(assets, output, actual):
                     if row["input_id"] == document["inputs"][0]["id"]
                     and row["workload"] == "random-256"
                 ]
-                point = page.locator("circle.point").first
+                point = page.locator('circle.point[aria-label^="Uncompressed"]').first
                 point.focus()
                 point.press("Enter")
                 assert (
                     "Useful throughput" in page.locator("#detail-content").inner_text()
                 )
                 assert "Revision" in page.locator("#detail-content").inner_text()
+                assert point.get_attribute("aria-pressed") == "true"
+                assert page.locator('#rows button[aria-pressed="true"]').count() == 1
+                assert "selected" in page.locator("#selection-status").inner_text()
+                page.locator("#selection-details").click()
+                assert page.evaluate("document.activeElement.id") == "detail-heading"
+                verify_mark_contrast(page)
                 with page.expect_download() as downloaded:
                     page.locator("#csv").click()
                 exported = list(
@@ -329,6 +429,8 @@ def check(assets, output, actual):
                 page.locator("#frontier-only").uncheck()
                 page.select_option("#block", "")
                 page.select_option("#codec", "zstd")
+                assert page.locator("#selection-details").is_hidden()
+                assert page.locator('circle.point[aria-pressed="true"]').count() == 0
                 page.select_option("#view", "io")
                 page.reload()
                 page.wait_for_selector("#workspace", state="visible")
@@ -392,6 +494,29 @@ def check(assets, output, actual):
                 )
                 page.select_option("#view", "pareto")
                 page.screenshot(path=str(output / "pareto-dark.png"), full_page=True)
+                verify_mark_contrast(page)
+                page.select_option("#view", "device")
+                page.locator(".measurements summary").click()
+                page.locator("#rows button").first.click()
+                assert page.locator('circle.point[aria-pressed="true"]').count() == 1
+                page.screenshot(
+                    path=str(output / "device-table-dark.png"), full_page=True
+                )
+                page.set_viewport_size({"width": 390, "height": 850})
+                page.locator("#selection-details").click()
+                assert page.evaluate("document.activeElement.id") == "detail-heading"
+                assert page.locator("#detail-heading").evaluate(
+                    "node => { const box = node.getBoundingClientRect(); return box.top >= 0 && box.bottom <= innerHeight; }"
+                )
+                page.screenshot(
+                    path=str(output / "device-selected-390.png"), full_page=True
+                )
+                assert page.evaluate(
+                    "document.documentElement.scrollWidth <= innerWidth + 1"
+                ), page.evaluate("""[...document.querySelectorAll('body *')]
+                  .filter(node => node.getBoundingClientRect().right > innerWidth + 1)
+                  .slice(0, 8).map(node => ({tag: node.tagName, class: node.className,
+                    right: node.getBoundingClientRect().right}))""")
                 assert not errors, errors
                 browser.close()
         finally:
