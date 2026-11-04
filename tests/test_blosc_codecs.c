@@ -253,7 +253,7 @@ read_crops(const char* const* uris,
   EXPECT(
     damacy_zarr_metadata_create(metadata_reader,
                                 &(struct damacy_metadata_cache_config){
-                                  .array_entries = 32, .shard_entries = 128 },
+                                  .array_entries = 64, .shard_entries = 256 },
                                 &metadata) == DAMACY_OK);
   EXPECT(damacy_chunk_planner_create(
            metadata,
@@ -272,7 +272,7 @@ read_crops(const char* const* uris,
                                            .max_chunks_per_wave = 64,
                                            .max_substreams_per_chunk = 32,
                                            .host_buffer_waves = 2,
-                                           .chunk_layout_entries = 32 },
+                                           .chunk_layout_entries = 64 },
              &executor) == DAMACY_OK);
   } else {
     EXPECT(damacy_cpu_executor_create(
