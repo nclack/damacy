@@ -70,6 +70,13 @@ ordinary RAM for input, decoded chunks, codec workspace, and output. It decodes
 each distinct source chunk once per batch, then copies its intersections into
 all samples that use it. There is no persistent decoded-chunk cache.
 
+Both executors support raw bytes, Zstd, and Blosc with `zstd`, `lz4`, or
+`lz4hc`, including byte shuffle and bitshuffle. The CPU executor keeps one
+C-Blosc thread per decode worker. The CUDA executor shares decoder scratch
+between Zstd and LZ4 on its decode stream; split Blosc blocks count toward
+`CudaLimits.max_substreams_per_chunk`, and decoder storage grows within the
+configured GPU memory limit.
+
 ## Select CUDA execution
 
 In a CUDA-enabled build, replace the executor with:

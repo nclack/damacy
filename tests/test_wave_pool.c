@@ -335,8 +335,9 @@ static int
 test_chunk_substreams_unprobed_blosc(void)
 {
   struct sample_plan sp_unprobed = { .layout_probed = 0 };
-  struct sample_plan sp_probed = { .layout_probed = 1,
-                                   .layout = { .nblocks = 5 } };
+  struct sample_plan sp_probed = {
+    .layout_probed = 1, .layout = { .nblocks = 5, .nsubstreams = 5 }
+  };
 
   uint32_t n = 0xDEADBEEF;
   {

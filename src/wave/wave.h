@@ -40,28 +40,24 @@ struct damacy_wave
   struct gpu_parse_chunk* d_parse_chunks;
   uint32_t* h_blosc_chunk_indices;
   uint32_t* d_blosc_chunk_indices;
-  uint32_t* h_block_chunk_map;
-  uint32_t* d_block_chunk_map;
-  uint32_t* d_is_memcpyed;
-  uint32_t n_blosc_zstd_chunks;
-  uint32_t n_blosc_zstd_blocks;
+  uint32_t* d_skip_blocks;
+  uint32_t n_blosc_chunks;
+  uint32_t n_blosc_blocks;
   uint32_t n_host_memcpy;
   uint32_t n_host_zstd;
   uint32_t* d_n_zstd;
+  uint32_t* d_n_lz4;
   uint32_t* d_n_memcpy;
   uint32_t* d_parse_err;
   uint32_t* h_parse_counters;
 
-  struct nvcomp_fanout_host h_zstd_fan;
-  struct gpu_memcpy_op* h_memcpy_ops;
+  struct decode_fanout_host h_fanout;
 
   struct blosc1_totals* d_blosc1_totals;
   struct blosc1_totals* h_blosc1_totals;
 
-  struct nvcomp_fanout zstd_fan;
+  struct decode_fanout fanout;
   uint32_t fanout_cap;
-
-  struct gpu_memcpy_op* d_memcpy_ops;
 
   struct assemble_chunk* h_assemble_chunks;
   struct assemble_chunk* d_assemble_chunks;
@@ -93,7 +89,6 @@ struct damacy_wave
 int
 wave_init(struct damacy_wave* wave,
           uint32_t max_chunks_per_wave,
-          uint32_t max_substreams_per_wave,
           uint64_t input_staging_device_bytes,
           uint64_t dev_decompressed_bytes);
 

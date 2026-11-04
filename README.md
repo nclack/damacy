@@ -165,7 +165,7 @@ Damacy reads zarr v3 (sharded and non-sharded). What's recognized today:
 | Array versions | v3 | v2 stores are not read |
 | Layout (sharded) | `sharding_indexed` | with `index_location` either `"start"` or `"end"` (default) |
 | Layout (non-sharded) | yes | each chunk is a separate file at `c/<i>/<j>/...` |
-| Inner / chunk codec | `bytes` (passthrough), `zstd`, `blosc` (cname=`zstd`) | `blosc` with `cname=lz4`/`lz4hc` is recognized at parse time and rejected by the executor |
+| Inner / chunk codec | `bytes` (passthrough), `zstd`, `blosc` (cname=`zstd`, `lz4`, or `lz4hc`) | CPU and GPU; Blosc supports no shuffle, byte shuffle, and bitshuffle |
 | Sharding index codec | `bytes` + `crc32c` | the shard index itself; the data codec is separate |
 | Missing chunks | yes — read as `fill_value` | per zarr v3 spec; sharded "empty" entries (`offset==nbytes==2^64−1`) and missing chunk files both route here |
 

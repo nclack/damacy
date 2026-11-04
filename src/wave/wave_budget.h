@@ -74,5 +74,5 @@ decoder_initial_caps(uint32_t max_chunks_per_wave,
                      uint64_t dev_per_wave,
                      uint64_t max_chunk_uncompressed_bytes,
                      size_t* out_substreams,
-                     size_t* out_zstd_per,
+                     size_t* out_block_bytes,
                      size_t* out_total_uncompressed);

@@ -3,7 +3,7 @@
 #include "damacy_limits.h"
 #include "store/store.h"
 #include "util/prelude.h"
-#include "zarr/zarr_metadata.h" // CODEC_BLOSC_ZSTD
+#include "zarr/zarr_metadata.h"
 
 #include <stdint.h>
 
@@ -27,7 +27,8 @@ zarr_chunk_layout_parse_header(const void* header,
   CHECK_SILENT(Fail, out);
 
   // Only blosc-formatted codecs carry a per-chunk header.
-  if (codec_id != (uint8_t)CODEC_BLOSC_ZSTD)
+  if (codec_id != (uint8_t)CODEC_BLOSC_ZSTD &&
+      codec_id != (uint8_t)CODEC_BLOSC_LZ4)
     return 1;
   if (first_chunk_cbytes < BLOSC1_HEADER_BYTES)
     return 1;
@@ -37,16 +38,27 @@ zarr_chunk_layout_parse_header(const void* header,
   uint8_t typesize = p[3];
   uint32_t nbytes = read_u32_le(p + 4);
   uint32_t blocksize = read_u32_le(p + 8);
-  // p+12 is cbytes; redundant with first_chunk_cbytes, skipped.
-
-  if (blocksize == 0)
+  if (p[0] < 1 || p[0] > 2 || read_u32_le(p + 12) != first_chunk_cbytes)
     return 1;
-  if (nbytes > DAMACY_BLOSC_MAX_CHUNK_UNCOMPRESSED_BYTES)
+  if (!nbytes || nbytes > DAMACY_BLOSC_MAX_CHUNK_UNCOMPRESSED_BYTES ||
+      !blocksize || blocksize > nbytes || !typesize || typesize > 8u ||
+      nbytes % typesize || blocksize % typesize)
     return 1;
-  if (typesize == 0 || typesize > 8u)
+  const uint8_t memcpyed = (flags >> 1) & 1u;
+  const uint8_t compformat = codec_id == CODEC_BLOSC_LZ4 ? 1u : 4u;
+  if (memcpyed) {
+    if (first_chunk_cbytes - BLOSC1_HEADER_BYTES != nbytes)
+      return 1;
+  } else if (p[1] != 1 || (flags >> 5) != compformat || (flags & 8u)) {
     return 1;
-  uint32_t nblocks = nbytes / blocksize + (nbytes % blocksize != 0u);
-  if (nblocks > max_substreams_per_chunk)
+  }
+  const uint32_t nblocks = nbytes / blocksize + (nbytes % blocksize != 0u);
+  const uint32_t nsplits =
+    !(flags & 0x10u) && blocksize / typesize >= 128u ? typesize : 1u;
+  const uint32_t nsubstreams =
+    (nbytes / blocksize) * nsplits + (nbytes % blocksize != 0u);
+  if (nsubstreams > max_substreams_per_chunk ||
+      (!memcpyed && nblocks > (first_chunk_cbytes - BLOSC1_HEADER_BYTES) / 4u))
     return 1;
 
   *out = (struct chunk_layout){
@@ -59,6 +71,7 @@ zarr_chunk_layout_parse_header(const void* header,
     .blocksize = blocksize,
     .nbytes = nbytes,
     .nblocks = nblocks,
+    .nsubstreams = nsubstreams,
   };
   return 0;
 
@@ -80,7 +93,8 @@ zarr_chunk_layout_probe(struct store* s,
   CHECK_SILENT(Fail, out);
 
   // Only blosc-formatted codecs carry a per-chunk header.
-  if (codec_id != (uint8_t)CODEC_BLOSC_ZSTD)
+  if (codec_id != (uint8_t)CODEC_BLOSC_ZSTD &&
+      codec_id != (uint8_t)CODEC_BLOSC_LZ4)
     return 1;
   if (first_chunk_cbytes < BLOSC1_HEADER_BYTES)
     return 1;

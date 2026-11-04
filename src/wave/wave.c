@@ -15,7 +15,6 @@
 int
 wave_init(struct damacy_wave* wave,
           uint32_t max_chunks_per_wave,
-          uint32_t max_substreams_per_wave,
           uint64_t input_staging_device_bytes,
           uint64_t dev_decompressed_bytes)
 {
@@ -57,36 +56,24 @@ wave_init(struct damacy_wave* wave,
                     (size_t)cap * sizeof(uint32_t)));
   CU(Error, cuMemAlloc(&dptr, (size_t)cap * sizeof(uint32_t)));
   wave->d_blosc_chunk_indices = (uint32_t*)(uintptr_t)dptr;
-  {
-    const size_t substreams_max = max_substreams_per_wave;
-    CU(Error,
-       cuMemAllocHost((void**)&wave->h_block_chunk_map,
-                      substreams_max * sizeof(uint32_t)));
-    CU(Error, cuMemAlloc(&dptr, substreams_max * sizeof(uint32_t)));
-  }
-  wave->d_block_chunk_map = (uint32_t*)(uintptr_t)dptr;
   // Bitset: one bit per wave-local chunk index, rounded to uint32_t words.
   CU(Error, cuMemAlloc(&dptr, (size_t)((cap + 31u) / 32u) * sizeof(uint32_t)));
-  wave->d_is_memcpyed = (uint32_t*)(uintptr_t)dptr;
+  wave->d_skip_blocks = (uint32_t*)(uintptr_t)dptr;
   CU(Error, cuMemAlloc(&dptr, sizeof(uint32_t)));
   wave->d_n_zstd = (uint32_t*)(uintptr_t)dptr;
+  CU(Error, cuMemAlloc(&dptr, sizeof(uint32_t)));
+  wave->d_n_lz4 = (uint32_t*)(uintptr_t)dptr;
   CU(Error, cuMemAlloc(&dptr, sizeof(uint32_t)));
   wave->d_n_memcpy = (uint32_t*)(uintptr_t)dptr;
   CU(Error, cuMemAlloc(&dptr, sizeof(uint32_t)));
   wave->d_parse_err = (uint32_t*)(uintptr_t)dptr;
   CU(Error,
-     cuMemAllocHost((void**)&wave->h_parse_counters, 3 * sizeof(uint32_t)));
+     cuMemAllocHost((void**)&wave->h_parse_counters, 4 * sizeof(uint32_t)));
 
-  const size_t substreams = DAMACY_BLOSC_ZSTD_INITIAL_BATCH_CAP;
-  if (fanout_alloc_pinned(&wave->h_zstd_fan, &wave->zstd_fan, substreams))
+  const size_t substreams = DAMACY_DECODER_INITIAL_BATCH_CAP;
+  if (fanout_alloc_pinned(&wave->h_fanout, &wave->fanout, substreams))
     goto Error;
   wave->fanout_cap = (uint32_t)substreams;
-
-  CU(Error,
-     cuMemAllocHost((void**)&wave->h_memcpy_ops,
-                    (size_t)cap * sizeof(struct gpu_memcpy_op)));
-  CU(Error, cuMemAlloc(&dptr, (size_t)cap * sizeof(struct gpu_memcpy_op)));
-  wave->d_memcpy_ops = (struct gpu_memcpy_op*)(uintptr_t)dptr;
 
   CU(Error, cuEventCreate(&wave->ev.input_start, CU_EVENT_DEFAULT));
   CU(Error, cuEventCreate(&wave->ev.input_transfer_done, CU_EVENT_DEFAULT));
@@ -110,26 +97,23 @@ wave_destroy(struct damacy_wave* wave, int cuda_skip)
     return;
   if (!cuda_skip) {
     void* const host_ptrs[] = {
-      wave->h_blosc1_totals,   wave->h_memcpy_ops,
-      wave->h_assemble_chunks, wave->h_parse_chunks,
-      wave->h_parse_counters,  wave->h_blosc_chunk_indices,
-      wave->h_block_chunk_map,
+      wave->h_blosc1_totals,  wave->h_assemble_chunks,     wave->h_parse_chunks,
+      wave->h_parse_counters, wave->h_blosc_chunk_indices,
     };
     for (size_t i = 0; i < countof(host_ptrs); ++i)
       if (host_ptrs[i])
         cuMemFreeHost(host_ptrs[i]);
-    fanout_free_pinned(&wave->h_zstd_fan, &wave->zstd_fan);
+    fanout_free_pinned(&wave->h_fanout, &wave->fanout);
     void* const dev_ptrs[] = {
       wave->dev_compressed_owned,
       wave->dev_decompressed,
       wave->d_assemble_chunks,
       wave->d_blosc1_totals,
-      wave->d_memcpy_ops,
       wave->d_parse_chunks,
       wave->d_blosc_chunk_indices,
-      wave->d_block_chunk_map,
-      wave->d_is_memcpyed,
+      wave->d_skip_blocks,
       wave->d_n_zstd,
+      wave->d_n_lz4,
       wave->d_n_memcpy,
       wave->d_parse_err,
     };
