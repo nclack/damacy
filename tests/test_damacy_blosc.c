@@ -167,6 +167,76 @@ test_full_array_blosc_zstd(void)
   return run_full_array("blosc-zstd");
 }
 
+static void
+write_u32_le(uint8_t* out, uint32_t value)
+{
+  for (unsigned i = 0; i < 4; ++i)
+    out[i] = (uint8_t)(value >> (8 * i));
+}
+
+static int
+test_blosc_raw_blocks_exceed_chunk_count(void)
+{
+  char root[64], path[256];
+  EXPECT(mkdtemp_root(root, sizeof root) == 0);
+  snprintf(path, sizeof path, "%s/zarr.json", root);
+  FILE* file = fopen(path, "wb");
+  EXPECT(file != NULL);
+  const char metadata[] =
+    "{\"zarr_format\":3,\"node_type\":\"array\",\"shape\":[16,32],"
+    "\"data_type\":\"uint16\",\"fill_value\":0,"
+    "\"chunk_grid\":{\"name\":\"regular\",\"configuration\":{\"chunk_shape\":["
+    "16,32]}},"
+    "\"chunk_key_encoding\":{\"name\":\"default\",\"configuration\":{"
+    "\"separator\":\"/\"}},"
+    "\"codecs\":[{\"name\":\"bytes\",\"configuration\":{\"endian\":\"little\"}}"
+    ","
+    "{\"name\":\"blosc\",\"configuration\":{\"cname\":\"zstd\",\"clevel\":3,"
+    "\"shuffle\":\"noshuffle\",\"typesize\":2,\"blocksize\":64}}],"
+    "\"attributes\":{}}";
+  EXPECT(fwrite(metadata, 1, sizeof metadata - 1, file) == sizeof metadata - 1);
+  EXPECT(fclose(file) == 0);
+  snprintf(path, sizeof path, "%s/c", root);
+  EXPECT(mkdir(path, 0700) == 0);
+  snprintf(path, sizeof path, "%s/c/0", root);
+  EXPECT(mkdir(path, 0700) == 0);
+  snprintf(path, sizeof path, "%s/c/0/0", root);
+  uint8_t chunk[16 + 16 * 4 + 16 * (4 + 64)] = { 2, 1, 0x90, 2 };
+  write_u32_le(chunk + 4, 1024);
+  write_u32_le(chunk + 8, 64);
+  write_u32_le(chunk + 12, sizeof chunk);
+  for (uint32_t block = 0; block < 16; ++block) {
+    uint32_t start = 16 + 16 * 4 + block * (4 + 64);
+    write_u32_le(chunk + 16 + 4 * block, start);
+    write_u32_le(chunk + start, 64);
+    for (uint32_t i = 0; i < 32; ++i) {
+      uint16_t value = (uint16_t)(block * 32 + i);
+      chunk[start + 4 + 2 * i] = (uint8_t)value;
+      chunk[start + 5 + 2 * i] = (uint8_t)(value >> 8);
+    }
+  }
+  file = fopen(path, "wb");
+  EXPECT(file != NULL);
+  EXPECT(fwrite(chunk, 1, sizeof chunk, file) == sizeof chunk);
+  EXPECT(fclose(file) == 0);
+
+  struct damacy_config cfg = mk_cfg(root, 1, 16, 32);
+  cfg.tuning.max_chunks_per_wave = 1;
+  cfg.tuning.max_substreams_per_chunk = 16;
+  cfg.tuning.max_chunk_uncompressed_bytes = 1024;
+  struct damacy* d = NULL;
+  EXPECT(damacy_create(&cfg, &d) == DAMACY_OK);
+  float out[16 * 32] = { 0 };
+  size_t count = 0;
+  EXPECT(run_one(d, mk_sample(root, 0, 16, 0, 32), out, 16 * 32, &count) == 0);
+  EXPECT(count == 16 * 32);
+  for (size_t i = 0; i < count; ++i)
+    EXPECT(out[i] == (float)i);
+  damacy_destroy(d);
+  fixture_rm_tree(root);
+  return 0;
+}
+
 // Sub-window y[3,11) x[5,27) crosses the 2x2 inner-chunk grid;
 // exercises the blosc-zstd + shuffle path with partial intersections.
 static int
@@ -662,6 +732,7 @@ main(void)
 {
   EXPECT(cuda_init_primary() == 0);
   RUN(test_full_array_blosc_zstd);
+  RUN(test_blosc_raw_blocks_exceed_chunk_count);
   RUN(test_partial_crossing_chunks_blosc);
   RUN(test_three_codecs_mixed_batch);
   RUN(test_multi_wave_per_batch);

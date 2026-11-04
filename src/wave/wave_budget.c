@@ -46,6 +46,7 @@ wave_decoder_caps(uint64_t substreams,
 
 enum damacy_status
 wave_predict_bytes(uint32_t max_chunks_per_wave,
+                   uint32_t max_substreams_per_wave,
                    uint64_t input_staging_bytes,
                    uint64_t dev_decompressed_bytes,
                    struct wave_alloc_summary* out)
@@ -57,8 +58,9 @@ wave_predict_bytes(uint32_t max_chunks_per_wave,
   out->dev_decompressed = dev_decompressed_bytes;
   out->blosc1_meta =
     cap * sizeof(struct assemble_chunk) + sizeof(struct blosc1_totals);
-  out->fanout_soa = substreams * (2 * sizeof(void*) + 2 * sizeof(size_t)) +
-                    cap * sizeof(struct gpu_memcpy_op);
+  out->fanout_soa =
+    substreams * (2 * sizeof(void*) + 2 * sizeof(size_t)) +
+    (uint64_t)max_substreams_per_wave * sizeof(struct gpu_memcpy_op);
   return DAMACY_OK;
 }
 
@@ -109,9 +111,12 @@ gpu_budget_predict(const struct damacy_config* cfg,
 {
   const uint64_t runtime_chunk_cap = resolve_max_chunk_uncompressed(cfg);
   const uint32_t max_chunks_per_wave = resolve_max_chunks_per_wave(cfg);
+  const uint32_t max_substreams_per_wave = DAMACY_MAX_SUBSTREAMS_PER_WAVE(
+    max_chunks_per_wave, resolve_max_substreams_per_chunk(cfg));
 
   struct wave_alloc_summary per_wave = { 0 };
   enum damacy_status s = wave_predict_bytes(max_chunks_per_wave,
+                                            max_substreams_per_wave,
                                             input->wave_device_bytes,
                                             dev_decompressed_per_wave,
                                             &per_wave);
@@ -171,8 +176,8 @@ predict_pool_total(uint32_t max_chunks_per_wave,
                    uint64_t* out_total)
 {
   struct wave_alloc_summary per_wave = { 0 };
-  enum damacy_status s =
-    wave_predict_bytes(max_chunks_per_wave, 0, dev_per_wave, &per_wave);
+  enum damacy_status s = wave_predict_bytes(
+    max_chunks_per_wave, max_substreams_per_wave, 0, dev_per_wave, &per_wave);
   if (s != DAMACY_OK)
     return s;
 

@@ -85,7 +85,9 @@ wave_init(struct damacy_wave* wave,
   CU(Error,
      cuMemAllocHost((void**)&wave->h_memcpy_ops,
                     (size_t)cap * sizeof(struct gpu_memcpy_op)));
-  CU(Error, cuMemAlloc(&dptr, (size_t)cap * sizeof(struct gpu_memcpy_op)));
+  CU(Error,
+     cuMemAlloc(
+       &dptr, (size_t)max_substreams_per_wave * sizeof(struct gpu_memcpy_op)));
   wave->d_memcpy_ops = (struct gpu_memcpy_op*)(uintptr_t)dptr;
 
   CU(Error, cuEventCreate(&wave->ev.input_start, CU_EVENT_DEFAULT));
