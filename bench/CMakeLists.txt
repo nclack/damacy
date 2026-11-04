@@ -4,7 +4,7 @@ if(DAMACY_FUZZ)
     return()
 endif()
 
-add_executable(damacy_bench main.c)
+add_executable(damacy_bench main.c cold_read.c)
 target_link_libraries(
     damacy_bench
     PRIVATE damacy json json_writer slice strbuf warnings

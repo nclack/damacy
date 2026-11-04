@@ -1,0 +1,229 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["numpy==2.5.2", "zarr==3.3.0", "numcodecs==0.16.5"]
+# ///
+"""Encode and verify the exact microscopy layouts in a reader study."""
+
+from __future__ import annotations
+
+import argparse
+import importlib.metadata
+import math
+import struct
+from pathlib import Path
+
+import numpy as np
+from pareto import (
+    DTYPES,
+    command_output,
+    file_hash,
+    identity,
+    read_json,
+    relative_path,
+    require_compute,
+    write_json,
+)
+from zarr.codecs import BloscCodec, ZstdCodec
+
+import zarr
+
+
+def input_path(root, asset):
+    path = relative_path(root, asset["path"])
+    expected = math.prod(asset["shape"]) * DTYPES[asset["dtype"]][1]
+    if not path.is_file() or path.stat().st_size != expected:
+        key = command_output(
+            ["git", "-C", str(root), "annex", "lookupkey", "--", asset["path"]]
+        )
+        location = (
+            command_output(["git", "-C", str(root), "annex", "contentlocation", key])
+            if key
+            else None
+        )
+        if location:
+            parts = Path(location).parts
+            if parts[0] == ".git":
+                git_dir = command_output(
+                    [
+                        "git",
+                        "-C",
+                        str(root),
+                        "rev-parse",
+                        "--path-format=absolute",
+                        "--git-dir",
+                    ]
+                )
+                path = Path(git_dir).joinpath(*parts[1:]) if git_dir else path
+            else:
+                path = root / location
+    if not path.is_file() or path.stat().st_size != expected:
+        raise ValueError(
+            f"Input is missing or has the wrong length: {asset['id']}; materialize the corpus first"
+        )
+    if file_hash(path) != asset["sha256"]:
+        raise ValueError(f"Input checksum mismatch: {asset['id']}")
+    return path
+
+
+def compressors(variant):
+    if variant["codec"] == "none":
+        return []
+    if variant["codec"] == "zstd":
+        return [ZstdCodec(level=variant["level"], checksum=False)]
+    return [
+        BloscCodec(
+            cname="zstd",
+            clevel=variant["level"],
+            shuffle="bitshuffle",
+            typesize=DTYPES[variant["dtype"]][1],
+            blocksize=variant["block_bytes"],
+        )
+    ]
+
+
+def chunk_records(array, variant):
+    slots = math.prod(
+        s // c
+        for s, c in zip(variant["shard_shape"], variant["chunk_shape"], strict=True)
+    )
+    index_bytes = slots * 16 + 4
+    blocks, payload_bytes, chunks = set(), 0, 0
+    for file in sorted((array / "c").rglob("*")):
+        if not file.is_file():
+            continue
+        size = file.stat().st_size
+        with file.open("rb") as stream:
+            stream.seek(-index_bytes, 2)
+            index = stream.read(index_bytes)
+            for offset, length in struct.iter_unpack("<QQ", index[:-4]):
+                if offset == 2**64 - 1 and length == 2**64 - 1:
+                    continue
+                if offset + length > size - index_bytes:
+                    raise ValueError("Invalid shard index")
+                payload_bytes += length
+                chunks += 1
+                if variant["codec"] == "blosc-zstd":
+                    stream.seek(offset)
+                    header = stream.read(16)
+                    decoded, block, stored = struct.unpack_from("<III", header, 4)
+                    if (
+                        decoded != variant["chunk_bytes"]
+                        or not block
+                        or stored != length
+                    ):
+                        raise ValueError(
+                            "Blosc header disagrees with the requested chunk layout"
+                        )
+                    blocks.add(block)
+    if not chunks:
+        raise ValueError("No stored chunks were generated")
+    return {
+        "payload_bytes": payload_bytes,
+        "stored_chunks": chunks,
+        "padded_chunk_bytes": chunks * variant["chunk_bytes"],
+        "actual_block_bytes": sorted(blocks),
+    }
+
+
+def prepare(plan, corpus, output):
+    require_compute()
+    if identity(read_json(corpus / "manifest.json")) != plan["corpus_sha256"]:
+        raise ValueError("Corpus metadata changed after planning")
+    inputs = {asset["id"]: asset for asset in plan["inputs"]}
+    paths = {name: input_path(corpus, asset) for name, asset in inputs.items()}
+    packages = {
+        name: importlib.metadata.version(name)
+        for name in ("numpy", "zarr", "numcodecs")
+    }
+    output.mkdir(parents=True, exist_ok=True)
+    write_json(
+        output / "preparation.json",
+        {"plan_sha256": identity(plan), "packages": packages},
+    )
+    records = []
+    for number, variant in enumerate(plan["variants"], 1):
+        destination = output / variant["id"]
+        if destination.exists():
+            record = read_json(destination / "layout.json")
+            if any(record[key] != value for key, value in variant.items()):
+                raise ValueError("Existing layout differs from the study plan")
+            for item in record["files"]:
+                file = relative_path(output, item["path"])
+                if (
+                    file.stat().st_size != item["bytes"]
+                    or file_hash(file) != item["sha256"]
+                ):
+                    raise ValueError(f"Prepared file changed: {file}")
+            records.append(record)
+            continue
+        pending = output / f"{variant['id']}.partial"
+        pending.mkdir()
+        asset = inputs[variant["input_id"]]
+        dtype = np.dtype(asset["dtype"]).newbyteorder("<")
+        pixels = np.memmap(
+            paths[asset["id"]], dtype=dtype, mode="r", shape=tuple(asset["shape"])
+        )
+        array = zarr.create_array(
+            store=str(pending / "array"),
+            shape=tuple(asset["shape"]),
+            dtype=dtype,
+            chunks=tuple(variant["chunk_shape"]),
+            shards=tuple(variant["shard_shape"]),
+            compressors=compressors(variant),
+            config={"write_empty_chunks": True},
+            zarr_format=3,
+        )
+        array[:] = pixels
+        if array[:].tobytes() != pixels.tobytes():
+            raise ValueError(
+                f"Encoded input does not round-trip exactly: {variant['id']}"
+            )
+        details = chunk_records(pending / "array", variant)
+        files = [
+            {
+                "path": f"{variant['id']}/{file.relative_to(pending).as_posix()}",
+                "bytes": file.stat().st_size,
+                "sha256": file_hash(file),
+            }
+            for file in sorted((pending / "array").rglob("*"))
+            if file.is_file()
+        ]
+        record = {
+            **variant,
+            **details,
+            "logical_bytes": pixels.nbytes,
+            "stored_bytes": sum(item["bytes"] for item in files),
+            "files": files,
+        }
+        write_json(pending / "layout.json", record)
+        pending.rename(destination)
+        records.append(record)
+        print(
+            f"[{number}/{len(plan['variants'])}] {asset['id']} {variant['codec']} "
+            f"{variant['chunk_bytes']} / {variant['block_bytes']}: "
+            f"{record['logical_bytes'] / record['stored_bytes']:.3f}x",
+            flush=True,
+        )
+    write_json(
+        output / "prepared.json",
+        {
+            "version": 1,
+            "plan_sha256": identity(plan),
+            "packages": packages,
+            "variants": records,
+        },
+    )
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("plan", type=Path)
+    parser.add_argument("--corpus", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    prepare(read_json(args.plan), args.corpus, args.output)
+
+
+if __name__ == "__main__":
+    main()

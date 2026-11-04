@@ -97,6 +97,8 @@ class Sampling(BaseModel):
     n_warmup_batches: int = 0
     samples_per_batch: int = Field(gt=0)
     seed: int = 1234
+    min_seconds: float = Field(default=0.0, ge=0.0, le=600.0)
+    pattern: Literal["random", "planes"] = "random"
 
 
 class Pipeline(BaseModel):
@@ -117,6 +119,7 @@ class Pipeline(BaseModel):
     # n_shard_index_cache floor (>= lookahead_samples * max_shards_per_sample)
     # and caps per-sample shard enumeration at runtime.
     max_shards_per_sample: int = Field(default=64, gt=0)
+    max_substreams_per_chunk: int = Field(default=32, gt=0, le=65535)
     # Bench bypass: skip decode by flipping chunks to fill at parse +
     # assemble time. IO and input transfer still run; assemble broadcasts the
     # array's fill_value. Useful for isolating decode cost.
@@ -250,6 +253,7 @@ class Derived(BaseModel):
 
 class Results(BaseModel):
     scenario: Scenario
+    measurement_passes: int = Field(default=1, gt=0)
     timings_ms: Timings
     stages: list[Stage]
     counters: Counters

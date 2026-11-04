@@ -233,7 +233,13 @@ Full API reference and guides: **<https://nclack.github.io/damacy/>**
 - [Multi-GPU & distributed training](https://nclack.github.io/damacy/distributed/)
   — device binding model + torchrun / DDP examples.
 
-Performance dashboards (auto-published from `bench.yml`):
+Performance:
 
-- [Throughput](https://nclack.github.io/damacy/throughput/) — bigger is better
-- [Timings](https://nclack.github.io/damacy/timings/) — smaller is better
+- [Pareto analysis](https://nclack.github.io/damacy/pareto/) — throughput versus
+  compression across chunk, codec, and block settings, with application request
+  rates and NVMe IOPS. Cold NVMe and RAM-cached studies are labeled separately.
+- [Measurement protocol](https://nclack.github.io/damacy/performance/) — data,
+  workloads, cache verification, hardware records, reproduction, and PR previews.
+- [Throughput history](https://nclack.github.io/damacy/throughput/) and
+  [timing history](https://nclack.github.io/damacy/timings/) — daily CI scenarios
+  published by `bench.yml`.

@@ -32,7 +32,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write  # peaceiris pushes to gh-pages
+  contents: read
 
 jobs:
   build:
@@ -63,6 +63,78 @@ jobs:
       - name: Build site (--strict)
         run: mkdocs build --strict
 
+      - name: Set up Node for report checks
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Check performance analysis
+        run: |
+          ruff check bench/pareto.py bench/pareto_data.py bench/test_pareto.py
+          python -m unittest discover -s bench -p test_pareto.py
+          node --test bench/test_pareto.mjs
+          node --input-type=module --check < docs/pareto/report.js
+          node --check docs/pareto/appearance.js
+
+      - name: Check report in Chromium
+        run: |
+          python -m pip install 'playwright==1.62.0'
+          python -m playwright install --with-deps chromium
+          python bench/test_pareto_browser.py --assets site/pareto --output browser-fixture
+          python bench/test_pareto_browser.py --assets site/pareto --actual --output browser-actual
+
+      - name: Save browsable site
+        uses: actions/upload-artifact@v7
+        with:
+          name: docs-site
+          path: site
+          include-hidden-files: true
+
+      - name: Preview instructions
+        env:
+          PR_NUMBER: ${{ github.event.number }}
+          REPOSITORY: ${{ github.repository }}
+          SAME_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+        run: |
+          if [ -n "$PR_NUMBER" ] && [ "$SAME_REPOSITORY" = true ]; then
+            printf '[Preview the performance report](https://%s.github.io/%s/pr-preview/pr-%s/pareto/) after the publish job completes.\n' "${REPOSITORY%/*}" "${REPOSITORY#*/}" "$PR_NUMBER" >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf 'Download the docs-site artifact, unzip it, and serve it with `python -m http.server`.\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  publish:
+    needs: build
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pages: write
+    steps:
+      - name: Checkout publishing configuration
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Download checked site
+        uses: actions/download-artifact@v8
+        with:
+          name: docs-site
+          path: site
+
+      - name: Publish PR preview
+        if: github.event_name == 'pull_request'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./site
+          publish_branch: gh-pages
+          destination_dir: pr-preview/pr-${{ github.event.number }}
+          keep_files: false
+          user_name: "github-actions[bot]"
+          user_email: "github-actions[bot]@users.noreply.github.com"
+          commit_message: "docs: update PR preview"
+
       - name: Deploy to gh-pages
         if: github.event_name != 'pull_request'
         uses: peaceiris/actions-gh-pages@v4
@@ -76,4 +148,10 @@ jobs:
           keep_files: true
           user_name: "github-actions[bot]"
           user_email: "github-actions[bot]@users.noreply.github.com"
-          commit_message: "docs: ${{ github.event.head_commit.message || github.sha }}"
+          commit_message: "docs: update published site"
+
+      - name: Request Pages build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: gh api --method POST "repos/$GH_REPO/pages/builds"
