@@ -646,69 +646,28 @@ Error:
 }
 
 static void
-set_assemble_chunk_base(struct assemble_chunk* out,
-                        const struct chunk_plan* c,
-                        uint8_t spatial_rank,
-                        uint8_t force_fill)
-{
-  out->src_base_byte_off = (uint64_t)c->dev_decompressed_offset;
-  out->sample_idx_in_batch = c->sample_idx_in_batch;
-  out->is_fill = c->is_fill | force_fill;
-  out->gather_offset = c->gather_offset;
-  memcpy(out->chunk_d, c->chunk_d, spatial_rank * sizeof(*c->chunk_d));
-}
-
-static uint64_t
-chunk_output_elements(const struct chunk_plan* c,
-                      const struct sample_plan* sp,
-                      const struct gather_dim* gather_dims,
-                      uint8_t spatial_rank)
-{
-  uint64_t out = 1;
-  for (uint8_t d = 0; d < spatial_rank; ++d) {
-    if (sp->indexed) {
-      out *= gather_dims[c->gather_offset + d].count;
-      continue;
-    }
-    int64_t chunk_shape = (int64_t)sp->dims[d].chunk_shape;
-    int64_t origin =
-      (int64_t)c->chunk_d[d] * chunk_shape - sp->dims[d].aabb_lo_relative;
-    int64_t lo = origin > 0 ? origin : 0;
-    int64_t hi = origin + chunk_shape < sp->dims[d].aabb_extent
-                   ? origin + chunk_shape
-                   : sp->dims[d].aabb_extent;
-    out *= (uint64_t)(hi > lo ? hi - lo : 0);
-  }
-  return out;
-}
-
-static void
 build_assemble_meta(const struct wave_pool* wp, struct damacy_wave* wave)
 {
   struct render_job* job = wave_job(wp, wave);
   uint32_t bpe = damacy_dtype_bpe(wp->dtype);
   uint8_t spatial_rank = (uint8_t)(wp->pool->rank - 1);
-  uint32_t max_bpc = 0;
+  wave->assemble_max_blocks_per_chunk = 0;
+  wave->gather_max_blocks_per_chunk = 0;
   wave->assemble_rank = spatial_rank;
   for (uint32_t i = 0; i < wave->n_chunks; ++i) {
     struct chunk_plan* c = &job->chunk_plans[wave->batch_chunk_offset + i];
     const struct sample_plan* sp = &job->sample_plans[c->sample_idx_in_batch];
-    set_assemble_chunk_base(
-      &wave->h_assemble_chunks[i], c, spatial_rank, wp->bypass_decode);
-
+    struct assemble_chunk* assembled = &wave->h_assemble_chunks[i];
     uint64_t elements =
-      chunk_output_elements(c, sp, job->gather_dims, spatial_rank);
-    uint32_t bpc = sp->indexed
-                     ? assemble_gather_blocks(elements)
-                     : assemble_blocks_per_chunk(spatial_rank, sp->dims);
-    if (bpc > max_bpc)
-      max_bpc = bpc;
+      assemble_prepare_chunk(assembled, sp, c, job->gather_dims);
+    assembled->is_fill |= wp->bypass_decode;
+    uint32_t* max_bpc = sp->indexed ? &wave->gather_max_blocks_per_chunk
+                                    : &wave->assemble_max_blocks_per_chunk;
+    if (assembled->blocks > *max_bpc)
+      *max_bpc = assembled->blocks;
 
     wave->assemble_out_bytes += elements * (uint64_t)bpe;
   }
-  if (max_bpc == 0)
-    max_bpc = 1;
-  wave->assemble_max_blocks_per_chunk = max_bpc;
 }
 
 static CUevent
@@ -828,17 +787,21 @@ queue_assemble_output(struct wave_pool* wp, struct damacy_wave* wave)
   struct render_job* job = wave_job(wp, wave);
   struct damacy_batch_slot* batch = &wp->pool->slots[wave->batch_pool_slot];
   CU(CudaFail, cuEventRecord(wave->ev.asm_start, s));
-  if (assemble_launch(s,
-                      wave->assemble_rank,
-                      (const struct sample_plan*)job->d_sample_plans,
-                      job->n_sample_plans,
-                      wave->d_assemble_chunks,
-                      wave->n_chunks,
-                      wave->assemble_max_blocks_per_chunk,
-                      wave->dev_decompressed,
-                      batch->dev_ptr,
-                      wp->dtype))
-    goto CudaFail;
+  for (uint8_t indexed = 0; indexed < 2; ++indexed) {
+    uint32_t blocks = indexed ? wave->gather_max_blocks_per_chunk
+                              : wave->assemble_max_blocks_per_chunk;
+    if (assemble_launch(s,
+                        wave->assemble_rank,
+                        (const struct sample_plan*)job->d_sample_plans,
+                        indexed,
+                        wave->d_assemble_chunks,
+                        wave->n_chunks,
+                        blocks,
+                        wave->dev_decompressed,
+                        batch->dev_ptr,
+                        wp->dtype))
+      goto CudaFail;
+  }
   CU(CudaFail, cuEventRecord(wave->ev.asm_end, s));
   return DAMACY_OK;
 CudaFail:

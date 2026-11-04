@@ -62,6 +62,7 @@ struct damacy_wave
   struct assemble_chunk* h_assemble_chunks;
   struct assemble_chunk* d_assemble_chunks;
   uint32_t assemble_max_blocks_per_chunk;
+  uint32_t gather_max_blocks_per_chunk;
   uint8_t assemble_rank;
 
   struct wave_events

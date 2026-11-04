@@ -11,51 +11,8 @@
 
 namespace {
 
-// Block-tile shape T[d] within a chunk for a rank-`rank` sample. Threads
-// run innermost-fastest: 32 along dim rank-1, 8 along dim rank-2, 1
-// elsewhere (kBlockSize == 256).
-//
-//   rank 1: T = {256}
-//   rank 2: T = {8, 32}
-//   rank R >= 3: T = {..., 1, 8, 32}
-
 constexpr uint32_t kBlockSize = 256;
-
-// Ranks <= kMaxTemplateRank get a fully-templated kernel (loop unrolled,
-// tile_T / thread_dim resolved at compile time). Higher ranks fall
-// through to a runtime-rank kernel up to DAMACY_MAX_RANK.
 constexpr int kMaxTemplateRank = 8;
-
-__device__ __host__ __forceinline__ uint32_t
-tile_T(int rank, int d)
-{
-  if (rank == 1)
-    return kBlockSize;
-  if (d == rank - 1)
-    return 32u;
-  if (d == rank - 2)
-    return 8u;
-  return 1u;
-}
-
-// Decode a 1D thread index into per-dim coordinates within the block tile.
-__device__ __forceinline__ uint32_t
-thread_dim(int rank, uint32_t tid, int d)
-{
-  if (rank == 1)
-    return tid;
-  if (d == rank - 1)
-    return tid & 31u;
-  if (d == rank - 2)
-    return (tid >> 5) & 7u;
-  return 0u;
-}
-
-__device__ __host__ __forceinline__ uint32_t
-ceil_div_u32(uint32_t a, uint32_t b)
-{
-  return (a + b - 1u) / b;
-}
 
 template<enum damacy_dtype output, typename dst_t>
 __device__ __forceinline__ dst_t
@@ -74,20 +31,19 @@ load_source(const uint8_t* source, uint8_t input)
 template<enum damacy_dtype output, typename dst_t>
 __device__ __forceinline__ dst_t
 load_unshuffled(const uint8_t* chunk_base,
-                int64_t elem_idx,
+                uint32_t elem_idx,
                 uint8_t typesize,
                 uint32_t blocksize,
                 uint32_t chunk_bytes,
                 uint8_t src_dtype)
 {
-  const uint64_t elem_byte = (uint64_t)elem_idx * (uint64_t)typesize;
-  const uint64_t block_idx = elem_byte / (uint64_t)blocksize;
-  const uint32_t intra_byte = (uint32_t)(elem_byte - block_idx * blocksize);
-  const uint32_t block_bytes =
-    min((uint64_t)blocksize, chunk_bytes - block_idx * blocksize);
+  const uint32_t elem_byte = elem_idx * typesize;
+  const uint32_t intra_byte = elem_byte % blocksize;
+  const uint32_t block_offset = elem_byte - intra_byte;
+  const uint32_t block_bytes = min(blocksize, chunk_bytes - block_offset);
   const uint32_t elems_per_block = block_bytes / typesize;
   const uint32_t within = intra_byte / typesize;
-  const uint8_t* block = chunk_base + (size_t)block_idx * blocksize;
+  const uint8_t* block = chunk_base + block_offset;
   uint8_t tmp[8];
 #pragma unroll
   for (uint32_t t = 0; t < 8; ++t)
@@ -103,19 +59,19 @@ load_unshuffled(const uint8_t* chunk_base,
 template<enum damacy_dtype output, typename dst_t>
 __device__ __forceinline__ dst_t
 load_bitunshuffled(const uint8_t* chunk_base,
-                   int64_t elem_idx,
+                   uint32_t elem_idx,
                    uint8_t typesize,
                    uint32_t blocksize,
                    uint32_t chunk_bytes,
                    uint8_t src_dtype)
 {
-  const uint64_t elem_byte = (uint64_t)elem_idx * typesize;
-  const uint64_t block_idx = elem_byte / blocksize;
-  const uint32_t block_bytes =
-    min((uint64_t)blocksize, chunk_bytes - block_idx * blocksize);
+  const uint32_t elem_byte = elem_idx * typesize;
+  const uint32_t intra_byte = elem_byte % blocksize;
+  const uint32_t block_offset = elem_byte - intra_byte;
+  const uint32_t block_bytes = min(blocksize, chunk_bytes - block_offset);
   const uint32_t elems_per_block = block_bytes / typesize;
-  const uint32_t e = (uint32_t)(elem_byte - block_idx * blocksize) / typesize;
-  const uint8_t* block = chunk_base + (size_t)block_idx * blocksize;
+  const uint32_t e = intra_byte / typesize;
+  const uint8_t* block = chunk_base + block_offset;
   if (elems_per_block % 8u)
     return load_source<output, dst_t>(block + e * typesize, src_dtype);
   const uint32_t bytes_per_plane = elems_per_block >> 3;
@@ -129,8 +85,7 @@ load_bitunshuffled(const uint8_t* chunk_base,
     uint8_t out = 0;
 #pragma unroll
     for (uint32_t bp = 0; bp < 8; ++bp) {
-      const uint8_t plane =
-        block[(size_t)(bb * 8u + bp) * bytes_per_plane + e_byte];
+      const uint8_t plane = block[(bb * 8u + bp) * bytes_per_plane + e_byte];
       out = (uint8_t)(out | (((plane >> e_bit) & 1u) << bp));
     }
     tmp[bb] = out;
@@ -168,7 +123,7 @@ __device__ __forceinline__ dst_t
 load_chunk_value(const struct sample_plan& s,
                  const struct assemble_chunk& c,
                  const uint8_t* arena_base,
-                 uint64_t source)
+                 uint32_t source)
 {
   if (c.is_fill)
     return load_source<output, dst_t>(s.fill_value, s.src_dtype);
@@ -203,14 +158,11 @@ gather_body(int rank,
             uint8_t* output_base)
 {
   const struct gather_dim* gather = s.gather_dims + c.gather_offset;
-  uint64_t elements = 1;
-  for (int d = 0; d < rank; ++d)
-    elements *= gather[d].count;
   for (uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
-       i < elements;
+       i < c.elements;
        i += (uint64_t)gridDim.x * blockDim.x) {
     uint64_t remaining = i;
-    uint64_t source = 0;
+    uint32_t source = 0;
     uint64_t destination = s.sample_dst_off_elems;
 #pragma unroll
     for (int d = rank - 1; d >= 0; --d) {
@@ -224,7 +176,7 @@ gather_body(int rank,
         src = index.source;
         dst = index.output;
       }
-      source += (uint64_t)src * s.dims[d].src_stride;
+      source += src * (uint32_t)s.dims[d].src_stride;
       destination += dst * s.dims[d].dst_stride;
     }
     ((dst_t*)output_base)[destination] =
@@ -232,10 +184,6 @@ gather_body(int rank,
   }
 }
 
-// Per-thread copy. The decode of blockIdx.x → tile-in-chunk and the
-// per-dim accumulation of src/dst offsets and bounds fuse into one
-// reverse loop: the accumulators commute across d, so the row-major
-// modulus chain (innermost dim first) doesn't constrain the order.
 template<enum damacy_dtype output, typename dst_t>
 __device__ __forceinline__ void
 assemble_body(int rank,
@@ -244,39 +192,26 @@ assemble_body(int rank,
               const uint8_t* arena_base,
               uint8_t* output_base)
 {
-  const uint32_t tid = threadIdx.x;
-  uint32_t rem = blockIdx.x;
-  int64_t src_off_elems = 0;
-  int64_t dst_off_elems = s.sample_dst_off_elems;
-  bool in_bounds = true;
-
+  const uint32_t element = blockIdx.x * kBlockSize + threadIdx.x;
+  if (element >= (uint32_t)c.elements)
+    return;
+  uint32_t remaining = element;
+  uint32_t source = c.src_begin_elem;
+  uint64_t destination = c.dst_begin_elem;
 #pragma unroll
   for (int d = rank - 1; d >= 0; --d) {
-    const struct sample_dim sd = s.dims[d];
-    const uint32_t T_d = tile_T(rank, d);
-    const uint32_t tiles_d = ceil_div_u32(sd.chunk_shape, T_d);
-    const uint32_t tile_in_chunk = rem % tiles_d;
-    rem /= tiles_d;
-    const uint32_t intra = tile_in_chunk * T_d + thread_dim(rank, tid, d);
-    in_bounds = in_bounds && (intra < sd.chunk_shape);
-    const int64_t u =
-      (int64_t)c.chunk_d[d] * (int64_t)sd.chunk_shape + (int64_t)intra;
-    const int64_t dst_d = u - sd.aabb_lo_relative;
-    in_bounds = in_bounds && (dst_d >= 0) && (dst_d < sd.aabb_extent);
-    src_off_elems += (int64_t)intra * sd.src_stride;
-    dst_off_elems += dst_d * sd.dst_stride;
+    const uint32_t position = remaining % c.shape[d];
+    remaining /= c.shape[d];
+    source += position * (uint32_t)s.dims[d].src_stride;
+    destination += (uint64_t)position * s.dims[d].dst_stride;
   }
-  if (rem != 0 || !in_bounds)
-    return;
-
-  dst_t* dst = (dst_t*)(output_base + dst_off_elems * (int64_t)sizeof(dst_t));
-
-  *dst = load_chunk_value<output, dst_t>(s, c, arena_base, src_off_elems);
+  ((dst_t*)output_base)[destination] =
+    load_chunk_value<output, dst_t>(s, c, arena_base, source);
 }
 
 // Single kernel template covering both the templated-rank fast path
 // (RANK_TPL > 0) and the runtime-rank fallback (RANK_TPL == 0).
-template<int RANK_TPL, enum damacy_dtype output, typename dst_t>
+template<int RANK_TPL, enum damacy_dtype output, typename dst_t, bool INDEXED>
 __global__ void
 assemble_kernel(const struct sample_plan* __restrict__ d_samples,
                 const struct assemble_chunk* __restrict__ d_chunks,
@@ -284,9 +219,13 @@ assemble_kernel(const struct sample_plan* __restrict__ d_samples,
                 uint8_t* __restrict__ output_base)
 {
   const struct assemble_chunk& c = d_chunks[blockIdx.y];
+  if (blockIdx.x >= c.blocks)
+    return;
   const struct sample_plan& s = d_samples[c.sample_idx_in_batch];
+  if (s.indexed != INDEXED)
+    return;
   const int rank = (RANK_TPL == 0) ? (int)s.rank : RANK_TPL;
-  if (s.indexed)
+  if (INDEXED)
     gather_body<output, dst_t>(rank, s, c, arena_base, output_base);
   else
     assemble_body<output, dst_t>(rank, s, c, arena_base, output_base);
@@ -296,8 +235,12 @@ assemble_kernel(const struct sample_plan* __restrict__ d_samples,
 // selects the runtime-rank kernel; otherwise it's the compile-time rank.
 #define DST_CASE(DST_VAL, DST_T)                                               \
   case DST_VAL:                                                                \
-    assemble_kernel<kRankTpl, DST_VAL, DST_T>                                  \
-      <<<grid, block, 0, stream>>>(d_samples, d_chunks, arena_b, output_b);    \
+    if (indexed)                                                               \
+      assemble_kernel<kRankTpl, DST_VAL, DST_T, true>                          \
+        <<<grid, block, 0, stream>>>(d_samples, d_chunks, arena_b, output_b);  \
+    else                                                                       \
+      assemble_kernel<kRankTpl, DST_VAL, DST_T, false>                         \
+        <<<grid, block, 0, stream>>>(d_samples, d_chunks, arena_b, output_b);  \
     break
 
 #define DISPATCH_DST(RANK_TPL_VAL)                                             \
@@ -326,7 +269,7 @@ extern "C" int
 assemble_launch(CUstream stream,
                 uint8_t rank,
                 const struct sample_plan* d_samples,
-                uint32_t n_samples,
+                uint8_t indexed,
                 const struct assemble_chunk* d_chunks,
                 uint32_t n_chunks,
                 uint32_t max_blocks_per_chunk,
@@ -334,7 +277,6 @@ assemble_launch(CUstream stream,
                 void* output_base,
                 enum damacy_dtype dst_dtype)
 {
-  (void)n_samples;
   if (n_chunks == 0 || max_blocks_per_chunk == 0)
     return 0;
   if (!d_samples || !d_chunks || !arena_base || !output_base)
@@ -381,20 +323,40 @@ assemble_launch(CUstream stream,
   return 0;
 }
 
-extern "C" uint32_t
-assemble_blocks_per_chunk(uint8_t rank, const struct sample_dim* dims)
+extern "C" uint64_t
+assemble_prepare_chunk(struct assemble_chunk* out,
+                       const struct sample_plan* s,
+                       const struct chunk_plan* c,
+                       const struct gather_dim* gather_dims)
 {
-  if (!dims || rank == 0 || rank > DAMACY_MAX_RANK)
-    return 0;
-  uint32_t bpc = 1u;
-  for (int d = 0; d < (int)rank; ++d)
-    bpc *= ceil_div_u32(dims[d].chunk_shape, tile_T((int)rank, d));
-  return bpc;
-}
-
-extern "C" uint32_t
-assemble_gather_blocks(uint64_t elements)
-{
-  uint64_t blocks = elements / kBlockSize + (elements % kBlockSize != 0);
-  return (uint32_t)(blocks > 65535 ? 65535 : blocks);
+  *out = {};
+  out->src_base_byte_off = c->dev_decompressed_offset;
+  out->sample_idx_in_batch = c->sample_idx_in_batch;
+  out->is_fill = c->is_fill;
+  out->gather_offset = c->gather_offset;
+  out->dst_begin_elem = s->sample_dst_off_elems;
+  uint64_t elements = 1;
+  for (int d = 0; d < s->rank; ++d) {
+    if (s->indexed) {
+      elements *= gather_dims[c->gather_offset + d].count;
+      continue;
+    }
+    const struct sample_dim sd = s->dims[d];
+    const int64_t origin =
+      (int64_t)c->chunk_d[d] * sd.chunk_shape - sd.aabb_lo_relative;
+    const int64_t lo = origin > 0 ? origin : 0;
+    const int64_t hi = origin + sd.chunk_shape < sd.aabb_extent
+                         ? origin + sd.chunk_shape
+                         : sd.aabb_extent;
+    if (hi <= lo)
+      return 0;
+    out->shape[d] = (uint32_t)(hi - lo);
+    out->src_begin_elem += (uint32_t)((lo - origin) * sd.src_stride);
+    out->dst_begin_elem += (uint64_t)lo * sd.dst_stride;
+    elements *= out->shape[d];
+  }
+  out->elements = elements;
+  const uint64_t blocks = elements / kBlockSize + (elements % kBlockSize != 0);
+  out->blocks = (uint32_t)(s->indexed && blocks > 65535 ? 65535 : blocks);
+  return elements;
 }

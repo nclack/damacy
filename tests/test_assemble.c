@@ -17,7 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MAX_RANK 5
+#define MAX_RANK DAMACY_MAX_RANK
 
 // f32 ↔ bf16 helpers, expressed as bit ops to avoid pulling cuda_bf16.h
 // into a C TU. Round-to-nearest-even matches __float2bfloat16's
@@ -182,6 +182,16 @@ ravel(const uint32_t* coord, const uint32_t* extents, int rank)
   return lin;
 }
 
+static uint32_t
+max_chunk_blocks(const struct assemble_chunk* chunks, uint32_t count)
+{
+  uint32_t blocks = 0;
+  for (uint32_t i = 0; i < count; ++i)
+    if (chunks[i].blocks > blocks)
+      blocks = chunks[i].blocks;
+  return blocks;
+}
+
 static int
 run_scenario(int rank,
              const uint32_t* S,
@@ -262,10 +272,10 @@ run_scenario(int rank,
       chunk_d[d] = rem % N[d];
       rem /= N[d];
     }
-    h_chunks[cidx].src_base_byte_off = (uint64_t)cidx * chunk_bytes;
-    h_chunks[cidx].sample_idx_in_batch = 0;
-    for (int d = 0; d < rank; ++d)
-      h_chunks[cidx].chunk_d[d] = chunk_d[d];
+    struct chunk_plan chunk = { .dev_decompressed_offset =
+                                  (uint32_t)(cidx * chunk_bytes) };
+    memcpy(chunk.chunk_d, chunk_d, rank * sizeof(*chunk_d));
+    assemble_prepare_chunk(&h_chunks[cidx], &sp, &chunk, NULL);
   }
 
   CUdeviceptr d_arena = 0, d_output = 0, d_sp = 0, d_chunks = 0;
@@ -283,12 +293,12 @@ run_scenario(int rank,
                       (size_t)n_chunks * sizeof(struct assemble_chunk)) ==
          CUDA_SUCCESS);
 
-  uint32_t max_bpc = assemble_blocks_per_chunk((uint8_t)rank, sp.dims);
+  uint32_t max_bpc = max_chunk_blocks(h_chunks, n_chunks);
   EXPECT(max_bpc > 0);
   EXPECT(assemble_launch(0,
                          (uint8_t)rank,
                          (const struct sample_plan*)(uintptr_t)d_sp,
-                         1,
+                         0,
                          (const struct assemble_chunk*)(uintptr_t)d_chunks,
                          n_chunks,
                          max_bpc,
@@ -577,10 +587,10 @@ run_fill_scenario(enum dtype src_dtype,
       chunk_d[d] = rem % N[d];
       rem /= N[d];
     }
-    h_chunks[cidx].src_base_byte_off = (uint64_t)cidx * chunk_bytes;
-    h_chunks[cidx].sample_idx_in_batch = 0;
-    for (int d = 0; d < rank; ++d)
-      h_chunks[cidx].chunk_d[d] = chunk_d[d];
+    struct chunk_plan chunk = { .dev_decompressed_offset =
+                                  (uint32_t)(cidx * chunk_bytes) };
+    memcpy(chunk.chunk_d, chunk_d, rank * sizeof(*chunk_d));
+    assemble_prepare_chunk(&h_chunks[cidx], &sp, &chunk, NULL);
     if (cidx == fill_chunk_idx)
       h_chunks[cidx].is_fill = 1;
   }
@@ -600,12 +610,12 @@ run_fill_scenario(enum dtype src_dtype,
                       (size_t)n_chunks * sizeof(struct assemble_chunk)) ==
          CUDA_SUCCESS);
 
-  uint32_t max_bpc = assemble_blocks_per_chunk((uint8_t)rank, sp.dims);
+  uint32_t max_bpc = max_chunk_blocks(h_chunks, n_chunks);
   EXPECT(max_bpc > 0);
   EXPECT(assemble_launch(0,
                          (uint8_t)rank,
                          (const struct sample_plan*)(uintptr_t)d_sp,
-                         1,
+                         0,
                          (const struct assemble_chunk*)(uintptr_t)d_chunks,
                          n_chunks,
                          max_bpc,
@@ -767,9 +777,9 @@ test_rank3_all_fill(void)
       chunk_d[d] = rem % N[d];
       rem /= N[d];
     }
-    for (int d = 0; d < rank; ++d)
-      h_chunks[cidx].chunk_d[d] = chunk_d[d];
-    h_chunks[cidx].is_fill = 1;
+    struct chunk_plan chunk = { .is_fill = 1 };
+    memcpy(chunk.chunk_d, chunk_d, rank * sizeof(*chunk_d));
+    assemble_prepare_chunk(&h_chunks[cidx], &sp, &chunk, NULL);
   }
 
   CUdeviceptr d_arena = 0, d_output = 0, d_sp = 0, d_chunks = 0;
@@ -788,11 +798,11 @@ test_rank3_all_fill(void)
                       (size_t)n_chunks * sizeof(struct assemble_chunk)) ==
          CUDA_SUCCESS);
 
-  uint32_t max_bpc = assemble_blocks_per_chunk((uint8_t)rank, sp.dims);
+  uint32_t max_bpc = max_chunk_blocks(h_chunks, n_chunks);
   EXPECT(assemble_launch(0,
                          (uint8_t)rank,
                          (const struct sample_plan*)(uintptr_t)d_sp,
-                         1,
+                         0,
                          (const struct assemble_chunk*)(uintptr_t)d_chunks,
                          n_chunks,
                          max_bpc,
@@ -836,6 +846,146 @@ test_rank3_non_pow2(void)
     3, S, N, aabb_lo_relative, aabb_extent, dtype_u16, DAMACY_F32, 0);
 }
 
+static int
+test_all_ranks(void)
+{
+  for (int rank = 1; rank <= MAX_RANK; ++rank) {
+    uint32_t shape[MAX_RANK], chunks[MAX_RANK];
+    int64_t begin[MAX_RANK], extent[MAX_RANK];
+    for (int d = 0; d < rank; ++d) {
+      shape[d] = chunks[d] = 1;
+      begin[d] = 0;
+      extent[d] = 1;
+    }
+    shape[rank - 1] = 37;
+    chunks[rank - 1] = 3;
+    begin[rank - 1] = 17;
+    extent[rank - 1] = 67;
+    if (rank > 1) {
+      shape[0] = 3;
+      chunks[0] = 2;
+      begin[0] = 1;
+      extent[0] = 4;
+    }
+    EXPECT(run_scenario(
+             rank, shape, chunks, begin, extent, dtype_u16, DAMACY_F32, 0) ==
+           0);
+  }
+  return 0;
+}
+
+static int
+test_unused_chunks(void)
+{
+  uint32_t shape[3] = { 3, 5, 7 };
+  uint32_t chunks[3] = { 3, 3, 3 };
+  int64_t begin[3] = { 4, 8, 13 };
+  int64_t extent[3] = { 1, 2, 3 };
+  return run_scenario(
+    3, shape, chunks, begin, extent, dtype_u16, DAMACY_F32, 0);
+}
+
+static int
+test_mixed_samples(void)
+{
+  enum
+  {
+    index_count = 257,
+    columns = 3,
+    guard = 4
+  };
+  uint16_t arena[15];
+  for (uint16_t i = 0; i < 15; ++i)
+    arena[i] = i;
+  struct gather_index indices[index_count];
+  for (uint32_t i = 0; i < index_count; ++i)
+    indices[i] =
+      (struct gather_index){ .source = i % 3, .output = index_count - 1 - i };
+  struct gather_dim gather[2] = { { .begin = 0, .count = index_count },
+                                  { .begin = 1, .count = columns } };
+  struct sample_plan sample = {
+    .rank = 2,
+    .src_dtype = dtype_u16,
+    .indexed = 1,
+    .sample_dst_off_elems = guard,
+    .dims = { { .chunk_shape = 3,
+                .index_count = index_count,
+                .src_stride = 5,
+                .dst_stride = columns },
+              { .chunk_shape = 5, .src_stride = 1, .dst_stride = 1 } }
+  };
+  struct chunk_plan chunk = { 0 };
+  struct assemble_chunk assembled;
+  EXPECT(assemble_prepare_chunk(&assembled, &sample, &chunk, gather) ==
+         index_count * columns);
+  struct sample_plan samples[2] = { sample,
+                                    { .rank = 2,
+                                      .src_dtype = dtype_u16,
+                                      .sample_dst_off_elems =
+                                        guard + index_count * columns,
+                                      .dims = { { .chunk_shape = 3,
+                                                  .aabb_extent = 3,
+                                                  .src_stride = 5,
+                                                  .dst_stride = 5 },
+                                                { .chunk_shape = 5,
+                                                  .aabb_extent = 5,
+                                                  .src_stride = 1,
+                                                  .dst_stride = 1 } } } };
+  write_src_value(samples[1].fill_value, 7, dtype_u16);
+  struct chunk_plan fill_chunk = { .sample_idx_in_batch = 1, .is_fill = 1 };
+  struct assemble_chunk chunks[2] = { assembled };
+  EXPECT(assemble_prepare_chunk(&chunks[1], &samples[1], &fill_chunk, NULL) ==
+         15);
+  float output[guard + index_count * columns + 15 + guard];
+  for (size_t i = 0; i < sizeof(output) / sizeof(*output); ++i)
+    output[i] = -1;
+  CUdeviceptr d_arena, d_output, d_sample, d_chunk, d_indices, d_gather;
+  EXPECT(cuMemAlloc(&d_arena, sizeof(arena)) == CUDA_SUCCESS);
+  EXPECT(cuMemAlloc(&d_output, sizeof(output)) == CUDA_SUCCESS);
+  EXPECT(cuMemAlloc(&d_sample, sizeof(samples)) == CUDA_SUCCESS);
+  EXPECT(cuMemAlloc(&d_chunk, sizeof(chunks)) == CUDA_SUCCESS);
+  EXPECT(cuMemAlloc(&d_indices, sizeof(indices)) == CUDA_SUCCESS);
+  EXPECT(cuMemAlloc(&d_gather, sizeof(gather)) == CUDA_SUCCESS);
+  samples[0].indices = (const struct gather_index*)(uintptr_t)d_indices;
+  samples[0].gather_dims = (const struct gather_dim*)(uintptr_t)d_gather;
+  EXPECT(cuMemcpyHtoD(d_arena, arena, sizeof(arena)) == CUDA_SUCCESS);
+  EXPECT(cuMemcpyHtoD(d_output, output, sizeof(output)) == CUDA_SUCCESS);
+  EXPECT(cuMemcpyHtoD(d_sample, samples, sizeof(samples)) == CUDA_SUCCESS);
+  EXPECT(cuMemcpyHtoD(d_chunk, chunks, sizeof(chunks)) == CUDA_SUCCESS);
+  EXPECT(cuMemcpyHtoD(d_indices, indices, sizeof(indices)) == CUDA_SUCCESS);
+  EXPECT(cuMemcpyHtoD(d_gather, gather, sizeof(gather)) == CUDA_SUCCESS);
+  for (uint8_t indexed = 0; indexed < 2; ++indexed)
+    EXPECT(assemble_launch(0,
+                           sample.rank,
+                           (const struct sample_plan*)(uintptr_t)d_sample,
+                           indexed,
+                           (const struct assemble_chunk*)(uintptr_t)d_chunk,
+                           2,
+                           1,
+                           (const void*)(uintptr_t)d_arena,
+                           (void*)(uintptr_t)d_output,
+                           DAMACY_F32) == 0);
+  EXPECT(cuStreamSynchronize(0) == CUDA_SUCCESS);
+  EXPECT(cuMemcpyDtoH(output, d_output, sizeof(output)) == CUDA_SUCCESS);
+  for (uint32_t row = 0; row < index_count; ++row)
+    for (uint32_t col = 0; col < columns; ++col)
+      EXPECT(output[guard + row * columns + col] ==
+             ((index_count - 1 - row) % 3) * 5 + col + 1);
+  for (uint32_t i = 0; i < 15; ++i)
+    EXPECT(output[guard + index_count * columns + i] == 7);
+  for (uint32_t i = 0; i < guard; ++i) {
+    EXPECT(output[i] == -1);
+    EXPECT(output[guard + index_count * columns + 15 + i] == -1);
+  }
+  cuMemFree(d_arena);
+  cuMemFree(d_output);
+  cuMemFree(d_sample);
+  cuMemFree(d_chunk);
+  cuMemFree(d_indices);
+  cuMemFree(d_gather);
+  return 0;
+}
+
 int
 main(void)
 {
@@ -858,6 +1008,9 @@ main(void)
     return 1;
   }
 
+  RUN(test_mixed_samples);
+  RUN(test_all_ranks);
+  RUN(test_unused_chunks);
   RUN(test_rank3_full);
   RUN(test_rank3_partial);
   RUN(test_rank3_u8_to_f32);
