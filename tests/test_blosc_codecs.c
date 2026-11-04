@@ -195,7 +195,7 @@ write_array(const char* uri, const struct array_options* options)
                                  size,
                                  source,
                                  encoded[chunk],
-                                 ENCODED_CAP,
+                                 size + BLOSC_MAX_OVERHEAD,
                                  options->codec + 6,
                                  256 * options->typesize,
                                  1);
