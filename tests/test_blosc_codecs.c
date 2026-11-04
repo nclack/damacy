@@ -21,7 +21,8 @@
 #define ARRAY_COLS 70
 #define CROP_ROWS 28
 #define CROP_COLS 53
-#define ENCODED_CAP (CHUNK_ROWS * CHUNK_COLS * 8 + 256)
+#define MAX_CHUNK_ROWS 512
+#define ENCODED_CAP (MAX_CHUNK_ROWS * CHUNK_COLS * 8 + 256)
 
 struct array_options
 {
@@ -33,6 +34,7 @@ struct array_options
   int sharded;
   int raw_blocks;
   unsigned seed;
+  unsigned chunk_rows;
 };
 
 #ifdef DAMACY_TEST_BLOSC_THREADS
@@ -59,13 +61,22 @@ read_u32(const unsigned char* p)
          ((uint32_t)p[3] << 24);
 }
 
+static unsigned
+chunk_rows(const struct array_options* options)
+{
+  return options->chunk_rows ? options->chunk_rows : CHUNK_ROWS;
+}
+
 static uint64_t
 value_at(unsigned y, unsigned x, const struct array_options* options)
 {
   uint64_t value = (y * ARRAY_COLS + x + options->seed) % 31;
   value *= 0x0102040810204081ull;
-  if (options->raw_blocks) {
-    if ((y % CHUNK_ROWS) * CHUNK_COLS + x % CHUNK_COLS >= 512) {
+  unsigned chunk = (y / chunk_rows(options)) * 2 + x / CHUNK_COLS;
+  if (options->raw_blocks == 1 ||
+      (options->raw_blocks == 2 && chunk % 2 == 0)) {
+    if (options->raw_blocks == 1 &&
+        (y % chunk_rows(options)) * CHUNK_COLS + x % CHUNK_COLS >= 512) {
       value = 0;
     } else {
       value = y * ARRAY_COLS + x + options->seed + 1;
@@ -92,6 +103,8 @@ write_bytes(const char* path, const void* data, size_t size)
 static int
 write_array(const char* uri, const struct array_options* options)
 {
+  const unsigned rows = chunk_rows(options);
+  EXPECT(rows >= CHUNK_ROWS && rows <= MAX_CHUNK_ROWS);
   EXPECT(mkdir(uri, 0755) == 0);
   char path[512], codec[512], codecs[1024], json[2048];
   const char* shuffle = options->shuffle == BLOSC_SHUFFLE      ? "shuffle"
@@ -123,7 +136,7 @@ write_array(const char* uri, const struct array_options* options)
              "\"chunk_shape\":[%d,%d],\"codecs\":[%s%s],"
              "\"index_codecs\":[%s,{\"name\":\"crc32c\"}],\"index_location\":"
              "\"end\"}}]",
-             CHUNK_ROWS,
+             rows,
              CHUNK_COLS,
              bytes,
              codec,
@@ -138,10 +151,10 @@ write_array(const char* uri, const struct array_options* options)
            "\"chunk_key_encoding\":{\"name\":\"default\",\"configuration\":{"
            "\"separator\":\"/\"}},"
            "\"fill_value\":0,\"codecs\":%s}",
-           ARRAY_ROWS,
+           2 * rows,
            ARRAY_COLS,
            8 * options->typesize,
-           options->sharded ? ARRAY_ROWS : CHUNK_ROWS,
+           options->sharded ? 2 * rows : rows,
            options->sharded ? ARRAY_COLS : CHUNK_COLS,
            codecs);
   snprintf(path, sizeof(path), "%s/zarr.json", uri);
@@ -158,12 +171,12 @@ write_array(const char* uri, const struct array_options* options)
   size_t total = 0;
   blosc_set_splitmode(options->split);
   for (unsigned chunk = 0; chunk < 4; ++chunk) {
-    unsigned char source[CHUNK_ROWS * CHUNK_COLS * 8];
-    size_t size = CHUNK_ROWS * CHUNK_COLS * options->typesize;
-    for (unsigned y = 0; y < CHUNK_ROWS; ++y)
+    unsigned char source[MAX_CHUNK_ROWS * CHUNK_COLS * 8];
+    size_t size = rows * CHUNK_COLS * options->typesize;
+    for (unsigned y = 0; y < rows; ++y)
       for (unsigned x = 0; x < CHUNK_COLS; ++x) {
         uint64_t value = value_at(
-          (chunk / 2) * CHUNK_ROWS + y, (chunk % 2) * CHUNK_COLS + x, options);
+          (chunk / 2) * rows + y, (chunk % 2) * CHUNK_COLS + x, options);
         for (unsigned byte = 0; byte < options->typesize; ++byte)
           source[(y * CHUNK_COLS + x) * options->typesize + byte] =
             (unsigned char)(value >> (8 * byte));
@@ -188,8 +201,13 @@ write_array(const char* uri, const struct array_options* options)
                                  1);
       EXPECT(n > 0);
       sizes[chunk] = (unsigned)n;
-      EXPECT(read_u32(encoded[chunk] + 8) == 256 * options->typesize);
-      EXPECT(!!(encoded[chunk][2] & BLOSC_MEMCPYED) == (options->level == 0));
+      uint32_t blocksize = read_u32(encoded[chunk] + 8);
+      EXPECT(blocksize > 0 && blocksize <= size);
+      if (options->chunk_rows)
+        EXPECT(blocksize < size && size % blocksize != 0);
+      EXPECT(
+        !!(encoded[chunk][2] & BLOSC_MEMCPYED) ==
+        (options->level == 0 || (options->raw_blocks == 2 && chunk % 2 == 0)));
       if (options->level && options->typesize > 1)
         EXPECT(!!(encoded[chunk][2] & 0x10) ==
                (options->split == BLOSC_NEVER_SPLIT));
@@ -240,7 +258,7 @@ read_crops(const char* const* uris,
   EXPECT(damacy_chunk_planner_create(
            metadata,
            &(struct damacy_plan_limits){ .max_chunks = 1024,
-                                         .max_chunk_bytes = 8192,
+                                         .max_chunk_bytes = 1 << 18,
                                          .max_shards_per_sample = 4,
                                          .max_plan_bytes = 8 << 20 },
            &planner) == DAMACY_OK);
@@ -248,8 +266,8 @@ read_crops(const char* const* uris,
     EXPECT(damacy_cuda_executor_create(
              reader,
              &(struct damacy_cuda_config){ .device = 0,
-                                           .max_gpu_memory_bytes = 64 << 20,
-                                           .max_chunk_bytes = 8192,
+                                           .max_gpu_memory_bytes = 128 << 20,
+                                           .max_chunk_bytes = 1 << 18,
                                            .max_read_bytes = 1 << 20,
                                            .max_chunks_per_wave = 64,
                                            .max_substreams_per_chunk = 32,
@@ -260,9 +278,9 @@ read_crops(const char* const* uris,
     EXPECT(damacy_cpu_executor_create(
              reader,
              &(struct damacy_cpu_config){ .decode_workers = workers,
-                                          .max_encoded_chunk_bytes = 8192,
-                                          .max_decoded_chunk_bytes = 8192,
-                                          .max_memory_bytes = 16 << 20,
+                                          .max_encoded_chunk_bytes = 1 << 18,
+                                          .max_decoded_chunk_bytes = 1 << 18,
+                                          .max_memory_bytes = 32 << 20,
                                           .chunks_per_input_buffer = 16 },
              &executor) == DAMACY_OK);
   }
@@ -283,7 +301,9 @@ read_crops(const char* const* uris,
       .uri = uris[i],
       .rank = 2,
       .axes = { { .kind = DAMACY_AXIS_INTERVAL,
-                  .interval = { 3 + i % 2, 3 + i % 2 + CROP_ROWS } },
+                  .interval = { chunk_rows(&options[i]) - 14 + i % 2,
+                                chunk_rows(&options[i]) - 14 + i % 2 +
+                                  CROP_ROWS } },
                 { .kind = DAMACY_AXIS_INTERVAL,
                   .interval = { 5 + i % 3, 5 + i % 3 + CROP_COLS } } }
     };
@@ -322,12 +342,14 @@ read_crops(const char* const* uris,
       for (unsigned y = 0; y < CROP_ROWS; ++y)
         for (unsigned x = 0; x < CROP_COLS; ++x)
           EXPECT(values[(i * CROP_ROWS + y) * CROP_COLS + x] ==
-                 value_at(3 + i % 2 + y, 5 + i % 3 + x, &options[i]));
+                 value_at(chunk_rows(&options[i]) - 14 + i % 2 + y,
+                          5 + i % 3 + x,
+                          &options[i]));
     free(values);
     struct damacy_stats stats;
     damacy_stats_get(pipeline, &stats);
     if (gpu) {
-      EXPECT(stats.gpu_bytes_committed <= (64ull << 20));
+      EXPECT(stats.gpu_bytes_committed <= (128ull << 20));
       if (count == 32)
         EXPECT(stats.waves_emitted >= 2);
     }
@@ -369,7 +391,7 @@ test_layouts(int gpu)
              ++split)
           for (int sharded = 0; sharded <= 1; ++sharded) {
             struct array_options options = {
-              codecs[codec], typesize, shuffle, split, 5, sharded, 0, 7
+              codecs[codec], typesize, shuffle, split, 5, sharded, 0, 7, 0
             };
             EXPECT(run_array(&options, gpu) == 0);
           }
@@ -382,12 +404,36 @@ test_raw_and_memcpyed(int gpu)
   for (int shuffle = 0; shuffle <= 2; ++shuffle)
     for (int sharded = 0; sharded <= 1; ++sharded) {
       struct array_options options = {
-        "blosc-lz4", 8, shuffle, BLOSC_ALWAYS_SPLIT, 5, sharded, 1, 11
+        "blosc-lz4", 8, shuffle, BLOSC_ALWAYS_SPLIT, 5, sharded, 1, 11, 0
       };
       EXPECT(run_array(&options, gpu) == 0);
       options.level = 0;
       EXPECT(run_array(&options, gpu) == 0);
+      options.level = 5;
+      options.raw_blocks = 2;
+      EXPECT(run_array(&options, gpu) == 0);
     }
+  return 0;
+}
+
+static int
+test_split_tails(int gpu)
+{
+  const char* codecs[] = { "blosc-lz4", "blosc-lz4hc" };
+  for (unsigned codec = 0; codec < 2; ++codec)
+    for (unsigned rows = 480; rows <= 481; ++rows)
+      for (int sharded = 0; sharded <= 1; ++sharded) {
+        struct array_options options = { codecs[codec],
+                                         8,
+                                         BLOSC_BITSHUFFLE,
+                                         BLOSC_ALWAYS_SPLIT,
+                                         5,
+                                         sharded,
+                                         0,
+                                         7,
+                                         rows };
+        EXPECT(run_array(&options, gpu) == 0);
+      }
   return 0;
 }
 
@@ -403,10 +449,12 @@ test_mixed_and_growth(int gpu)
   struct array_options options[32];
   for (unsigned i = 0; i < 5; ++i) {
     options[i] = (struct array_options){
-      codecs[i], 8, BLOSC_BITSHUFFLE, BLOSC_NEVER_SPLIT, 5, i % 2, 0, i
+      codecs[i], 8, BLOSC_BITSHUFFLE, BLOSC_NEVER_SPLIT, 5, i % 2, 0, i, 0
     };
     if (i >= 3)
       options[i].split = BLOSC_ALWAYS_SPLIT;
+    if (i == 4)
+      options[i].chunk_rows = 480;
     snprintf(paths[i], sizeof(paths[i]), "%s/array%u", root, i);
     EXPECT(write_array(paths[i], &options[i]) == 0);
     uris[i] = paths[i];
@@ -415,7 +463,7 @@ test_mixed_and_growth(int gpu)
   for (unsigned i = 0; i < 32; ++i) {
     uris[i] = paths[4];
     options[i] = (struct array_options){
-      "blosc-lz4hc", 8, BLOSC_BITSHUFFLE, BLOSC_ALWAYS_SPLIT, 5, 0, 0, 4
+      "blosc-lz4hc", 8, BLOSC_BITSHUFFLE, BLOSC_ALWAYS_SPLIT, 5, 0, 0, 4, 480
     };
   }
   EXPECT(read_crops(uris, options, 32, gpu, 4, DAMACY_OK) == 0);
@@ -431,7 +479,7 @@ test_malformed(int gpu)
     EXPECT(mkdtemp(root));
     snprintf(uri, sizeof(uri), "%s/array", root);
     struct array_options options = {
-      "blosc-lz4", 2, BLOSC_BITSHUFFLE, BLOSC_NEVER_SPLIT, 5, 0, 0, 7
+      "blosc-lz4", 2, BLOSC_BITSHUFFLE, BLOSC_NEVER_SPLIT, 5, 0, 0, 7, 0
     };
     EXPECT(write_array(uri, &options) == 0);
     snprintf(path, sizeof(path), "%s/c/1/1", uri);
@@ -505,6 +553,7 @@ main(void)
   for (int gpu = 0; gpu < backends; ++gpu) {
     EXPECT(test_layouts(gpu) == 0);
     EXPECT(test_raw_and_memcpyed(gpu) == 0);
+    EXPECT(test_split_tails(gpu) == 0);
     EXPECT(test_mixed_and_growth(gpu) == 0);
     EXPECT(test_malformed(gpu) == 0);
   }
