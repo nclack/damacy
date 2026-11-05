@@ -50,7 +50,48 @@ are shared with other activity on those devices. Their adjacent idle rates are
 shown without subtracting an assumed background rate. A high IOPS value alone
 does not make a setting better; request size and useful throughput provide context.
 
-## Cold NVMe pilot results
+## Mixed-source cold NVMe results
+
+The [November 5 CPU study](pareto/index.html#study=542501404495a92083a9)
+contains **126 settings and 308 executions**, using all seven microscopy assets,
+nine layouts, two read patterns, and six dataset omissions. Each setting has two
+process repetitions. It ran on an AMD EPYC 9655P with 32 allowed logical CPUs,
+16 decode workers, 16 file workers, and eight 7.68 TB Intel PCIe NVMe drives.
+The prepared files total 769.17 GiB, representing 1008 GiB of uncompressed pixels.
+
+For the complete source mixture, two layouts form the observed frontier in both
+read patterns:
+
+| Layout | Compression | Crop useful GiB/s | Whole-frame useful GiB/s |
+| --- | ---: | ---: | ---: |
+| Zstd, 1 MiB chunks | 1.441× | 1.205 | 5.579 |
+| Blosc-Zstd, 256 KiB chunks and blocks | 1.504× | 1.030 | 4.472 |
+
+These are medians from two repetitions, not an established ordering of close
+settings. Across the study, the median min–max throughput spread was 2.25% of
+the median, with a maximum of 16.82%. Bracketing raw-control spreads ranged from
+1.13% to 5.64%. The plots retain individual ranges and the controls for each
+source mixture and read pattern.
+
+All 758 measured passes passed the zero-resident-page check and recorded NVMe
+reads. Peak overlapping application read calls reached 16 in every execution.
+Device read rates ranged from about 32,000 to 141,000 IOPS across executions;
+these rates describe the measured requests and include device activity outside
+the process. The adjacent idle rate reached 455 read IOPS. For all-source
+whole-frame Zstd/1 MiB reads, the median device rate was 70,375 IOPS and
+7.343 GiB/s, while useful source throughput was 5.579 GiB/s and returned
+float32 throughput was 10.414 GiB/s.
+
+Omitting DynaCell changes the highest-median layout to Blosc-Zstd/256 KiB for
+both read patterns. Omitting BBBC010 changes whole-frame Zstd/1 MiB throughput
+by only −0.47%, while its compression falls 10.14%, from 1.441× to 1.295×.
+The sensitivity panel shows both axes and each mixture's raw-normalized speedup.
+Omissions change source types and file counts as well as the pixel distribution;
+see the [study protocol](#mixed-source-microscopy-study) for those limits.
+The [retained JSON](pareto/data/542501404495a92083a9.json) includes every observation,
+cache check, device counter, and source, query, and binary hash.
+
+## Earlier cold NVMe pilot results
 
 The [cold CPU pilot](pareto/index.html#study=5add8a3675356a860c8e) contains
 72 executions of 24 settings on an AMD EPYC 9655P, with eight allowed logical
@@ -153,8 +194,8 @@ The updated [`bench/studies/microscopy.json`](https://github.com/nclack/damacy/b
 uses every asset in the version-3 [corpus manifest](https://github.com/nclack/chucky-benchmarks-data).
 The current seven inputs are OpenCell DNA and protein, BBBC010 brightfield,
 JUMP-Scope fluorescence, DynaCell phase, COSEM EM, and BBBC022 MitoTracker.
-The larger study has not been measured yet. The published pilot numbers above
-still describe the earlier, much smaller inputs.
+The November 5 mixed-source CPU results above use this geometry and protocol.
+The older single-input pilots retain their original, smaller inputs.
 
 Each source becomes a 2048 × 2048 frame sequence. A 4 × 4 spatial grid gives
 16 shard files per frame, with each shard containing **1 GiB of uncompressed

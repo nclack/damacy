@@ -71,6 +71,7 @@ test("sensitivity only compares matching settings and backends", () => {
   omission.id = "omit";
   omission.input_id = "without-source";
   omission.condition_id = "omitted";
+  omission.compression_fold = 1.6;
   omission.metrics.useful_gib_s.median = 8;
   omission.metrics.returned_gib_s.median = 22;
   omission.reference_useful_gib_s.median = 16;
@@ -78,6 +79,7 @@ test("sensitivity only compares matching settings and backends", () => {
   unrelated.backend = "cuda";
   const values = sensitivity([baseline, omission, unrelated], omission);
   assert.equal(values.length, 1);
+  assert(Math.abs(values[0].compression_percent + 20) < 1e-12);
   assert.equal(values[0].raw_relative_percent, -50);
   assert(Math.abs(values[0].useful_percent + 20) < 1e-12);
   assert(Math.abs(values[0].returned_percent - 10) < 1e-12);

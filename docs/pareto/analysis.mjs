@@ -43,6 +43,7 @@ export function sensitivity(rows, selected) {
   if (!baseline) return [];
   return rows.filter(row => row.input_id !== "all-sources" && same(row)).map(row => ({
     row,
+    compression_percent: 100 * (row.compression_fold / baseline.compression_fold - 1),
     useful_percent: 100 * (row.metrics.useful_gib_s.median / baseline.metrics.useful_gib_s.median - 1),
     raw_relative_percent: row.reference_useful_gib_s && baseline.reference_useful_gib_s
       ? 100 * ((row.metrics.useful_gib_s.median / row.reference_useful_gib_s.median)

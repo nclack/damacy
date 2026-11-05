@@ -300,6 +300,7 @@ def verify_study(page, document):
                 detail = page.locator("#detail-content").inner_text()
                 assert "Expanded shape" in detail and "Query coverage" in detail
                 assert "Leave-one-out sensitivity" in detail
+                assert " compression (" in detail
             for view, metric in (
                 ("io", "read_iops"),
                 ("device", "device_iops"),
@@ -456,7 +457,7 @@ def check(assets, output, actual):
                             page.select_option("#appearance", theme)
                             verify_mark_contrast(page)
                             page.screenshot(
-                                path=str(output / f"mixture-{theme}.png"),
+                                path=str(output / f"mixture-{entry['id']}-{theme}.png"),
                                 full_page=True,
                             )
                             detail = page.locator("#detail")
@@ -472,20 +473,27 @@ def check(assets, output, actual):
                                 )
                                 assert detail.evaluate("node => node.scrollTop > 0")
                                 detail.screenshot(
-                                    path=str(output / f"mixture-{section}-{theme}.png")
+                                    path=str(
+                                        output / f"mixture-{entry['id']}-{section}-{theme}.png"
+                                    )
                                 )
                             detail.evaluate("node => { node.scrollTop = 0; }")
                             page.evaluate("window.scrollTo(0, 0)")
                         page.select_option("#appearance", "system")
                 page.select_option("#study", document["id"])
                 page.wait_for_selector("#workspace", state="visible")
-                page.select_option("#input", document["inputs"][0]["id"])
-                page.select_option("#workload", "random-256")
+                input_id = document.get("cohorts", document["inputs"])[0]["id"]
+                workload = min(
+                    row["workload"]
+                    for row in document["rows"]
+                    if row["input_id"] == input_id
+                )
+                page.select_option("#input", input_id)
+                page.select_option("#workload", workload)
                 expected = [
                     row
                     for row in document["rows"]
-                    if row["input_id"] == document["inputs"][0]["id"]
-                    and row["workload"] == "random-256"
+                    if row["input_id"] == input_id and row["workload"] == workload
                 ]
                 point = page.locator('circle.point[aria-label^="Uncompressed"]').first
                 point.focus()
@@ -534,7 +542,7 @@ def check(assets, output, actual):
                 page.locator(".more-filters summary").click()
                 page.select_option("#block", "16384")
                 assert page.locator("circle.point").count() == sum(
-                    row["setting"]["codec"] != "blosc-zstd"
+                    not row["setting"]["codec"].startswith("blosc-")
                     or row["setting"]["block_bytes"] == 16384
                     for row in expected
                 )
@@ -542,7 +550,7 @@ def check(assets, output, actual):
                 assert page.locator("circle.point").count() > 0
                 page.select_option("#view", "io")
                 assert page.locator("circle.point").count() == sum(
-                    row["setting"]["codec"] != "blosc-zstd"
+                    not row["setting"]["codec"].startswith("blosc-")
                     or row["setting"]["block_bytes"] == 16384
                     for row in expected
                 )
