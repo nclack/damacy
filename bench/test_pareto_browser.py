@@ -459,16 +459,23 @@ def check(assets, output, actual):
                                 path=str(output / f"mixture-{theme}.png"),
                                 full_page=True,
                             )
-                            page.locator("#detail").evaluate(
-                                "node => { node.scrollTop = 100000; }"
-                            )
-                            page.screenshot(
-                                path=str(output / f"mixture-details-{theme}.png"),
-                                full_page=True,
-                            )
-                            page.locator("#detail").evaluate(
-                                "node => { node.scrollTop = 0; }"
-                            )
+                            detail = page.locator("#detail")
+                            detail.scroll_into_view_if_needed()
+                            for section, heading in (
+                                ("sensitivity", "Leave-one-out sensitivity"),
+                                ("sources", "Input and source"),
+                            ):
+                                detail.get_by_role(
+                                    "heading", name=heading, exact=True
+                                ).evaluate(
+                                    "node => node.scrollIntoView({block: 'start'})"
+                                )
+                                assert detail.evaluate("node => node.scrollTop > 0")
+                                detail.screenshot(
+                                    path=str(output / f"mixture-{section}-{theme}.png")
+                                )
+                            detail.evaluate("node => { node.scrollTop = 0; }")
+                            page.evaluate("window.scrollTo(0, 0)")
                         page.select_option("#appearance", "system")
                 page.select_option("#study", document["id"])
                 page.wait_for_selector("#workspace", state="visible")
