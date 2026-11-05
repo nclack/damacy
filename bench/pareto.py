@@ -21,6 +21,7 @@ import subprocess
 import sys
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 
@@ -834,21 +835,21 @@ def run_study(args):
     write_json(args.output / "plan.json", plan)
     write_json(args.output / "prepared.json", prepared)
     write_json(args.output / "schedule.json", tasks)
-    for variant in variants.values():
-        for item in variant["files"]:
-            path = relative_path(args.data, item["path"])
-            if is_cold(plan) and (
-                not path.resolve().is_relative_to(args.data.resolve())
-                or path.stat().st_dev != args.data.stat().st_dev
-            ):
-                raise ValueError(
-                    "Cold files must stay on the verified local filesystem"
-                )
-            if (
-                path.stat().st_size != item["bytes"]
-                or file_hash(path) != item["sha256"]
-            ):
-                raise ValueError(f"Prepared file changed: {path}")
+
+    def verify_file(item):
+        path = relative_path(args.data, item["path"])
+        if is_cold(plan) and (
+            not path.resolve().is_relative_to(args.data.resolve())
+            or path.stat().st_dev != args.data.stat().st_dev
+        ):
+            raise ValueError("Cold files must stay on the verified local filesystem")
+        if path.stat().st_size != item["bytes"] or file_hash(path) != item["sha256"]:
+            raise ValueError(f"Prepared file changed: {path}")
+
+    files = [item for variant in variants.values() for item in variant["files"]]
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        for _ in executor.map(verify_file, files):
+            pass
     for number, task in enumerate(tasks, 1):
         destination = args.output / "observations" / f"{task['id']}.json"
         if destination.exists():
