@@ -85,8 +85,8 @@ function select(row, announce = true) {
       ["Samples per pass", number(query.samples)],
       ["Source bytes per pass", `${number(query.useful_bytes / 2 ** 30)} GiB`],
       ["Shard files per pass", number(query.distinct_shards)],
-      ["Shard files per batch", range(query.shards_per_window.batch)],
-      ["Shard files per lookahead window", range(query.shards_per_window.lookahead)],
+      ["Planned files per batch", range(query.shards_per_window.batch)],
+      [`Planned files per ${study.pipeline.lookahead_samples}-query block`, range(query.shards_per_window.lookahead)],
       ["Query SHA256", row.sampling.query_sha256],
     ]);
     target.append(element("p", "Shard coverage counts files addressed by the planned queries. Peak active file reads counts overlapping read calls; it does not count distinct active shard files."));
@@ -278,7 +278,7 @@ function table(rows, isIO, isDevice) {
 function updateContext() {
   const context = study.context, cohort = study.cohorts?.find(value => value.id === $("input").value);
   const geometry = cohort
-    ? `${cohort.input_ids.length} source inputs, mixed within each pass. ${cohort.omitted_dataset ? `Omitted collection: ${cohort.omitted_dataset}. ` : ""}${study.volume.frame_shape.join(" × ")} frames; ${study.volume.shard_spatial_shape.join(" × ")} spatial shards; ${number(study.volume.shard_bytes / 2 ** 30)} GiB uncompressed per shard. ${study.weighting}. Read weights count samples per input; compression combines equal logical source volumes. Expanded pixels are tiled source distributions.`
+    ? `${cohort.input_ids.length} source inputs, mixed within each pass. ${cohort.omitted_dataset ? `Omitted collection: ${cohort.omitted_dataset}. ` : ""}${study.volume.frame_shape.join(" × ")} frames; ${study.volume.shard_spatial_shape.join(" × ")} spatial shards; ${number(study.volume.shard_bytes / 2 ** 30)} GiB uncompressed per shard. ${study.weighting}. Compression combines equal logical source volumes. Expanded pixels are tiled source distributions.`
     : "Each input is a small replayed image pack.";
   $("context").textContent = `${study.pilot ? "Pilot · limited settings. " : ""}${context.machine.cpu?.["Model name"] || context.machine.host} · ${context.machine.cpu_affinity?.length ?? "Unknown"} allowed logical CPUs · ${study.pipeline.decode_workers} CPU decode workers · ${study.pipeline.n_io_threads} file workers · ${context.machine.gpu?.split("\n")[0]?.split(",")[0] || "CPU only"}. ${geometry}`;
 }
