@@ -290,6 +290,9 @@ def verify_study(page, document):
             verify_table(page, expected, "pareto")
             if document.get("cohorts"):
                 assert (
+                    "Every timed pass" in page.locator("#cache-condition").inner_text()
+                )
+                assert (
                     f"{len(asset['input_ids'])} source inputs"
                     in page.locator("#context").inner_text()
                 )
@@ -316,6 +319,7 @@ def mixture_fixture():
     study = fixture()
     study["id"] = "1" * 20
     study["label"] = "Mixed-source browser fixture — not measured"
+    study["context"]["cache_policy"] = "cold-pass"
     study["cohorts"] = [
         {
             "id": "all-sources",
@@ -339,6 +343,12 @@ def mixture_fixture():
     for row in study["rows"]:
         cohort = study["cohorts"][row["input_id"] == "image-b"]
         row["input_id"] = cohort["id"]
+        if row["workload"] == "random-256":
+            row["workload"] = "balanced-256"
+        row["setting"]["dtype"] = "mixed"
+        row["sampling"]["sample_shape"] = (
+            [1, 2048, 2048] if row["workload"] == "whole-planes" else [1, 256, 256]
+        )
         row["reference_useful_gib_s"] = {"median": 10, "min": 9, "max": 11, "n": 3}
         if (
             row["setting"]["codec"] == "blosc-zstd"
@@ -448,6 +458,16 @@ def check(assets, output, actual):
                             page.screenshot(
                                 path=str(output / f"mixture-{theme}.png"),
                                 full_page=True,
+                            )
+                            page.locator("#detail").evaluate(
+                                "node => { node.scrollTop = 100000; }"
+                            )
+                            page.screenshot(
+                                path=str(output / f"mixture-details-{theme}.png"),
+                                full_page=True,
+                            )
+                            page.locator("#detail").evaluate(
+                                "node => { node.scrollTop = 0; }"
                             )
                         page.select_option("#appearance", "system")
                 page.select_option("#study", document["id"])

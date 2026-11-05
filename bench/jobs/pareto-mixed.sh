@@ -38,19 +38,31 @@ case "$study_backend" in
       -R '^(test_benchmark_cpu|test_cold_read|test_cpu_executor|test_cpu_pipeline|test_blosc_codecs|test_file_reader)$'
     uv run --script bench/pareto.py prepare "$study_root/plan.json" \
       --corpus "$study_corpus" --output "$study_root/data"
-    cp -a "$study_root/data" "$study_scratch/data"
     study_backends=(--backend cpu)
     ;;
   cuda)
     study_backends=()
     ctest --test-dir build --output-on-failure
-    cp -a "$study_root/data" "$study_scratch/data"
     ;;
   *)
     printf 'Expected cpu or cuda, got %s\n' "$study_backend" >&2
     exit 2
     ;;
 esac
+
+uv run --no-project --python 3.12 python - "$study_root/data/prepared.json" "$study_scratch" <<'PY_SPACE'
+import json
+import shutil
+import sys
+from pathlib import Path
+prepared = json.loads(Path(sys.argv[1]).read_text())
+required = sum(item["stored_bytes"] for item in prepared["variants"]) + 1024**3
+available = shutil.disk_usage(sys.argv[2]).free
+if required > available:
+    raise SystemExit(f"Local NVMe needs {required} bytes; only {available} are available")
+print(f"Copying {required - 1024**3} prepared bytes to local NVMe", flush=True)
+PY_SPACE
+cp -a "$study_root/data" "$study_scratch/data"
 
 uv run --script bench/pareto.py run "$study_root/plan.json" \
   --data "$study_scratch/data" --output "$study_root/results-$study_backend" \
