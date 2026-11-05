@@ -6,7 +6,8 @@ import unittest
 from pathlib import Path
 
 import numpy as np
-from pareto_data import compressors, tiled_shard, write_volume
+from pareto import file_hash
+from pareto_data import compressors, prepare_variants, tiled_shard, write_volume
 
 import zarr
 
@@ -88,6 +89,51 @@ class TilingTests(unittest.TestCase):
                     ),
                     4,
                 )
+
+    def test_parallel_preparation_preserves_pixels_and_resumes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            pixels = np.arange(2 * 3 * 4, dtype=np.uint16).reshape(2, 3, 4)
+            source = root / "input.bin"
+            source.write_bytes(pixels.tobytes())
+            asset = {"id": "example", "dtype": "uint16", "shape": list(pixels.shape)}
+            variants = [
+                {
+                    "id": codec,
+                    "input_id": "example",
+                    "dtype": "uint16",
+                    "codec": codec,
+                    "shape": [4, 8, 8],
+                    "shard_shape": [4, 4, 4],
+                    "chunk_shape": [1, 2, 2],
+                    "chunk_bytes": 8,
+                    "block_bytes": None,
+                    "level": 3,
+                    "tiling": {"method": "shifted-periodic-planes", "seed": 42},
+                }
+                for codec in ("none", "zstd")
+            ]
+            args = (
+                {"variants": variants},
+                {"example": asset},
+                {"example": source},
+                root,
+                2,
+            )
+            records = {record["id"]: record for record in prepare_variants(*args)}
+            self.assertEqual(set(records), {variant["id"] for variant in variants})
+            for variant in variants:
+                record = records[variant["id"]]
+                self.assertEqual(record["shard_files"], 4)
+                actual = zarr.open_array(str(root / variant["id"] / "array"))[:]
+                whole = {**variant, "shard_shape": variant["shape"]}
+                np.testing.assert_array_equal(
+                    actual, tiled_shard(pixels, whole, (0, 0, 0))
+                )
+                for file in record["files"]:
+                    self.assertEqual(file_hash(root / file["path"]), file["sha256"])
+            resumed = {record["id"]: record for record in prepare_variants(*args)}
+            self.assertEqual(resumed, records)
 
 
 if __name__ == "__main__":

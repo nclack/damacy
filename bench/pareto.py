@@ -1132,6 +1132,7 @@ def main():
     prepare.add_argument("plan", type=Path)
     prepare.add_argument("--corpus", type=Path, required=True)
     prepare.add_argument("--output", type=Path, required=True)
+    prepare.add_argument("--workers", type=int, default=1)
     run = commands.add_parser(
         "run", help="Run repeated, randomized measurements on a compute node"
     )
@@ -1197,6 +1198,8 @@ def main():
                     str(args.corpus.resolve()),
                     "--output",
                     str(args.output.resolve()),
+                    "--workers",
+                    str(args.workers),
                 ],
                 check=True,
             )

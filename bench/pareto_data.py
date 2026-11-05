@@ -12,6 +12,8 @@ import importlib.metadata
 import math
 import random
 import struct
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from multiprocessing import get_context
 from pathlib import Path
 
 import numpy as np
@@ -172,7 +174,86 @@ def write_volume(array, pixels, variant):
                 print(f"  verified shard {origin}", flush=True)
 
 
-def prepare(plan, corpus, output):
+def prepare_variant(variant, asset, path, output):
+    zarr.config.set({"async.concurrency": 8, "threading.max_workers": 8})
+    destination = output / variant["id"]
+    if destination.exists():
+        record = read_json(destination / "layout.json")
+        if any(record[key] != value for key, value in variant.items()):
+            raise ValueError("Existing layout differs from the study plan")
+        for item in record["files"]:
+            file = relative_path(output, item["path"])
+            if (
+                file.stat().st_size != item["bytes"]
+                or file_hash(file) != item["sha256"]
+            ):
+                raise ValueError(f"Prepared file changed: {file}")
+        return record
+    pending = output / f"{variant['id']}.partial"
+    pending.mkdir()
+    dtype = np.dtype(asset["dtype"]).newbyteorder("<")
+    pixels = np.memmap(path, dtype=dtype, mode="r", shape=tuple(asset["shape"]))
+    array = zarr.create_array(
+        store=str(pending / "array"),
+        shape=tuple(variant["shape"]),
+        dtype=dtype,
+        chunks=tuple(variant["chunk_shape"]),
+        shards=tuple(variant["shard_shape"]),
+        compressors=compressors(variant),
+        config={"write_empty_chunks": True},
+        zarr_format=3,
+    )
+    write_volume(array, pixels, variant)
+    details = chunk_records(pending / "array", variant)
+    files = [
+        {
+            "path": f"{variant['id']}/{file.relative_to(pending).as_posix()}",
+            "bytes": file.stat().st_size,
+            "sha256": file_hash(file),
+        }
+        for file in sorted((pending / "array").rglob("*"))
+        if file.is_file()
+    ]
+    record = {
+        **variant,
+        **details,
+        "logical_bytes": math.prod(variant["shape"]) * dtype.itemsize,
+        "shard_files": sum(not item["path"].endswith("/zarr.json") for item in files),
+        "shard_file_bytes": [
+            item["bytes"] for item in files if not item["path"].endswith("/zarr.json")
+        ],
+        "stored_bytes": sum(item["bytes"] for item in files),
+        "files": files,
+    }
+    write_json(pending / "layout.json", record)
+    pending.rename(destination)
+    return record
+
+
+def prepare_variants(plan, inputs, paths, output, workers):
+    if workers < 1:
+        raise ValueError("Preparation needs at least one worker")
+    arguments = [
+        (variant, inputs[variant["input_id"]], paths[variant["input_id"]], output)
+        for variant in plan["variants"]
+    ]
+    if workers == 1:
+        for args in arguments:
+            yield prepare_variant(*args)
+        return
+    with ProcessPoolExecutor(
+        max_workers=workers, mp_context=get_context("spawn")
+    ) as executor:
+        futures = [executor.submit(prepare_variant, *args) for args in arguments]
+        try:
+            for future in as_completed(futures):
+                yield future.result()
+        finally:
+            for future in futures:
+                future.cancel()
+
+
+def prepare(plan, corpus, output, *, workers=1):
     require_compute()
     if identity(read_json(corpus / "manifest.json")) != plan["corpus_sha256"]:
         raise ValueError("Corpus metadata changed after planning")
@@ -185,77 +266,19 @@ def prepare(plan, corpus, output):
     output.mkdir(parents=True, exist_ok=True)
     write_json(
         output / "preparation.json",
-        {"plan_sha256": identity(plan), "packages": packages},
+        {"plan_sha256": identity(plan), "packages": packages, "workers": workers},
     )
     from pareto_mixture import write_queries
 
     write_queries(plan, output)
-    zarr.config.set({"async.concurrency": 8, "threading.max_workers": 8})
-    records = []
-    for number, variant in enumerate(plan["variants"], 1):
-        destination = output / variant["id"]
-        if destination.exists():
-            record = read_json(destination / "layout.json")
-            if any(record[key] != value for key, value in variant.items()):
-                raise ValueError("Existing layout differs from the study plan")
-            for item in record["files"]:
-                file = relative_path(output, item["path"])
-                if (
-                    file.stat().st_size != item["bytes"]
-                    or file_hash(file) != item["sha256"]
-                ):
-                    raise ValueError(f"Prepared file changed: {file}")
-            records.append(record)
-            continue
-        pending = output / f"{variant['id']}.partial"
-        pending.mkdir()
-        asset = inputs[variant["input_id"]]
-        dtype = np.dtype(asset["dtype"]).newbyteorder("<")
-        pixels = np.memmap(
-            paths[asset["id"]], dtype=dtype, mode="r", shape=tuple(asset["shape"])
-        )
-        array = zarr.create_array(
-            store=str(pending / "array"),
-            shape=tuple(variant["shape"]),
-            dtype=dtype,
-            chunks=tuple(variant["chunk_shape"]),
-            shards=tuple(variant["shard_shape"]),
-            compressors=compressors(variant),
-            config={"write_empty_chunks": True},
-            zarr_format=3,
-        )
-        write_volume(array, pixels, variant)
-        details = chunk_records(pending / "array", variant)
-        files = [
-            {
-                "path": f"{variant['id']}/{file.relative_to(pending).as_posix()}",
-                "bytes": file.stat().st_size,
-                "sha256": file_hash(file),
-            }
-            for file in sorted((pending / "array").rglob("*"))
-            if file.is_file()
-        ]
-        record = {
-            **variant,
-            **details,
-            "logical_bytes": math.prod(variant["shape"]) * dtype.itemsize,
-            "shard_files": sum(
-                not item["path"].endswith("/zarr.json") for item in files
-            ),
-            "shard_file_bytes": [
-                item["bytes"]
-                for item in files
-                if not item["path"].endswith("/zarr.json")
-            ],
-            "stored_bytes": sum(item["bytes"] for item in files),
-            "files": files,
-        }
-        write_json(pending / "layout.json", record)
-        pending.rename(destination)
-        records.append(record)
+    records = {}
+    for number, record in enumerate(
+        prepare_variants(plan, inputs, paths, output, workers), 1
+    ):
+        records[record["id"]] = record
         print(
-            f"[{number}/{len(plan['variants'])}] {asset['id']} {variant['codec']} "
-            f"{variant['chunk_bytes']} / {variant['block_bytes']}: "
+            f"[{number}/{len(plan['variants'])}] {record['input_id']} {record['codec']} "
+            f"{record['chunk_bytes']} / {record['block_bytes']}: "
             f"{record['logical_bytes'] / record['stored_bytes']:.3f}x",
             flush=True,
         )
@@ -265,7 +288,8 @@ def prepare(plan, corpus, output):
             "version": 1,
             "plan_sha256": identity(plan),
             "packages": packages,
-            "variants": records,
+            "preparation_workers": workers,
+            "variants": [records[variant["id"]] for variant in plan["variants"]],
         },
     )
 
@@ -275,8 +299,9 @@ def main():
     parser.add_argument("plan", type=Path)
     parser.add_argument("--corpus", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--workers", type=int, default=1)
     args = parser.parse_args()
-    prepare(read_json(args.plan), args.corpus, args.output)
+    prepare(read_json(args.plan), args.corpus, args.output, workers=args.workers)
 
 
 if __name__ == "__main__":

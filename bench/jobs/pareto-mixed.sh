@@ -36,7 +36,7 @@ case "$study_backend" in
     ctest --test-dir build --output-on-failure \
       -R '^(test_benchmark_cpu|test_cold_read|test_cpu_executor|test_cpu_pipeline|test_blosc_codecs|test_file_reader)$'
     uv run --script bench/pareto.py prepare "$study_root/plan.json" \
-      --corpus "$study_corpus" --output "$study_root/data"
+      --corpus "$study_corpus" --output "$study_root/data" --workers 3
     study_backends=(--backend cpu)
     ;;
   cuda)
