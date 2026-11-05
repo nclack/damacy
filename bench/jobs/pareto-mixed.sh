@@ -31,8 +31,7 @@ PY
 case "$study_backend" in
   cpu)
     cmake -S . -B build -G Ninja \
-      -DCMAKE_BUILD_TYPE=RelWithDebInfo -DDAMACY_CUDA=ON -DDAMACY_PYTHON=OFF \
-      -DCMAKE_CUDA_ARCHITECTURES=90-real
+      -DCMAKE_BUILD_TYPE=RelWithDebInfo -DDAMACY_CUDA=OFF -DDAMACY_PYTHON=OFF
     cmake --build build --parallel 16
     ctest --test-dir build --output-on-failure \
       -R '^(test_benchmark_cpu|test_cold_read|test_cpu_executor|test_cpu_pipeline|test_blosc_codecs|test_file_reader)$'
@@ -69,3 +68,10 @@ uv run --script bench/pareto.py run "$study_root/plan.json" \
   "${study_backends[@]}" --storage 'Local NVMe; checked cold multi-batch passes'
 uv run --script bench/pareto.py report "$study_root/results-$study_backend" \
   --output "$study_root/report/data"
+
+if [[ "$study_backend" == cpu ]]; then
+  cmake -S . -B build -G Ninja \
+    -DCMAKE_BUILD_TYPE=RelWithDebInfo -DDAMACY_CUDA=ON -DDAMACY_PYTHON=OFF \
+    -DCMAKE_CUDA_ARCHITECTURES=90-real
+  cmake --build build --parallel 16
+fi
