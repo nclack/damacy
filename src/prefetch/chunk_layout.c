@@ -148,6 +148,7 @@ chunk_layout_fetch(struct prefetch_fetcher* self_,
     return 1;
   }
   switch (meta->inner_codec.id) {
+    case CODEC_BLOSC_LZ4:
     case CODEC_BLOSC_ZSTD:
       break;
     case CODEC_NONE:
@@ -298,6 +299,7 @@ chunk_layout_async_start(struct prefetch_async_fetcher* self_,
     return 0;
   }
   switch (meta->inner_codec.id) {
+    case CODEC_BLOSC_LZ4:
     case CODEC_BLOSC_ZSTD:
       break;
     case CODEC_NONE:

@@ -41,7 +41,7 @@
 
 #include "cuda_init.h"
 #include "damacy.h"
-#include "decoder/decoder_zstd.h"
+#include "decoder/decoder_batch.h"
 #include "fixture.h"
 
 #include <cuda.h>
@@ -193,8 +193,8 @@ test_chunk_cap_shrinks_nvcomp(void)
   const size_t total = 8ull << 20;
 
   size_t small = 0, large = 0;
-  EXPECT(decoder_zstd_query_temp_bytes(batch, 4096, total, &small) == 0);
-  EXPECT(decoder_zstd_query_temp_bytes(batch, 512ull << 10, total, &large) ==
+  EXPECT(decoder_batch_query_temp_bytes(batch, 4096, total, &small) == 0);
+  EXPECT(decoder_batch_query_temp_bytes(batch, 512ull << 10, total, &large) ==
          0);
   // nvcomp's scratch grows with per-substream cap; smaller cap mustn't
   // ask for more memory than the larger one.
@@ -206,7 +206,7 @@ test_chunk_cap_shrinks_nvcomp(void)
 
 // damacy_config_describe should run safely on a sane config without
 // constructing a damacy instance. It does call into nvcomp via
-// decoder_zstd_query_temp_bytes, so a live CUDA context is required —
+// decoder_batch_query_temp_bytes, so a live CUDA context is required —
 // cuda_init_primary in main() retains the primary on dev 0 before any
 // describe call. Output goes through log/log.h — no return value to
 // check; we just want it not to crash.

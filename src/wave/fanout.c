@@ -1,6 +1,7 @@
 #include "fanout.h"
 
 #include "damacy_limits.h"
+#include "decoder/decoder_memcpy.h"
 #include "gpu_budget/gpu_budget.h"
 #include "log/log.h"
 #include "util/cuda_check.h"
@@ -10,8 +11,8 @@
 #include <stdlib.h>
 
 int
-fanout_alloc_pinned(struct nvcomp_fanout_host* h,
-                    struct nvcomp_fanout* d,
+fanout_alloc_pinned(struct decode_fanout_host* h,
+                    struct decode_fanout* d,
                     size_t n)
 {
   CUdeviceptr dptr = 0;
@@ -27,20 +28,25 @@ fanout_alloc_pinned(struct nvcomp_fanout_host* h,
   d->d_decomp_ptrs = (void**)(uintptr_t)dptr;
   CU(Fail, cuMemAlloc(&dptr, n * sizeof(size_t)));
   d->d_decomp_buf_sizes = (size_t*)(uintptr_t)dptr;
+  CU(Fail,
+     cuMemAllocHost((void**)&h->memcpy_ops, n * sizeof(struct gpu_memcpy_op)));
+  CU(Fail, cuMemAlloc(&dptr, n * sizeof(struct gpu_memcpy_op)));
+  d->d_memcpy_ops = (struct gpu_memcpy_op*)(uintptr_t)dptr;
+  CU(Fail, cuMemAllocHost((void**)&h->block_chunk_map, n * sizeof(uint32_t)));
+  CU(Fail, cuMemAlloc(&dptr, n * sizeof(uint32_t)));
+  d->d_block_chunk_map = (uint32_t*)(uintptr_t)dptr;
   return 0;
 Fail:
   return 1;
 }
 
 void
-fanout_free_pinned(struct nvcomp_fanout_host* h, struct nvcomp_fanout* d)
+fanout_free_pinned(struct decode_fanout_host* h, struct decode_fanout* d)
 {
   if (h) {
     void* host_ptrs[] = {
-      (void*)h->comp_ptrs,
-      h->comp_sizes,
-      h->decomp_ptrs,
-      h->decomp_buf_sizes,
+      (void*)h->comp_ptrs, h->comp_sizes, h->decomp_ptrs,
+      h->decomp_buf_sizes, h->memcpy_ops, h->block_chunk_map,
     };
     for (size_t i = 0; i < countof(host_ptrs); ++i)
       if (host_ptrs[i])
@@ -49,13 +55,13 @@ fanout_free_pinned(struct nvcomp_fanout_host* h, struct nvcomp_fanout* d)
     h->comp_sizes = NULL;
     h->decomp_ptrs = NULL;
     h->decomp_buf_sizes = NULL;
+    h->memcpy_ops = NULL;
+    h->block_chunk_map = NULL;
   }
   if (d) {
     void* dev_ptrs[] = {
-      (void*)d->d_comp_ptrs,
-      d->d_comp_sizes,
-      d->d_decomp_ptrs,
-      d->d_decomp_buf_sizes,
+      (void*)d->d_comp_ptrs, d->d_comp_sizes, d->d_decomp_ptrs,
+      d->d_decomp_buf_sizes, d->d_memcpy_ops, d->d_block_chunk_map,
     };
     for (size_t i = 0; i < countof(dev_ptrs); ++i)
       if (dev_ptrs[i])
@@ -64,13 +70,15 @@ fanout_free_pinned(struct nvcomp_fanout_host* h, struct nvcomp_fanout* d)
     d->d_comp_sizes = NULL;
     d->d_decomp_ptrs = NULL;
     d->d_decomp_buf_sizes = NULL;
+    d->d_memcpy_ops = NULL;
+    d->d_block_chunk_map = NULL;
   }
 }
 
 enum damacy_status
 fanout_upload(CUstream s,
-              const struct nvcomp_fanout* d,
-              const struct nvcomp_fanout_host* h,
+              const struct decode_fanout* d,
+              const struct decode_fanout_host* h,
               size_t n)
 {
   CU(Fail,
@@ -109,23 +117,23 @@ fanout_next_pow2(size_t v)
   return v + 1;
 }
 
-// Device-resident bytes per substream in a fanout SOA: 2 pointers and
-// 2 size_t (mirrors fanout_alloc_pinned). Pinned-host fanout bytes
-// don't count against the GPU budget.
 static uint64_t
 fanout_dev_bytes_per_sub(void)
 {
-  return (uint64_t)(2 * sizeof(void*) + 2 * sizeof(size_t));
+  return (uint64_t)(2 * sizeof(void*) + 2 * sizeof(size_t) +
+                    sizeof(struct gpu_memcpy_op) + sizeof(uint32_t));
 }
 
 enum damacy_status
-fanout_grow(struct nvcomp_fanout_host* h,
-            struct nvcomp_fanout* d,
+fanout_grow(struct decode_fanout_host* h,
+            struct decode_fanout* d,
             uint32_t* cap,
             size_t need,
             uint32_t max_substreams_per_wave,
             struct gpu_budget* budget)
 {
+  if (need > max_substreams_per_wave)
+    return DAMACY_DECODE;
   if (need <= (size_t)*cap)
     return DAMACY_OK;
   size_t new_cap = fanout_next_pow2(need);

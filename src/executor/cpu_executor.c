@@ -372,6 +372,7 @@ decode_chunk(struct cpu_worker* worker,
                ? DAMACY_OK
                : DAMACY_DECODE;
     }
+    case CODEC_BLOSC_LZ4:
     case CODEC_BLOSC_ZSTD: {
       size_t size = 0;
       if (blosc_cbuffer_validate(input, chunk->encoded_bytes, &size) ||
@@ -384,11 +385,14 @@ decode_chunk(struct cpu_worker* worker,
       int flags;
       blosc_cbuffer_metainfo(input, &typesize, &flags);
       const char* compressor = blosc_cbuffer_complib(input);
+      const char* expected = metadata->inner_codec.id == CODEC_BLOSC_LZ4
+                               ? BLOSC_LZ4_LIBNAME
+                               : BLOSC_ZSTD_LIBNAME;
       if (!blocksize || blocksize > size ||
           typesize != dtype_bpe(metadata->dtype) ||
           cbytes != chunk->encoded_bytes || size > BLOSC_MAX_BUFFERSIZE ||
           (!(flags & BLOSC_MEMCPYED) &&
-           (!compressor || strcmp(compressor, BLOSC_ZSTD_LIBNAME))))
+           (!compressor || strcmp(compressor, expected))))
         return DAMACY_DECODE;
       int result = blosc_decompress_ctx(input, worker->decoded, size, 1);
       return result > 0 && (size_t)result == size ? DAMACY_OK : DAMACY_DECODE;
@@ -622,7 +626,7 @@ cpu_submit(struct damacy_executor* base,
     enum compression_codec codec =
       plan->arrays[chunk->array].metadata.inner_codec.id;
     if (!chunk->missing && codec != CODEC_NONE && codec != CODEC_ZSTD &&
-        codec != CODEC_BLOSC_ZSTD)
+        codec != CODEC_BLOSC_ZSTD && codec != CODEC_BLOSC_LZ4)
       return DAMACY_DECODE;
   }
   struct cpu_slot* target = &self->slots[slot];

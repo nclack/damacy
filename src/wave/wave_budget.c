@@ -4,8 +4,9 @@
 #include "damacy_config.h" // resolve_max_chunk_uncompressed
 #include "damacy_limits.h"
 #include "decoder/blosc1.h"
+#include "decoder/blosc1_parse.h"
+#include "decoder/decoder_batch.h"
 #include "decoder/decoder_memcpy.h"
-#include "decoder/decoder_zstd.h"
 #include "executor/dispatch.h"
 #include "gpu_budget/gpu_budget.h"
 #include "log/log.h"
@@ -20,11 +21,11 @@ wave_decoder_caps(uint64_t substreams,
                   uint32_t max_chunks_per_wave,
                   uint64_t dev_decompressed_bytes,
                   uint64_t max_chunk_uncompressed_bytes,
-                  uint64_t* out_zstd_per,
+                  uint64_t* out_block_bytes,
                   uint64_t* out_total_uncompressed)
 {
   if (dev_decompressed_bytes == 0 || max_chunk_uncompressed_bytes == 0) {
-    *out_zstd_per = 0;
+    *out_block_bytes = 0;
     *out_total_uncompressed = 0;
     return;
   }
@@ -37,10 +38,10 @@ wave_decoder_caps(uint64_t substreams,
     total_uncompressed = chunks_cap_bytes;
   if (subs_cap_bytes < total_uncompressed)
     total_uncompressed = subs_cap_bytes;
-  uint64_t zstd_per = runtime_chunk_cap;
-  if (zstd_per > total_uncompressed)
-    zstd_per = total_uncompressed;
-  *out_zstd_per = zstd_per;
+  uint64_t block_bytes = runtime_chunk_cap;
+  if (block_bytes > total_uncompressed)
+    block_bytes = total_uncompressed;
+  *out_block_bytes = block_bytes;
   *out_total_uncompressed = total_uncompressed;
 }
 
@@ -51,14 +52,17 @@ wave_predict_bytes(uint32_t max_chunks_per_wave,
                    struct wave_alloc_summary* out)
 {
   const uint64_t cap = (uint64_t)max_chunks_per_wave;
-  const uint64_t substreams = (uint64_t)DAMACY_BLOSC_ZSTD_INITIAL_BATCH_CAP;
+  const uint64_t substreams = (uint64_t)DAMACY_DECODER_INITIAL_BATCH_CAP;
 
   out->dev_compressed = input_staging_bytes;
   out->dev_decompressed = dev_decompressed_bytes;
-  out->blosc1_meta =
-    cap * sizeof(struct assemble_chunk) + sizeof(struct blosc1_totals);
-  out->fanout_soa = substreams * (2 * sizeof(void*) + 2 * sizeof(size_t)) +
-                    cap * sizeof(struct gpu_memcpy_op);
+  out->blosc1_meta = cap * (sizeof(struct assemble_chunk) +
+                            sizeof(struct gpu_parse_chunk) + sizeof(uint32_t)) +
+                     ((cap + 31u) / 32u) * sizeof(uint32_t) +
+                     sizeof(struct blosc1_totals) + 4u * sizeof(uint32_t);
+  out->fanout_soa =
+    substreams * (2 * sizeof(void*) + 2 * sizeof(size_t) +
+                  sizeof(struct gpu_memcpy_op) + sizeof(uint32_t));
   return DAMACY_OK;
 }
 
@@ -69,20 +73,20 @@ predict_decoder_scratch_bytes(uint64_t substreams,
                               uint64_t max_chunk_uncompressed_bytes,
                               uint64_t* out_bytes)
 {
-  uint64_t zstd_per = 0, total_uncompressed = 0;
+  uint64_t block_bytes = 0, total_uncompressed = 0;
   wave_decoder_caps(substreams,
                     max_chunks_per_wave,
                     dev_per_wave,
                     max_chunk_uncompressed_bytes,
-                    &zstd_per,
+                    &block_bytes,
                     &total_uncompressed);
-  size_t zstd_temp = 0;
-  if (decoder_zstd_query_temp_bytes((size_t)substreams,
-                                    (size_t)zstd_per,
-                                    (size_t)total_uncompressed,
-                                    &zstd_temp))
+  size_t temp_bytes = 0;
+  if (decoder_batch_query_temp_bytes((size_t)substreams,
+                                     (size_t)block_bytes,
+                                     (size_t)total_uncompressed,
+                                     &temp_bytes))
     return DAMACY_CUDA;
-  *out_bytes = (uint64_t)zstd_temp + substreams * sizeof(size_t) +
+  *out_bytes = (uint64_t)temp_bytes + substreams * sizeof(size_t) +
                substreams * sizeof(int);
   return DAMACY_OK;
 }
@@ -94,7 +98,7 @@ wave_pool_shared_predict_bytes(uint32_t max_chunks_per_wave,
                                uint64_t* out_nvcomp_temp)
 {
   return predict_decoder_scratch_bytes(
-    (uint64_t)DAMACY_BLOSC_ZSTD_INITIAL_BATCH_CAP,
+    (uint64_t)DAMACY_DECODER_INITIAL_BATCH_CAP,
     max_chunks_per_wave,
     dev_decompressed_bytes,
     max_chunk_uncompressed_bytes,
@@ -144,19 +148,19 @@ decoder_initial_caps(uint32_t max_chunks_per_wave,
                      uint64_t dev_per_wave,
                      uint64_t max_chunk_uncompressed_bytes,
                      size_t* out_substreams,
-                     size_t* out_zstd_per,
+                     size_t* out_block_bytes,
                      size_t* out_total_uncompressed)
 {
-  const uint64_t substreams = (uint64_t)DAMACY_BLOSC_ZSTD_INITIAL_BATCH_CAP;
-  uint64_t zstd_per = 0, total_uncompressed = 0;
+  const uint64_t substreams = (uint64_t)DAMACY_DECODER_INITIAL_BATCH_CAP;
+  uint64_t block_bytes = 0, total_uncompressed = 0;
   wave_decoder_caps(substreams,
                     max_chunks_per_wave,
                     dev_per_wave,
                     max_chunk_uncompressed_bytes,
-                    &zstd_per,
+                    &block_bytes,
                     &total_uncompressed);
   *out_substreams = (size_t)substreams;
-  *out_zstd_per = (size_t)zstd_per;
+  *out_block_bytes = (size_t)block_bytes;
   *out_total_uncompressed = (size_t)total_uncompressed;
 }
 
@@ -176,7 +180,10 @@ predict_pool_total(uint32_t max_chunks_per_wave,
   if (s != DAMACY_OK)
     return s;
 
-  const uint64_t substreams_max = (uint64_t)max_substreams_per_wave;
+  const uint64_t substreams_max =
+    max_substreams_per_wave > DAMACY_DECODER_INITIAL_BATCH_CAP
+      ? max_substreams_per_wave
+      : DAMACY_DECODER_INITIAL_BATCH_CAP;
   uint64_t nvcomp_temp_max = 0;
   s = predict_decoder_scratch_bytes(substreams_max,
                                     max_chunks_per_wave,
@@ -186,9 +193,10 @@ predict_pool_total(uint32_t max_chunks_per_wave,
   if (s != DAMACY_OK)
     return s;
 
-  const uint64_t substreams_init =
-    (uint64_t)DAMACY_BLOSC_ZSTD_INITIAL_BATCH_CAP;
-  const uint64_t bytes_per_sub = 2ull * sizeof(void*) + 2ull * sizeof(size_t);
+  const uint64_t substreams_init = (uint64_t)DAMACY_DECODER_INITIAL_BATCH_CAP;
+  const uint64_t bytes_per_sub = 2ull * sizeof(void*) + 2ull * sizeof(size_t) +
+                                 sizeof(struct gpu_memcpy_op) +
+                                 sizeof(uint32_t);
   const uint64_t fanout_slice_init = substreams_init * bytes_per_sub;
   const uint64_t fanout_slice_max = substreams_max * bytes_per_sub;
   const uint64_t fanout_soa_worst =
@@ -295,7 +303,7 @@ wave_pool_resolve_sizing(uint32_t max_chunks_per_wave,
 }
 
 enum damacy_status
-decoder_scratch_grow(struct decoder_zstd* decoder,
+decoder_scratch_grow(struct decoder_batch* decoder,
                      CUstream stream_decode,
                      uint32_t max_chunks_per_wave,
                      uint32_t max_substreams_per_wave,
@@ -304,11 +312,13 @@ decoder_scratch_grow(struct decoder_zstd* decoder,
                      struct gpu_budget* budget,
                      size_t need)
 {
-  const size_t cur = decoder_zstd_cur_max_batch(decoder);
+  if (need > max_substreams_per_wave)
+    return DAMACY_DECODE;
+  const size_t cur = decoder_batch_cur_max_batch(decoder);
   if (cur == 0) {
     // Prior grow left the decoder destroyed-internally. Re-growing
     // would leak the partial state and still fail; surface CUDA.
-    log_error("zstd decoder: cur_max_batch=0 (prior grow failed)");
+    log_error("batch decoder: cur_max_batch=0 (prior grow failed)");
     return DAMACY_CUDA;
   }
   if (need <= cur)
@@ -336,7 +346,7 @@ decoder_scratch_grow(struct decoder_zstd* decoder,
   const uint64_t delta_bytes =
     new_bytes > old_bytes ? new_bytes - old_bytes : 0;
   enum damacy_status bs =
-    gpu_budget_try_commit(budget, delta_bytes, "zstd decoder grow");
+    gpu_budget_try_commit(budget, delta_bytes, "batch decoder grow");
   if (bs != DAMACY_OK)
     return bs;
 
@@ -345,19 +355,19 @@ decoder_scratch_grow(struct decoder_zstd* decoder,
   // pending post-decode + assemble.
   CU(CudaFail, cuStreamSynchronize(stream_decode));
 
-  uint64_t zstd_per = 0, total_uncompressed = 0;
+  uint64_t block_bytes = 0, total_uncompressed = 0;
   wave_decoder_caps((uint64_t)new_cap,
                     max_chunks_per_wave,
                     dev_per_wave,
                     max_chunk_uncompressed_bytes,
-                    &zstd_per,
+                    &block_bytes,
                     &total_uncompressed);
-  if (decoder_zstd_grow(
-        decoder, new_cap, (size_t)zstd_per, (size_t)total_uncompressed) != 0)
+  if (decoder_batch_grow(
+        decoder, new_cap, (size_t)block_bytes, (size_t)total_uncompressed) != 0)
     goto CudaFail;
 
   // Internal observe-and-grow event — DEBUG to keep INFO clean.
-  log_debug("zstd decoder: grew %zu -> %zu (need=%zu, +%llu bytes)",
+  log_debug("batch decoder: grew %zu -> %zu (need=%zu, +%llu bytes)",
             cur,
             new_cap,
             need,
@@ -366,7 +376,7 @@ decoder_scratch_grow(struct decoder_zstd* decoder,
 
 CudaFail:
   // grow tried + failed: roll back the commit so committed reflects
-  // the un-grown state. decoder_zstd_grow leaves the decoder zombie;
+  // the un-grown state. decoder_batch_grow leaves the decoder zombie;
   // subsequent kick_input calls short-circuit on cur_max_batch==0.
   gpu_budget_release(budget, delta_bytes);
   return DAMACY_CUDA;

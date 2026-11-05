@@ -162,9 +162,12 @@ run_full_array(const char* codec)
 }
 
 static int
-test_full_array_blosc_zstd(void)
+test_full_array_blosc_codecs(void)
 {
-  return run_full_array("blosc-zstd");
+  EXPECT(run_full_array("blosc-zstd") == 0);
+  EXPECT(run_full_array("blosc-lz4") == 0);
+  EXPECT(run_full_array("blosc-lz4hc") == 0);
+  return 0;
 }
 
 // Sub-window y[3,11) x[5,27) crosses the 2x2 inner-chunk grid;
@@ -350,7 +353,7 @@ test_multi_wave_per_batch(void)
 // Regression for the per-wave-fanout corruption bug: pre-fix, growing
 // wave A's fanout reallocated wave B's fanout in lockstep, corrupting
 // any in-flight upload of B's SOA. Fixture: 65 inner chunks × 16 blocks
-// each = 1040 substreams per wave > DAMACY_BLOSC_ZSTD_INITIAL_BATCH_CAP
+// each = 1040 substreams per wave > DAMACY_DECODER_INITIAL_BATCH_CAP
 // (1024), forcing both the per-wave fanout SOA and the pool-shared
 // decoder scratch to grow on first dispatch. clevel=1 splits each
 // 512 KB inner chunk into 16 blocks. Two batches keep both waves in
@@ -661,7 +664,7 @@ int
 main(void)
 {
   EXPECT(cuda_init_primary() == 0);
-  RUN(test_full_array_blosc_zstd);
+  RUN(test_full_array_blosc_codecs);
   RUN(test_partial_crossing_chunks_blosc);
   RUN(test_three_codecs_mixed_batch);
   RUN(test_multi_wave_per_batch);

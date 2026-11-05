@@ -95,7 +95,7 @@ planner_plan_segment(struct planner* self,
     enum compression_codec codec =
       plan->arrays[chunk->array].metadata.inner_codec.id;
     if (!chunk->missing && codec != CODEC_NONE && codec != CODEC_ZSTD &&
-        codec != CODEC_BLOSC_ZSTD) {
+        codec != CODEC_BLOSC_ZSTD && codec != CODEC_BLOSC_LZ4) {
       status = DAMACY_DECODE;
       goto Done;
     }
