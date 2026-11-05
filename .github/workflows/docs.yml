@@ -84,6 +84,16 @@ jobs:
           python bench/test_pareto_browser.py --assets site/pareto --output browser-fixture
           python bench/test_pareto_browser.py --assets site/pareto --actual --output browser-actual
 
+      - name: Save browser review images
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: docs-browser-checks
+          path: |
+            browser-fixture
+            browser-actual
+          retention-days: 7
+
       - name: Save browsable site
         uses: actions/upload-artifact@v7
         with:
