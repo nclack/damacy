@@ -836,6 +836,12 @@ Metadata caches can evict entries after preparation finishes.</p>
 ordinary RAM for input, decoded chunks, codec workspace, and output. It decodes
 each distinct source chunk once per batch, then copies its intersections into
 all samples that use it. There is no persistent decoded-chunk cache.</p>
+<p>Both executors support raw bytes, Zstd, and Blosc with <code>zstd</code>, <code>lz4</code>, or
+<code>lz4hc</code>, including byte shuffle and bitshuffle. The CPU executor keeps one
+C-Blosc thread per decode worker. The CUDA executor shares decoder scratch
+between Zstd and LZ4 on its decode stream; split Blosc blocks count toward
+<code>CudaLimits.max_substreams_per_chunk</code>, and decoder storage grows within the
+configured GPU memory limit.</p>
 <h2 id="select-cuda-execution">Select CUDA execution<a class="headerlink" href="#select-cuda-execution" title="Permanent link">&para;</a></h2>
 <p>In a CUDA-enabled build, replace the executor with:</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">executor</span> <span class="o">=</span> <span class="n">damacy</span><span class="o">.</span><span class="n">CudaExecutor</span><span class="p">(</span>

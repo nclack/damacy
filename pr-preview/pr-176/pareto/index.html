@@ -28,7 +28,7 @@
     <section id="workspace" hidden aria-label="Performance study">
       <div class="filters">
         <label>Study<select id="study"></select></label>
-        <label>Image input<select id="input"></select></label>
+        <label><span id="input-label">Image input</span><select id="input"></select></label>
         <label>Read pattern<select id="workload"></select></label>
         <label>Plot<select id="view"></select></label>
       </div>
@@ -51,6 +51,7 @@
         <span><i class="none"></i>Uncompressed</span>
         <span><i class="zstd"></i>Zstd</span>
         <span><i class="blosc-zstd"></i>Blosc Zstd · bitshuffle</span>
+        <span><i class="blosc-lz4"></i>Blosc LZ4 · bitshuffle</span>
       </div>
       <p class="note" id="plot-note"></p>
       <div class="results">
@@ -80,12 +81,12 @@
     <section class="method">
       <h2>Reading the measurements</h2>
       <p>Useful throughput counts the pixels requested by the read, in their source data type, divided by elapsed time. Converting uint16 pixels to float32 does not increase this rate. GPU measurements wait for the final device work to finish. Initialization and warmup are separate.</p>
-      <p>Compression divides the original image bytes by stored Zarr file bytes, including padding, shard indexes, and array metadata. The horizontal axis is logarithmic. Values below one mean the stored files are larger than the original image.</p>
+      <p>Compression divides the uncompressed logical bytes of the stored arrays by their Zarr file bytes, including padding, shard indexes, and array metadata. Mixed studies use the expanded, tiled arrays in this ratio. The horizontal axis is logarithmic. Values below one mean the stored files are larger than the original image.</p>
       <p>Application requests/s counts data reads after adjacent requests are combined, divided by elapsed time. Encoded bandwidth counts the bytes in those requests. Metadata reads are separate. Higher request rates can mean smaller reads, so the plot includes encoded bandwidth and the details show average request size. Application requests are distinct from filesystem, NFS, and NVMe operations.</p>
       <p>A setting is on the observed frontier if no other tested setting in the same input, read pattern, backend, machine session, and storage condition is at least as good on both axes and better on one. Filters recompute that frontier. Raw controls remain in the comparison when filtering Blosc blocks. Connections join observations; they do not interpolate unmeasured performance.</p>
       <p>Ranges are observed minima and maxima, not confidence intervals. Reference variation describes the bracketing control runs. Pilot studies cover a limited set of settings and establish measurement cost and repeatability; they do not establish a final frontier.</p>
-      <p>Preloaded files measure the reader with a small, cached image working set. Overlapping or repeated requests can share encoded reads, so read amplification can be below one even without compression. These rates do not establish disk or network bandwidth. Shard geometry and CPU worker counts are held fixed within a study. Stage intervals overlap and must not be added into an elapsed-time breakdown.</p>
-      <p>Cold studies verify local PCIe NVMe storage, clear each data file from the Linux page cache after warmup and before every timed batch, and verify zero resident pages. Cache clearing is excluded from time. NVMe counters cover the devices as a whole, including other jobs and readahead; details retain adjacent idle traffic. These small, repeated cold batches do not establish sustained streaming performance or control SSD/controller caches.</p>
+      <p>Preloaded files measure the reader with a small, cached image working set. Overlapping or repeated requests can share encoded reads, so read amplification can be below one even without compression. These rates do not establish disk or network bandwidth. Shard geometry is held fixed per source across compared settings; CPU worker counts stay fixed within a study. Stage intervals overlap and must not be added into an elapsed-time breakdown.</p>
+      <p>Cold studies verify local PCIe NVMe storage and zero resident data-file pages before timing. Mixed-source studies then run many batches per cold pass; the earlier pilots drain one cold batch at a time. Cache clearing is excluded from time. NVMe counters cover the devices as a whole, including other jobs and readahead; details retain adjacent idle traffic. SSD/controller caches are not controlled. Mixed studies report original and expanded shapes, spatial shard coverage, physical file sizes, and measured overlapping read calls. Leave-one-out cases preserve the retained sources’ coordinates and remove a whole dataset collection.</p>
       <p><a href="../performance/">Measurement protocol and reproduction</a> · Design inspired by the <a href="https://acquire-project.github.io/chucky/microscopy.html">chucky microscopy analysis</a>.</p>
     </section>
   </main>

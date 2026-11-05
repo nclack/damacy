@@ -371,10 +371,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#cold-nvme-protocol" class="md-nav__link">
+  <a href="#earlier-single-batch-cold-protocol" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Cold NVMe protocol
+        Earlier single-batch cold protocol
       
     </span>
   </a>
@@ -393,10 +393,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#microscopy-study" class="md-nav__link">
+  <a href="#mixed-source-microscopy-study" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Microscopy study
+        Mixed-source microscopy study
       
     </span>
   </a>
@@ -698,10 +698,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#cold-nvme-protocol" class="md-nav__link">
+  <a href="#earlier-single-batch-cold-protocol" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Cold NVMe protocol
+        Earlier single-batch cold protocol
       
     </span>
   </a>
@@ -720,10 +720,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#microscopy-study" class="md-nav__link">
+  <a href="#mixed-source-microscopy-study" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Microscopy study
+        Mixed-source microscopy study
       
     </span>
   </a>
@@ -873,8 +873,8 @@ not interpret them as additional timed metadata reads.</p>
 different machine from the cached H100 study; their rates are not a paired
 comparison of cache state. A cold CUDA study and the full layout matrix remain
 unmeasured.</p>
-<h2 id="cold-nvme-protocol">Cold NVMe protocol<a class="headerlink" href="#cold-nvme-protocol" title="Permanent link">&para;</a></h2>
-<p>The study definition now selects <code>"cache_policy": "cold"</code>. The earlier pilot
+<h2 id="earlier-single-batch-cold-protocol">Earlier single-batch cold protocol<a class="headerlink" href="#earlier-single-batch-cold-protocol" title="Permanent link">&para;</a></h2>
+<p>The retained cold pilot used <code>"cache_policy": "cold"</code>. The cached pilot
 below used preloaded files; it remains a separate cached study and is not
 evidence of cold NVMe performance.</p>
 <ol>
@@ -957,64 +957,132 @@ Applying its average process overhead to the cached full matrix gives approximat
 79 minutes before preparation and validation. Cold runs also spend time clearing
 and checking file pages, so that estimate does not apply to the cold protocol.
 The full matrix has not been measured.</p>
-<h2 id="microscopy-study">Microscopy study<a class="headerlink" href="#microscopy-study" title="Permanent link">&para;</a></h2>
-<p><a href="https://github.com/nclack/damacy/blob/main/bench/studies/microscopy.json"><code>bench/studies/microscopy.json</code></a>
-defines the matrix. It uses version 3 of the public
-<a href="https://github.com/nclack/chucky-benchmarks-data">microscopy corpus</a>, also used by
-the <a href="https://acquire-project.github.io/chucky/microscopy.html">chucky microscopy analysis</a>.
-Inputs retain their original pixel values, shape, type, checksum, and attribution.</p>
-<p>The seven inputs cover OpenCell DNA and protein, BBBC010 brightfield, JUMP-Scope
-fluorescence, DynaCell phase, COSEM EM, and BBBC022 MitoTracker. These are small
-image packs, not a representative sample of every microscopy workload.</p>
-<p>The study compares:</p>
+<h2 id="mixed-source-microscopy-study">Mixed-source microscopy study<a class="headerlink" href="#mixed-source-microscopy-study" title="Permanent link">&para;</a></h2>
+<p>The updated <a href="https://github.com/nclack/damacy/blob/main/bench/studies/microscopy.json"><code>bench/studies/microscopy.json</code></a>
+uses every asset in the version-3 <a href="https://github.com/nclack/chucky-benchmarks-data">corpus manifest</a>.
+The current seven inputs are OpenCell DNA and protein, BBBC010 brightfield,
+JUMP-Scope fluorescence, DynaCell phase, COSEM EM, and BBBC022 MitoTracker.
+The larger study has not been measured yet. The published pilot numbers above
+still describe the earlier, much smaller inputs.</p>
+<p>Each source becomes a 2048 × 2048 frame sequence. A 4 × 4 spatial grid gives
+16 shard files per frame, with each shard containing <strong>1 GiB of uncompressed
+pixels</strong>. Depth depends on the original type; shapes below are <code>[plane, Y, X]</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Source type</th>
+<th>Expanded volume</th>
+<th>Shard shape</th>
+<th>Logical volume bytes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>uint8</td>
+<td>4096 × 2048 × 2048</td>
+<td>4096 × 512 × 512</td>
+<td>16 GiB</td>
+</tr>
+<tr>
+<td>uint16</td>
+<td>2048 × 2048 × 2048</td>
+<td>2048 × 512 × 512</td>
+<td>16 GiB</td>
+</tr>
+<tr>
+<td>float32</td>
+<td>1024 × 2048 × 2048</td>
+<td>1024 × 512 × 512</td>
+<td>16 GiB</td>
+</tr>
+</tbody>
+</table>
+<p>Compressed shard file sizes vary by source and codec and are retained individually.
+The writer processes and verifies one complete shard at a time. Original values,
+types, checksums, and attribution are retained. Source planes repeat cyclically;
+each output plane uses a seeded spatial offset and periodic tiling. Adjacent
+spatial shards agree at their boundaries. This creates distinct stored extents
+with the source's pixel distribution and local spatial texture. It does not
+create new specimens or establish realistic depth correlations, especially for
+single-plane inputs. Chunk layouts extending across planes must be interpreted
+with that limitation.</p>
+<p>The default matrix compares raw bytes, Zstd, Blosc-Zstd, and Blosc-LZ4; compression
+level is three and Blosc uses bitshuffle. Chunk sizes are 16, 64, 256, and 1024 KiB;
+Blosc block requests are 16 KiB or the whole chunk. Chunk dimensions divide the
+512 × 512 spatial shards. When a large chunk cannot fit in one spatial plane, it
+extends along the plane axis. Actual block sizes are read back from encoded headers.
+The <a href="https://zarr-specs.readthedocs.io/en/latest/v3/codecs/sharding-indexed/">Zarr sharding specification</a>
+requires each inner chunk dimension to divide its shard dimension.</p>
+<p>Two workloads use retained, deterministic query streams:</p>
 <ul>
-<li>Uncompressed bytes, Zstd level 3, and Blosc Zstd level 3 with bitshuffle.</li>
-<li>16, 64, 256, and 1024 KiB chunks, with a plane extent of one. The remaining
-  dimensions are powers of two, with the longer extent along X.</li>
-<li>Blosc block requests of 16 KiB and the whole chunk. Duplicate requests are
-  removed, and actual block sizes are read from the stored headers.</li>
-<li>Random 256 × 256 crops and sequential whole-plane reads.</li>
-<li>CPU and CUDA decoding, with the same encoded files and queries.</li>
+<li><strong>Shard-balanced 256 × 256 crops.</strong> Each source contributes equally many
+  samples. Queries rotate through all 16 spatial shards, choose a random crop
+  inside each selected shard, and avoid revisiting any maximum-chunk-size plane
+  extent in that shard during a pass. Crops may cross inner chunk boundaries,
+  but do not cross shard boundaries; this is an explicit workload constraint.</li>
+<li><strong>Whole-frame reads.</strong> Each source contributes sampled 2048 × 2048 planes,
+  each touching all 16 spatial shards. Selected planes do not reuse the same
+  maximum-chunk-size depth extent within a pass.</li>
 </ul>
-<p>Shard shape stays at <code>[1, 1024, 1024]</code>; CPU decode and file worker counts stay
-at eight. The reader allows 64 Blosc blocks per chunk to cover the full matrix.
-Both backends return float32. These are controlled comparisons at
-recorded resource limits, not claims about the best possible CPU worker count
-or shard geometry.</p>
-<p>Cold executions use the protocol above. An explicit <code>"preloaded files"</code> cache
-policy instead preloads encoded files and replays fixed query passes until both
-the work budget and minimum duration are satisfied. The <code>bytes_per_pass</code> profile
-field applies to that cached mode; cold mode always uses one batch per pass.</p>
-<p>The full matrix has 105 encoded layouts and 420 measurement settings. Three
-randomized rounds plus bracketing uncompressed controls make 1,428 executions.
-The pilot covers three inputs spanning uint8, uint16, and float32, four layouts
-per input, both backends, and both read patterns: 48 settings and 144 executions.
-Its requested measurement windows total 192 seconds before preparation, process
-startup, warmup, and work-budget overruns.</p>
-<p>Pilot results are labelled. Repeats report medians and observed min–max ranges;
-they are not confidence intervals. Controls before and after each condition
-show reference variation. The full study should follow a pilot review of
-runtime, repeatability, and agreement between the short and longer control windows.</p>
+<p>Each pass returns 1 GiB of float32 samples per input: 4096 crops or 64 whole
+frames, mixed across the seven sources. The complete mixture therefore returns
+7 GiB and requests 3.75 GiB of source pixels per pass. Original dtype sizes are
+used when computing useful bytes. Compression aggregates the equal 16 GiB
+source volumes by summing logical and stored bytes; read weights are equal
+sample counts, which give unequal source-byte contributions across types.</p>
+<p>Leave-one-out cases remove a whole dataset collection and retain all remaining
+coordinates and their relative ordering. Both OpenCell channels are removed
+together. The pass contains less work after an omission, with the same work per
+retained input. The report compares useful and returned rates and changes in
+speedup against each mixture's uncompressed reference. Changes also reflect the
+reduced number of source files; they are sensitivity measurements, not causal
+estimates of a source's compression cost.</p>
+<p>The new <code>cold-pass</code> policy evicts and checks every shard-data file before a
+multi-batch pass, then lets the pipeline overlap reads and decoding through the
+whole pass. It records device counters around each pass and repeats checked
+passes until the minimum time is reached. It does not preload pixels into RAM
+for measurement. Codecs and metadata are warmed; eviction follows any preparation
+or warmup reads. Kernel readahead and incidental reuse within a pass remain part
+of the measured buffered reader. The original <code>cold</code> policy remains available
+for reproducing the earlier one-batch pilots.</p>
+<p>The study uses 16 file workers, 16 CPU decode workers, and a lookahead of 512
+samples. These are resource limits, not a claim that 16 shard files are always
+being read simultaneously. The report records planned distinct shard files per
+batch and lookahead window separately from the measured peak number of overlapping
+file read calls. The latter can include multiple calls to the same file and
+excludes the metadata reader's separate activity.</p>
+<p>Both the pilot and full study include all seven assets, both backends, both
+workloads, the complete mixture, and six dataset omissions. The pilot has nine
+layouts per input (63 encoded arrays, 1008 GiB logical preparation), 252 settings,
+and 616 process executions across both backends. Its minimum timed work totals
+1456 seconds; encoding, validation, startup, warmup, cache clearing, and completed
+pass overruns are additional. The full study uses 22 layouts per input, 616
+settings, and 2016 executions. It encodes 2464 GiB of logical pixels. Encoded
+storage requirements are measured during preparation, rather than estimated
+from the small earlier pilots.</p>
+<p>Repeated results report medians and observed min–max ranges. Bracketing raw
+controls show variation during each condition. The previous definitions are
+retained in <code>bench/studies/microscopy-pilot-v1.json</code> for reproducing old data.</p>
 <h2 id="reproduce-a-study">Reproduce a study<a class="headerlink" href="#reproduce-a-study" title="Permanent link">&para;</a></h2>
 <p>Use a materialized version-3 corpus with <code>manifest.json</code> and the declared raw
 files. Planning reads metadata only:</p>
 <div class="language-sh highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>uv<span class="w"> </span>run<span class="w"> </span>--script<span class="w"> </span>bench/pareto.py<span class="w"> </span>plan<span class="w"> </span>bench/studies/microscopy.json<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span>--corpus<span class="w"> </span>/path/to/microscopy<span class="w"> </span>--pilot<span class="w"> </span>--output<span class="w"> </span>/shared/study/plan.json
 </span></code></pre></div>
-<p>Omit <code>--pilot</code> to plan all seven inputs and 105 layouts.</p>
+<p>Omit <code>--pilot</code> for all 22 layouts per input. Both modes include every source and all six dataset omissions.</p>
 <p>Preparation and measurement belong on compute nodes. Build <code>damacy_bench</code> with
 CUDA enabled to measure both backends. Preparation checks input hashes, encodes
 each layout, verifies every decoded pixel, and records the stored files and
 Blosc headers:</p>
 <div class="language-sh highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>uv<span class="w"> </span>run<span class="w"> </span>--script<span class="w"> </span>bench/pareto.py<span class="w"> </span>prepare<span class="w"> </span>/shared/study/plan.json<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span>--corpus<span class="w"> </span>/path/to/microscopy<span class="w"> </span>--output<span class="w"> </span>/shared/study/data
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span>--corpus<span class="w"> </span>/path/to/microscopy<span class="w"> </span>--output<span class="w"> </span>/node-local/study/data
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>uv<span class="w"> </span>run<span class="w"> </span>--script<span class="w"> </span>bench/pareto.py<span class="w"> </span>run<span class="w"> </span>/shared/study/plan.json<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span>--data<span class="w"> </span>/node-local/study/data<span class="w"> </span>--output<span class="w"> </span>/shared/study/results<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span>--storage<span class="w"> </span><span class="s1">'Local NVMe; file cache checked cold before every batch'</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span>--storage<span class="w"> </span><span class="s1">'Local NVMe; checked cold multi-batch passes'</span>
 </span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>uv<span class="w"> </span>run<span class="w"> </span>--script<span class="w"> </span>bench/pareto.py<span class="w"> </span>report<span class="w"> </span>/shared/study/results<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">  </span>--output<span class="w"> </span>docs/pareto/data
 </span></code></pre></div>
-<p>Copy the prepared data to the node-local path before running. <code>--backend cpu</code>
+<p>Prepare on verified node-local NVMe, or copy prepared files there before running. <code>--backend cpu</code>
 selects only CPU measurements. Each process has a timeout; failures retain
 stdout, stderr, and its scenario. Repeating the same command resumes completed
 observations only when the plan, files, source, binary, machine, allocation,

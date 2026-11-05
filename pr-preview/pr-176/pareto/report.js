@@ -1,12 +1,12 @@
-import {csv, devicePlottable, frontier, groups, ioPlottable, matches, plottable} from "./analysis.mjs";
+import {csv, devicePlottable, frontier, groups, ioPlottable, matches, plottable, sensitivity} from "./analysis.mjs";
 
 const $ = id => document.getElementById(id);
 const number = value => Number.isFinite(value) ? value.toLocaleString(undefined, {maximumSignificantDigits: 4}) : "—";
 const kib = bytes => bytes == null ? "—" : `${number(bytes / 1024)} KiB`;
 const range = metric => metric ? `${number(metric.min)}–${number(metric.max)}` : "Not recorded";
-const colors = {none: "var(--gray)", zstd: "var(--blue)", "blosc-zstd": "var(--orange)"};
-const codecs = {none: "Uncompressed", zstd: "Zstd", "blosc-zstd": "Blosc Zstd"};
-const workloads = {"random-256": "Random 256 × 256 crops", "whole-planes": "Whole-plane reads"};
+const colors = {none: "var(--gray)", zstd: "var(--blue)", "blosc-zstd": "var(--orange)", "blosc-lz4": "var(--green)"};
+const codecs = {none: "Uncompressed", zstd: "Zstd", "blosc-zstd": "Blosc Zstd", "blosc-lz4": "Blosc LZ4"};
+const workloads = {"balanced-256": "Shard-balanced 256 × 256 crops", "random-256": "Random 256 × 256 crops", "whole-planes": "Whole-plane reads"};
 const views = {pareto: "Throughput and compression", io: "Application reads and bandwidth", device: "NVMe IOPS and bandwidth"};
 const saved = new URLSearchParams(location.hash.slice(1));
 let study, entries, selected, filtered = [], generation = 0;
@@ -55,12 +55,13 @@ function select(row, announce = true) {
     ["Compression", `${number(row.compression_fold)}×`],
     ["Process repetitions", metrics.useful_gib_s.n],
     ["Chunk", kib(setting.chunk_bytes)],
-    ["Chunk shape", setting.chunk_shape.join(" × ")],
-    ["Shard shape", setting.shard_shape.join(" × ")],
+    ["Chunk shape", setting.sources ? "Per source, below" : setting.chunk_shape.join(" × ")],
+    ["Shard shape", setting.sources ? "Per source, below" : setting.shard_shape.join(" × ")],
     ["Blosc block request", kib(setting.block_bytes)],
     ["Blocks in headers", setting.actual_block_bytes.map(kib).join(", ") || "—"],
     ["Compression level", setting.level || "—"],
     ["Source type", setting.dtype],
+    ["Peak active file reads", metrics.peak_active_reads ? number(metrics.peak_active_reads.max) : "Not recorded"],
     ["Returned type", study.pipeline.dtype],
     ["Sample shape", row.sampling.sample_shape.join(" × ")],
     ["Encoded reads / useful bytes", `${number(metrics.read_amplification?.median)}×`],
@@ -75,8 +76,33 @@ function select(row, announce = true) {
     ["Initial first batch", `${number(metrics.first_batch_ms.median)} ms`],
     ["Reference range / median", `${number(row.reference_spread_percent)}%`],
     ["Stored file bytes", number(setting.stored_bytes)],
-    ["Logical image bytes", number(setting.logical_bytes)],
+    ["Logical array bytes", number(setting.logical_bytes)],
   ]);
+  if (row.query_summary) {
+    const query = row.query_summary;
+    target.append(element("h3", "Query coverage"));
+    fields(target, [
+      ["Samples per pass", number(query.samples)],
+      ["Source bytes per pass", `${number(query.useful_bytes / 2 ** 30)} GiB`],
+      ["Shard files per pass", number(query.distinct_shards)],
+      ["Shard files per batch", range(query.shards_per_window.batch)],
+      ["Shard files per lookahead window", range(query.shards_per_window.lookahead)],
+      ["Query SHA256", row.sampling.query_sha256],
+    ]);
+    target.append(element("p", "Shard coverage counts files addressed by the planned queries. Peak active file reads counts overlapping read calls; it does not count distinct active shard files."));
+    const link = element("a", "Download retained query stream");
+    link.href = `data/queries/${row.sampling.query_id}.bin`;
+    target.append(link);
+    const comparisons = sensitivity(study.rows, row);
+    if (comparisons.length) {
+      target.append(element("h3", "Leave-one-out sensitivity"));
+      target.append(element("p", "Change from all sources for this setting. Raw-relative compares speedup against each mixture’s own uncompressed control; returned compares the same float32 sample size. Removing a collection also changes the source types and number of files. These are median comparisons, not significance tests."));
+      fields(target, comparisons.map(value => [
+        study.cohorts.find(cohort => cohort.id === value.row.input_id).name,
+        `${number(value.raw_relative_percent)}% raw-relative · ${number(value.returned_percent)}% returned · ${number(value.useful_percent)}% useful`,
+      ]));
+    }
+  }
   if (metrics.device_iops) {
     target.append(element("h3", "NVMe device counters"));
     fields(target, [
@@ -114,10 +140,30 @@ function select(row, announce = true) {
     fields(target, counts);
   }
   target.append(element("h3", "Input and source"));
-  const input = study.inputs.find(value => value.id === row.input_id);
-  const link = element("a", input.name);
-  if (/^https?:\/\//.test(input.source.url)) link.href = input.source.url;
-  target.append(link, element("p", input.source.attribution), element("p", `License: ${input.source.license}`));
+  const sources = setting.sources || [setting];
+  for (const source of sources) {
+    const input = study.inputs.find(value => value.id === (source.input_id || row.input_id));
+    const group = setting.sources ? element("details") : target;
+    if (setting.sources) {
+      group.className = "source-details";
+      group.open = source === sources[0];
+      group.append(element("summary", input.name));
+      target.append(group);
+    }
+    const link = element("a", setting.sources ? "Source attribution" : input.name);
+    if (/^https?:\/\//.test(input.source.url)) link.href = input.source.url;
+    group.append(link, element("p", input.source.attribution), element("p", `License: ${input.source.license}`));
+    if (setting.sources) fields(group, [
+      ["Original shape", source.source_shape.join(" × ")],
+      ["Expanded shape", source.shape.join(" × ")],
+      ["Source type", source.dtype],
+      ["Chunk shape", source.chunk_shape.join(" × ")],
+      ["Shard shape", source.shard_shape.join(" × ")],
+      ["Shard files", source.shard_files],
+      ["Stored shard range", `${number(Math.min(...source.shard_file_bytes) / 2 ** 30)}–${number(Math.max(...source.shard_file_bytes) / 2 ** 30)} GiB`],
+      ["Input SHA256", source.input_sha256],
+    ]);
+  }
   fields(target, [["Revision", `${study.context.source.revision?.slice(0, 12) || "Unknown"}${study.context.source.local_changes ? " + local changes" : ""}`],
     ["Binary SHA256", study.context.binary_sha256], ["Input SHA256", setting.input_sha256]]);
   d3.selectAll("circle.point").attr("stroke-width", point => point.id === selected ? 3 : 1.5)
@@ -229,7 +275,16 @@ function table(rows, isIO, isDevice) {
   }
 }
 
+function updateContext() {
+  const context = study.context, cohort = study.cohorts?.find(value => value.id === $("input").value);
+  const geometry = cohort
+    ? `${cohort.input_ids.length} source inputs, mixed within each pass. ${cohort.omitted_dataset ? `Omitted collection: ${cohort.omitted_dataset}. ` : ""}${study.volume.frame_shape.join(" × ")} frames; ${study.volume.shard_spatial_shape.join(" × ")} spatial shards; ${number(study.volume.shard_bytes / 2 ** 30)} GiB uncompressed per shard. ${study.weighting}. Read weights count samples per input; compression combines equal logical source volumes. Expanded pixels are tiled source distributions.`
+    : "Each input is a small replayed image pack.";
+  $("context").textContent = `${study.pilot ? "Pilot · limited settings. " : ""}${context.machine.cpu?.["Model name"] || context.machine.host} · ${context.machine.cpu_affinity?.length ?? "Unknown"} allowed logical CPUs · ${study.pipeline.decode_workers} CPU decode workers · ${study.pipeline.n_io_threads} file workers · ${context.machine.gpu?.split("\n")[0]?.split(",")[0] || "CPU only"}. ${geometry}`;
+}
+
 function render() {
+  updateContext();
   const isDevice = $("view").value === "device", isIO = $("view").value !== "pareto";
   const filters = Object.fromEntries(["input", "workload", "codec", "chunk", "block"].map(id => [id, $(id).value]));
   filtered = study.rows.filter(row => matches(row, filters));
@@ -276,7 +331,9 @@ async function loadStudy() {
   selected = null;
   if (study.version !== 1 || !study.rows.length) throw new Error("This study has no supported measurements.");
   options("view", Object.keys(views), id => views[id]);
-  options("input", study.inputs.map(input => input.id), id => study.inputs.find(input => input.id === id).name);
+  const choices = study.cohorts || study.inputs;
+  $("input-label").textContent = study.cohorts ? "Source mixture" : "Image input";
+  options("input", choices.map(input => input.id), id => choices.find(input => input.id === id).name);
   options("workload", [...new Set(study.rows.map(row => row.workload))], id => workloads[id] || id);
   options("codec", [...new Set(study.rows.map(row => row.setting.codec))], id => codecs[id], true);
   options("chunk", [...new Set(study.rows.map(row => row.setting.chunk_bytes))].sort((a, b) => a - b), kib, true);
@@ -284,10 +341,11 @@ async function loadStudy() {
   $("raw").href = `data/${entry.file}`;
   const context = study.context;
   const storage = context.machine.local_storage;
-  $("cache-condition").textContent = context.cache_policy === "cold"
+  $("cache-condition").textContent = context.cache_policy === "cold-pass"
+    ? `Cold file-cache passes · ${storage.devices.length} PCIe NVMe devices (${[...new Set(storage.devices.map(device => device.model))].join(", ")}). Every timed pass starts with zero resident shard-data pages and runs many batches through the pipeline. Device reads are verified. Codecs and metadata are warmed; SSD/controller caches are not controlled.`
+    : context.cache_policy === "cold"
     ? `Cold file-cache reads · ${storage.devices.length} PCIe NVMe devices (${[...new Set(storage.devices.map(device => device.model))].join(", ")}). Every timed batch starts with zero resident data-file pages; device reads are verified. Codec and metadata caches are warmed. SSD/controller caches are not controlled.`
     : "Cached pilot · files were preloaded into RAM and reads were replayed. These measurements characterize the cached reader and do not measure cold NVMe performance.";
-  $("context").textContent = `${study.pilot ? "Pilot · limited settings. " : ""}${context.machine.cpu?.["Model name"] || context.machine.host} · ${context.machine.cpu_affinity?.length ?? "Unknown"} allowed logical CPUs · ${study.pipeline.decode_workers} CPU decode workers · ${study.pipeline.n_io_threads} file workers · ${context.machine.gpu?.split("\n")[0]?.split(",")[0] || "CPU only"}. Each input is a small replayed image pack.`;
   $("workspace").hidden = false;
   $("status").hidden = true;
   render();
