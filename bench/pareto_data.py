@@ -266,7 +266,7 @@ def prepare(plan, corpus, output, *, workers=1):
     output.mkdir(parents=True, exist_ok=True)
     write_json(
         output / "preparation.json",
-        {"plan_sha256": identity(plan), "packages": packages, "workers": workers},
+        {"plan_sha256": identity(plan), "packages": packages},
     )
     from pareto_mixture import write_queries
 
@@ -288,7 +288,6 @@ def prepare(plan, corpus, output, *, workers=1):
             "version": 1,
             "plan_sha256": identity(plan),
             "packages": packages,
-            "preparation_workers": workers,
             "variants": [records[variant["id"]] for variant in plan["variants"]],
         },
     )

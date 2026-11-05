@@ -1,13 +1,15 @@
 """Verify tiled pixels and encoded shards with small, real Zarr arrays."""
 
 import copy
+import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
-from pareto import file_hash
-from pareto_data import compressors, prepare_variants, tiled_shard, write_volume
+from pareto import file_hash, identity, read_json
+from pareto_data import compressors, prepare, tiled_shard, write_volume
 
 import zarr
 
@@ -94,9 +96,20 @@ class TilingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             pixels = np.arange(2 * 3 * 4, dtype=np.uint16).reshape(2, 3, 4)
-            source = root / "input.bin"
+            corpus = root / "corpus"
+            corpus.mkdir()
+            output = root / "data"
+            source = corpus / "input.bin"
             source.write_bytes(pixels.tobytes())
-            asset = {"id": "example", "dtype": "uint16", "shape": list(pixels.shape)}
+            asset = {
+                "id": "example",
+                "dtype": "uint16",
+                "shape": list(pixels.shape),
+                "path": "input.bin",
+                "sha256": file_hash(source),
+            }
+            manifest = {"inputs": [asset]}
+            (corpus / "manifest.json").write_text(json.dumps(manifest))
             variants = [
                 {
                     "id": codec,
@@ -113,27 +126,29 @@ class TilingTests(unittest.TestCase):
                 }
                 for codec in ("none", "zstd")
             ]
-            args = (
-                {"variants": variants},
-                {"example": asset},
-                {"example": source},
-                root,
-                2,
-            )
-            records = {record["id"]: record for record in prepare_variants(*args)}
+            plan = {
+                "variants": variants,
+                "inputs": [asset],
+                "corpus_sha256": identity(manifest),
+            }
+            with patch("pareto_data.require_compute"):
+                prepare(plan, corpus, output, workers=2)
+            prepared = read_json(output / "prepared.json")
+            records = {record["id"]: record for record in prepared["variants"]}
             self.assertEqual(set(records), {variant["id"] for variant in variants})
             for variant in variants:
                 record = records[variant["id"]]
                 self.assertEqual(record["shard_files"], 4)
-                actual = zarr.open_array(str(root / variant["id"] / "array"))[:]
+                actual = zarr.open_array(str(output / variant["id"] / "array"))[:]
                 whole = {**variant, "shard_shape": variant["shape"]}
                 np.testing.assert_array_equal(
                     actual, tiled_shard(pixels, whole, (0, 0, 0))
                 )
                 for file in record["files"]:
-                    self.assertEqual(file_hash(root / file["path"]), file["sha256"])
-            resumed = {record["id"]: record for record in prepare_variants(*args)}
-            self.assertEqual(resumed, records)
+                    self.assertEqual(file_hash(output / file["path"]), file["sha256"])
+            with patch("pareto_data.require_compute"):
+                prepare(plan, corpus, output, workers=1)
+            self.assertEqual(read_json(output / "prepared.json"), prepared)
 
 
 if __name__ == "__main__":
