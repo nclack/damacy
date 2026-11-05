@@ -96,10 +96,10 @@ function select(row, announce = true) {
     const comparisons = sensitivity(study.rows, row);
     if (comparisons.length) {
       target.append(element("h3", "Leave-one-out sensitivity"));
-      target.append(element("p", "Change from all sources for this setting. Raw-relative compares speedup against each mixture’s own uncompressed control; returned compares the same float32 sample size. Removing a collection also changes the source types and number of files. These are median comparisons, not significance tests."));
+      target.append(element("p", "Changes from all sources for this setting. Compression shows the remaining mixture’s ratio and its percentage change. Raw-relative compares speedup against each mixture’s uncompressed control; returned compares float32 throughput. Removing a collection changes source types and file counts. These medians are not significance tests."));
       fields(target, comparisons.map(value => [
         study.cohorts.find(cohort => cohort.id === value.row.input_id).name,
-        `${number(value.raw_relative_percent)}% raw-relative · ${number(value.returned_percent)}% returned · ${number(value.useful_percent)}% useful`,
+        `${number(value.row.compression_fold)}× compression (${number(value.compression_percent)}%) · ${number(value.raw_relative_percent)}% raw-relative · ${number(value.returned_percent)}% returned · ${number(value.useful_percent)}% useful`,
       ]));
     }
   }
@@ -280,7 +280,7 @@ function updateContext() {
   const geometry = cohort
     ? `${cohort.input_ids.length} source inputs, mixed within each pass. ${cohort.omitted_dataset ? `Omitted collection: ${cohort.omitted_dataset}. ` : ""}${study.volume.frame_shape.join(" × ")} frames; ${study.volume.shard_spatial_shape.join(" × ")} spatial shards; ${number(study.volume.shard_bytes / 2 ** 30)} GiB uncompressed per shard. ${study.weighting}. Compression combines equal logical source volumes. Expanded pixels are tiled source distributions.`
     : "Each input is a small replayed image pack.";
-  $("context").textContent = `${study.pilot ? "Pilot · limited settings. " : ""}${context.machine.cpu?.["Model name"] || context.machine.host} · ${context.machine.cpu_affinity?.length ?? "Unknown"} allowed logical CPUs · ${study.pipeline.decode_workers} CPU decode workers · ${study.pipeline.n_io_threads} file workers · ${context.machine.gpu?.split("\n")[0]?.split(",")[0] || "CPU only"}. ${geometry}`;
+  $("context").textContent = `${study.pilot ? "Pilot · limited settings. " : ""}${study.profile?.repeats ?? study.rows[0].metrics.useful_gib_s.n} process repetitions per setting. ${context.machine.cpu?.["Model name"] || context.machine.host} · ${context.machine.cpu_affinity?.length ?? "Unknown"} allowed logical CPUs · ${study.pipeline.decode_workers} CPU decode workers · ${study.pipeline.n_io_threads} file workers · ${context.machine.gpu?.split("\n")[0]?.split(",")[0] || "CPU only"}. ${geometry}`;
 }
 
 function render() {

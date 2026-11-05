@@ -2,6 +2,13 @@
   "version": 1,
   "studies": [
     {
+      "id": "542501404495a92083a9",
+      "label": "Mixed microscopy: 1 GiB shards on cold NVMe \u00b7 cpu-turin-gp-l-244-043 \u00b7 2026-11-05",
+      "pilot": true,
+      "file": "542501404495a92083a9.json",
+      "cache_policy": "cold-pass"
+    },
+    {
       "id": "5add8a3675356a860c8e",
       "label": "Cold NVMe microscopy reads: chunks, blocks, and codecs \u00b7 cpu-turin-gp-l-244-013 \u00b7 2026-11-04",
       "pilot": true,
