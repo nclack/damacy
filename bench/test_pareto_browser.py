@@ -296,7 +296,10 @@ def verify_study(page, document):
                     f"{len(asset['input_ids'])} source inputs"
                     in page.locator("#context").inner_text()
                 )
-                page.locator("circle.point").first.click()
+                point = page.locator("circle.point").first
+                point.focus()
+                point.press("Enter")
+                assert point.get_attribute("aria-pressed") == "true"
                 detail = page.locator("#detail-content").inner_text()
                 assert "Expanded shape" in detail and "Query coverage" in detail
                 assert "Leave-one-out sensitivity" in detail
@@ -452,7 +455,9 @@ def check(assets, output, actual):
                     verify_study(page, current)
                     if current.get("cohorts"):
                         page.select_option("#input", "all-sources")
-                        page.locator("circle.point").first.click()
+                        point = page.locator("circle.point").last
+                        point.click()
+                        assert point.get_attribute("aria-pressed") == "true"
                         for theme in ("light", "dark"):
                             page.select_option("#appearance", theme)
                             verify_mark_contrast(page)
