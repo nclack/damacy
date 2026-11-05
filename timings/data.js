@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793806410917,
+  "lastUpdate": 1793893096950,
   "repoUrl": "https://github.com/nclack/damacy",
   "entries": {
     "damacy timings": [
@@ -10311,6 +10311,88 @@ window.BENCHMARK_DATA = {
           {
             "name": "damacy/mixed/assemble.ms_avg",
             "value": 2.90997,
+            "unit": "ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Nathan Clack",
+            "username": "nclack",
+            "email": "nclack@gmail.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "8ba202cbee921a9d82d4f6281a42723f486b4175",
+          "message": "Restore Blosc-LZ4 on CPU and GPU (#174)\n\nRestores reading **byte-shuffled and bitshuffled Blosc `lz4` and `lz4hc`\narrays on both CPU and GPU**. These arrays currently fail with\n`DAMACY_DECODE`. No shuffle, translated crops, and sharded or unsharded\narrays are also supported.\n\n| Blosc shuffle mode | CPU (`lz4` and `lz4hc`) | GPU (`lz4` and `lz4hc`)\n|\n| --- | --- | --- |\n| Byte shuffle (`shuffle`) | Supported and tested | Supported and tested\n|\n| Bitshuffle (`bitshuffle`) | Supported and tested | Supported and\ntested |\n| No shuffle (`noshuffle`) | Supported and tested | Supported and tested\n|\n\nOn CPU, C-Blosc decompresses and reverses the shuffle, retaining the\nconfigured decode-worker count and one internal C-Blosc thread per\ndecode. On GPU, nvCOMP decompresses the LZ4 blocks, and CUDA assembly\nreverses byte shuffle or bitshuffle while producing the output,\nincluding partial final blocks.\n\nThe GPU executor shares decoder scratch and growing dispatch buffers\nbetween Zstd and LZ4 on the existing decode stream, with allocation\ngrowth checked against the memory budget. Parsing handles split and\nunsplit blocks, raw blocks, and `MEMCPYED` chunks; decode completion\nchecks both status and output size. LZ4 uses the CUDA backend for\nunaligned Blosc payloads and malformed-input error reporting.\n\nThe [shuffle regression\nmatrix](https://github.com/nclack/damacy/blob/f7974de25f4bb1950c30163ec0277af7bbf34f80/tests/test_blosc_codecs.c#L383)\nchecks exact decoded values for both codecs, all three shuffle modes,\n1/2/4/8-byte elements, split and unsplit blocks, and sharded and\nunsharded translated crops. [The same cases run on CPU and\nGPU](https://github.com/nclack/damacy/blob/f7974de25f4bb1950c30163ec0277af7bbf34f80/tests/test_blosc_codecs.c#L547).\nAdditional tests cover bitshuffled partial final blocks, mixed codecs,\ngrowth across multiple waves, and malformed/truncated inputs. Codec\ndocumentation, Zarr fixture generation, and benchmark scenarios also\nsupport LZ4/LZ4HC.\n\nValidation on `f7974de`:\n\n- [CPU-only\nCI](https://github.com/nclack/damacy/actions/runs/41837977300): Ubuntu\n28/28 tests and macOS 29/29 tests pass.\n- [CUDA CI](https://github.com/nclack/damacy/actions/runs/41837977244):\n40/40 tests and the Python smoke check pass.\n- Release build, ThreadSanitizer, documentation, and coverage checks\npass.\n- Python lint/format and whitespace checks pass.\n\nCloses #166.\n\n---------\n\nCo-authored-by: Nathan Clack <nclack@biohub.org>",
+          "timestamp": "2026-11-05T08:13:54Z",
+          "url": "https://github.com/nclack/damacy/commit/8ba202cbee921a9d82d4f6281a42723f486b4175"
+        },
+        "date": 1793893094900,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "damacy/default/init",
+            "value": 368.307,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/time_to_first_batch",
+            "value": 359.072,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/wall",
+            "value": 9746.28,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/io.ms_avg",
+            "value": 4.0541,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/input_transfer.ms_avg",
+            "value": 3.81321,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/default/assemble.ms_avg",
+            "value": 2.69982,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/init",
+            "value": 374.232,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/time_to_first_batch",
+            "value": 360.91,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/wall",
+            "value": 9884.25,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/io.ms_avg",
+            "value": 4.19543,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/input_transfer.ms_avg",
+            "value": 3.89761,
+            "unit": "ms"
+          },
+          {
+            "name": "damacy/mixed/assemble.ms_avg",
+            "value": 2.90829,
             "unit": "ms"
           }
         ]
