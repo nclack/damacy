@@ -254,19 +254,24 @@ uv run --script bench/pareto.py plan bench/studies/microscopy.json \
 Omit `--pilot` for all 22 layouts per input. Both modes include every source and all six dataset omissions.
 
 Preparation and measurement belong on compute nodes. Build `damacy_bench` with
-CUDA enabled to measure both backends. Preparation checks input hashes, encodes
+CUDA enabled to measure both backends. For CPU-only measurements without a GPU
+driver, configure with `-DDAMACY_CUDA=OFF`. Preparation checks input hashes, encodes
 each layout, verifies every decoded pixel, and records the stored files and
 Blosc headers:
 
 ```sh
 uv run --script bench/pareto.py prepare /shared/study/plan.json \
-  --corpus /path/to/microscopy --output /node-local/study/data
+  --corpus /path/to/microscopy --output /node-local/study/data --workers 3
 uv run --script bench/pareto.py run /shared/study/plan.json \
   --data /node-local/study/data --output /shared/study/results \
   --storage 'Local NVMe; checked cold multi-batch passes'
 uv run --script bench/pareto.py report /shared/study/results \
   --output docs/pareto/data
 ```
+
+`--workers` selects how many layouts to prepare at once; the default is one.
+Completed layouts can be reused with a different worker count. Every stored file
+is checked again after copying and before measurements; those checks are untimed.
 
 Prepare on verified node-local NVMe, or copy prepared files there before running. `--backend cpu`
 selects only CPU measurements. Each process has a timeout; failures retain

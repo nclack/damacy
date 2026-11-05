@@ -53,6 +53,7 @@ uv run --no-project --python 3.12 python - "$study_root/data/prepared.json" "$st
 import json
 import shutil
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 prepared = json.loads(Path(sys.argv[1]).read_text())
 required = sum(item["stored_bytes"] for item in prepared["variants"]) + 1024**3
@@ -60,8 +61,18 @@ available = shutil.disk_usage(sys.argv[2]).free
 if required > available:
     raise SystemExit(f"Local NVMe needs {required} bytes; only {available} are available")
 print(f"Copying {required - 1024**3} prepared bytes to local NVMe", flush=True)
+source = Path(sys.argv[1]).parent
+output = Path(sys.argv[2]) / "data"
+files = [path for path in source.rglob("*") if path.is_file()]
+def copy_file(path):
+    destination = output / path.relative_to(source)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(path, destination)
+with ThreadPoolExecutor(max_workers=8) as executor:
+    for _ in executor.map(copy_file, files):
+        pass
+print(f"Copied {len(files)} files to local NVMe", flush=True)
 PY_SPACE
-cp -a "$study_root/data" "$study_scratch/data"
 
 uv run --script bench/pareto.py run "$study_root/plan.json" \
   --data "$study_scratch/data" --output "$study_root/results-$study_backend" \
