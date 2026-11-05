@@ -114,6 +114,8 @@ damacy_stats_reset(struct damacy* self)
   if (!self->stopping) {
     stats_init(&self->stats);
     self->planner->ops->reset_stats(self->planner);
+    if (self->executor->ops->reset_stats)
+      self->executor->ops->reset_stats(self->executor);
   }
   scheduler_unlock(self->sched);
 }

@@ -27,7 +27,8 @@ from pathlib import Path, PurePosixPath
 ROOT = Path(__file__).resolve().parents[1]
 GIB = 1024**3
 DTYPES = {"uint8": ("u8", 1), "uint16": ("u16", 2), "float32": ("f32", 4)}
-METRICS_VERSION = 2
+METRICS_VERSION = 3
+NEW_METRICS = {"peak_active_reads"}
 IO_METRICS = {"read_iops", "read_gib_s", "mean_read_bytes", "reads_per_useful_gib"}
 IO_METRICS.update(
     {
@@ -149,6 +150,12 @@ def chunk_shape(byte_count, itemsize):
 
 
 def make_plan(definition, corpus, *, pilot=False):
+    if definition["version"] == 2:
+        from pareto_mixture import make_mixture_plan
+
+        plan = make_mixture_plan(definition, corpus, pilot=pilot)
+        schedule(plan)
+        return plan
     if definition["version"] != 1:
         raise ValueError("Unsupported study definition version")
     if corpus["version"] != definition["corpus_version"]:
@@ -295,6 +302,49 @@ def make_plan(definition, corpus, *, pilot=False):
     return plan
 
 
+def case_variant(case, variants):
+    if "variant_ids" not in case:
+        return variants[case["variant_id"]]
+    selected = [variants[key] for key in case["variant_ids"]]
+    first = selected[0]
+    setting = {
+        key: first[key]
+        for key in ("codec", "chunk_bytes", "block_bytes", "level", "shuffle")
+    }
+    if any(
+        any(value[key] != expected for key, expected in setting.items())
+        for value in selected
+    ):
+        raise ValueError(
+            "A mixture must use the same codec and byte settings for every source"
+        )
+    return {
+        **setting,
+        "id": case["variant_id"],
+        "input_id": case["input_id"],
+        "dtype": "mixed",
+        "chunk_shape": [],
+        "shard_shape": [],
+        "input_sha256": identity([value["input_sha256"] for value in selected]),
+        "logical_bytes": sum(
+            math.prod(value["shape"]) * DTYPES[value["dtype"]][1] for value in selected
+        ),
+        "stored_bytes": sum(value.get("stored_bytes", 0) for value in selected),
+        "actual_block_bytes": sorted(
+            {size for value in selected for size in value.get("actual_block_bytes", [])}
+        ),
+        "files": [item for value in selected for item in value.get("files", [])],
+        "sources": [
+            {key: item for key, item in value.items() if key != "files"}
+            for value in selected
+        ],
+    }
+
+
+def is_cold(plan):
+    return plan.get("cache_policy") in {"cold", "cold-pass"}
+
+
 def schedule(plan, backend=None):
     variants = {v["id"]: v for v in plan["variants"]}
     groups = {}
@@ -316,7 +366,7 @@ def schedule(plan, backend=None):
                 c
                 for c in cases
                 if all(
-                    variants[c["variant_id"]][k] == v
+                    case_variant(c, variants)[k] == v
                     for k, v in plan["reference_setting"].items()
                 )
             ]
@@ -541,18 +591,20 @@ def scenario_for(plan, case, data, *, reference=False, variant=None, storage=Non
         "name": case["id"],
         "dataset": {
             "store_root": str(Path(data).resolve()),
-            "n_zarrs": 1,
-            "uris": [f"{case['variant_id']}/array"],
+            "n_zarrs": len(case.get("variant_ids", [case["variant_id"]])),
+            "uris": [
+                f"{key}/array" for key in case.get("variant_ids", [case["variant_id"]])
+            ],
         },
         "sampling": sampling,
         "pipeline": pipeline,
         "consumer": {"hold_ms": 0},
     }
-    if plan.get("cache_policy") == "cold":
+    if is_cold(plan):
         if not variant or not storage:
             raise ValueError("Cold scenarios require files and verified NVMe devices")
         scenario["cache"] = {
-            "policy": "cold",
+            "policy": plan["cache_policy"],
             "files": [
                 str(relative_path(Path(data).resolve(), item["path"]))
                 for item in variant["files"]
@@ -560,6 +612,10 @@ def scenario_for(plan, case, data, *, reference=False, variant=None, storage=Non
             ],
             "device_stats": [device["stat_path"] for device in storage["devices"]],
         }
+    if "query_id" in sampling:
+        sampling["query_file"] = str(
+            Path(data).resolve() / "queries" / f"{sampling['query_id']}.bin"
+        )
     return scenario
 
 
@@ -581,8 +637,24 @@ def observation_metrics(result, case, variant):
         batches
         * sampling["samples_per_batch"]
         * math.prod(sampling["sample_shape"])
-        * DTYPES[variant["dtype"]][1]
+        * (1 if "query_summary" in case else DTYPES[variant["dtype"]][1])
     )
+    if "query_summary" in case:
+        summary = case["query_summary"]
+        expected = {
+            "samples_per_pass": summary["samples"],
+            "source_bytes_per_pass": summary["useful_bytes"],
+            "samples_per_source": [
+                item["samples"] for item in summary["source_samples"]
+            ],
+        }
+        if result.get("query_stream") != expected:
+            raise ValueError(
+                "Native query counts or source byte sizes disagree with the plan"
+            )
+        if summary["samples"] != sampling["n_batches"] * sampling["samples_per_batch"]:
+            raise ValueError("Query stream does not contain complete batches")
+        input_bytes = passes * summary["useful_bytes"]
     returned_bytes = (
         batches * sampling["samples_per_batch"] * result["derived"]["bytes_per_sample"]
     )
@@ -597,10 +669,22 @@ def observation_metrics(result, case, variant):
     reads = result["counters"].get("reads_issued")
     if reads is not None:
         positive_int(reads, "reads_issued")
+    peak_reads = result["counters"].get("data_backend_read_max_active")
+    if peak_reads is not None:
+        positive_int(peak_reads, "peak active reads")
+        if peak_reads > result["scenario"]["pipeline"]["n_io_threads"]:
+            raise ValueError("Peak active reads exceed file workers")
+    elif "query_summary" in case:
+        raise ValueError("Mixed studies require measured read concurrency")
     cold = result.get("cold_reads")
-    if result["scenario"].get("cache", {}).get("policy") == "cold":
-        if not cold or sampling["n_batches"] != 1 or cold["passes"] != passes:
-            raise ValueError("Cold reads require a checked cold start for every batch")
+    policy = result["scenario"].get("cache", {}).get("policy")
+    if policy in {"cold", "cold-pass"}:
+        if (
+            not cold
+            or cold["passes"] != passes
+            or (policy == "cold" and sampling["n_batches"] != 1)
+        ):
+            raise ValueError("Cold reads require a checked cold start for every pass")
         if cold["resident_pages_after"] != 0:
             raise ValueError("Cold reads still had resident file pages")
         for key in ("files", "pages_per_check", "device_reads", "device_read_bytes"):
@@ -620,6 +704,7 @@ def observation_metrics(result, case, variant):
     elif cold is not None:
         raise ValueError("Cold read counters were recorded for a cached scenario")
     return {
+        "peak_active_reads": peak_reads,
         "useful_gib_s": input_bytes / GIB / wall_s,
         "returned_gib_s": returned_bytes / GIB / wall_s,
         "read_iops": reads / wall_s if reads is not None else None,
@@ -659,7 +744,13 @@ def validate_saved_metrics(row, metrics):
     version = row.get("metrics_version", 1)
     if version == 1:
         expected = {
-            key: value for key, value in metrics.items() if key not in IO_METRICS
+            key: value
+            for key, value in metrics.items()
+            if key not in IO_METRICS | NEW_METRICS
+        }
+    elif version == 2:
+        expected = {
+            key: value for key, value in metrics.items() if key not in NEW_METRICS
         }
     elif version == METRICS_VERSION:
         expected = metrics
@@ -704,12 +795,16 @@ def run_study(args):
     plan = read_json(args.plan)
     prepared = read_json(args.data / "prepared.json")
     validate_prepared(plan, prepared)
+    from pareto_mixture import write_queries
+
+    write_queries(plan, args.data)
+    write_queries(plan, args.output)
     tasks = schedule(plan, args.backend)
     cases = {case["id"]: case for case in plan["cases"]}
     variants = {v["id"]: v for v in prepared["variants"]}
     bench = args.bench.resolve(strict=True)
     machine = machine_record(args.data)
-    if plan.get("cache_policy") == "cold":
+    if is_cold(plan):
         machine["local_storage"] = local_nvme_record(args.data)
     if (
         any(cases[t["case_id"]]["backend"] == "cuda" for t in tasks)
@@ -742,11 +837,13 @@ def run_study(args):
     for variant in variants.values():
         for item in variant["files"]:
             path = relative_path(args.data, item["path"])
-            if plan.get("cache_policy") == "cold" and (
+            if is_cold(plan) and (
                 not path.resolve().is_relative_to(args.data.resolve())
                 or path.stat().st_dev != args.data.stat().st_dev
             ):
-                raise ValueError("Cold files must stay on the verified local filesystem")
+                raise ValueError(
+                    "Cold files must stay on the verified local filesystem"
+                )
             if (
                 path.stat().st_size != item["bytes"]
                 or file_hash(path) != item["sha256"]
@@ -762,7 +859,7 @@ def run_study(args):
                 )
             continue
         case = cases[task["case_id"]]
-        variant = variants[case["variant_id"]]
+        variant = case_variant(case, variants)
         scenario = scenario_for(
             plan,
             case,
@@ -771,13 +868,20 @@ def run_study(args):
             variant=variant,
             storage=machine.get("local_storage"),
         )
+        query_path = (
+            Path(scenario["sampling"]["query_file"])
+            if "query_file" in scenario["sampling"]
+            else None
+        )
+        if query_path and file_hash(query_path) != case["sampling"]["query_sha256"]:
+            raise ValueError("Query stream changed before measurement")
         task_dir = args.output / "processes" / task["id"]
         task_dir.mkdir(parents=True, exist_ok=True)
         scenario_path = task_dir / "scenario.json"
         write_json(scenario_path, scenario)
         cache = (
-            {"policy": "cold before every timed batch"}
-            if plan.get("cache_policy") == "cold"
+            {"policy": plan["cache_policy"]}
+            if is_cold(plan)
             else prepare_cache(
                 [relative_path(args.data, item["path"]) for item in variant["files"]]
             )
@@ -801,6 +905,8 @@ def run_study(args):
                 check=False,
             )
         elapsed = time.monotonic() - before
+        if query_path and file_hash(query_path) != case["sampling"]["query_sha256"]:
+            raise ValueError("Query stream changed during measurement")
         if process.returncode:
             raise ValueError(
                 f"Benchmark failed ({process.returncode}); see {task_dir / 'stderr.txt'}"
@@ -859,6 +965,12 @@ def summarize(directory):
     ):
         raise ValueError("Study plan or prepared-file record changed")
     validate_prepared(plan, prepared)
+    for query in plan.get("query_sets", []):
+        if (
+            file_hash(directory / "queries" / f"{query['id']}.bin")
+            != query["summary"]["sha256"]
+        ):
+            raise ValueError("Retained query stream changed")
     if tasks != schedule(plan, context["backend"]):
         raise ValueError("Measurement schedule does not match the plan")
     cases = {case["id"]: case for case in plan["cases"]}
@@ -875,14 +987,14 @@ def summarize(directory):
             case,
             row["result"]["scenario"]["dataset"]["store_root"],
             reference=task["role"] != "sample",
-            variant=variants[case["variant_id"]],
+            variant=case_variant(case, variants),
             storage=context["machine"].get("local_storage"),
         )
         if row["result"]["scenario"] != expected_scenario:
             raise ValueError(
                 "Observation scenario disagrees with the measurement schedule"
             )
-        metrics = observation_metrics(row["result"], case, variants[case["variant_id"]])
+        metrics = observation_metrics(row["result"], case, case_variant(case, variants))
         validate_saved_metrics(row, metrics)
         row = {**row, "metrics_version": METRICS_VERSION, "metrics": metrics}
         condition = (case["input_id"], case["backend"], case["workload"])
@@ -898,14 +1010,18 @@ def summarize(directory):
         if "cache" in public["result"]["scenario"]:
             public["result"]["scenario"]["cache"]["files"] = [
                 item["path"]
-                for item in variants[case["variant_id"]]["files"]
+                for item in case_variant(case, variants)["files"]
                 if not item["path"].endswith("/zarr.json")
             ]
+        if "query_file" in public["result"]["scenario"]["sampling"]:
+            public["result"]["scenario"]["sampling"]["query_file"] = (
+                f"queries/{case['sampling']['query_id']}.bin"
+            )
         observations.append(public)
     rows = []
     for case_id, values in samples.items():
         case = cases[case_id]
-        variant = variants[case["variant_id"]]
+        variant = case_variant(case, variants)
         condition = (case["input_id"], case["backend"], case["workload"])
         if len(values) != plan["profile"]["repeats"]:
             raise ValueError("Missing repeated observations")
@@ -918,6 +1034,11 @@ def summarize(directory):
                 "backend": case["backend"],
                 "workload": case["workload"],
                 "sampling": case["sampling"],
+                **(
+                    {"query_summary": case["query_summary"]}
+                    if "query_summary" in case
+                    else {}
+                ),
                 "setting": {
                     k: v for k, v in variant.items() if k not in {"files", "id"}
                 },
@@ -926,6 +1047,7 @@ def summarize(directory):
                     key: spread([value["metrics"][key] for value in values])
                     for key in values[0]["metrics"]
                 },
+                "reference_useful_gib_s": reference,
                 "reference_spread_percent": 100
                 * (reference["max"] - reference["min"])
                 / reference["median"],
@@ -947,8 +1069,14 @@ def summarize(directory):
         },
         "pipeline": plan["pipeline"],
         "profile": plan["profile"],
+        "reference_setting": plan["reference_setting"],
         "preparation_packages": prepared["packages"],
         "inputs": public_inputs,
+        **(
+            {key: plan[key] for key in ("cohorts", "volume", "weighting")}
+            if "cohorts" in plan
+            else {}
+        ),
         "rows": rows,
         "observations": observations,
     }
@@ -959,6 +1087,9 @@ def publish(args):
     args.output.mkdir(parents=True, exist_ok=True)
     filename = f"{document['id']}.json"
     write_json(args.output / filename, document)
+    from pareto_mixture import write_queries
+
+    write_queries(read_json(args.run / "plan.json"), args.output)
     index_path = args.output / "index.json"
     index = (
         read_json(index_path) if index_path.exists() else {"version": 1, "studies": []}
@@ -975,7 +1106,9 @@ def publish(args):
         raise ValueError("Study index conflicts with the exported result")
     if not matches:
         index["studies"].append(entry)
-        index["studies"].sort(key=lambda value: value.get("cache_policy") != "cold")
+        index["studies"].sort(
+            key=lambda value: value.get("cache_policy") not in {"cold", "cold-pass"}
+        )
         temporary = args.output / "index.json.tmp"
         with temporary.open("x") as stream:
             stream.write(json.dumps(index, indent=2) + "\n")
@@ -1031,6 +1164,12 @@ def main():
                     {
                         "inputs": len(document["inputs"]),
                         "encoded_layouts": len(document["variants"]),
+                        "logical_preparation_gib": sum(
+                            math.prod(v["shape"]) * DTYPES[v["dtype"]][1]
+                            for v in document["variants"]
+                        )
+                        / GIB,
+                        "cohorts": len(document.get("cohorts", [])),
                         "settings": len(document["cases"]),
                         "executions": len(tasks),
                         "minimum_timed_seconds": sum(

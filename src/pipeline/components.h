@@ -10,9 +10,15 @@
 struct damacy_reader
 {
   struct store* store;
+  struct store_fs* file_store;
   uint32_t max_inflight_reads;
   uint8_t enable_readahead;
 };
+
+void
+reader_io_stats(struct damacy_reader* reader, struct damacy_stats* out);
+void
+reader_io_stats_reset(struct damacy_reader* reader);
 
 struct damacy_metadata_reader
 {
@@ -62,6 +68,7 @@ struct damacy_executor_ops
   enum damacy_status (*wait_event)(struct damacy_executor*, void*);
   int (*busy)(const struct damacy_executor*);
   void (*stats)(struct damacy_executor*, struct damacy_stats*);
+  void (*reset_stats)(struct damacy_executor*);
   void (*stop)(struct damacy_executor*);
   void (*destroy)(struct damacy_executor*);
 };

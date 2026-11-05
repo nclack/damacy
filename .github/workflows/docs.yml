@@ -58,7 +58,8 @@ jobs:
             'mkdocs>=1.6' \
             'mkdocs-material>=9.5' \
             'mkdocstrings[python]>=0.26' \
-            'ruff>=0.6'
+            'ruff>=0.6' \
+            'numpy==2.5.2' 'zarr==3.3.0' 'numcodecs==0.16.5'
 
       - name: Build site (--strict)
         run: mkdocs build --strict
@@ -70,8 +71,8 @@ jobs:
 
       - name: Check performance analysis
         run: |
-          ruff check bench/pareto.py bench/pareto_data.py bench/test_pareto.py
-          python -m unittest discover -s bench -p test_pareto.py
+          ruff check bench/pareto*.py bench/test_pareto*.py
+          PYTHONPATH=bench python -m unittest test_pareto test_pareto_mixture test_pareto_data
           node --test bench/test_pareto.mjs
           node --input-type=module --check < docs/pareto/report.js
           node --check docs/pareto/appearance.js

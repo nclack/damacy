@@ -93,6 +93,51 @@ def check(binary, backend):
         assert result["metadata"]["measured"]["shard_index_misses"] == 0
         assert "cold_reads" not in result
 
+        assert 0 < result["counters"]["data_backend_read_max_active"] <= 2
+        assert (
+            result["counters"]["data_backend_read_jobs"]
+            >= result["counters"]["reads_issued"]
+        )
+
+        other = root / "other"
+        other.mkdir()
+        metadata = json.loads((array / "zarr.json").read_text())
+        metadata["data_type"] = "float32"
+        (other / "zarr.json").write_text(json.dumps(metadata))
+        for plane in range(2):
+            chunk = other / f"c/{plane}/0/0"
+            chunk.parent.mkdir(parents=True)
+            chunk.write_bytes(struct.pack("<256f", *range(256)))
+        query_file = root / "queries.bin"
+        records = [(i % 2, i % 2, 0, 0) for i in range(6)]
+        data = (
+            b"DAMACYQ1"
+            + struct.pack("<Q", len(records))
+            + b"".join(struct.pack("<4I", *q) for q in records)
+        )
+        query_file.write_bytes(data)
+        mixed = copy.deepcopy(scenario)
+        mixed["dataset"].update(n_zarrs=2, uris=["array", "other"])
+        mixed["sampling"].update(pattern="queries", query_file=str(query_file))
+        result = run(mixed)
+        assert result["query_stream"] == {
+            "samples_per_pass": 6,
+            "source_bytes_per_pass": 4608,
+            "samples_per_source": [3, 3],
+        }
+        for invalid in (
+            data[:-1],
+            data + b"x",
+            b"invalid!" + data[8:],
+            data[:16] + struct.pack("<4I", 2, 0, 0, 0) + data[32:],
+            data[:16] + struct.pack("<4I", 0, 2, 0, 0) + data[32:],
+        ):
+            query_file.write_bytes(invalid)
+            assert "query stream is invalid" in run(mixed, False)
+        query_file.write_bytes(data)
+        mixed["cache"] = {"policy": "cold-pass", "files": [], "device_stats": []}
+        assert "cold-read verification" in run(mixed, False)
+
         one = copy.deepcopy(scenario)
         one["sampling"].update(
             pattern="random", sample_shape=[1, 8, 8], n_warmup_batches=0, min_seconds=0

@@ -12,6 +12,7 @@ from pareto import (
     DTYPES,
     GIB,
     IO_METRICS,
+    NEW_METRICS,
     block_devices,
     chunk_shape,
     identity,
@@ -26,7 +27,7 @@ from pareto import (
 
 
 def fixture():
-    definition = read_json(Path(__file__).parent / "studies/microscopy.json")
+    definition = read_json(Path(__file__).parent / "studies/microscopy-pilot-v1.json")
     definition["cache_policy"] = "preloaded files"
     assets = []
     for name in definition["inputs"]:
@@ -255,9 +256,17 @@ class MetricTests(unittest.TestCase):
 
     def test_old_observations_can_gain_iops_without_changing_measurements(self):
         metrics = observation_metrics(self.result, self.case, self.variant)
-        old = {key: value for key, value in metrics.items() if key not in IO_METRICS}
+        old = {
+            key: value
+            for key, value in metrics.items()
+            if key not in IO_METRICS | NEW_METRICS
+        }
+        previous = {
+            key: value for key, value in metrics.items() if key not in NEW_METRICS
+        }
         validate_saved_metrics({"metrics": old}, metrics)
-        validate_saved_metrics({"metrics_version": 2, "metrics": metrics}, metrics)
+        validate_saved_metrics({"metrics_version": 2, "metrics": previous}, metrics)
+        validate_saved_metrics({"metrics_version": 3, "metrics": metrics}, metrics)
         for row in (
             {"metrics": {**old, "wall_seconds": 2}},
             {
@@ -266,7 +275,7 @@ class MetricTests(unittest.TestCase):
                 }
             },
             {"metrics_version": 2, "metrics": old},
-            {"metrics_version": 3, "metrics": metrics},
+            {"metrics_version": 4, "metrics": metrics},
         ):
             with self.subTest(row=row), self.assertRaises(ValueError):
                 validate_saved_metrics(row, metrics)
@@ -316,6 +325,40 @@ class MetricTests(unittest.TestCase):
         self.assertEqual(metrics["device_mean_read_bytes"], 4096)
         self.assertEqual(metrics["idle_device_iops"], 4)
         self.assertEqual(metrics["cache_preparation_seconds"], 0.03)
+
+    def test_checked_cold_pass_can_pipeline_multiple_batches(self):
+        self.cold_result()
+        self.case["sampling"]["n_batches"] = 3
+        self.result["scenario"]["sampling"]["n_batches"] = 3
+        self.result["counters"]["batches_emitted"] = 6
+        self.result["scenario"]["cache"]["policy"] = "cold-pass"
+        metrics = observation_metrics(self.result, self.case, self.variant)
+        self.assertEqual(metrics["passes"], 2)
+        self.assertEqual(metrics["batches"], 6)
+        self.result["scenario"]["cache"]["policy"] = "cold"
+        with self.assertRaisesRegex(ValueError, "checked cold start"):
+            observation_metrics(self.result, self.case, self.variant)
+
+    def test_mixed_bytes_use_source_types_and_native_counts(self):
+        self.case["query_summary"] = {
+            "samples": 12,
+            "useful_bytes": 7680,
+            "source_samples": [{"samples": 6}, {"samples": 6}],
+        }
+        self.variant["dtype"] = "mixed"
+        self.result["query_stream"] = {
+            "samples_per_pass": 12,
+            "source_bytes_per_pass": 7680,
+            "samples_per_source": [6, 6],
+        }
+        self.result["scenario"]["pipeline"] = {"n_io_threads": 4}
+        self.result["counters"]["data_backend_read_max_active"] = 3
+        metrics = observation_metrics(self.result, self.case, self.variant)
+        self.assertEqual(metrics["useful_bytes"], 15360)
+        self.assertEqual(metrics["peak_active_reads"], 3)
+        self.result["query_stream"]["source_bytes_per_pass"] = 12288
+        with self.assertRaisesRegex(ValueError, "source byte sizes"):
+            observation_metrics(self.result, self.case, self.variant)
 
     def test_unverified_cold_runs_are_rejected(self):
         self.cold_result()

@@ -267,7 +267,7 @@ def verify_mark_contrast(page):
 
 
 def verify_study(page, document):
-    for asset in document["inputs"]:
+    for asset in document.get("cohorts", document["inputs"]):
         page.select_option("#input", asset["id"])
         for workload in sorted(
             {
@@ -288,6 +288,15 @@ def verify_study(page, document):
             )
             verify_scales(page)
             verify_table(page, expected, "pareto")
+            if document.get("cohorts"):
+                assert (
+                    f"{len(asset['input_ids'])} source inputs"
+                    in page.locator("#context").inner_text()
+                )
+                page.locator("circle.point").first.click()
+                detail = page.locator("#detail-content").inner_text()
+                assert "Expanded shape" in detail and "Query coverage" in detail
+                assert "Leave-one-out sensitivity" in detail
             for view, metric in (
                 ("io", "read_iops"),
                 ("device", "device_iops"),
@@ -301,6 +310,70 @@ def verify_study(page, document):
                 verify_scales(page, view)
                 verify_table(page, expected, view)
             page.select_option("#view", "pareto")
+
+
+def mixture_fixture():
+    study = fixture()
+    study["id"] = "1" * 20
+    study["label"] = "Mixed-source browser fixture — not measured"
+    study["cohorts"] = [
+        {
+            "id": "all-sources",
+            "name": "All sources",
+            "input_ids": ["image-a", "image-b"],
+            "omitted_dataset": None,
+        },
+        {
+            "id": "without-b",
+            "name": "Without image-b",
+            "input_ids": ["image-a"],
+            "omitted_dataset": "image-b",
+        },
+    ]
+    study["volume"] = {
+        "frame_shape": [2048, 2048],
+        "shard_spatial_shape": [512, 512],
+        "shard_bytes": 2**30,
+    }
+    study["weighting"] = "Equal sample counts per input; original source byte sizes"
+    for row in study["rows"]:
+        cohort = study["cohorts"][row["input_id"] == "image-b"]
+        row["input_id"] = cohort["id"]
+        row["reference_useful_gib_s"] = {"median": 10, "min": 9, "max": 11, "n": 3}
+        if (
+            row["setting"]["codec"] == "blosc-zstd"
+            and row["setting"]["block_bytes"] == 262144
+        ):
+            row["setting"]["codec"] = "blosc-lz4"
+        row["setting"]["sources"] = [
+            {
+                "input_id": name,
+                "source_shape": [6, 600, 600],
+                "shape": [2048, 2048, 2048],
+                "dtype": "uint16",
+                "chunk_shape": [1, 256, 512],
+                "shard_shape": [2048, 512, 512],
+                "shard_files": 16,
+                "shard_file_bytes": [2**29] * 16,
+                "input_sha256": "f" * 64,
+            }
+            for name in cohort["input_ids"]
+        ]
+        row["query_summary"] = {
+            "samples": 128,
+            "useful_bytes": 2**24,
+            "distinct_shards": 16 * len(cohort["input_ids"]),
+            "shards_per_window": {
+                "batch": {"min": 16, "max": 32},
+                "lookahead": {"min": 16, "max": 32},
+            },
+            "source_samples": [
+                {"input_id": name, "samples": 128 // len(cohort["input_ids"])}
+                for name in cohort["input_ids"]
+            ],
+        }
+        row["sampling"].update(query_id="fixture", query_sha256="f" * 64)
+    return study
 
 
 def check(assets, output, actual):
@@ -321,6 +394,16 @@ def check(assets, output, actual):
                     }
                 ],
             }
+            mixed = mixture_fixture()
+            index["studies"].append(
+                {
+                    "id": mixed["id"],
+                    "file": f"{mixed['id']}.json",
+                    "label": mixed["label"],
+                    "pilot": True,
+                }
+            )
+            (report / f"data/{mixed['id']}.json").write_text(json.dumps(mixed))
             (report / "data/index.json").write_text(json.dumps(index))
             (report / f"data/{document['id']}.json").write_text(json.dumps(document))
         index = json.loads((report / "data/index.json").read_text())
@@ -356,6 +439,17 @@ def check(assets, output, actual):
                     page.select_option("#study", entry["id"])
                     page.wait_for_selector("#workspace", state="visible")
                     verify_study(page, current)
+                    if current.get("cohorts"):
+                        page.select_option("#input", "all-sources")
+                        page.locator("circle.point").first.click()
+                        for theme in ("light", "dark"):
+                            page.select_option("#appearance", theme)
+                            verify_mark_contrast(page)
+                            page.screenshot(
+                                path=str(output / f"mixture-{theme}.png"),
+                                full_page=True,
+                            )
+                        page.select_option("#appearance", "system")
                 page.select_option("#study", document["id"])
                 page.wait_for_selector("#workspace", state="visible")
                 page.select_option("#input", document["inputs"][0]["id"])

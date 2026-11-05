@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import importlib.metadata
 import math
+import random
 import struct
 from pathlib import Path
 
@@ -73,7 +74,7 @@ def compressors(variant):
         return [ZstdCodec(level=variant["level"], checksum=False)]
     return [
         BloscCodec(
-            cname="zstd",
+            cname=variant["codec"].removeprefix("blosc-"),
             clevel=variant["level"],
             shuffle="bitshuffle",
             typesize=DTYPES[variant["dtype"]][1],
@@ -103,7 +104,7 @@ def chunk_records(array, variant):
                     raise ValueError("Invalid shard index")
                 payload_bytes += length
                 chunks += 1
-                if variant["codec"] == "blosc-zstd":
+                if variant["codec"].startswith("blosc-"):
                     stream.seek(offset)
                     header = stream.read(16)
                     decoded, block, stored = struct.unpack_from("<III", header, 4)
@@ -126,6 +127,51 @@ def chunk_records(array, variant):
     }
 
 
+def tiled_shard(pixels, variant, origin):
+    if variant["tiling"]["method"] != "shifted-periodic-planes":
+        raise ValueError("Unsupported tiling method")
+    shape = tuple(variant["shard_shape"])
+    result = np.empty(shape, dtype=pixels.dtype)
+    seed = int(identity([variant["input_id"], variant["tiling"]]), 16)
+    for local_z in range(shape[0]):
+        z = origin[0] + local_z
+        rng = random.Random(seed + z)
+        y = (
+            origin[1] + np.arange(shape[1]) + rng.randrange(pixels.shape[1])
+        ) % pixels.shape[1]
+        x = (
+            origin[2] + np.arange(shape[2]) + rng.randrange(pixels.shape[2])
+        ) % pixels.shape[2]
+        result[local_z] = pixels[z % pixels.shape[0]][np.ix_(y, x)]
+    return result
+
+
+def write_volume(array, pixels, variant):
+    if "tiling" not in variant:
+        array[:] = pixels
+        if array[:].tobytes() != pixels.tobytes():
+            raise ValueError("Encoded input does not round-trip exactly")
+        return
+    shape, shards = variant["shape"], variant["shard_shape"]
+    for z in range(0, shape[0], shards[0]):
+        for y in range(0, shape[1], shards[1]):
+            for x in range(0, shape[2], shards[2]):
+                origin = (z, y, x)
+                selection = tuple(
+                    slice(start, start + size)
+                    for start, size in zip(origin, shards, strict=True)
+                )
+                expected = tiled_shard(pixels, variant, origin)
+                array[selection] = expected
+                actual = array[selection]
+                if not np.array_equal(actual.view(np.uint8), expected.view(np.uint8)):
+                    raise ValueError(
+                        f"Encoded shard does not round-trip exactly: {variant['id']} {origin}"
+                    )
+                del actual, expected
+                print(f"  verified shard {origin}", flush=True)
+
+
 def prepare(plan, corpus, output):
     require_compute()
     if identity(read_json(corpus / "manifest.json")) != plan["corpus_sha256"]:
@@ -141,6 +187,10 @@ def prepare(plan, corpus, output):
         output / "preparation.json",
         {"plan_sha256": identity(plan), "packages": packages},
     )
+    from pareto_mixture import write_queries
+
+    write_queries(plan, output)
+    zarr.config.set({"async.concurrency": 8, "threading.max_workers": 8})
     records = []
     for number, variant in enumerate(plan["variants"], 1):
         destination = output / variant["id"]
@@ -166,7 +216,7 @@ def prepare(plan, corpus, output):
         )
         array = zarr.create_array(
             store=str(pending / "array"),
-            shape=tuple(asset["shape"]),
+            shape=tuple(variant["shape"]),
             dtype=dtype,
             chunks=tuple(variant["chunk_shape"]),
             shards=tuple(variant["shard_shape"]),
@@ -174,11 +224,7 @@ def prepare(plan, corpus, output):
             config={"write_empty_chunks": True},
             zarr_format=3,
         )
-        array[:] = pixels
-        if array[:].tobytes() != pixels.tobytes():
-            raise ValueError(
-                f"Encoded input does not round-trip exactly: {variant['id']}"
-            )
+        write_volume(array, pixels, variant)
         details = chunk_records(pending / "array", variant)
         files = [
             {
@@ -192,7 +238,15 @@ def prepare(plan, corpus, output):
         record = {
             **variant,
             **details,
-            "logical_bytes": pixels.nbytes,
+            "logical_bytes": math.prod(variant["shape"]) * dtype.itemsize,
+            "shard_files": sum(
+                not item["path"].endswith("/zarr.json") for item in files
+            ),
+            "shard_file_bytes": [
+                item["bytes"]
+                for item in files
+                if not item["path"].endswith("/zarr.json")
+            ],
             "stored_bytes": sum(item["bytes"] for item in files),
             "files": files,
         }

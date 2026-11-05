@@ -98,7 +98,10 @@ class Sampling(BaseModel):
     samples_per_batch: int = Field(gt=0)
     seed: int = 1234
     min_seconds: float = Field(default=0.0, ge=0.0, le=600.0)
-    pattern: Literal["random", "planes"] = "random"
+    pattern: Literal["random", "planes", "queries"] = "random"
+    query_file: str | None = None
+    query_id: str | None = None
+    query_sha256: str | None = None
 
 
 class Pipeline(BaseModel):

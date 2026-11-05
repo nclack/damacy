@@ -9,6 +9,7 @@
 #include "cold_read.h"
 #include "damacy_config.h"
 #include "damacy_pipeline.h"
+#include "query_stream.h"
 
 #include "util/json.h"
 #include "util/json_writer.h"
@@ -116,6 +117,7 @@ struct scenario
   uint64_t sampling_seed;
   double min_seconds;
   int whole_planes;
+  char query_file[512];
   int cold_reads;
 
   // pipeline
@@ -388,8 +390,22 @@ parse_scenario(struct cslice src, struct scenario* sc)
     char pattern[32] = "random";
     read_string_into(
       src, p_pattern, countof(p_pattern), pattern, sizeof(pattern));
-    if (strcmp(pattern, "random") && strcmp(pattern, "planes"))
+    if (strcmp(pattern, "random") && strcmp(pattern, "planes") &&
+        strcmp(pattern, "queries"))
       return 1;
+    if (!strcmp(pattern, "queries")) {
+      static const struct json_query p_file[] = {
+        { QUERY_KEY, .key = "sampling" }, { QUERY_KEY, .key = "query_file" }
+      };
+      if (sc->rank != 3 ||
+          read_string_into(src,
+                           p_file,
+                           countof(p_file),
+                           sc->query_file,
+                           sizeof sc->query_file) ||
+          !sc->query_file[0] || sc->n_warmup_batches > sc->n_batches)
+        return 1;
+    }
     sc->whole_planes = !strcmp(pattern, "planes");
     if (!sc->n_batches || !sc->samples_per_batch || sc->min_seconds < 0.0 ||
         sc->min_seconds > 600.0)
@@ -403,9 +419,11 @@ parse_scenario(struct cslice src, struct scenario* sc)
     enum json_err error =
       json_resolve(src, policy, countof(policy), &value, NULL);
     if (error != JSON_ERR_NOT_FOUND) {
-      if (error != JSON_OK || !json_str_eq(value, "cold"))
+      if (error != JSON_OK ||
+          (!json_str_eq(value, "cold") && !json_str_eq(value, "cold-pass")))
         return 1;
-      if (sc->n_batches != 1 || !sc->n_warmup_batches) {
+      if ((json_str_eq(value, "cold") && sc->n_batches != 1) ||
+          !sc->n_warmup_batches) {
         fprintf(stderr,
                 "bench: cold reads require one batch per pass and warmup\n");
         return 1;
@@ -607,6 +625,8 @@ struct array_table
 {
   char* uris;      // n * BENCH_MAX_URI (absolute)
   int64_t* shapes; // n * DAMACY_MAX_RANK
+  uint8_t* bytes_per_pixel;
+  struct query_stream queries;
   uint32_t n;
   uint8_t rank;
 };
@@ -618,6 +638,8 @@ array_table_free(struct array_table* t)
     return;
   free(t->uris);
   free(t->shapes);
+  free(t->bytes_per_pixel);
+  query_stream_free(&t->queries);
   t->uris = NULL;
   t->shapes = NULL;
 }
@@ -649,7 +671,10 @@ array_table_init_fmt(struct array_table* t,
 }
 
 static int
-read_array_shape(const char* abs_uri, int64_t* shape, uint8_t* rank)
+read_array_shape(const char* abs_uri,
+                 int64_t* shape,
+                 uint8_t* rank,
+                 uint8_t* bytes_per_pixel)
 {
   char path[BENCH_MAX_URI + 16];
   if (snprintf(path, sizeof path, "%s/zarr.json", abs_uri) >= (int)sizeof path)
@@ -661,6 +686,13 @@ read_array_shape(const char* abs_uri, int64_t* shape, uint8_t* rank)
   struct cslice s = { .beg = buf, .end = buf + len };
   static const struct json_query p[] = { { QUERY_KEY, .key = "shape" } };
   int rc = read_int_array(s, p, countof(p), shape, DAMACY_MAX_RANK, rank);
+  static const struct json_query p_type[] = { { QUERY_KEY,
+                                                .key = "data_type" } };
+  enum damacy_dtype dtype;
+  if (parse_dtype(s, p_type, countof(p_type), &dtype))
+    rc = 1;
+  else
+    *bytes_per_pixel = damacy_dtype_bpe(dtype);
   free(buf);
   return rc;
 }
@@ -702,7 +734,8 @@ array_table_init_uris(struct array_table* t,
     return 1;
   t->uris = (char*)calloc((size_t)cap, BENCH_MAX_URI);
   t->shapes = (int64_t*)calloc((size_t)cap * DAMACY_MAX_RANK, sizeof(int64_t));
-  if (!t->uris || !t->shapes)
+  t->bytes_per_pixel = calloc(cap, sizeof(*t->bytes_per_pixel));
+  if (!t->uris || !t->shapes || !t->bytes_per_pixel)
     return 1;
   t->rank = rank;
   t->n = 0;
@@ -729,7 +762,7 @@ array_table_init_uris(struct array_table* t,
       return 1;
     int64_t shp[DAMACY_MAX_RANK];
     uint8_t r = 0;
-    if (read_array_shape(slot, shp, &r)) {
+    if (read_array_shape(slot, shp, &r, &t->bytes_per_pixel[t->n])) {
       fprintf(stderr, "bench: cannot read shape from %s/zarr.json\n", slot);
       return 1;
     }
@@ -839,7 +872,20 @@ drive(struct damacy* d,
         uint64_t remaining = samples_target - pushed_local;
         in_pool = remaining < pool_cap ? (uint32_t)remaining : pool_cap;
         for (uint32_t i = 0; i < in_pool; ++i) {
-          if (sc->whole_planes) {
+          if (at->queries.records) {
+            const struct query_record* query =
+              &at->queries.records[pushed_local + i];
+            struct damacy_sample* sample = &pool[i];
+            sample->uri = &at->uris[(size_t)query->array * BENCH_MAX_URI];
+            sample->rank = 3;
+            for (unsigned axis = 0; axis < 3; ++axis) {
+              int64_t begin = query->origin[axis];
+              sample->axes[axis] = (struct damacy_axis_selection){
+                .kind = DAMACY_AXIS_INTERVAL,
+                .interval = { begin, begin + sc->sample_shape[axis] }
+              };
+            }
+          } else if (sc->whole_planes) {
             uint64_t index = pushed_local + i;
             uint32_t z = (uint32_t)(index % at->n);
             const int64_t* shape = &at->shapes[(size_t)z * DAMACY_MAX_RANK];
@@ -1002,7 +1048,10 @@ emit_metadata_counts(struct json_writer* jw,
 }
 
 static void
-emit_results(const struct scenario* sc, const struct run_metrics* rm, FILE* out)
+emit_results(const struct scenario* sc,
+             const struct run_metrics* rm,
+             const struct array_table* at,
+             FILE* out)
 {
   struct strbuf sb = { 0 };
   struct json_writer jw;
@@ -1062,6 +1111,21 @@ emit_results(const struct scenario* sc, const struct run_metrics* rm, FILE* out)
     jw_uint(&jw, rm->cold.idle.bytes);
     jw_key(&jw, "idle_device_writes");
     jw_uint(&jw, rm->cold.idle.writes);
+    jw_object_end(&jw);
+  }
+
+  if (at->queries.records) {
+    jw_key(&jw, "query_stream");
+    jw_object_begin(&jw);
+    jw_key(&jw, "samples_per_pass");
+    jw_uint(&jw, at->queries.count);
+    jw_key(&jw, "source_bytes_per_pass");
+    jw_uint(&jw, at->queries.source_bytes);
+    jw_key(&jw, "samples_per_source");
+    jw_array_begin(&jw);
+    for (uint32_t i = 0; i < at->n; ++i)
+      jw_uint(&jw, at->queries.samples_per_source[i]);
+    jw_array_end(&jw);
     jw_object_end(&jw);
   }
 
@@ -1159,6 +1223,10 @@ emit_results(const struct scenario* sc, const struct run_metrics* rm, FILE* out)
   jw_uint(&jw, rm->stats.metadata_latency.total_sleep_ns);
   jw_key(&jw, "metadata_latency_max_sleep_ns");
   jw_uint(&jw, rm->stats.metadata_latency.max_sleep_ns);
+  jw_key(&jw, "data_backend_read_jobs");
+  jw_uint(&jw, rm->stats.data_backend.read_jobs);
+  jw_key(&jw, "data_backend_read_max_active");
+  jw_uint(&jw, rm->stats.data_backend.read_max_active);
   jw_key(&jw, "metadata_backend_read_jobs");
   jw_uint(&jw, rm->stats.metadata_backend.read_jobs);
   jw_key(&jw, "metadata_backend_read_active");
@@ -1352,6 +1420,23 @@ main(int argc, char** argv)
       free(json_buf);
       return 1;
     }
+  }
+
+  if (sc.query_file[0] &&
+      (!at.bytes_per_pixel || at.n != sc.n_zarrs ||
+       query_stream_load(sc.query_file,
+                         at.n,
+                         at.shapes,
+                         DAMACY_MAX_RANK,
+                         at.bytes_per_pixel,
+                         sc.sample_shape,
+                         (uint64_t)sc.n_batches * sc.samples_per_batch,
+                         &at.queries))) {
+    fprintf(stderr,
+            "bench: query stream is invalid or does not match the arrays\n");
+    array_table_free(&at);
+    free(json_buf);
+    return 1;
   }
 
   if (sc.whole_planes) {
@@ -1552,9 +1637,8 @@ main(int argc, char** argv)
   if (getrusage(RUSAGE_SELF, &usage) == 0)
     rm.peak_host_bytes = (uint64_t)usage.ru_maxrss * 1024;
   pipeline_destroy(&pipeline);
+  emit_results(&sc, &rm, &at, stdout);
   array_table_free(&at);
-
-  emit_results(&sc, &rm, stdout);
   free(json_buf);
   return 0;
 }

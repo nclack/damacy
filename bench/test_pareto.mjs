@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {csv, devicePlottable, frontier, ioPlottable, matches} from "../docs/pareto/analysis.mjs";
+import {csv, devicePlottable, frontier, ioPlottable, matches, sensitivity} from "../docs/pareto/analysis.mjs";
 
 function point(id, fold, rate, condition = "cpu") {
   return {id, condition_id: condition, input_id: "image", backend: condition, workload: "crop",
@@ -31,6 +31,8 @@ test("Blosc block filters preserve raw controls", () => {
   assert(matches(raw, {block: "16384"}));
   assert(!matches(blosc, {block: "16384"}));
   assert(matches(blosc, {block: "65536"}));
+  blosc.setting.codec = "blosc-lz4";
+  assert(!matches(blosc, {block: "16384"}));
 });
 
 test("CSV keeps exact values and measurement identities", () => {
@@ -58,4 +60,26 @@ test("application and device counters cannot substitute for each other", () => {
   assert(devicePlottable(row));
   row.metrics.device_iops.median = NaN;
   assert(!devicePlottable(row));
+});
+
+test("sensitivity only compares matching settings and backends", () => {
+  const baseline = point("all", 2, 10);
+  baseline.input_id = "all-sources";
+  baseline.metrics.returned_gib_s = {median: 20};
+  baseline.reference_useful_gib_s = {median: 10};
+  const omission = structuredClone(baseline);
+  omission.id = "omit";
+  omission.input_id = "without-source";
+  omission.condition_id = "omitted";
+  omission.metrics.useful_gib_s.median = 8;
+  omission.metrics.returned_gib_s.median = 22;
+  omission.reference_useful_gib_s.median = 16;
+  const unrelated = structuredClone(omission);
+  unrelated.backend = "cuda";
+  const values = sensitivity([baseline, omission, unrelated], omission);
+  assert.equal(values.length, 1);
+  assert.equal(values[0].raw_relative_percent, -50);
+  assert(Math.abs(values[0].useful_percent + 20) < 1e-12);
+  assert(Math.abs(values[0].returned_percent - 10) < 1e-12);
+  assert.equal(frontier([baseline, omission]).length, 2);
 });
