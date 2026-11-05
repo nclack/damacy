@@ -57,4 +57,3 @@ uv run --script bench/pareto.py run "$study_root/plan.json" \
   "${study_backends[@]}" --storage 'Local NVMe; checked cold multi-batch passes'
 uv run --script bench/pareto.py report "$study_root/results-$study_backend" \
   --output "$study_root/report/data"
-

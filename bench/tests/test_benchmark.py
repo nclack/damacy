@@ -96,7 +96,7 @@ def check(binary, backend):
         assert 0 < result["counters"]["data_backend_read_max_active"] <= 2
         assert (
             result["counters"]["data_backend_read_jobs"]
-            >= result["counters"]["reads_issued"]
+            == result["counters"]["reads_issued"]
         )
 
         other = root / "other"

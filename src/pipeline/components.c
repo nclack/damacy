@@ -132,7 +132,6 @@ damacy_file_metadata_reader_create(uint32_t concurrency,
   reader->concurrency = concurrency;
   if (latency)
     reader->latency = *latency;
-  reader->file_store = (struct store_fs*)reader->store;
   *out = reader;
   return DAMACY_OK;
 }
