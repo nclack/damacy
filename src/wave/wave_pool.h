@@ -12,7 +12,7 @@
 
 struct damacy_batch_pool;
 struct damacy_stats;
-struct decoder_zstd;
+struct decoder_batch;
 struct gpu_budget;
 struct render_job_pool;
 struct store;
@@ -36,7 +36,7 @@ struct wave_pool
   uint8_t decode_done_ring_idx;
   uint8_t decode_done_recorded;
 
-  struct decoder_zstd* zstd_decoder;
+  struct decoder_batch* decoder;
 
   uint64_t dev_per_wave;
   uint64_t max_chunk_uncompressed_bytes;

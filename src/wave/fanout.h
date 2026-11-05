@@ -1,11 +1,7 @@
-// Pinned-host + device SOA fanout used by the zstd decoder batch path.
-// Owns alloc / free / upload / grow primitives; wave/ packages a pair
-// of these per wave and grows them independently when a wave's
-// substream count outpaces the current cap.
 #pragma once
 
 #include "damacy.h"         // enum damacy_status
-#include "decoder/blosc1.h" // struct nvcomp_fanout
+#include "decoder/blosc1.h" // struct decode_fanout
 
 #include <cuda.h>
 #include <stddef.h>
@@ -13,14 +9,16 @@
 
 struct gpu_budget;
 
-// Host-resident mirror of nvcomp_fanout. Pointer slots hold device
+// Host-resident mirror of decode_fanout. Pointer slots hold device
 // addresses; fanout_upload pushes the four arrays to the device SOA.
-struct nvcomp_fanout_host
+struct decode_fanout_host
 {
   const void** comp_ptrs;
   size_t* comp_sizes;
   void** decomp_ptrs;
   size_t* decomp_buf_sizes;
+  struct gpu_memcpy_op* memcpy_ops;
+  uint32_t* block_chunk_map;
 };
 
 // Next power of 2 ≥ v, with a floor of 1. SIZE_MAX wraps to 0; callers
@@ -30,26 +28,26 @@ struct nvcomp_fanout_host
 size_t
 fanout_next_pow2(size_t v);
 
-// 4 pinned-host + 4 device allocs for one nvcomp fanout. Returns 0 ok,
+// Pinned-host and device allocations for one nvcomp fanout. Returns 0 ok,
 // 1 on first failure (logged). Partial-failure cleanup relies on `h`
 // and `d` being zero-initialized by the caller; the matching
 // fanout_free walks each pointer NULL-safely.
 int
-fanout_alloc_pinned(struct nvcomp_fanout_host* h,
-                    struct nvcomp_fanout* d,
+fanout_alloc_pinned(struct decode_fanout_host* h,
+                    struct decode_fanout* d,
                     size_t n);
 
-// Free the 4 pinned-host + 4 device buffers a prior fanout_alloc_pinned
+// Free the pinned-host and device buffers a prior fanout_alloc_pinned
 // allocated, zero the SOA structs so they're safe to re-allocate into.
 // NULL-safe per pointer.
 void
-fanout_free_pinned(struct nvcomp_fanout_host* h, struct nvcomp_fanout* d);
+fanout_free_pinned(struct decode_fanout_host* h, struct decode_fanout* d);
 
 // Copy the 4 SOA arrays in lockstep onto `s`.
 enum damacy_status
 fanout_upload(CUstream s,
-              const struct nvcomp_fanout* d,
-              const struct nvcomp_fanout_host* h,
+              const struct decode_fanout* d,
+              const struct decode_fanout_host* h,
               size_t n);
 
 // Grow the fanout SOA pair to fit `need` substreams. *cap is the
@@ -66,8 +64,8 @@ fanout_upload(CUstream s,
 // that wave is between bind and kick_input's fanout_upload, so the
 // other wave's input-stream work is independent.
 enum damacy_status
-fanout_grow(struct nvcomp_fanout_host* h,
-            struct nvcomp_fanout* d,
+fanout_grow(struct decode_fanout_host* h,
+            struct decode_fanout* d,
             uint32_t* cap,
             size_t need,
             uint32_t max_substreams_per_wave,

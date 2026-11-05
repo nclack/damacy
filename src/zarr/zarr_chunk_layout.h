@@ -19,15 +19,16 @@ extern "C"
 
   struct chunk_layout
   {
-    uint8_t codec_id;   // CODEC_BLOSC_ZSTD currently the only probed codec
+    uint8_t codec_id;
     uint8_t typesize;   // bytes per element (1..8)
     uint8_t shuffle;    // byte shuffle flag
     uint8_t bitshuffle; // bit shuffle flag
-    uint8_t dont_split; // header flag bit 4; always 1 for blosc1-zstd
+    uint8_t dont_split;
     uint8_t memcpyed;   // header flag bit 1
     uint32_t blocksize; // bytes per blosc block
     uint32_t nbytes;    // uncompressed bytes per chunk
-    uint32_t nblocks;   // == ceil(nbytes / blocksize); <= MAX_BLOCKS_PER_CHUNK
+    uint32_t nblocks;
+    uint32_t nsubstreams;
   };
 
   int zarr_chunk_layout_parse_header(const void* header,

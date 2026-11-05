@@ -77,12 +77,15 @@ load_unshuffled(const uint8_t* chunk_base,
                 int64_t elem_idx,
                 uint8_t typesize,
                 uint32_t blocksize,
+                uint32_t chunk_bytes,
                 uint8_t src_dtype)
 {
   const uint64_t elem_byte = (uint64_t)elem_idx * (uint64_t)typesize;
   const uint64_t block_idx = elem_byte / (uint64_t)blocksize;
   const uint32_t intra_byte = (uint32_t)(elem_byte - block_idx * blocksize);
-  const uint32_t elems_per_block = blocksize / typesize;
+  const uint32_t block_bytes =
+    min((uint64_t)blocksize, chunk_bytes - block_idx * blocksize);
+  const uint32_t elems_per_block = block_bytes / typesize;
   const uint32_t within = intra_byte / typesize;
   const uint8_t* block = chunk_base + (size_t)block_idx * blocksize;
   uint8_t tmp[8];
@@ -103,16 +106,21 @@ load_bitunshuffled(const uint8_t* chunk_base,
                    int64_t elem_idx,
                    uint8_t typesize,
                    uint32_t blocksize,
+                   uint32_t chunk_bytes,
                    uint8_t src_dtype)
 {
-  const uint32_t elems_per_block = blocksize / typesize;
+  const uint64_t elem_byte = (uint64_t)elem_idx * typesize;
+  const uint64_t block_idx = elem_byte / blocksize;
+  const uint32_t block_bytes =
+    min((uint64_t)blocksize, chunk_bytes - block_idx * blocksize);
+  const uint32_t elems_per_block = block_bytes / typesize;
+  const uint32_t e = (uint32_t)(elem_byte - block_idx * blocksize) / typesize;
+  const uint8_t* block = chunk_base + (size_t)block_idx * blocksize;
+  if (elems_per_block % 8u)
+    return load_source<output, dst_t>(block + e * typesize, src_dtype);
   const uint32_t bytes_per_plane = elems_per_block >> 3;
-  const uint64_t block_idx = (uint64_t)elem_idx / elems_per_block;
-  const uint32_t e =
-    (uint32_t)((uint64_t)elem_idx - block_idx * (uint64_t)elems_per_block);
   const uint32_t e_byte = e >> 3;
   const uint32_t e_bit = e & 7u;
-  const uint8_t* block = chunk_base + (size_t)block_idx * blocksize;
   uint8_t tmp[8];
 #pragma unroll
   for (uint32_t bb = 0; bb < 8; ++bb) {
@@ -171,12 +179,14 @@ load_chunk_value(const struct sample_plan& s,
                                             source,
                                             c.shuffle_typesize,
                                             c.shuffle_blocksize,
+                                            s.layout.nbytes,
                                             s.src_dtype);
     case ASSEMBLE_SHUFFLE_BIT:
       return load_bitunshuffled<output, dst_t>(chunk_base,
                                                source,
                                                c.shuffle_typesize,
                                                c.shuffle_blocksize,
+                                               s.layout.nbytes,
                                                s.src_dtype);
     default:
       return load_source<output, dst_t>(

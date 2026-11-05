@@ -92,10 +92,10 @@ _Static_assert(DAMACY_HARD_MAX_SUBSTREAMS_PER_WAVE_U64 <= UINT32_MAX,
 // overflow in the nblocks ceil-div for adversarial inputs.
 #define DAMACY_BLOSC_MAX_CHUNK_UNCOMPRESSED_BYTES (16ull << 20) // 16 MB
 
-// Initial substream-batch cap for the pool-shared zstd decoder + per-wave
+// Initial substream-batch cap for the pool-shared decoder + per-wave
 // fanout SOAs. Sized off a typical wave (hundreds of substreams);
 // grows on demand when a wave's actual substream count exceeds the cap.
-#define DAMACY_BLOSC_ZSTD_INITIAL_BATCH_CAP 1024u
+#define DAMACY_DECODER_INITIAL_BATCH_CAP 1024u
 
 #define DAMACY_MAX_SUBSTREAMS_PER_WAVE(chunks, substreams_per_chunk)           \
   ((uint32_t)((uint64_t)(chunks) * (uint64_t)(substreams_per_chunk)))

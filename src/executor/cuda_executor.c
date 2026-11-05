@@ -350,7 +350,7 @@ prepare_layouts(struct cuda_executor* self,
     enum compression_codec codec = array->metadata.inner_codec.id;
     if (codec == CODEC_NONE || codec == CODEC_ZSTD)
       continue;
-    if (codec != CODEC_BLOSC_ZSTD)
+    if (codec != CODEC_BLOSC_ZSTD && codec != CODEC_BLOSC_LZ4)
       return DAMACY_DECODE;
     const struct plan_chunk* chunk = NULL;
     for (uint32_t i = 0; i < plan->n_chunks; ++i)

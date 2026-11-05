@@ -80,10 +80,32 @@ if(NOT DAMACY_FUZZ)
     set_tests_properties(test_spatial PROPERTIES LABELS tsan TIMEOUT 120)
     add_damacy_test(test_cpu_pipeline damacy test_fixture Threads::Threads)
     add_damacy_test(test_cpu_executor cpu_executor)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_link_options(
+            test_cpu_executor
+            PRIVATE "LINKER:--wrap=threadpool_for_n_dynamic"
+                    "LINKER:--wrap=platform_thread_join"
+        )
+    endif()
+    set_tests_properties(test_cpu_executor PROPERTIES LABELS tsan TIMEOUT 30)
+    add_damacy_test(test_blosc_codecs damacy test_fixture PkgConfig::BLOSC PkgConfig::ZSTD)
+    set_tests_properties(test_blosc_codecs PROPERTIES TIMEOUT 180)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_compile_definitions(
+            test_blosc_codecs
+            PRIVATE DAMACY_TEST_BLOSC_THREADS=1
+        )
+        target_link_options(
+            test_blosc_codecs
+            PRIVATE "LINKER:--wrap=blosc_decompress_ctx"
+        )
+    endif()
     set_tests_properties(test_cpu_pipeline PROPERTIES TIMEOUT 120)
 endif()
 
 if(DAMACY_CUDA)
+    target_compile_definitions(test_blosc_codecs PRIVATE DAMACY_TEST_CUDA=1)
+    target_link_libraries(test_blosc_codecs PRIVATE CUDA::cudart_static)
     add_library(cuda_test_util STATIC cuda_init.c cuda_init.h)
     target_include_directories(
         cuda_test_util

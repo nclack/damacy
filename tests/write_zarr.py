@@ -28,14 +28,15 @@ def parse_shape(s: str) -> tuple[int, ...]:
     return tuple(int(x) for x in s.split(","))
 
 
-def make_compressors(codec: str, dtype: np.dtype, shuffle: str):
+def make_compressors(codec: str, dtype: np.dtype, shuffle: str, blocksize: int = 0):
     if codec == "none":
         return []
     if codec == "zstd":
         return [ZstdCodec(level=3, checksum=False)]
-    # blosc-zstd-l<N>: clevel N; lower clevels split into smaller blocks.
-    blosc_prefix = "blosc-zstd"
-    if codec.startswith(blosc_prefix):
+    for cname in ("zstd", "lz4hc", "lz4"):
+        blosc_prefix = f"blosc-{cname}"
+        if not codec.startswith(blosc_prefix):
+            continue
         suffix = codec[len(blosc_prefix) :]
         if suffix == "":
             clevel = 3
@@ -45,8 +46,9 @@ def make_compressors(codec: str, dtype: np.dtype, shuffle: str):
             raise SystemExit(f"unknown --codec {codec!r}")
         return [
             BloscCodec(
-                cname="zstd",
+                cname=cname,
                 clevel=clevel,
+                blocksize=blocksize,
                 shuffle=shuffle,
                 typesize=int(dtype.itemsize),
             )
@@ -80,11 +82,13 @@ def main() -> int:
     ap.add_argument(
         "--codec",
         default="zstd",
-        help="inner codec: none | zstd | blosc-zstd | blosc-zstd-l<N>",
+        help="inner codec: none | zstd | blosc-{zstd,lz4,lz4hc}[-l<N>]",
     )
     ap.add_argument(
         "--shuffle", choices=["noshuffle", "shuffle", "bitshuffle"], default="shuffle"
     )
+    ap.add_argument("--blocksize", type=int, default=0)
+    ap.add_argument("--unsharded", action="store_true")
     args = ap.parse_args()
 
     if not (len(args.shape) == len(args.inner) == len(args.shard)):
@@ -111,8 +115,10 @@ def main() -> int:
         shape=args.shape,
         dtype=np_dtype,
         chunks=args.inner,
-        shards=args.shard,
-        compressors=make_compressors(args.codec, np_dtype, args.shuffle),
+        shards=None if args.unsharded else args.shard,
+        compressors=make_compressors(
+            args.codec, np_dtype, args.shuffle, args.blocksize
+        ),
     )
     arr[...] = data
     return 0

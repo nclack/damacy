@@ -244,7 +244,7 @@ add_src_lib(planner SOURCES planner/planner.h planner/planner.c
 add_cuda_lib(decoder
     SOURCES decoder/decoder.h
             decoder/decoder_check.h
-            decoder/decoder_zstd.h decoder/decoder_zstd.c
+            decoder/decoder_batch.h decoder/decoder_batch.c
             decoder/decoder_memcpy.h decoder/decoder_memcpy.cu
             decoder/blosc1.h
             decoder/blosc1_parse.h decoder/blosc1_parse.cu

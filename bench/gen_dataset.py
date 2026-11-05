@@ -33,10 +33,10 @@ def make_compressors(codec: str, clevel: int, dtype: np.dtype):
         return []
     if codec == "zstd":
         return [ZstdCodec(level=clevel, checksum=False)]
-    if codec == "blosc-zstd":
+    if codec in ("blosc-zstd", "blosc-lz4", "blosc-lz4hc"):
         return [
             BloscCodec(
-                cname=BloscCname.zstd,
+                cname=BloscCname(codec.removeprefix("blosc-")),
                 clevel=clevel,
                 shuffle=BloscShuffle.shuffle,
                 typesize=int(dtype.itemsize),
@@ -61,7 +61,9 @@ def main() -> int:
     )
     ap.add_argument("--dtype", default="uint16")
     ap.add_argument(
-        "--codec", default="zstd", choices=["none", "zstd", "blosc-zstd"]
+        "--codec",
+        default="zstd",
+        choices=["none", "zstd", "blosc-zstd", "blosc-lz4", "blosc-lz4hc"],
     )
     ap.add_argument(
         "--clevel", type=int, default=3, help="compression level passed to zstd / blosc"

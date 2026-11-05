@@ -70,6 +70,13 @@ ordinary RAM for input, decoded chunks, codec workspace, and output. It decodes
 each distinct source chunk once per batch, then copies its intersections into
 all samples that use it. There is no persistent decoded-chunk cache.
 
+Both executors support raw bytes, Zstd, and Blosc with `zstd`, `lz4`, or
+`lz4hc`, including byte shuffle and bitshuffle. The CPU executor keeps one
+C-Blosc thread per decode worker. The CUDA executor shares decoder scratch
+between Zstd and LZ4 on its decode stream; split Blosc blocks count toward
+`CudaLimits.max_substreams_per_chunk`, and decoder storage grows within the
+configured GPU memory limit.
+
 ## Select CUDA execution
 
 In a CUDA-enabled build, replace the executor with:
@@ -183,7 +190,7 @@ from the Python value objects.
 | `PlanLimits.max_shards_per_sample` | Maximum number of shard files touched by one sample. |
 | `PlanLimits.max_plan_bytes` | Owned storage per prepared plan, including index arrays; also caps copied index data per queued query. |
 | `CpuLimits.max_memory_bytes` | CPU executor's buffers, codec workspace, active read plans, and temporary read-planning scratch. |
-| `CpuLimits.decode_workers` | Total decoding/assembly workers, including the calling scheduler thread. |
+| `CpuLimits.decode_workers` | Background decoding/assembly workers; the scheduler runs separately. |
 | `CpuLimits.chunks_per_input_buffer` | Chunks each of the two encoded-input buffers holds; from `decode_workers` to 16384. |
 | `FileReader.workers` | Bulk I/O workers, separate from decoding workers. |
 | `FileReader.max_inflight_reads` | Bulk read capacity; execution respects this bound and retries saturation. |
@@ -235,6 +242,10 @@ Each of its two encoded-input buffers holds `chunks_per_input_buffer` chunks
 `min(decode_workers, chunks_per_input_buffer)` chunks, so one buffer can hold
 several reads at once; with one decode worker, reads do not merge. Submission
 also respects the reader limit. Decoder workspaces remain per worker.
+
+Decoding and assembly run in the background. When a group finishes, the
+scheduler refills its input buffer while other reads or decoding continue.
+Shutdown waits for active readers and decoders before freeing their buffers.
 
 The two input buffers reserve
 `2 * chunks_per_input_buffer * max_encoded_chunk_bytes` bytes, plus per-chunk

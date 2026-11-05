@@ -13,13 +13,15 @@ constexpr uint32_t kThreadsPerBlock = 256;
 // at the sizes we care about (typically <= 8K statuses per codec batch).
 __global__ void
 status_reduce_kernel(const int* __restrict__ d_statuses,
+                     const size_t* __restrict__ d_actual_sizes,
+                     const size_t* __restrict__ d_expected_sizes,
                      uint32_t* __restrict__ d_counter,
                      uint32_t n)
 {
   uint32_t local = 0;
   for (uint32_t i = blockIdx.x * blockDim.x + threadIdx.x; i < n;
        i += gridDim.x * blockDim.x) {
-    if (d_statuses[i] != 0)
+    if (d_statuses[i] != 0 || d_actual_sizes[i] != d_expected_sizes[i])
       ++local;
   }
 #pragma unroll
@@ -34,6 +36,8 @@ status_reduce_kernel(const int* __restrict__ d_statuses,
 extern "C" int
 decoder_status_reduce_launch(CUstream stream,
                              const int* d_statuses,
+                             const size_t* d_actual_sizes,
+                             const size_t* d_expected_sizes,
                              uint32_t* d_error_counter,
                              uint32_t n)
 {
@@ -46,6 +50,6 @@ decoder_status_reduce_launch(CUstream stream,
   if (blocks > 64u)
     blocks = 64u;
   status_reduce_kernel<<<blocks, kThreadsPerBlock, 0, (cudaStream_t)stream>>>(
-    d_statuses, d_error_counter, n);
+    d_statuses, d_actual_sizes, d_expected_sizes, d_error_counter, n);
   return decoder_launch_status_check("decoder_status_reduce_launch");
 }

@@ -187,10 +187,10 @@ request_layout(struct fixture* fx,
 }
 
 static int
-test_probes_blosc_zstd_layout(void)
+probe_blosc_layout(const char* codec, uint8_t codec_id)
 {
   struct fixture fx = { 0 };
-  EXPECT(fixture_setup(&fx, "blosc-zstd") == 0);
+  EXPECT(fixture_setup(&fx, codec) == 0);
   struct prefetch_handle h_shard = { 0 };
   uint64_t shard_coord[DAMACY_MAX_RANK] = { 0 };
   EXPECT(warm_upstream(&fx, "foo", 0, 0, &h_shard, shard_coord) == 0);
@@ -207,7 +207,7 @@ test_probes_blosc_zstd_layout(void)
     (const struct chunk_layout*)prefetch_cache_try_get(fx.chunk_layout_cache,
                                                        h);
   EXPECT(layout);
-  EXPECT(layout->codec_id == CODEC_BLOSC_ZSTD);
+  EXPECT(layout->codec_id == codec_id);
   EXPECT(layout->typesize == 2);
   EXPECT(layout->nbytes > 0);
   EXPECT(layout->blocksize > 0);
@@ -269,59 +269,12 @@ test_probes_non_origin_shard_when_origin_missing(void)
   return 0;
 }
 
-// Guards against silently returning NULL for unsupported codecs (would
-// reach READY then fail late at plan time).
-static const char* BLOSC_LZ4_ZARR_JSON =
-  "{"
-  "\"zarr_format\":3,"
-  "\"node_type\":\"array\","
-  "\"shape\":[16,32],"
-  "\"data_type\":\"uint16\","
-  "\"chunk_grid\":{\"name\":\"regular\",\"configuration\":{"
-  "\"chunk_shape\":[16,32]}},"
-  "\"chunk_key_encoding\":{\"name\":\"default\",\"configuration\":{"
-  "\"separator\":\"/\"}},"
-  "\"fill_value\":0,"
-  "\"codecs\":[{\"name\":\"sharding_indexed\",\"configuration\":{"
-  "\"chunk_shape\":[8,16],"
-  "\"codecs\":[{\"name\":\"bytes\",\"configuration\":{\"endian\":\"little\"}},"
-  "{\"name\":\"blosc\",\"configuration\":{\"cname\":\"lz4\"}}],"
-  "\"index_codecs\":[{\"name\":\"bytes\",\"configuration\":{"
-  "\"endian\":\"little\"}},{\"name\":\"crc32c\"}],"
-  "\"index_location\":\"end\"}}]"
-  "}";
-
 static int
-test_unsupported_codec_errors(void)
+test_probes_blosc_layouts(void)
 {
-  struct fixture fx = { 0 };
-  EXPECT(fixture_setup_caches(&fx) == 0);
-
-  char path[512];
-  snprintf(path, sizeof path, "%s/foo", fx.root);
-  EXPECT(mkdir(path, 0755) == 0);
-  snprintf(path, sizeof path, "%s/foo/zarr.json", fx.root);
-  EXPECT(fixture_write_file(path, BLOSC_LZ4_ZARR_JSON) == 0);
-
-  struct prefetch_gate gate;
-  prefetch_gate_init(&gate);
-  struct prefetch_handle h_meta = prefetch_cache_request(
-    fx.array_meta_cache, hash_fnv1a_str("foo"), "foo", 0, &gate);
-  EXPECT(prefetch_handle_valid(h_meta));
-  EXPECT(prefetch_gate_is_ready(&gate));
-  EXPECT(!prefetch_gate_has_error(&gate));
-
-  prefetch_gate_init(&gate);
-  struct prefetch_handle h = request_layout(&fx, "foo", NULL, NULL, 0, &gate);
-  EXPECT(prefetch_handle_valid(h));
-  EXPECT(prefetch_gate_has_error(&gate));
-
-  int err = 0;
-  EXPECT(prefetch_cache_query(fx.chunk_layout_cache, h, NULL, &err) ==
-         PREFETCH_STATE_ERROR);
-  EXPECT(err == DAMACY_DECODE);
-
-  fixture_teardown(&fx);
+  EXPECT(probe_blosc_layout("blosc-zstd", CODEC_BLOSC_ZSTD) == 0);
+  EXPECT(probe_blosc_layout("blosc-lz4", CODEC_BLOSC_LZ4) == 0);
+  EXPECT(probe_blosc_layout("blosc-lz4hc", CODEC_BLOSC_LZ4) == 0);
   return 0;
 }
 
@@ -351,13 +304,41 @@ test_dedup_returns_same_layout(void)
   return 0;
 }
 
+static int
+test_split_layout_limits(void)
+{
+  for (unsigned typesize = 1; typesize <= 8; typesize *= 2) {
+    for (unsigned split = 0; split < 2; ++split) {
+      unsigned char header[16] = { 2, 1, 0x20, (unsigned char)typesize };
+      if (!split)
+        header[2] |= 0x10;
+      fixture_write_le32(header + 4, 700 * typesize);
+      fixture_write_le32(header + 8, 256 * typesize);
+      fixture_write_le32(header + 12, 128);
+      struct chunk_layout layout = { 0 };
+      uint32_t streams = 2 * (split ? typesize : 1) + 1;
+      EXPECT(zarr_chunk_layout_parse_header(
+               header, 128, CODEC_BLOSC_LZ4, streams, &layout) == 0);
+      EXPECT(layout.nblocks == 3 && layout.nsubstreams == streams);
+      EXPECT(zarr_chunk_layout_parse_header(
+               header, 128, CODEC_BLOSC_LZ4, streams - 1, &layout) != 0);
+      header[2] |= 2;
+      fixture_write_le32(header + 12, 700 * typesize + 16);
+      EXPECT(
+        zarr_chunk_layout_parse_header(
+          header, 700 * typesize + 16, CODEC_BLOSC_LZ4, streams, &layout) == 0);
+    }
+  }
+  return 0;
+}
+
 int
 main(void)
 {
-  RUN(test_probes_blosc_zstd_layout);
+  RUN(test_probes_blosc_layouts);
+  RUN(test_split_layout_limits);
   RUN(test_non_blosc_codec_yields_no_layout);
   RUN(test_probes_non_origin_shard_when_origin_missing);
-  RUN(test_unsupported_codec_errors);
   RUN(test_dedup_returns_same_layout);
   log_info("all tests passed");
   return 0;

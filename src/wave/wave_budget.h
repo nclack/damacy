@@ -40,7 +40,6 @@ struct wave_alloc_summary
 
 enum damacy_status
 wave_predict_bytes(uint32_t max_chunks_per_wave,
-                   uint32_t max_substreams_per_wave,
                    uint64_t input_staging_bytes,
                    uint64_t dev_decompressed_bytes,
                    struct wave_alloc_summary* out);
@@ -75,5 +74,5 @@ decoder_initial_caps(uint32_t max_chunks_per_wave,
                      uint64_t dev_per_wave,
                      uint64_t max_chunk_uncompressed_bytes,
                      size_t* out_substreams,
-                     size_t* out_zstd_per,
+                     size_t* out_block_bytes,
                      size_t* out_total_uncompressed);

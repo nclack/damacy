@@ -78,7 +78,7 @@ plan's chunk-use links. Before reading, it uses the shared coalescer to merge
 adjacent or overlapping ranges within each shard and interleave merged reads
 across shards. Each unique chunk retains its offset within a merged read; its
 uses still control output assembly. CPU reads use exact encoded byte ranges,
-without CUDA's page alignment. It handles raw bytes, zstd, and C-Blosc zstd
+without CUDA's page alignment. It handles raw bytes, zstd, and C-Blosc zstd/LZ4/LZ4HC
 with no, byte, or bit shuffle. It copies clipped chunk intersections, gathers
 indexed positions, and casts supported source types to `f32` or `bf16`,
 including fill-only chunks. The CUDA executor currently retains its per-use

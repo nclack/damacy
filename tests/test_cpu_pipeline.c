@@ -132,11 +132,13 @@ test_reader_workers_limited_to_cpus(void)
 static int
 test_codecs_and_types(void)
 {
-  const char* codecs[] = { "none", "zstd", "blosc-zstd" };
+  const char* codecs[] = {
+    "none", "zstd", "blosc-zstd", "blosc-lz4", "blosc-lz4hc"
+  };
   const char* types[] = { "uint8", "uint16",  "int16",  "uint32",
                           "int32", "float16", "float32" };
   const int unsigned_bits[] = { 8, 16, 0, 32, 0, 0, 0 };
-  for (unsigned ci = 0; ci < 3; ++ci)
+  for (unsigned ci = 0; ci < sizeof(codecs) / sizeof(codecs[0]); ++ci)
     for (unsigned ti = 0; ti < 7; ++ti) {
       char root[] = "/tmp/damacy_cpu_XXXXXX";
       EXPECT(mkdtemp(root));
