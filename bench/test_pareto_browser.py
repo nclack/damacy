@@ -219,7 +219,7 @@ def verify_table(page, rows, view):
     if view == "device":
         metrics += [
             ("IOPS (reads/s)", "device_iops"),
-            ("Bandwidth (GiB/s)", "device_read_gib_s"),
+            ("Storage bandwidth (GiB/s)", "device_read_gib_s"),
         ]
     assert {row["id"] for row in cells} == set(by_id)
     for row in cells:
@@ -501,6 +501,11 @@ def check(assets, output, actual):
                                 path=str(output / f"mixture-{entry['id']}-{theme}.png"),
                                 full_page=True,
                             )
+                            page.locator(".primary-metrics").screenshot(
+                                path=str(
+                                    output / f"measurements-{entry['id']}-{theme}.png"
+                                )
+                            )
                             detail = page.locator("#detail")
                             detail.scroll_into_view_if_needed()
                             for section, heading in (
@@ -546,7 +551,7 @@ def check(assets, output, actual):
                 assert page.locator(".primary-metrics dt").all_text_contents() == [
                     "Image throughput",
                     "Compression ratio",
-                    "Bandwidth",
+                    "Storage bandwidth",
                     "IOPS",
                 ]
                 diagnostics = page.locator(".diagnostics")
@@ -595,7 +600,7 @@ def check(assets, output, actual):
                     )
                     for column, metric in (
                         ("iops", "device_iops"),
-                        ("bandwidth_gib_s", "device_read_gib_s"),
+                        ("storage_bandwidth_gib_s", "device_read_gib_s"),
                     ):
                         value = original["metrics"].get(metric)
                         assert (

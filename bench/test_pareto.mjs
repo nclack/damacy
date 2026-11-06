@@ -54,7 +54,7 @@ test("application and device counters cannot substitute for each other", () => {
   const output = csv([row]);
   assert(!output.includes('"12345.678901234"'));
   assert(!output.includes('"1.2345678901234"'));
-  assert(output.includes('"bandwidth_gib_s_median"'));
+  assert(output.includes('"storage_bandwidth_gib_s_median"'));
   assert(output.includes('"iops_median"'));
   assert(!output.includes('"read_iops_median"'));
   row.metrics.device_iops = {median: 17};
