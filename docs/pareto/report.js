@@ -247,7 +247,7 @@ function panel(rows, scales, isIO) {
   const radius = row => 4 + Math.sqrt(row.setting.chunk_bytes / 16384) * .6;
   points.append("circle").attr("class", "point").attr("tabindex", 0).attr("role", "button")
     .attr("aria-pressed", row => row.id === selected).attr("aria-controls", "detail")
-    .attr("aria-label", row => `${codecs[row.setting.codec]}, chunk ${kib(row.setting.chunk_bytes)}, block ${kib(row.setting.block_bytes)}, ${isIO ? `${number(xValue(row))} IOPS, ${number(yMetric(row).median)} GiB/s` : `${number(yMetric(row).median)} GiB/s image throughput, ${number(row.compression_fold)} fold`}`)
+    .attr("aria-label", row => `${codecs[row.setting.codec]}, chunk ${kib(row.setting.chunk_bytes)}, block ${kib(row.setting.block_bytes)}, ${isIO ? `${number(xValue(row))} IOPS, ${number(yMetric(row).median)} GiB/s bandwidth` : `${number(yMetric(row).median)} GiB/s image throughput, ${number(row.compression_fold)}× compression ratio`}`)
     .attr("cx", row => x(xValue(row))).attr("cy", row => y(yMetric(row).median))
     .attr("r", radius)
     .attr("fill", row => isIO || ids.has(row.id) ? colors[row.setting.codec] : "var(--surface)")
@@ -342,7 +342,7 @@ function render() {
   $("frontier-filter").hidden = isIO;
   $("plot-note").textContent = isIO
     ? "Bandwidth counts bytes read from the storage system per second; IOPS counts completed read operations per second. Both are summed across its drives. More IOPS alone does not imply higher image throughput. Points show medians; bars show observed ranges."
-    : "Image throughput counts requested pixels in their source data type per second. Compression ratio is image bytes divided by stored file bytes. Upper right is better. Filled, connected points form each panel’s observed frontier. Points show medians; bars show observed ranges. All panels use the same axes.";
+    : "Image throughput counts requested pixel bytes per second in the source data type. Compression ratio is image bytes divided by stored file bytes. Upper right is better. Filled, connected points form each panel’s observed frontier. Points show medians; bars show observed ranges. All panels use the same axes.";
   const count = groups(filtered).reduce((total, rows) => total + frontier(rows).length, 0);
   $("count").textContent = `${isIO ? `${valid.length} settings with storage measurements` : `${filtered.length} settings · ${count} on the observed frontiers`} · larger markers indicate larger chunks`;
   table(filtered, isIO);
@@ -380,7 +380,10 @@ async function loadStudy() {
   const system = $("storage-content");
   system.replaceChildren(element("p", "All panels in this study use this storage system. Bandwidth and IOPS are Linux counters summed over its drives, including metadata, read-ahead, and other processes. They are not internal SSD flash-operation counts."));
   const models = new Map();
-  for (const device of storage?.devices || []) models.set(device.model, (models.get(device.model) || 0) + 1);
+  for (const device of storage?.devices || []) {
+    const model = `${device.model}${device.bytes ? ` (${number(device.bytes / 10 ** 12)} TB each)` : ""}`;
+    models.set(model, (models.get(model) || 0) + 1);
+  }
   const gpu = context.machine.gpu?.split("\n")[0]?.split(",");
   const filesystem = storage?.filesystem || context.machine.filesystem?.filesystems?.[0];
   fields(system, [
