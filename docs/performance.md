@@ -106,7 +106,7 @@ with 16 KiB requested blocks reaches **7.173 GiB/s at 1.463× compression**.
 Whole-chunk blocks reach **2.726 GiB/s at 1.473×**. That small compression gain
 comes with a large throughput cost, so block size remains an important parameter.
 
-**There is no consistent Turin advantage in this sweep.** Random-crop medians are
+**There is no consistent Turin advantage in this sweep.** The best random-crop medians are
 close across the machines. For baked 256² Blosc-LZ4, the H100 node's CPU reaches
 10.784 GiB/s versus 7.844 GiB/s on Turin, with separated repeat ranges. These are
 different hosts and storage arrays. CPU/GPU training comparisons also need to

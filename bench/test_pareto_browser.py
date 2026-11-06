@@ -558,7 +558,13 @@ def verify_crop_study(page, document, output):
             verify_scales(page, "device")
             verify_table(page, expected, "device")
             page.select_option("#view", "pareto")
-        page.locator("circle.point").first.click()
+        point = page.locator("circle.point").first
+        point.focus()
+        point.press("Enter")
+        assert point.get_attribute("aria-pressed") == "true"
+        selected_id = point.evaluate("node => node.__data__.id")
+        page.locator(f'#rows button[data-setting="{selected_id}"]').click()
+        assert point.get_attribute("aria-pressed") == "true"
         detail = page.locator("#detail-content").inner_text()
         assert "Samples/s" in detail
         if access == "baked":
