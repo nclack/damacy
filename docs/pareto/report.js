@@ -238,6 +238,7 @@ function panel(rows, scales, isIO, isCrop = false) {
   wrapper.className = "panel";
   const backend = first.backend === "cpu" ? "CPU" : "CUDA";
   wrapper.append(element("h2", backend));
+  wrapper.append(element("p", first.backend === "cpu" ? "Output: system RAM." : "Output: GPU memory."));
   $("plots").append(wrapper);
   const padding = parseFloat(getComputedStyle(wrapper).paddingLeft) + parseFloat(getComputedStyle(wrapper).paddingRight);
   const width = Math.max(240, wrapper.clientWidth - padding);
