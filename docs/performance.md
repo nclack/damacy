@@ -91,7 +91,8 @@ November 5 EPYC study below describes a different machine.
 
 Across all settings, the median min–max throughput spread was 1.12% of the
 median, with a maximum of 12.08%. Bracketing raw-control spreads ranged from
-0.70% to 7.87%. These observed ranges describe two repetitions, not confidence
+0.70% to 7.87%. Settings have two repetitions; control ranges span four
+bracketing executions. These are observed min–max ranges, not confidence
 intervals or a reliable ordering of close settings.
 
 All **1,374 measured passes** verified zero resident shard-data pages and

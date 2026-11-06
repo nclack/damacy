@@ -230,6 +230,7 @@ function panel(rows, scales, isIO) {
   const padding = parseFloat(getComputedStyle(wrapper).paddingLeft) + parseFloat(getComputedStyle(wrapper).paddingRight);
   const width = Math.max(240, wrapper.clientWidth - padding);
   const height = Math.max(260, Math.min(325, width * .65 + 70)), left = 57, right = 18, top = 18, bottom = 54;
+  const xTicks = isIO ? Math.max(2, Math.min(5, Math.floor((width - left - right) / 55))) : 5;
   const x = (isIO ? d3.scaleLinear() : d3.scaleLog()).domain(scales.x).range([left, width - right]);
   if (isIO) x.nice();
   const y = d3.scaleLinear().domain(scales.y).nice().range([height - bottom, top]);
@@ -242,7 +243,7 @@ function panel(rows, scales, isIO) {
   svg.append("g").attr("class", "grid").attr("transform", `translate(${left},0)`)
     .call(d3.axisLeft(y).ticks(5).tickSize(-(width - left - right)).tickFormat(""));
   svg.append("g").attr("transform", `translate(0,${height - bottom})`)
-    .call(d3.axisBottom(x).ticks(5, isIO ? "~s" : ".2~g"));
+    .call(d3.axisBottom(x).ticks(xTicks, isIO ? "~s" : ".2~g"));
   svg.append("g").attr("transform", `translate(${left},0)`).call(d3.axisLeft(y).ticks(5));
   svg.append("text").attr("class", "axis-label").attr("x", (left + width - right) / 2)
     .attr("y", height - 7).attr("text-anchor", "middle").text(isIO ? "IOPS (reads/s)" : "Compression ratio (×, log scale)");
