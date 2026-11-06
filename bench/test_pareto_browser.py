@@ -530,6 +530,8 @@ def crop_fixture():
 
 
 def verify_crop_study(page, document, output):
+    output = output / f"study-{document['id']}"
+    output.mkdir(exist_ok=True)
     page.select_option("#input", "all-sources")
     for access in ("random", "baked"):
         page.select_option("#workload", access)
@@ -544,12 +546,18 @@ def verify_crop_study(page, document, output):
                 and row["crop_size"] == crop
             ]
             assert page.locator("circle.point").count() == len(expected)
-            assert page.locator(".panel").count() == 2
+            assert page.locator(".panel").count() == len(
+                {row["backend"] for row in expected}
+            )
             assert page.locator("path.frontier").evaluate_all(
                 "paths => paths.every(path => new Set(path.__data__.map(row => row.crop_size)).size === 1)"
             )
             verify_scales(page)
             verify_table(page, expected, "pareto")
+            page.select_option("#view", "device")
+            verify_scales(page, "device")
+            verify_table(page, expected, "device")
+            page.select_option("#view", "pareto")
         page.locator("circle.point").first.click()
         detail = page.locator("#detail-content").inner_text()
         assert "Samples/s" in detail
@@ -656,23 +664,39 @@ def check(assets, output, actual):
             )
             (report / f"data/{mixed['id']}.json").write_text(json.dumps(mixed))
             crops = crop_fixture()
-            index["studies"].append(
+            index["studies"].insert(
+                0,
                 {
                     "id": crops["id"],
                     "file": f"{crops['id']}.json",
                     "label": crops["label"],
                     "pilot": True,
-                }
+                },
             )
             (report / f"data/{crops['id']}.json").write_text(json.dumps(crops))
+            cpu = copy.deepcopy(crops)
+            cpu.update(id="3" * 20, label="CPU crop browser fixture — not measured")
+            cpu["rows"] = [row for row in cpu["rows"] if row["backend"] == "cpu"]
+            cpu["context"]["machine"]["gpu"] = None
+            index["studies"].append(
+                {
+                    "id": cpu["id"],
+                    "file": f"{cpu['id']}.json",
+                    "label": cpu["label"],
+                    "pilot": True,
+                }
+            )
+            (report / f"data/{cpu['id']}.json").write_text(json.dumps(cpu))
             (report / "data/index.json").write_text(json.dumps(index))
             (report / f"data/{document['id']}.json").write_text(json.dumps(document))
         index = json.loads((report / "data/index.json").read_text())
         if not index["studies"]:
             raise ValueError("Browser measurement checks need a retained study")
-        document = json.loads(
-            (report / "data" / index["studies"][0]["file"]).read_text()
-        )
+        documents = {
+            entry["id"]: json.loads((report / "data" / entry["file"]).read_text())
+            for entry in index["studies"]
+        }
+        document = next(value for value in documents.values() if not value.get("baked"))
         server = ThreadingHTTPServer(
             ("127.0.0.1", 0), partial(QuietHandler, directory=str(root))
         )
@@ -693,7 +717,11 @@ def check(assets, output, actual):
                 )
                 page.on("pageerror", lambda error: errors.append(str(error)))
                 url = f"http://127.0.0.1:{server.server_port}/pareto/"
-                page.goto(url + "#view=io")
+                page.goto(url + "?check=default")
+                page.wait_for_selector("#workspace", state="visible")
+                assert page.locator("#study").input_value() == index["studies"][0]["id"]
+                assert page.locator("circle.point").count() > 0
+                page.goto(url + f"#study={document['id']}&view=io")
                 page.wait_for_selector("#workspace", state="visible")
                 assert page.locator("#view").input_value() == "device"
                 assert page.locator("#view option").all_text_contents() == [
@@ -702,7 +730,7 @@ def check(assets, output, actual):
                 ]
                 page.select_option("#view", "pareto")
                 for entry in index["studies"]:
-                    current = json.loads((report / "data" / entry["file"]).read_text())
+                    current = documents[entry["id"]]
                     page.select_option("#study", entry["id"])
                     page.wait_for_selector("#workspace", state="visible")
                     verify_study(page, current, output)
@@ -957,7 +985,8 @@ def check(assets, output, actual):
             json.dumps(
                 {
                     "actual_measurements": actual,
-                    "settings": len(document["rows"]),
+                    "settings": sum(len(value["rows"]) for value in documents.values()),
+                    "default_study": index["studies"][0]["id"],
                     "studies_checked": len(index["studies"]),
                     "console_errors": errors,
                     "viewports": [1440, 768, 390, 320],
@@ -966,7 +995,8 @@ def check(assets, output, actual):
             )
             + "\n"
         )
-        print(f"Browser checks passed for {len(document['rows'])} settings: {output}")
+        count = sum(len(value["rows"]) for value in documents.values())
+        print(f"Browser checks passed for {count} settings: {output}")
 
 
 def main():
