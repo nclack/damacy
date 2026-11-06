@@ -58,7 +58,57 @@ cannot be added into elapsed time. The JSON retains all original counters,
 including output-byte rates after float32 conversion. CSV exports use the same
 four main measurement names as the plots and sidebar.
 
-## Mixed-source cold NVMe results
+## Paired CPU and H100 cold-read results
+
+The [November 6 paired study](pareto/index.html#study=81fe76d51bbbd3212ed6)
+contains **252 settings and 616 executions**: nine layouts, both read patterns,
+the complete seven-asset mixture, six dataset omissions, and both CPU and CUDA.
+Each setting has two process repetitions. Both backends ran on one H100 80 GB
+node with an Intel Xeon Platinum 8462Y+, 32 allowed logical CPUs, 16 CPU decode
+workers, and 16 file workers. Its storage system is XFS on an array of eight
+7.68 TB Intel SSDPF2KX076T1O PCIe NVMe drives. The run reused the verified
+769.17 GiB preparation and completed in 79 minutes 33 seconds, including local
+staging and all 42 native tests.
+
+These are all-source image-throughput medians in **GiB/s**, comparing the same
+layouts on that machine. The table includes every layout on at least one observed
+frontier. Blosc block sizes in the labels are requests; actual block sizes from
+the encoded headers are retained in the report.
+
+| Layout | Compression ratio | CPU crops | CUDA crops | CPU whole frames | CUDA whole frames |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Blosc-LZ4, 256 KiB chunks / 256 KiB blocks | 1.433× | 1.025 | 1.190 | 4.245 | 4.805 |
+| Zstd, 1 MiB chunks | 1.441× | 0.922 | 0.812 | 4.108 | 3.570 |
+| Blosc-Zstd, 256 KiB chunks / 16 KiB blocks | 1.475× | 0.944 | 1.187 | 4.002 | 4.959 |
+| Blosc-Zstd, 256 KiB chunks / 256 KiB blocks | 1.504× | 0.961 | 1.157 | 4.022 | 4.773 |
+
+On CUDA, the two Blosc-Zstd layouts trade whole-frame throughput against
+compression. Crop medians for Blosc-LZ4/256 KiB and Blosc-Zstd/16 KiB blocks are
+within 0.3%, with overlapping repeat ranges. CUDA does not improve every layout:
+Zstd/1 MiB is slower than its paired CPU measurement in both read patterns.
+The CPU values here come from the same allocation as the CUDA values; the
+November 5 EPYC study below describes a different machine.
+
+Across all settings, the median min–max throughput spread was 1.12% of the
+median, with a maximum of 12.08%. Bracketing raw-control spreads ranged from
+0.70% to 7.87%. These observed ranges describe two repetitions, not confidence
+intervals or a reliable ordering of close settings.
+
+All **1,374 measured passes** verified zero resident shard-data pages and
+recorded storage reads. Peak overlapping file read calls reached 16 in every
+execution. IOPS ranged from 29,945 to 134,864 across executions. Adjacent idle
+traffic reached 180 IOPS, at most 0.46% of the corresponding measured rate.
+For CUDA whole-frame Blosc-Zstd with 256 KiB chunks and 16 KiB requested blocks,
+the medians were **4.959 GiB/s image throughput**, **3.500 GiB/s storage bandwidth**,
+and **48,554 IOPS**, with **1.475× compression**.
+
+The report includes each dataset omission and its own uncompressed control.
+The [retained JSON](pareto/data/81fe76d51bbbd3212ed6.json) contains every observation,
+cache check, device counter, source geometry, and source, query, and binary hash.
+This completes the planned nine-layout paired study; the 22-layout matrix has
+not been measured.
+
+## Earlier mixed-source CPU results
 
 The [November 5 CPU study](pareto/index.html#study=542501404495a92083a9)
 contains **126 settings and 308 executions**, using all seven microscopy assets,
@@ -120,8 +170,8 @@ not interpret them as additional timed metadata reads.
 
 This validates the cold protocol on local storage. It is a CPU-only pilot on a
 different machine from the cached H100 study; their rates are not a paired
-comparison of cache state. A cold CUDA study and the full layout matrix remain
-unmeasured.
+comparison of cache state. The paired cold H100 study above uses the larger,
+mixed-source protocol; the full 22-layout matrix remains unmeasured.
 
 ## Earlier single-batch cold protocol
 
@@ -202,18 +252,24 @@ The updated [`bench/studies/microscopy.json`](https://github.com/nclack/damacy/b
 uses every asset in the version-3 [corpus manifest](https://github.com/nclack/chucky-benchmarks-data).
 The current seven inputs are OpenCell DNA and protein, BBBC010 brightfield,
 JUMP-Scope fluorescence, DynaCell phase, COSEM EM, and BBBC022 MitoTracker.
-The November 5 mixed-source CPU results above use this geometry and protocol.
+The November 5 CPU and November 6 paired H100 studies above use this geometry
+and protocol.
 The older single-input pilots retain their original, smaller inputs.
 
 Each source becomes a 2048 × 2048 frame sequence. A 4 × 4 spatial grid gives
 16 shard files per frame, with each shard containing **1 GiB of uncompressed
 pixels**. Depth depends on the original type; shapes below are `[plane, Y, X]`.
+Chunk sizes also count uncompressed pixel bytes.
 
-| Source type | Expanded volume | Shard shape | Logical volume bytes |
-| --- | --- | --- | --- |
-| uint8 | 4096 × 2048 × 2048 | 4096 × 512 × 512 | 16 GiB |
-| uint16 | 2048 × 2048 × 2048 | 2048 × 512 × 512 | 16 GiB |
-| float32 | 1024 × 2048 × 2048 | 1024 × 512 × 512 | 16 GiB |
+| Source type | Expanded volume | Shard shape | 1 MiB chunk shape | Logical volume bytes |
+| --- | --- | --- | --- | --- |
+| uint8 | 4096 × 2048 × 2048 | 4096 × 512 × 512 | 4 × 512 × 512 | 16 GiB |
+| uint16 | 2048 × 2048 × 2048 | 2048 × 512 × 512 | 2 × 512 × 512 | 16 GiB |
+| float32 | 1024 × 2048 × 2048 | 1024 × 512 × 512 | 1 × 512 × 512 | 16 GiB |
+
+At 1 MiB, each chunk spans the shard's full 512 × 512 XY footprint, and each
+1 GiB shard contains 1024 chunks. COSEM uses uint8, DynaCell uses float32, and
+the other five inputs use uint16.
 
 Compressed shard file sizes vary by source and codec and are retained individually.
 The writer processes and verifies one complete shard at a time. Original values,

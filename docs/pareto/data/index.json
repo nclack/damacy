@@ -2,22 +2,29 @@
   "version": 1,
   "studies": [
     {
+      "id": "81fe76d51bbbd3212ed6",
+      "label": "H100 CPU/CUDA \u00b7 cold \u00b7 2026-11-06",
+      "pilot": true,
+      "file": "81fe76d51bbbd3212ed6.json",
+      "cache_policy": "cold-pass"
+    },
+    {
       "id": "542501404495a92083a9",
-      "label": "Mixed microscopy: 1 GiB shards on cold NVMe \u00b7 cpu-turin-gp-l-244-043 \u00b7 2026-11-05",
+      "label": "EPYC CPU \u00b7 cold \u00b7 2026-11-05",
       "pilot": true,
       "file": "542501404495a92083a9.json",
       "cache_policy": "cold-pass"
     },
     {
       "id": "5add8a3675356a860c8e",
-      "label": "Cold NVMe microscopy reads: chunks, blocks, and codecs \u00b7 cpu-turin-gp-l-244-013 \u00b7 2026-11-04",
+      "label": "EPYC CPU \u00b7 single-batch cold \u00b7 2026-11-04",
       "pilot": true,
       "file": "5add8a3675356a860c8e.json",
       "cache_policy": "cold"
     },
     {
       "id": "f0aa215f44b8b59093a0",
-      "label": "Microscopy reads: chunks, blocks, and codecs \u00b7 cw-us-e4a1-h100-228-085 \u00b7 2026-11-04",
+      "label": "H100 CPU/CUDA \u00b7 cached \u00b7 2026-11-04",
       "pilot": true,
       "file": "f0aa215f44b8b59093a0.json",
       "cache_policy": "preloaded files"
