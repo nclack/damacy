@@ -138,6 +138,14 @@ def fixture():
 
 
 def verify_scales(page, view="pareto"):
+    assert page.locator(".panel svg").evaluate_all("""svgs => svgs.every(svg => {
+      const title = svg.querySelector('text.axis-label[transform]').getBoundingClientRect();
+      return [...svg.querySelectorAll('.y-axis .tick text')].every(text => {
+        const tick = text.getBoundingClientRect();
+        return tick.left >= title.right || tick.right <= title.left
+          || tick.top >= title.bottom || tick.bottom <= title.top;
+      });
+    })""")
     sizes = page.locator(".panel svg").evaluate_all("""svgs => svgs.map(svg => ({
       width: svg.viewBox.baseVal.width, height: svg.viewBox.baseVal.height,
       renderedWidth: svg.getBoundingClientRect().width,
@@ -586,6 +594,16 @@ def verify_crop_study(page, document, output):
         page.set_viewport_size({"width": 1440, "height": 1100})
     page.select_option("#view", "pareto")
     page.select_option("#appearance", "system")
+    page.locator(".more-filters").evaluate("node => { node.open = true; }")
+    page.select_option("#chunk", "sample")
+    page.select_option("#workload", "random")
+    assert page.locator("#chunk").input_value() == ""
+    assert page.locator("circle.point").count() > 0
+    page.select_option("#chunk", "262144")
+    page.select_option("#workload", "baked")
+    assert page.locator("#chunk").input_value() == ""
+    assert page.locator("circle.point").count() > 0
+    page.locator(".more-filters").evaluate("node => { node.open = false; }")
 
 
 def check(assets, output, actual):

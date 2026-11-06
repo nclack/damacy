@@ -256,7 +256,8 @@ function panel(rows, scales, isIO, isCrop = false) {
     .call(d3.axisLeft(y).ticks(5).tickSize(-(width - left - right)).tickFormat(""));
   svg.append("g").attr("transform", `translate(0,${height - bottom})`)
     .call(d3.axisBottom(x).ticks(xTicks, isIO ? "~s" : ".2~g"));
-  svg.append("g").attr("transform", `translate(${left},0)`).call(d3.axisLeft(y).ticks(5));
+  svg.append("g").attr("class", "y-axis").attr("transform", `translate(${left},0)`)
+    .call(d3.axisLeft(y).ticks(5, isCrop ? "~s" : undefined));
   svg.append("text").attr("class", "axis-label").attr("x", (left + width - right) / 2)
     .attr("y", height - 7).attr("text-anchor", "middle").text(isCrop ? "Square crop width (pixels)" : isIO ? "IOPS (reads/s)" : "Compression ratio (×, log scale)");
   svg.append("text").attr("class", "axis-label").attr("transform", "rotate(-90)")
@@ -343,11 +344,12 @@ function table(rows, isIO, isCrop = false) {
 
 function updateContext() {
   const cohort = study.cohorts?.find(value => value.id === $("input").value);
+  const bakedFiles = study.rows.find(row => row.input_id === cohort?.id && row.access_pattern === "baked")?.query_summary.distinct_shards;
   let geometry = cohort
     ? `${cohort.input_ids.length} source inputs, mixed within each pass. ${cohort.omitted_dataset ? `Omitted collection: ${cohort.omitted_dataset}. ` : ""}${study.volume.frame_shape.join(" × ")} frames; ${study.volume.shard_spatial_shape.join(" × ")} spatial shards; ${number(study.volume.shard_bytes / 2 ** 30)} GiB uncompressed per shard. ${study.weighting}. Compression combines equal logical source volumes. Expanded pixels are tiled source distributions.`
     : "Each input is a small replayed image pack.";
   if (study.baked) geometry = $("workload").value === "baked"
-    ? `${cohort.input_ids.length} source inputs. ${study.baked.active_shards} shard files total per process, approximately ${number(study.baked.shard_bytes / 2 ** 30)} GiB uncompressed each. One crop per compression chunk, read forward through each file. The paired random coordinates and native pixel types are preserved. Compression is weighted by the stored sample mixture.`
+    ? `${cohort.input_ids.length} source inputs. ${bakedFiles} shard files total per process, approximately ${number(study.baked.shard_bytes / 2 ** 30)} GiB uncompressed each. One crop per compression chunk, read forward through each file. The paired random coordinates and native pixel types are preserved. Compression is weighted by the stored sample mixture.`
     : `${cohort.input_ids.length} source inputs, mixed within each pass. Uniform random translations across ${study.volume.frame_shape.join(" × ")} frames; crops may cross chunk and shard boundaries. ${number(study.volume.shard_bytes / 2 ** 30)} GiB uncompressed per spatial shard. Repeated or overlapping reads within a cold-start pass are allowed. Compression combines equal logical source volumes.`;
   if (study.batch_output_bytes) geometry += ` Batches hold ${number(study.batch_output_bytes / 2 ** 20)} MiB of float32 output; lookahead holds ${number(study.lookahead_output_bytes / 2 ** 20)} MiB at every crop size. These are single-plane storage workloads, not complete training batches.`;
   $("context").textContent = `${study.pilot ? "Pilot · limited settings. " : ""}${study.profile?.repeats ?? study.rows[0].metrics.useful_gib_s.n} process repetitions per setting · ${study.pipeline.decode_workers} CPU decode workers · ${study.pipeline.n_io_threads} file workers. ${geometry}`;
@@ -357,6 +359,13 @@ function render() {
   updateContext();
   const isIO = $("view").value === "device";
   const isCrop = $("view").value === "crop";
+  const candidates = study.rows.filter(row => matches(row, {input: $("input").value,
+    workload: $("workload").value, crop: isCrop ? "" : $("crop").value}));
+  options("codec", [...new Set(candidates.map(row => row.setting.codec))], id => codecs[id], true);
+  const byCodec = candidates.filter(row => matches(row, {codec: $("codec").value}));
+  options("chunk", [...new Set(byCodec.map(row => row.setting.chunk_mode === "sample" ? "sample" : row.setting.chunk_bytes))].sort((a, b) => a - b), value => value === "sample" ? "One sample" : kib(value), true);
+  const byChunk = byCodec.filter(row => matches(row, {chunk: $("chunk").value}));
+  options("block", [...new Set(byChunk.map(row => row.setting.block_mode === "chunk" ? "chunk" : row.setting.block_bytes).filter(Boolean))].sort((a, b) => a - b), value => value === "chunk" ? "Whole chunk" : kib(value), true);
   const filters = Object.fromEntries(["input", "workload", "crop", "codec", "chunk", "block"].map(id => [id, $(id).value]));
   $("crop-label").hidden = isCrop || !study.rows.some(row => row.crop_size);
   filtered = study.rows.filter(row => matches(row, {...filters, crop: isCrop ? "" : filters.crop}));
@@ -409,9 +418,6 @@ async function loadStudy() {
   options("input", choices.map(input => input.id), id => choices.find(input => input.id === id).name);
   options("workload", [...new Set(study.rows.map(row => row.access_pattern || row.workload))], id => workloads[id] || id);
   options("crop", [...new Set(study.rows.map(row => row.crop_size).filter(Boolean))].sort((a, b) => a - b), size => `${size} × ${size}`);
-  options("codec", [...new Set(study.rows.map(row => row.setting.codec))], id => codecs[id], true);
-  options("chunk", [...new Set(study.rows.map(row => row.setting.chunk_mode === "sample" ? "sample" : row.setting.chunk_bytes))].sort((a, b) => a - b), value => value === "sample" ? "One sample" : kib(value), true);
-  options("block", [...new Set(study.rows.map(row => row.setting.block_mode === "chunk" ? "chunk" : row.setting.block_bytes).filter(Boolean))].sort((a, b) => a - b), value => value === "chunk" ? "Whole chunk" : kib(value), true);
   $("raw").href = `data/${entry.file}`;
   const context = study.context;
   const storage = context.machine.local_storage;
