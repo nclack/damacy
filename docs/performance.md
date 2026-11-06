@@ -32,6 +32,8 @@ describe the completed-read and sector counters used here.
 
 All rates use wall time through completion, including the final GPU work.
 Initialization, warmup, and cache clearing are excluded. One GiB is 2³⁰ bytes.
+The CPU backend returns batches in system RAM; CUDA returns them in GPU memory.
+CPU rates exclude a subsequent transfer to the GPU.
 Converting source pixels to float32 does not increase image throughput. Stored
 file lengths include padding, shard indexes, and array metadata; they are not
 filesystem block allocation. Compression ratios below one mean the files are
@@ -61,53 +63,96 @@ four main measurement names as the plots and sidebar.
 
 ## Crop results
 
-The [November 6 EPYC crop study](pareto/index.html#study=2f6063ce5114fc47763a)
-contains **31 settings and 129 executions**, with three process repetitions per
-setting. It compares uniformly translated random crops with sequential reads of
-the same baked pixels, across the complete seven-input mixture. Baked layouts
-use 16 files total and one sample per compression chunk. The paired H100 CPU/CUDA
-run is in progress.
+The [paired H100 crop study](pareto/index.html#study=f0166121dda806b1b509) and
+[Turin CPU crop study](pareto/index.html#study=2f6063ce5114fc47763a) are complete:
+**93 settings and 387 executions**, with three process repetitions per setting.
+Both compare uniformly translated random crops with sequential reads of the same
+baked pixels, across all seven inputs. Baked layouts use 16 shard files total per
+process and one sample per compression chunk.
 
 These are the highest observed image-throughput medians among the tested layouts
-for each condition, in **GiB/s**:
+for each condition, in **GiB/s**. The selected encoding can differ between the
+random and baked columns. CPU output is in system RAM; CUDA output is in GPU memory.
 
-| Crop | Random | Baked | Baked / random |
-| --- | ---: | ---: | ---: |
-| 128² | 0.558 | 2.700 | 4.84× |
-| 192² | 0.746 | 6.713 | 9.00× |
-| 256² | 1.081 | 7.844 | 7.26× |
+| Reader | Crop | Random | Baked | Baked / random |
+| --- | --- | ---: | ---: | ---: |
+| Turin CPU | 128² | 0.558 | 2.700 | 4.84× |
+| H100 node · CPU | 128² | 0.544 | 2.349 | 4.32× |
+| H100 node · CUDA | 128² | 0.533 | 2.286 | 4.29× |
+| Turin CPU | 192² | 0.746 | 6.713 | 9.00× |
+| H100 node · CPU | 192² | 0.713 | 6.744 | 9.46× |
+| H100 node · CUDA | 192² | 0.745 | 6.129 | 8.23× |
+| Turin CPU | 256² | 1.081 | 7.844 | 7.26× |
+| H100 node · CPU | 256² | 1.039 | 10.784 | 10.38× |
+| H100 node · CUDA | 256² | 1.021 | 9.321 | 9.13× |
 
-The random-layout selections are Zstd with 16 KiB chunks at 128², Blosc-LZ4 with
-256 KiB chunks at 192², and Blosc-Zstd with 256 KiB chunks at 256². Both selected
-Blosc layouts use whole-chunk blocks. The baked selections are Blosc-LZ4 at 128²
-and 256², and Blosc-Zstd at 192², also with whole-chunk blocks.
+**Baking is the largest improvement:** the best observed medians improve by
+4.29–10.38× across these comparisons. The gain is much larger than the repeat
+ranges. This includes changing the chunk shape to one stored sample per chunk,
+so it measures the complete baked layout rather than isolating file order alone.
 
-**Baking produces a large improvement; close codec rankings remain unresolved.**
-The median min–max spread across settings is 11.34% of the median, with a maximum
-of 24.61%. Bracketing uncompressed controls span 11.51–26.33%. These are observed
-ranges from three repetitions and six controls per condition, not confidence
-intervals. The plotted frontiers use medians, so small apparent advantages should
-not be treated as established dominance.
+**Keep small chunks for 128² random crops.** Zstd with 16 KiB chunks has the highest
+median in all three reader configurations, at 1.391× compression. On H100 CUDA it
+reaches 0.533 GiB/s, versus 0.467 GiB/s for the fastest Blosc setting at 1.475×.
+For 192² and 256², Blosc layouts lead the tested random choices. The 1 MiB Zstd
+layout is dominated in every measured random-crop condition. Intermediate small
+chunks at larger crop sizes remain unmeasured.
 
-Small chunks remain useful for 128² random crops: 16 KiB Zstd reaches 0.558 GiB/s
-with 1.391× compression, versus 0.460 GiB/s and 1.475× for the fastest Blosc setting.
-Baked layouts avoid decoding unused pixels. At 128², the fastest baked setting
-uses about 25.6 kB of storage reads and 0.196 storage operations per sample, versus
-153.5 kB and 6.75 operations for the fastest random setting. Lower IOPS can therefore
-accompany faster sample delivery.
+**Baked codec choices depend on the backend.** On the H100 node, CPU Blosc-LZ4 has
+the highest baked medians at all three sizes, with about 1.42× compression.
+Uncompressed data has the highest baked CUDA medians; at 128² its advantage over
+Blosc-LZ4 is under 1%, so both remain useful candidates. At 256², CUDA Blosc-Zstd
+with 16 KiB requested blocks reaches **7.173 GiB/s at 1.463× compression**.
+Whole-chunk blocks reach **2.726 GiB/s at 1.473×**. That small compression gain
+comes with a large throughput cost, so block size remains an important parameter.
 
-The machine is an AMD EPYC 9655P with 32 allowed logical CPUs, 16 CPU decode workers,
-and 16 file workers. Its storage system is XFS on eight 7.68 TB Intel NVMe drives;
-the exact inventory is in the report. All **448 timed passes** verified zero
-resident shard-data pages. Peak overlapping reads reached 16 in every execution.
-IOPS ranged from 12,514 to 128,561; adjacent idle traffic was at most 5 IOPS and
-0.012% of the corresponding measured rate. The
-[retained JSON](pareto/data/2f6063ce5114fc47763a.json) includes every observation
-and the paired query streams are available from each result.
+**There is no consistent Turin advantage in this sweep.** Random-crop medians are
+close across the machines. For baked 256² Blosc-LZ4, the H100 node's CPU reaches
+10.784 GiB/s versus 7.844 GiB/s on Turin, with separated repeat ranges. These are
+different hosts and storage arrays. CPU/GPU training comparisons also need to
+include the CPU-to-GPU transfer and the actual training loader.
 
-The [crop protocol below](#random-crops-and-baked-samples) describes fixed byte
-budgets, source construction, batching effects, and the separate generative,
-image, and video training follow-ups.
+The samples/s view gives a different perspective on crop size. H100 CUDA's best
+random medians are about **16,289, 10,127, and 7,804 samples/s** at 128², 192², and
+256²; its best baked medians are **69,914, 83,309, and 71,263 samples/s**. More image
+bytes per second can accompany fewer completed samples. The
+[crop protocol](#random-crops-and-baked-samples) also explains the fixed CPU
+input-buffer limit and the extra read/decode groups at 128².
+
+Lower IOPS can accompany faster sample delivery. At 128² on H100 CUDA, the fastest
+random setting uses about **258 kB of storage reads and 7.68 storage operations per
+sample**. The fastest baked setting uses about **36 kB and 0.275 operations**.
+The full report retains these storage counters, along with image throughput and
+compression, for every setting.
+
+The paired H100 run contains **62 settings and 258 executions**. It used one H100
+80 GB GPU, an Intel Xeon Platinum 8462Y+, 32 allowed logical CPUs, 16 CPU decode
+workers, and 16 file workers. It finished in **45 minutes 16 seconds**, including
+all 42 native tests, the reader check, staging, and measurements. The Turin run
+contains **31 settings and 129 executions**, on an AMD EPYC 9655P with the same
+worker counts and allowed CPU count. Each machine used XFS on its own array of
+eight 7.68 TB Intel NVMe drives. Exact hosts and inventories are recorded in the
+report's Storage system section.
+
+All **1,353 timed passes** verified zero resident shard-data pages: 448 on Turin
+and 905 on H100. Peak overlapping reads reached 16 in every execution. H100 IOPS
+ranged from 11,447 to 126,002, with adjacent idle reads at most 70 IOPS and 0.36%
+of the corresponding measured rate. Turin IOPS ranged from 12,514 to 128,561;
+idle reads were at most 5 IOPS and 0.012%.
+
+H100's median min–max repeat spread was **1.74%**, with a maximum of 9.07%; its
+bracketing control spreads were 0.96–7.84%. Turin was noisier: median 11.34%,
+maximum 24.61%, and control spreads of 11.51–26.33%. These are observed ranges
+from three repetitions and six controls per condition, not confidence intervals.
+The plotted frontiers use medians, so small apparent advantages should not be
+treated as established dominance.
+
+The [H100 JSON](pareto/data/f0166121dda806b1b509.json) and
+[Turin JSON](pareto/data/2f6063ce5114fc47763a.json) retain every observation, source
+geometry, query, and source/binary hash. Paired query streams are downloadable
+from each result. The protocol below describes the separate generative, image,
+and video training follow-ups; these measurements cover single-plane storage
+workloads.
 
 ## Earlier paired CPU and H100 cold-read results
 
@@ -301,7 +346,7 @@ The full matrix has not been measured.
 ## Random crops and baked samples
 
 The current [`bench/studies/microscopy.json`](https://github.com/nclack/damacy/blob/bench/microscopy-pareto/bench/studies/microscopy.json)
-defines the smaller study whose [CPU results are above](#crop-results).
+defines the smaller study whose [measured results are above](#crop-results).
 It compares 128 × 128, 192 × 192, and 256 × 256 crops from the complete seven-input
 mixture. Whole-frame reads remain in the historical reports.
 
@@ -418,6 +463,11 @@ ownership, 16 active files per process means **128 active files per eight-GPU no
 Sixteen is a starting point per process, not a worker multiplier or an established
 scaling optimum. The processes share storage, CPU, and memory bandwidth; neither
 throughput nor file-worker counts should be extrapolated linearly.
+
+The measured H100 node has 128 logical CPUs, of which this one-GPU allocation
+uses 32. Dividing that node evenly among eight GPU processes would give 16 logical
+CPUs per process. The measured CPU budget therefore also needs reconsideration
+when scaling.
 
 For a target of `r` samples/s per GPU and `b` measured storage bytes per sample,
 the node needs approximately `8 × r × b` storage bytes/s. Apply the same calculation
