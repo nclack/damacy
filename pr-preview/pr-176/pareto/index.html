@@ -30,6 +30,7 @@
         <label>Study<select id="study"></select></label>
         <label><span id="input-label">Image input</span><select id="input"></select></label>
         <label>Read pattern<select id="workload"></select></label>
+        <label id="crop-label" hidden>Crop size<select id="crop"></select></label>
         <label>Plot<select id="view"></select></label>
       </div>
       <p id="cache-condition" class="note"></p>
@@ -93,7 +94,7 @@
       <p>Image throughput and storage bandwidth use GiB/s, where 1 GiB is 2³⁰ bytes. IOPS uses reads/s. All rates use elapsed measurement time, including reading, decoding, and final GPU completion. Initialization, warmup, and cache clearing are excluded. The Storage system section identifies the shared hardware; Diagnostics contains reader-level counters.</p>
       <details>
         <summary>Measurement limits</summary>
-        <p>The observed frontier compares settings within the same input, read pattern, backend, machine session, and storage condition. Filters recompute it. Connections join measured points; they do not predict unmeasured settings. All compared panels use the same axes.</p>
+        <p>The observed frontier compares settings within the same input, crop size, read pattern, backend, machine session, and storage condition. Filters recompute it. Connections join measured points; they do not predict unmeasured settings. All compared panels use the same axes.</p>
         <p>Ranges are observed minima and maxima, not confidence intervals. Use the measurements table or keyboard to select overlapping points. Pilot studies cover a limited set of settings and do not establish a final frontier.</p>
         <p>Compression ratio includes padding, shard indexes, and array metadata. Mixed studies use expanded, tiled source distributions. A ratio below one means the files are larger than the uncompressed image bytes. The compression axis is logarithmic.</p>
         <p>Cold studies verify zero resident data-file pages before each timed pass; codecs and metadata are warmed. Earlier cached studies replay files preloaded into RAM. Storage counters include read-ahead and other activity on the same drives. Idle measurements are available in Diagnostics, and SSD/controller caches are not controlled.</p>

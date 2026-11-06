@@ -426,6 +426,45 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#random-crops-and-baked-samples" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Random crops and baked samples
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Random crops and baked samples">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#both-katamari-training-paths" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Both Katamari training paths
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reasoning-about-eight-gpus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reasoning about eight GPUs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#mixed-source-microscopy-study" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -786,6 +825,45 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#random-crops-and-baked-samples" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Random crops and baked samples
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Random crops and baked samples">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#both-katamari-training-paths" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Both Katamari training paths
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reasoning-about-eight-gpus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reasoning about eight GPUs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#mixed-source-microscopy-study" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -845,7 +923,8 @@ and Blosc block setting. CPU and CUDA, source mixtures, read patterns, and machi
 sessions have separate frontiers. All panels within a study use one recorded
 storage system. Its host, processor, GPU, filesystem, and drives appear once in
 <strong>Storage system</strong>. Appearance follows the system setting by default, with saved
-light and dark overrides.</p>
+light and dark overrides. Crop studies add a <strong>Crop size and samples/s</strong> view,
+with a separate Pareto frontier for each crop size.</p>
 <p>The existing <a href="https://nclack.github.io/damacy/throughput/">throughput history</a> and
 <a href="https://nclack.github.io/damacy/timings/">timing history</a> retain the daily CI
 measurements. Those fixed scenarios track changes on the CI machine.</p>
@@ -1148,8 +1227,158 @@ Applying its average process overhead to the cached full matrix gives approximat
 79 minutes before preparation and validation. Cold runs also spend time clearing
 and checking file pages, so that estimate does not apply to the cold protocol.
 The full matrix has not been measured.</p>
+<h2 id="random-crops-and-baked-samples">Random crops and baked samples<a class="headerlink" href="#random-crops-and-baked-samples" title="Permanent link">&para;</a></h2>
+<p>The current <a href="https://github.com/nclack/damacy/blob/bench/microscopy-pareto/bench/studies/microscopy.json"><code>bench/studies/microscopy.json</code></a>
+defines the next, smaller study. <strong>These measurements have not been published yet.</strong>
+It compares 128 × 128, 192 × 192, and 256 × 256 crops from the complete seven-input
+mixture. Whole-frame reads remain in the historical reports.</p>
+<p><strong>Random crops</strong> choose each origin uniformly from every valid translation in the
+expanded source volume. The entire crop must be in bounds. Crops can cross both
+chunk and shard boundaries. Repeated and overlapping coordinates are allowed;
+there is no spatial-tile quota or exclusion of previously visited chunks.</p>
+<p><strong>Baked samples</strong> contain exactly those same pixels, in the original source type.
+Each compression chunk holds one sample. Within each source, sample <code>i</code> goes to
+file <code>i % source_file_count</code>, at offset <code>i // source_file_count</code>. Reading the paired
+query sequence therefore advances through each file. Preparation checks exact
+pixel round trips and verifies that successive chunks occupy contiguous byte
+ranges in each shard file. Both query streams are retained, including the source
+coordinates used to bake the timed samples.</p>
+<p>There are <strong>16 baked shard files total per process</strong>, across all sources. Native
+types remain in separate arrays: the five uint16 inputs get two files each,
+DynaCell float32 gets five, and COSEM uint8 gets one. Files are approximately
+1 GiB uncompressed; exact shapes and encoded sizes are recorded per source.
+The baked corpus contains equal sample counts per input, rounded to whole files
+and batches. A timed pass reads forward through a prefix of every file. It does
+not scan a whole epoch. The random layout retains the earlier 2048² volumes and
+512² spatial shards, with 16 files per source (112 in total).</p>
+<p>The initial layout choices are:</p>
+<table>
+<thead>
+<tr>
+<th>Encoding</th>
+<th>Random layout</th>
+<th>Baked layout</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Uncompressed control</td>
+<td>256 KiB chunks</td>
+<td>One sample per chunk</td>
+</tr>
+<tr>
+<td>Zstd</td>
+<td>1 MiB chunks</td>
+<td>One sample per chunk</td>
+</tr>
+<tr>
+<td>Blosc-Zstd, 16 KiB requested blocks</td>
+<td>256 KiB chunks</td>
+<td>One sample per chunk</td>
+</tr>
+<tr>
+<td>Blosc-Zstd, whole-chunk blocks</td>
+<td>256 KiB chunks</td>
+<td>One sample per chunk</td>
+</tr>
+<tr>
+<td>Blosc-LZ4, whole-chunk blocks</td>
+<td>256 KiB chunks</td>
+<td>One sample per chunk</td>
+</tr>
+</tbody>
+</table>
+<p>The compressed random layouts cover the observed all-source frontier choices
+from the earlier Turin CPU, H100 CPU, and H100 CUDA measurements. A <strong>16 KiB Zstd
+check at 128²</strong> keeps small chunks in consideration. Old dominated layouts are not
+assumed to remain dominated after changing the workload. Baked chunks range from
+16 KiB for a 128² uint8 sample to 256 KiB for a 256² float32 sample; a nominal
+256 KiB label would be misleading. Compression level remains three, with bitshuffle
+for Blosc. Actual block sizes are verified from stored headers.</p>
+<p>Batches contain <strong>36 MiB of float32 output</strong>, and lookahead contains <strong>144 MiB</strong> at
+every crop size. That gives batches of 576, 256, and 144 samples for 128², 192², and
+256² respectively. Passes return at least 1 GiB per source, rounded to complete
+batches. Worker counts and CPU/GPU memory limits stay fixed. Each condition has its
+own uncompressed controls before and after the settings, and three process
+repetitions by default. The pilot changes repetitions and duration, not the source
+mixture or layout selection.</p>
+<p>This is <strong>62 settings and 258 executions</strong> across CPU and CUDA, with one all-source
+mixture. Leave-one-out runs, extra repeats, intermediate chunk sizes, and grouping
+multiple baked samples per chunk are follow-ups around the resulting frontiers.
+The definition can enable dataset omissions while retaining the remaining query
+coordinates and order; omissions also reduce the baked file count. They are not
+part of the first sweep.</p>
+<p>Each crop size and access pattern has its own Pareto frontier. The <strong>Crop size and
+samples/s</strong> view compares completed crops per second at the fixed byte budgets.
+It converts the image throughput using the exact source composition of each query
+stream. A line follows one encoding recipe, not a frontier across different tasks.
+Compression ratio still describes the actual stored arrays: random arrays have
+equal logical bytes per source; baked arrays have equal sample counts. Their
+compression ratios therefore weight native source types differently. The paired
+read rates use the same source samples and byte counts.</p>
+<p>The cold-pass protocol below applies unchanged. Every timed pass begins with zero
+resident shard-data pages, following warmup or preparation. Cache reuse and
+read-ahead within a pass are part of the measured reader. This is not a guarantee
+that every individual crop reaches storage.</p>
+<h3 id="both-katamari-training-paths">Both Katamari training paths<a class="headerlink" href="#both-katamari-training-paths" title="Permanent link">&para;</a></h3>
+<p>The spatial sweep is a storage experiment shared by both targets. It is not a
+replay of either full training loader. The following source-read contracts were
+checked against Katamari revision
+<a href="https://github.com/evolutionaryscale/evolutionaryscale/tree/41ca4527e42017ad60c8e948fbb3c087168c294e/projects/katamari"><code>41ca4527e420</code></a>:</p>
+<table>
+<thead>
+<tr>
+<th>Follow-up profile</th>
+<th>Source reads to preserve</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Generative ROI</td>
+<td>One timepoint and Z plane; all native channels before output channel selection; random or centroid-centered ROI before normalization and resizing</td>
+</tr>
+<tr>
+<td>Image pretraining</td>
+<td>One timepoint and Z plane; all manifest-selected channels; usually 256² source crops, with a 224² exception</td>
+</tr>
+<tr>
+<td>Video pretraining</td>
+<td>12 or 16 timepoints, one Z plane, all manifest-selected channels; temporal stride 1 or 2</td>
+</tr>
+</tbody>
+</table>
+<p>The <a href="https://github.com/evolutionaryscale/evolutionaryscale/blob/41ca4527e42017ad60c8e948fbb3c087168c294e/projects/katamari/configs/experiment/generative/rae/fm/baselines/v7.yaml#L263">generative v7 configuration</a>
+produces 256² model inputs, but nominal source ROIs include 96² and 160², derived
+from physical field of view and pixel size. Manifest calibration can override
+those defaults. The chosen 128/192/256 storage sweep does not stand in for that
+actual ROI distribution. The active
+<a href="https://github.com/evolutionaryscale/evolutionaryscale/blob/41ca4527e42017ad60c8e948fbb3c087168c294e/projects/katamari/configs/experiment/prod/img-vid/active/vit_s.yaml#L13">image/video recipe</a>
+uses the legacy loader with homogeneous batches and log-weighted source selection.
+Its model channel limits are applied after source reads. Reading only the final
+channel count would understate storage work.</p>
+<p>A subsequent trace-based check should replay these three profiles on the selected
+layouts, retaining actual source/channel/time/ROI selections and source weights.
+For generative baking, preserve captions, conditioning, channel identities, masks,
+calibration, and paired reference geometry as well as pixels. For video, retain
+real frame relationships and temporal stride. The tiled distribution corpus does
+not supply realistic temporal or cross-channel correlations, so stacking its
+planes would not establish video-training performance. Keep these profile checks
+separate rather than multiplying every time, channel, crop, and codec choice.</p>
+<h3 id="reasoning-about-eight-gpus">Reasoning about eight GPUs<a class="headerlink" href="#reasoning-about-eight-gpus" title="Permanent link">&para;</a></h3>
+<p>Only one GPU is needed for this study. With one process per GPU and disjoint file
+ownership, 16 active files per process means <strong>128 active files per eight-GPU node</strong>.
+Sixteen is a starting point per process, not a worker multiplier or an established
+scaling optimum. The processes share storage, CPU, and memory bandwidth; neither
+throughput nor file-worker counts should be extrapolated linearly.</p>
+<p>For a target of <code>r</code> samples/s per GPU and <code>b</code> measured storage bytes per sample,
+the node needs approximately <code>8 × r × b</code> storage bytes/s. Apply the same calculation
+to storage operations per sample. Compare these demands with measured node limits
+and retain headroom for decoding and other work. Later scaling tests should vary
+files and outstanding work per process while enforcing disjoint samples and file
+ownership. Generative source synchronization and image/video batch partitioning
+must also retain their original source weights.</p>
 <h2 id="mixed-source-microscopy-study">Mixed-source microscopy study<a class="headerlink" href="#mixed-source-microscopy-study" title="Permanent link">&para;</a></h2>
-<p>The updated <a href="https://github.com/nclack/damacy/blob/main/bench/studies/microscopy.json"><code>bench/studies/microscopy.json</code></a>
+<p>The retained <a href="https://github.com/nclack/damacy/blob/bench/microscopy-pareto/bench/studies/microscopy-mixture-v2.json"><code>bench/studies/microscopy-mixture-v2.json</code></a>
 uses every asset in the version-3 <a href="https://github.com/nclack/chucky-benchmarks-data">corpus manifest</a>.
 The current seven inputs are OpenCell DNA and protein, BBBC010 brightfield,
 JUMP-Scope fluorescence, DynaCell phase, COSEM EM, and BBBC022 MitoTracker.
@@ -1206,7 +1435,7 @@ with the source's pixel distribution and local spatial texture. It does not
 create new specimens or establish realistic depth correlations, especially for
 single-plane inputs. Chunk layouts extending across planes must be interpreted
 with that limitation.</p>
-<p>The default matrix compares raw bytes, Zstd, Blosc-Zstd, and Blosc-LZ4; compression
+<p>That earlier matrix compares raw bytes, Zstd, Blosc-Zstd, and Blosc-LZ4; compression
 level is three and Blosc uses bitshuffle. Chunk sizes are 16, 64, 256, and 1024 KiB;
 Blosc block requests are 16 KiB or the whole chunk. Chunk dimensions divide the
 512 × 512 spatial shards. When a large chunk cannot fit in one spatial plane, it
@@ -1263,14 +1492,17 @@ storage requirements are measured during preparation, rather than estimated
 from the small earlier pilots.</p>
 <p>Repeated results report medians and observed min–max ranges. Bracketing raw
 controls show variation during each condition. The previous definitions are
-retained in <code>bench/studies/microscopy-pilot-v1.json</code> for reproducing old data.</p>
+retained in <code>bench/studies/microscopy-pilot-v1.json</code> and
+<code>bench/studies/microscopy-mixture-v2.json</code> for reproducing old data.</p>
 <h2 id="reproduce-a-study">Reproduce a study<a class="headerlink" href="#reproduce-a-study" title="Permanent link">&para;</a></h2>
 <p>Use a materialized version-3 corpus with <code>manifest.json</code> and the declared raw
-files. Planning reads metadata only:</p>
+files. Planning reads metadata only. The default definition is the new crop study; use
+<code>microscopy-mixture-v2.json --pilot</code> to reproduce the completed mixed study:</p>
 <div class="language-sh highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>uv<span class="w"> </span>run<span class="w"> </span>--script<span class="w"> </span>bench/pareto.py<span class="w"> </span>plan<span class="w"> </span>bench/studies/microscopy.json<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span>--corpus<span class="w"> </span>/path/to/microscopy<span class="w"> </span>--pilot<span class="w"> </span>--output<span class="w"> </span>/shared/study/plan.json
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span>--corpus<span class="w"> </span>/path/to/microscopy<span class="w"> </span>--output<span class="w"> </span>/shared/study/plan.json
 </span></code></pre></div>
-<p>Omit <code>--pilot</code> for all 22 layouts per input. Both modes include every source and all six dataset omissions.</p>
+<p>Use <code>--pilot</code> for two shorter repetitions instead of three; the new crop matrix
+and complete source mixture are unchanged. Dataset omissions are deferred.</p>
 <p>Preparation and measurement belong on compute nodes. Build <code>damacy_bench</code> with
 CUDA enabled to measure both backends. For CPU-only measurements without a GPU
 driver, configure with <code>-DDAMACY_CUDA=OFF</code>. Preparation checks input hashes, encodes
@@ -1296,6 +1528,11 @@ and resource settings still match. A new session needs a new result directory.</
 input paths. It rejects incomplete studies and mismatched observations. Serve
 the report over HTTP, or build the documentation site; the page loads its study
 JSON separately. The daily CI workflow does not start these retained studies.</p>
+<p>Preparation can reuse earlier arrays with <code>prepare --reuse /shared/previous/data</code>.
+It checks the exact layout and every file checksum before reuse. Reused arrays are
+linked in the preparation directory; copy the prepared file inventory to local
+storage before measuring, as <code>bench/jobs/pareto-mixed.sh</code> does. Raw layouts in the
+new definition retain their earlier identities, so only the baked arrays need encoding.</p>
 <h2 id="preview-a-pull-request">Preview a pull request<a class="headerlink" href="#preview-a-pull-request" title="Permanent link">&para;</a></h2>
 <p>The docs workflow builds and checks the page in Chromium. Pull requests from a
 branch in this repository publish their site under
