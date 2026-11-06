@@ -1,4 +1,4 @@
-import {csv, devicePlottable, frontier, groups, ioPlottable, matches, plottable, sensitivity} from "./analysis.mjs";
+import {csv, devicePlottable, frontier, groups, matches, plottable, sensitivity} from "./analysis.mjs";
 
 const $ = id => document.getElementById(id);
 const number = value => Number.isFinite(value) ? value.toLocaleString(undefined, {maximumSignificantDigits: 4}) : "—";
@@ -7,8 +7,9 @@ const range = metric => metric ? `${number(metric.min)}–${number(metric.max)}`
 const colors = {none: "var(--gray)", zstd: "var(--blue)", "blosc-zstd": "var(--orange)", "blosc-lz4": "var(--green)"};
 const codecs = {none: "Uncompressed", zstd: "Zstd", "blosc-zstd": "Blosc Zstd", "blosc-lz4": "Blosc LZ4"};
 const workloads = {"balanced-256": "Shard-balanced 256 × 256 crops", "random-256": "Random 256 × 256 crops", "whole-planes": "Whole-plane reads"};
-const views = {pareto: "Throughput and compression", io: "Application reads and bandwidth", device: "NVMe IOPS and bandwidth"};
+const views = {pareto: "Image throughput and compression", device: "Storage reads"};
 const saved = new URLSearchParams(location.hash.slice(1));
+if (saved.get("view") === "io") saved.set("view", "device");
 let study, entries, selected, filtered = [], generation = 0;
 
 function element(tag, text) {
@@ -35,7 +36,12 @@ async function json(url) {
 
 function fields(target, rows) {
   const list = element("dl");
-  for (const [name, value] of rows) list.append(element("dt", name), element("dd", value));
+  for (const [name, value] of rows) {
+    const cell = element("dd");
+    if (value instanceof Node) cell.append(value);
+    else cell.textContent = value;
+    list.append(element("dt", name), cell);
+  }
   target.append(list);
 }
 
@@ -44,89 +50,119 @@ function configurationName(row) {
     + (row.setting.block_bytes == null ? "" : ` · ${kib(row.setting.block_bytes)} block`);
 }
 
+function measurementValue(metric, unit = "") {
+  const value = element("span", metric ? `${number(metric.median)}${unit}` : "Not recorded");
+  if (metric) {
+    const limits = element("span", range(metric));
+    limits.className = "observed-range";
+    value.append(limits);
+  }
+  return value;
+}
+
 function select(row, announce = true) {
   selected = row.id;
   const target = $("detail-content");
+  const diagnosticsOpen = target.querySelector(".diagnostics")?.open ?? false;
   target.replaceChildren(element("p", `${codecs[row.setting.codec]} · ${row.backend.toUpperCase()}`));
   const setting = row.setting, metrics = row.metrics;
+  const summary = element("section");
+  summary.className = "primary-metrics";
+  summary.setAttribute("aria-label", "Measurements");
+  summary.append(element("p", `Medians and observed ranges across ${metrics.useful_gib_s.n} process repetitions. Compression ratio is fixed by the stored files.`));
+  fields(summary, [
+    ["Image throughput", measurementValue(metrics.useful_gib_s, " GiB/s")],
+    ["Compression ratio", `${number(row.compression_fold)}×`],
+    ["Bandwidth", measurementValue(metrics.device_read_gib_s, " GiB/s")],
+    ["IOPS", measurementValue(metrics.device_iops, " reads/s")],
+  ]);
+  target.append(summary, element("h3", "Layout"));
   fields(target, [
-    ["Useful throughput", `${number(metrics.useful_gib_s.median)} GiB/s`],
-    ["Observed useful range", `${range(metrics.useful_gib_s)} GiB/s`],
-    ["Compression", `${number(row.compression_fold)}×`],
-    ["Process repetitions", metrics.useful_gib_s.n],
     ["Chunk", kib(setting.chunk_bytes)],
     ["Chunk shape", setting.sources ? "Per source, below" : setting.chunk_shape.join(" × ")],
     ["Shard shape", setting.sources ? "Per source, below" : setting.shard_shape.join(" × ")],
-    ["Blosc block request", kib(setting.block_bytes)],
-    ["Blocks in headers", setting.actual_block_bytes.map(kib).join(", ") || "—"],
+    ["Blosc block", kib(setting.block_bytes)],
     ["Compression level", setting.level || "—"],
     ["Source type", setting.dtype],
-    ["Peak active file reads", metrics.peak_active_reads ? number(metrics.peak_active_reads.max) : "Not recorded"],
-    ["Returned type", study.pipeline.dtype],
     ["Sample shape", row.sampling.sample_shape.join(" × ")],
-    ["Encoded reads / useful bytes", `${number(metrics.read_amplification?.median)}×`],
-    ["Decoded / useful bytes", metrics.decode_amplification ? `${number(metrics.decode_amplification.median)}×` : "Not recorded"],
-    ["Returned throughput", `${number(metrics.returned_gib_s.median)} GiB/s`],
-    ["Application read requests/s", number(metrics.read_iops?.median)],
-    ["Request rate range", range(metrics.read_iops)],
-    ["Encoded read bandwidth", `${number(metrics.read_gib_s?.median)} GiB/s`],
-    ["Encoded bandwidth range", `${range(metrics.read_gib_s)} GiB/s`],
-    ["Mean encoded read size", kib(metrics.mean_read_bytes?.median)],
-    ["Read requests / useful GiB", number(metrics.reads_per_useful_gib?.median)],
-    ["Initial first batch", `${number(metrics.first_batch_ms.median)} ms`],
-    ["Reference range / median", `${number(row.reference_spread_percent)}%`],
-    ["Stored file bytes", number(setting.stored_bytes)],
-    ["Logical array bytes", number(setting.logical_bytes)],
   ]);
   if (row.query_summary) {
     const query = row.query_summary;
     target.append(element("h3", "Query coverage"));
     fields(target, [
       ["Samples per pass", number(query.samples)],
-      ["Source bytes per pass", `${number(query.useful_bytes / 2 ** 30)} GiB`],
+      ["Image bytes per pass", `${number(query.useful_bytes / 2 ** 30)} GiB`],
       ["Shard files per pass", number(query.distinct_shards)],
       ["Planned files per batch", range(query.shards_per_window.batch)],
       [`Planned files per ${study.pipeline.lookahead_samples}-query block`, range(query.shards_per_window.lookahead)],
-      ["Query SHA256", row.sampling.query_sha256],
+      ["Peak simultaneous file reads", metrics.peak_active_reads ? number(metrics.peak_active_reads.max) : "Not recorded"],
     ]);
-    target.append(element("p", "Shard coverage counts files addressed by the planned queries. Peak active file reads counts overlapping read calls; it does not count distinct active shard files."));
+    target.append(element("p", "Planned shard coverage counts distinct files. Simultaneous file reads can include multiple reads from the same file."));
     const link = element("a", "Download retained query stream");
     link.href = `data/queries/${row.sampling.query_id}.bin`;
     target.append(link);
     const comparisons = sensitivity(study.rows, row);
     if (comparisons.length) {
+      const baseline = study.rows.find(value => value.input_id === "all-sources"
+        && value.backend === row.backend && value.workload === row.workload
+        && ["codec", "chunk_bytes", "block_bytes", "level", "shuffle"].every(key => value.setting[key] === row.setting[key]));
       target.append(element("h3", "Leave-one-out sensitivity"));
-      target.append(element("p", "Changes from all sources for this setting. Compression shows the remaining mixture’s ratio and its percentage change. Raw-relative compares speedup against each mixture’s uncompressed control; returned compares float32 throughput. Removing a collection changes source types and file counts. These medians are not significance tests."));
-      fields(target, comparisons.map(value => [
-        study.cohorts.find(cohort => cohort.id === value.row.input_id).name,
-        `${number(value.row.compression_fold)}× compression (${number(value.compression_percent)}%) · ${number(value.raw_relative_percent)}% raw-relative · ${number(value.returned_percent)}% returned · ${number(value.useful_percent)}% useful`,
-      ]));
+      target.append(element("p", `Speed vs uncompressed divides image throughput by the same mixture’s uncompressed control${study.reference_setting ? ` (${kib(study.reference_setting.chunk_bytes)} chunks)` : ""}. A value of 1.2× means 20% faster. This accounts for source-type differences; removing a collection also changes file count.`));
+      for (const comparison of [baseline, ...comparisons.map(value => value.row)]) {
+        const group = element("section");
+        group.className = "sensitivity-comparison";
+        group.dataset.input = comparison.input_id;
+        group.append(element("h4", study.cohorts.find(cohort => cohort.id === comparison.input_id).name));
+        fields(group, [
+          ["Compression ratio", `${number(comparison.compression_fold)}×`],
+          ["Speed vs uncompressed", comparison.reference_useful_gib_s
+            ? `${number(comparison.metrics.useful_gib_s.median / comparison.reference_useful_gib_s.median)}×` : "Not recorded"],
+        ]);
+        target.append(group);
+      }
+      target.append(element("p", "These are comparisons of medians, not significance tests."));
     }
   }
+  const diagnostics = element("details");
+  diagnostics.className = "diagnostics";
+  diagnostics.open = diagnosticsOpen;
+  diagnostics.append(element("summary", "Diagnostics"));
+  diagnostics.append(element("h3", "Reader requests"));
+  diagnostics.append(element("p", "File read requests are the byte ranges Damacy reads before decompression, after adjacent ranges are combined. They exclude metadata. The OS can cache, split, combine, or read ahead of these requests, so their counts and bytes differ from storage measurements."));
+  fields(diagnostics, [
+    ["File read requests/s", number(metrics.read_iops?.median)],
+    ["File read bandwidth", measurementValue(metrics.read_gib_s, " GiB/s")],
+    ["Mean file read size", kib(metrics.mean_read_bytes?.median)],
+    ["File bytes / image bytes", `${number(metrics.read_amplification?.median)}×`],
+    ["Decoded bytes / image bytes", metrics.decode_amplification ? `${number(metrics.decode_amplification.median)}×` : "Not recorded"],
+    ["Output type", study.pipeline.dtype],
+    ["Blocks in headers", setting.actual_block_bytes.map(kib).join(", ") || "—"],
+    ["Initial first batch", `${number(metrics.first_batch_ms.median)} ms`],
+    ["Uncompressed control variation", `${number(row.reference_spread_percent)}%`],
+    ["Stored file bytes", number(setting.stored_bytes)],
+    ["Image bytes in stored arrays", number(setting.logical_bytes)],
+  ]);
   if (metrics.device_iops) {
-    target.append(element("h3", "NVMe device counters"));
-    fields(target, [
-      ["Read IOPS", number(metrics.device_iops.median)],
-      ["Read IOPS range", range(metrics.device_iops)],
-      ["Read bandwidth", `${number(metrics.device_read_gib_s.median)} GiB/s`],
-      ["Read bandwidth range", `${range(metrics.device_read_gib_s)} GiB/s`],
-      ["Mean device read size", kib(metrics.device_mean_read_bytes.median)],
-      ["Device reads / useful bytes", `${number(metrics.device_read_amplification.median)}×`],
-      ["Idle device read IOPS", number(metrics.idle_device_iops.median)],
-      ["Idle device bandwidth", `${number(metrics.idle_device_gib_s.median)} GiB/s`],
+    diagnostics.append(element("h3", "Storage checks"));
+    diagnostics.append(element("p", "Idle measurements are taken beside each execution and are not subtracted. Storage counters cover all activity on the selected drives."));
+    fields(diagnostics, [
+      ["Mean storage read size", kib(metrics.device_mean_read_bytes.median)],
+      ["Storage bytes / image bytes", `${number(metrics.device_read_amplification.median)}×`],
+      ["Idle IOPS", number(metrics.idle_device_iops.median)],
+      ["Idle bandwidth", `${number(metrics.idle_device_gib_s.median)} GiB/s`],
       ["Cache clearing (excluded)", `${number(metrics.cache_preparation_seconds.median)} s`],
     ]);
   }
-  target.append(element("h3", "Stage measurements"));
-  target.append(element("p", "One execution nearest the plotted bandwidth median; stage intervals overlap."));
-  const plottedMetric = $("view").value === "device" ? "device_read_gib_s" : $("view").value === "io" ? "read_gib_s" : "useful_gib_s";
+  diagnostics.append(element("h3", "Stage timings"));
+  diagnostics.append(element("p", "Execution nearest the image throughput median. Stage timings overlap and cannot be added together."));
+  const plottedMetric = "useful_gib_s";
   const observations = study.observations.filter(value => row.observation_ids.includes(value.task.id));
   observations.sort((a, b) => Math.abs(a.metrics[plottedMetric] - metrics[plottedMetric]?.median)
     - Math.abs(b.metrics[plottedMetric] - metrics[plottedMetric]?.median));
-  fields(target, observations[0].result.stages.map(stage => [stage.name.replaceAll("_", " "), `${number(stage.ms_total)} ms`]));
+  fields(diagnostics, observations[0].result.stages.map(stage => [stage.name.replaceAll("_", " "), `${number(stage.ms_total)} ms`]));
   const metadata = observations[0].result.metadata;
   if (metadata) {
-    target.append(element("h3", "Metadata in this execution"));
+    diagnostics.append(element("h3", "Metadata requests"));
     const counts = [
       ["Startup read operations", number(metadata.startup.read)],
       ["Measured read operations", number(metadata.measured.read)],
@@ -137,7 +173,7 @@ function select(row, announce = true) {
       ["Startup shard-index misses", number(metadata.startup.shard_index_misses)],
       ["Measured shard-index misses", number(metadata.measured.shard_index_misses)],
     );
-    fields(target, counts);
+    fields(diagnostics, counts);
   }
   target.append(element("h3", "Input and source"));
   const sources = setting.sources || [setting];
@@ -164,20 +200,23 @@ function select(row, announce = true) {
       ["Input SHA256", source.input_sha256],
     ]);
   }
-  fields(target, [["Revision", `${study.context.source.revision?.slice(0, 12) || "Unknown"}${study.context.source.local_changes ? " + local changes" : ""}`],
+  diagnostics.append(element("h3", "Provenance"));
+  fields(diagnostics, [["Revision", `${study.context.source.revision?.slice(0, 12) || "Unknown"}${study.context.source.local_changes ? " + local changes" : ""}`],
     ["Binary SHA256", study.context.binary_sha256], ["Input SHA256", setting.input_sha256]]);
+  if (row.sampling.query_sha256) fields(diagnostics, [["Query SHA256", row.sampling.query_sha256]]);
+  target.append(diagnostics);
   d3.selectAll("circle.point").attr("stroke-width", point => point.id === selected ? 3 : 1.5)
     .attr("aria-pressed", point => point.id === selected);
   for (const button of $("rows").querySelectorAll("button")) button.setAttribute("aria-pressed", button.dataset.setting === selected);
   $("selection-details").hidden = false;
-  if (announce) $("selection-status").textContent = `${configurationName(row)} selected. ${number(metrics.useful_gib_s.median)} useful GiB/s, ${number(row.compression_fold)}× compression, ${metrics.useful_gib_s.n} process repetitions.`;
+  if (announce) $("selection-status").textContent = `${configurationName(row)} selected. ${number(metrics.useful_gib_s.median)} GiB/s image throughput, ${number(row.compression_fold)}× compression ratio, ${metrics.useful_gib_s.n} process repetitions.`;
 }
 
-function panel(rows, scales, isIO, isDevice) {
+function panel(rows, scales, isIO) {
   const first = rows[0], wrapper = element("section");
   wrapper.className = "panel";
   const backend = first.backend === "cpu" ? "CPU" : "CUDA";
-  wrapper.append(element("h2", backend), element("p", study.context.storage));
+  wrapper.append(element("h2", backend));
   $("plots").append(wrapper);
   const padding = parseFloat(getComputedStyle(wrapper).paddingLeft) + parseFloat(getComputedStyle(wrapper).paddingRight);
   const width = Math.max(240, wrapper.clientWidth - padding);
@@ -185,21 +224,21 @@ function panel(rows, scales, isIO, isDevice) {
   const x = (isIO ? d3.scaleLinear() : d3.scaleLog()).domain(scales.x).range([left, width - right]);
   if (isIO) x.nice();
   const y = d3.scaleLinear().domain(scales.y).nice().range([height - bottom, top]);
-  const iopsMetric = isDevice ? "device_iops" : "read_iops";
-  const bandwidthMetric = isDevice ? "device_read_gib_s" : "read_gib_s";
+  const iopsMetric = "device_iops";
+  const bandwidthMetric = "device_read_gib_s";
   const xValue = row => isIO ? row.metrics[iopsMetric].median : row.compression_fold;
   const yMetric = row => row.metrics[isIO ? bandwidthMetric : "useful_gib_s"];
   const svg = d3.select(wrapper).append("svg").attr("viewBox", `0 0 ${width} ${height}`)
-    .attr("role", "group").attr("aria-label", `${backend}: ${isIO ? (isDevice ? "NVMe bandwidth versus IOPS" : "application bandwidth versus requests per second") : "useful throughput versus compression"}`);
+    .attr("role", "group").attr("aria-label", `${backend}: ${isIO ? "Storage bandwidth versus IOPS" : "Image throughput versus compression ratio"}`);
   svg.append("g").attr("class", "grid").attr("transform", `translate(${left},0)`)
     .call(d3.axisLeft(y).ticks(5).tickSize(-(width - left - right)).tickFormat(""));
   svg.append("g").attr("transform", `translate(0,${height - bottom})`)
     .call(d3.axisBottom(x).ticks(5, isIO ? "~s" : ".2~g"));
   svg.append("g").attr("transform", `translate(${left},0)`).call(d3.axisLeft(y).ticks(5));
   svg.append("text").attr("class", "axis-label").attr("x", (left + width - right) / 2)
-    .attr("y", height - 7).attr("text-anchor", "middle").text(isDevice ? "NVMe read IOPS" : isIO ? "Application read requests/s" : "Compression fold × (log scale)");
+    .attr("y", height - 7).attr("text-anchor", "middle").text(isIO ? "IOPS (reads/s)" : "Compression ratio (×, log scale)");
   svg.append("text").attr("class", "axis-label").attr("transform", "rotate(-90)")
-    .attr("x", -(top + height - bottom) / 2).attr("y", 14).attr("text-anchor", "middle").text(isDevice ? "Device read GiB/s" : isIO ? "Encoded read GiB/s" : "Useful image GiB/s");
+    .attr("x", -(top + height - bottom) / 2).attr("y", 14).attr("text-anchor", "middle").text(isIO ? "Bandwidth (GiB/s)" : "Image throughput (GiB/s)");
   const boundary = isIO ? [] : frontier(rows), ids = new Set(boundary.map(row => row.id));
   const shown = rows.filter(row => isIO || !$("frontier-only").checked || ids.has(row.id));
   if (!isIO) svg.append("path").datum(boundary).attr("class", "frontier").attr("fill", "none").attr("stroke", "var(--muted)")
@@ -208,7 +247,7 @@ function panel(rows, scales, isIO, isDevice) {
   const radius = row => 4 + Math.sqrt(row.setting.chunk_bytes / 16384) * .6;
   points.append("circle").attr("class", "point").attr("tabindex", 0).attr("role", "button")
     .attr("aria-pressed", row => row.id === selected).attr("aria-controls", "detail")
-    .attr("aria-label", row => `${codecs[row.setting.codec]}, chunk ${kib(row.setting.chunk_bytes)}, block ${kib(row.setting.block_bytes)}, ${isIO ? `${number(xValue(row))} ${isDevice ? "device IOPS" : "application requests/s"}, ${number(yMetric(row).median)} GiB/s` : `${number(yMetric(row).median)} useful GiB/s, ${number(row.compression_fold)} fold`}`)
+    .attr("aria-label", row => `${codecs[row.setting.codec]}, chunk ${kib(row.setting.chunk_bytes)}, block ${kib(row.setting.block_bytes)}, ${isIO ? `${number(xValue(row))} IOPS, ${number(yMetric(row).median)} GiB/s` : `${number(yMetric(row).median)} GiB/s image throughput, ${number(row.compression_fold)} fold`}`)
     .attr("cx", row => x(xValue(row))).attr("cy", row => y(yMetric(row).median))
     .attr("r", radius)
     .attr("fill", row => isIO || ids.has(row.id) ? colors[row.setting.codec] : "var(--surface)")
@@ -216,7 +255,7 @@ function panel(rows, scales, isIO, isDevice) {
     .attr("stroke-width", row => row.id === selected ? 3 : 1.5)
     .on("click", (_, row) => select(row)).on("keydown", (event, row) => {
       if (event.key === "Enter" || event.key === " ") { event.preventDefault(); select(row); }
-    }).append("title").text(row => `${codecs[row.setting.codec]} · ${kib(row.setting.chunk_bytes)} chunk · ${kib(row.setting.block_bytes)} block\n${number(yMetric(row).median)} ${isDevice ? "device" : isIO ? "encoded" : "useful"} GiB/s · ${isIO ? `${number(xValue(row))} requests/s · ${kib(row.metrics[isDevice ? "device_mean_read_bytes" : "mean_read_bytes"].median)} per read` : `${number(row.compression_fold)}×`}`);
+    }).append("title").text(row => `${codecs[row.setting.codec]} · ${kib(row.setting.chunk_bytes)} chunk · ${kib(row.setting.block_bytes)} block\n${isIO ? "Bandwidth" : "Image throughput"}: ${number(yMetric(row).median)} GiB/s · ${isIO ? `IOPS: ${number(xValue(row))} reads/s` : `Compression ratio: ${number(row.compression_fold)}×`}`);
   points.append("path").attr("class", "range").attr("aria-hidden", "true")
     .attr("d", row => {
       const cx = x(xValue(row)), low = y(yMetric(row).min), high = y(yMetric(row).max), cap = radius(row) + 3;
@@ -229,20 +268,19 @@ function panel(rows, scales, isIO, isDevice) {
     });
 }
 
-function table(rows, isIO, isDevice) {
+function table(rows, isIO) {
   const columns = [
     ["Backend", row => row.backend.toUpperCase()],
     ["Chunk", row => kib(row.setting.chunk_bytes)],
     ["Block request", row => kib(row.setting.block_bytes)],
   ];
   if (isIO) columns.push(
-    [isDevice ? "NVMe read IOPS" : "Application reads/s", row => row.metrics[isDevice ? "device_iops" : "read_iops"]],
-    [isDevice ? "Device read GiB/s" : "Encoded read GiB/s", row => row.metrics[isDevice ? "device_read_gib_s" : "read_gib_s"]],
-    [isDevice ? "Mean device read" : "Mean encoded read", row => kib(row.metrics[isDevice ? "device_mean_read_bytes" : "mean_read_bytes"]?.median)],
+    ["IOPS (reads/s)", row => row.metrics.device_iops],
+    ["Bandwidth (GiB/s)", row => row.metrics.device_read_gib_s],
   );
   columns.push(
-    ["Useful GiB/s", row => row.metrics.useful_gib_s],
-    ["Compression ×", row => number(row.compression_fold)],
+    ["Image throughput (GiB/s)", row => row.metrics.useful_gib_s],
+    ["Compression ratio (×)", row => number(row.compression_fold)],
     ["Repeats", row => row.metrics.useful_gib_s.n],
   );
   $("columns").replaceChildren(...["Setting", ...columns.map(([name]) => name)].map(name => {
@@ -268,7 +306,7 @@ function table(rows, isIO, isDevice) {
         const observed = element("span", range(metric));
         observed.className = "observed-range";
         cell.append(observed);
-      } else cell.textContent = metric ?? "—";
+      } else cell.textContent = metric ?? "Not recorded";
       tr.append(cell);
     }
     $("rows").append(tr);
@@ -276,40 +314,38 @@ function table(rows, isIO, isDevice) {
 }
 
 function updateContext() {
-  const context = study.context, cohort = study.cohorts?.find(value => value.id === $("input").value);
+  const cohort = study.cohorts?.find(value => value.id === $("input").value);
   const geometry = cohort
     ? `${cohort.input_ids.length} source inputs, mixed within each pass. ${cohort.omitted_dataset ? `Omitted collection: ${cohort.omitted_dataset}. ` : ""}${study.volume.frame_shape.join(" × ")} frames; ${study.volume.shard_spatial_shape.join(" × ")} spatial shards; ${number(study.volume.shard_bytes / 2 ** 30)} GiB uncompressed per shard. ${study.weighting}. Compression combines equal logical source volumes. Expanded pixels are tiled source distributions.`
     : "Each input is a small replayed image pack.";
-  $("context").textContent = `${study.pilot ? "Pilot · limited settings. " : ""}${study.profile?.repeats ?? study.rows[0].metrics.useful_gib_s.n} process repetitions per setting. ${context.machine.cpu?.["Model name"] || context.machine.host} · ${context.machine.cpu_affinity?.length ?? "Unknown"} allowed logical CPUs · ${study.pipeline.decode_workers} CPU decode workers · ${study.pipeline.n_io_threads} file workers · ${context.machine.gpu?.split("\n")[0]?.split(",")[0] || "CPU only"}. ${geometry}`;
+  $("context").textContent = `${study.pilot ? "Pilot · limited settings. " : ""}${study.profile?.repeats ?? study.rows[0].metrics.useful_gib_s.n} process repetitions per setting · ${study.pipeline.decode_workers} CPU decode workers · ${study.pipeline.n_io_threads} file workers. ${geometry}`;
 }
 
 function render() {
   updateContext();
-  const isDevice = $("view").value === "device", isIO = $("view").value !== "pareto";
+  const isIO = $("view").value === "device";
   const filters = Object.fromEntries(["input", "workload", "codec", "chunk", "block"].map(id => [id, $(id).value]));
   filtered = study.rows.filter(row => matches(row, filters));
   const query = new URLSearchParams({study: $("study").value, view: $("view").value, ...filters});
   history.replaceState(null, "", `#${query}`);
   $("plots").replaceChildren();
   $("rows").replaceChildren();
-  const valid = filtered.filter(isDevice ? devicePlottable : isIO ? ioPlottable : plottable);
+  const valid = filtered.filter(isIO ? devicePlottable : plottable);
   const fold = valid.map(row => row.compression_fold);
-  const max = d3.max(valid, row => row.metrics[isDevice ? "device_read_gib_s" : isIO ? "read_gib_s" : "useful_gib_s"].max);
-  const scales = {x: isIO ? [0, d3.max(valid, row => row.metrics[isDevice ? "device_iops" : "read_iops"].max) * 1.12]
+  const max = d3.max(valid, row => row.metrics[isIO ? "device_read_gib_s" : "useful_gib_s"].max);
+  const scales = {x: isIO ? [0, d3.max(valid, row => row.metrics.device_iops.max) * 1.12]
     : [d3.min(fold) / 1.15, d3.max(fold) * 1.15], y: [0, max * 1.12]};
   const panels = groups(valid).sort((a, b) => a[0].backend.localeCompare(b[0].backend));
   $("plots").classList.toggle("single-panel", panels.length === 1);
-  for (const rows of panels) panel(rows, scales, isIO, isDevice);
-  if (!valid.length) $("plots").append(element("p", isDevice && filtered.length ? "No NVMe counters were recorded for this study." : isIO && filtered.length ? "No application read counters were recorded for these settings." : "No measurements match these filters."));
+  for (const rows of panels) panel(rows, scales, isIO);
+  if (!valid.length) $("plots").append(element("p", isIO && filtered.length ? "Storage counters were not recorded for this study. File read requests cannot substitute for them." : "No measurements match these filters."));
   $("frontier-filter").hidden = isIO;
-  $("plot-note").textContent = isDevice
-    ? "NVMe counters include readahead and any other activity on those devices. Adjacent idle intervals are recorded in configuration details. The axes show read operations and bytes per timed second; higher IOPS alone does not imply better application performance. Points are medians; capped bars show observed min–max across process repetitions."
-    : isIO
-    ? "Each point shows application read requests/s and encoded bandwidth. For each execution, bandwidth equals requests/s × mean request size. More requests can reflect smaller reads; inspect request size and useful throughput in configuration details. Points are medians; capped bars show observed min–max across process repetitions."
-    : "Upper right is better. Filled, connected points form the observed Pareto frontier; hollow points are other tested settings. Points are medians; capped bars show observed min–max across process repetitions. Each panel has its own frontier; all panels use the same axes.";
+  $("plot-note").textContent = isIO
+    ? "Bandwidth counts bytes read from the storage system per second; IOPS counts completed read operations per second. Both are summed across its drives. More IOPS alone does not imply higher image throughput. Points show medians; bars show observed ranges."
+    : "Image throughput counts requested pixels in their source data type per second. Compression ratio is image bytes divided by stored file bytes. Upper right is better. Filled, connected points form each panel’s observed frontier. Points show medians; bars show observed ranges. All panels use the same axes.";
   const count = groups(filtered).reduce((total, rows) => total + frontier(rows).length, 0);
-  $("count").textContent = `${isIO ? `${valid.length} settings with read counts` : `${filtered.length} settings · ${count} on the observed frontiers`} · larger markers indicate larger chunks`;
-  table(filtered, isIO, isDevice);
+  $("count").textContent = `${isIO ? `${valid.length} settings with storage measurements` : `${filtered.length} settings · ${count} on the observed frontiers`} · larger markers indicate larger chunks`;
+  table(filtered, isIO);
   if (!filtered.some(row => row.id === selected)) {
     selected = null;
     $("selection-status").textContent = "Select a point or table setting to inspect its measurements.";
@@ -341,11 +377,28 @@ async function loadStudy() {
   $("raw").href = `data/${entry.file}`;
   const context = study.context;
   const storage = context.machine.local_storage;
+  const system = $("storage-content");
+  system.replaceChildren(element("p", "All panels in this study use this storage system. Bandwidth and IOPS are Linux counters summed over its drives, including metadata, read-ahead, and other processes. They are not internal SSD flash-operation counts."));
+  const models = new Map();
+  for (const device of storage?.devices || []) models.set(device.model, (models.get(device.model) || 0) + 1);
+  const gpu = context.machine.gpu?.split("\n")[0]?.split(",");
+  const filesystem = storage?.filesystem || context.machine.filesystem?.filesystems?.[0];
+  fields(system, [
+    ["Machine", context.machine.host],
+    ["CPU", context.machine.cpu?.["Model name"] || "Not recorded"],
+    ["Allowed logical CPUs", context.machine.cpu_affinity?.length ?? "Not recorded"],
+    ["GPU", gpu?.[0] || "None"],
+    ["GPU driver", gpu?.[2]?.trim() || "Not recorded"],
+    ["Filesystem", filesystem ? `${filesystem.fstype}${filesystem.source ? ` on ${filesystem.source.split("[")[0]}` : ""}` : "Not recorded"],
+    ["Drives", storage ? `${storage.devices.length} PCIe NVMe drives` : "Not recorded"],
+    ["Drive models", [...models].map(([model, count]) => `${count} × ${model}`).join("; ") || "Not recorded"],
+  ]);
+  system.append(element("p", storage ? "The drives are not reserved exclusively for this study. Idle activity is retained in Diagnostics. SSD/controller caches are not controlled." : "A drive inventory and storage counters were not recorded for this cached study."));
   $("cache-condition").textContent = context.cache_policy === "cold-pass"
-    ? `Cold file-cache passes · ${storage.devices.length} PCIe NVMe devices (${[...new Set(storage.devices.map(device => device.model))].join(", ")}). Every timed pass starts with zero resident shard-data pages and runs many batches through the pipeline. Device reads are verified. Codecs and metadata are warmed; SSD/controller caches are not controlled.`
+    ? "Cold file-cache passes. Every timed pass starts with zero resident shard-data pages and runs many batches through the pipeline. Storage reads are verified. Codecs and metadata are warmed."
     : context.cache_policy === "cold"
-    ? `Cold file-cache reads · ${storage.devices.length} PCIe NVMe devices (${[...new Set(storage.devices.map(device => device.model))].join(", ")}). Every timed batch starts with zero resident data-file pages; device reads are verified. Codec and metadata caches are warmed. SSD/controller caches are not controlled.`
-    : "Cached pilot · files were preloaded into RAM and reads were replayed. These measurements characterize the cached reader and do not measure cold NVMe performance.";
+    ? "Cold file-cache reads. Every timed batch starts with zero resident data-file pages; storage reads are verified. Codecs and metadata are warmed."
+    : "Cached pilot. Files were preloaded into RAM and reads were replayed. Storage bandwidth and IOPS were not recorded.";
   $("workspace").hidden = false;
   $("status").hidden = true;
   render();

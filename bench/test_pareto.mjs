@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {csv, devicePlottable, frontier, ioPlottable, matches, sensitivity} from "../docs/pareto/analysis.mjs";
+import {csv, devicePlottable, frontier, matches, sensitivity} from "../docs/pareto/analysis.mjs";
 
 function point(id, fold, rate, condition = "cpu") {
   return {id, condition_id: condition, input_id: "image", backend: condition, workload: "crop",
@@ -47,17 +47,22 @@ test("CSV keeps exact values and measurement identities", () => {
 
 test("application and device counters cannot substitute for each other", () => {
   const row = point("reads", 2, 4);
-  assert(!ioPlottable(row));
+  assert(!devicePlottable(row));
   row.metrics.read_iops = {median: 12345.678901234};
   row.metrics.read_gib_s = {median: 1.2345678901234};
-  assert(ioPlottable(row));
   assert(!devicePlottable(row));
   const output = csv([row]);
-  assert(output.includes('"12345.678901234"'));
-  assert(output.includes('"1.2345678901234"'));
+  assert(!output.includes('"12345.678901234"'));
+  assert(!output.includes('"1.2345678901234"'));
+  assert(output.includes('"bandwidth_gib_s_median"'));
+  assert(output.includes('"iops_median"'));
+  assert(!output.includes('"read_iops_median"'));
   row.metrics.device_iops = {median: 17};
   row.metrics.device_read_gib_s = {median: 1};
   assert(devicePlottable(row));
+  const measured = csv([row]);
+  assert(measured.includes('"17"'));
+  assert(measured.includes('"1"'));
   row.metrics.device_iops.median = NaN;
   assert(!devicePlottable(row));
 });

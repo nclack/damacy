@@ -166,7 +166,6 @@ def verify_scales(page, view="pareto"):
       })))""")
     axes = {
         "pareto": (("fold", math.log, "x", 1), ("rate", float, "y", -1)),
-        "io": (("read_iops", float, "x", 1), ("read_gib_s", float, "y", -1)),
         "device": (
             ("device_iops", float, "x", 1),
             ("device_read_gib_s", float, "y", -1),
@@ -211,21 +210,17 @@ def verify_table(page, rows, view):
       values: [...row.children].map(cell => ({text: cell.firstChild.textContent, range: cell.querySelector('.observed-range')?.textContent}))
     }))""")
     by_id = {row["id"]: row for row in rows}
-    metrics = [("Useful GiB/s", "useful_gib_s")]
+    metrics = [("Image throughput (GiB/s)", "useful_gib_s")]
+    assert not any(
+        word in heading
+        for heading in headers
+        for word in ("Encoded", "Application", "NVMe", "Useful", "Device")
+    )
     if view == "device":
-        assert "Application reads/s" not in headers
         metrics += [
-            ("NVMe read IOPS", "device_iops"),
-            ("Device read GiB/s", "device_read_gib_s"),
+            ("IOPS (reads/s)", "device_iops"),
+            ("Bandwidth (GiB/s)", "device_read_gib_s"),
         ]
-        assert "Mean device read" in headers
-    elif view == "io":
-        assert "NVMe read IOPS" not in headers
-        metrics += [
-            ("Application reads/s", "read_iops"),
-            ("Encoded read GiB/s", "read_gib_s"),
-        ]
-        assert "Mean encoded read" in headers
     assert {row["id"] for row in cells} == set(by_id)
     for row in cells:
         original = by_id[row["id"]]
@@ -237,7 +232,7 @@ def verify_table(page, rows, view):
             cell = row["values"][headers.index(heading)]
             metric = original["metrics"].get(key)
             if metric is None:
-                assert cell["text"] == "—"
+                assert cell["text"] == "Not recorded"
                 continue
             median, limits = cell["text"], cell["range"]
             values = [median, *limits.split("\N{EN DASH}")]
@@ -303,11 +298,46 @@ def verify_study(page, document):
                 detail = page.locator("#detail-content").inner_text()
                 assert "Expanded shape" in detail and "Query coverage" in detail
                 assert "Leave-one-out sensitivity" in detail
-                assert " compression (" in detail
-            for view, metric in (
-                ("io", "read_iops"),
-                ("device", "device_iops"),
-            ):
+                assert "Speed vs uncompressed" in detail
+                selected = point.evaluate("point => point.__data__.id")
+                selected_row = next(row for row in expected if row["id"] == selected)
+                shown = page.locator(".sensitivity-comparison").evaluate_all("""groups => groups.map(group => ({
+                  input: group.dataset.input, values: [...group.querySelectorAll('dd')].map(value => value.textContent)
+                }))""")
+                assert len(shown) == len(document["cohorts"])
+                assert shown[0]["input"] == "all-sources"
+                for comparison in shown:
+                    original = next(
+                        row
+                        for row in document["rows"]
+                        if row["input_id"] == comparison["input"]
+                        and row["backend"] == selected_row["backend"]
+                        and row["workload"] == selected_row["workload"]
+                        and all(
+                            row["setting"].get(key) == selected_row["setting"].get(key)
+                            for key in (
+                                "codec",
+                                "chunk_bytes",
+                                "block_bytes",
+                                "level",
+                                "shuffle",
+                            )
+                        )
+                    )
+                    values = [
+                        float(value.replace(",", "")[:-1])
+                        for value in comparison["values"]
+                    ]
+                    assert math.isclose(
+                        values[0], original["compression_fold"], rel_tol=5e-4
+                    )
+                    assert math.isclose(
+                        values[1],
+                        original["metrics"]["useful_gib_s"]["median"]
+                        / original["reference_useful_gib_s"]["median"],
+                        rel_tol=5e-4,
+                    )
+            for view, metric in (("device", "device_iops"),):
                 page.select_option("#view", view)
                 assert page.locator("circle.point").count() == sum(
                     bool(row["metrics"].get(metric)) for row in expected
@@ -446,8 +476,14 @@ def check(assets, output, actual):
                 )
                 page.on("pageerror", lambda error: errors.append(str(error)))
                 url = f"http://127.0.0.1:{server.server_port}/pareto/"
-                page.goto(url)
+                page.goto(url + "#view=io")
                 page.wait_for_selector("#workspace", state="visible")
+                assert page.locator("#view").input_value() == "device"
+                assert page.locator("#view option").all_text_contents() == [
+                    "Image throughput and compression",
+                    "Storage reads",
+                ]
+                page.select_option("#view", "pareto")
                 for entry in index["studies"]:
                     current = json.loads((report / "data" / entry["file"]).read_text())
                     page.select_option("#study", entry["id"])
@@ -479,7 +515,8 @@ def check(assets, output, actual):
                                 assert detail.evaluate("node => node.scrollTop > 0")
                                 detail.screenshot(
                                     path=str(
-                                        output / f"mixture-{entry['id']}-{section}-{theme}.png"
+                                        output
+                                        / f"mixture-{entry['id']}-{section}-{theme}.png"
                                     )
                                 )
                             detail.evaluate("node => { node.scrollTop = 0; }")
@@ -504,9 +541,34 @@ def check(assets, output, actual):
                 point.focus()
                 point.press("Enter")
                 assert (
-                    "Useful throughput" in page.locator("#detail-content").inner_text()
+                    "Image throughput" in page.locator("#detail-content").inner_text()
                 )
-                assert "Revision" in page.locator("#detail-content").inner_text()
+                assert page.locator(".primary-metrics dt").all_text_contents() == [
+                    "Image throughput",
+                    "Compression ratio",
+                    "Bandwidth",
+                    "IOPS",
+                ]
+                diagnostics = page.locator(".diagnostics")
+                assert diagnostics.get_attribute("open") is None
+                assert (
+                    "File read bandwidth"
+                    not in page.locator("#detail-content").inner_text()
+                )
+                diagnostics.locator("summary").click()
+                assert "File read bandwidth" in diagnostics.inner_text()
+                assert "Revision" in diagnostics.inner_text()
+                page.select_option("#view", "device")
+                assert diagnostics.get_attribute("open") is not None
+                page.set_viewport_size({"width": 1400, "height": 1100})
+                page.evaluate(
+                    "() => new Promise(resolve => requestAnimationFrame(resolve))"
+                )
+                assert diagnostics.get_attribute("open") is not None
+                page.select_option("#view", "pareto")
+                diagnostics.locator("summary").click()
+                assert diagnostics.get_attribute("open") is None
+                page.locator("#detail").evaluate("node => { node.scrollTop = 0; }")
                 assert point.get_attribute("aria-pressed") == "true"
                 assert page.locator('#rows button[aria-pressed="true"]').count() == 1
                 assert "selected" in page.locator("#selection-status").inner_text()
@@ -525,25 +587,26 @@ def check(assets, output, actual):
                 for row in exported:
                     original = by_id[row["setting_id"]]
                     assert (
-                        float(row["useful_gib_s_median"])
+                        float(row["image_throughput_gib_s_median"])
                         == original["metrics"]["useful_gib_s"]["median"]
                     )
                     assert (
-                        float(row["compression_fold"]) == original["compression_fold"]
+                        float(row["compression_ratio"]) == original["compression_fold"]
                     )
-                    for metric in (
-                        "read_iops",
-                        "read_gib_s",
-                        "mean_read_bytes",
-                        "device_iops",
-                        "device_read_gib_s",
+                    for column, metric in (
+                        ("iops", "device_iops"),
+                        ("bandwidth_gib_s", "device_read_gib_s"),
                     ):
                         value = original["metrics"].get(metric)
                         assert (
-                            float(row[f"{metric}_median"])
-                            if row[f"{metric}_median"]
+                            float(row[f"{column}_median"])
+                            if row[f"{column}_median"]
                             else None
                         ) == (value["median"] if value else None)
+                assert not any(
+                    "encoded" in key or "read_iops" in key or "useful" in key
+                    for key in exported[0]
+                )
                 page.locator(".more-filters summary").click()
                 page.select_option("#block", "16384")
                 assert page.locator("circle.point").count() == sum(
@@ -553,7 +616,7 @@ def check(assets, output, actual):
                 )
                 page.locator("#frontier-only").check()
                 assert page.locator("circle.point").count() > 0
-                page.select_option("#view", "io")
+                page.select_option("#view", "device")
                 assert page.locator("circle.point").count() == sum(
                     not row["setting"]["codec"].startswith("blosc-")
                     or row["setting"]["block_bytes"] == 16384
@@ -565,11 +628,11 @@ def check(assets, output, actual):
                 page.select_option("#codec", "zstd")
                 assert page.locator("#selection-details").is_hidden()
                 assert page.locator('circle.point[aria-pressed="true"]').count() == 0
-                page.select_option("#view", "io")
+                page.select_option("#view", "device")
                 page.reload()
                 page.wait_for_selector("#workspace", state="visible")
                 assert page.locator("#codec").input_value() == "zstd"
-                assert page.locator("#view").input_value() == "io"
+                assert page.locator("#view").input_value() == "device"
                 page.locator(".more-filters summary").click()
                 page.select_option("#codec", "")
                 assert page.locator("#appearance").input_value() == "system"
@@ -597,6 +660,17 @@ def check(assets, output, actual):
                 page.wait_for_function(
                     "document.documentElement.dataset.theme === 'light'"
                 )
+                page.locator("#storage-details summary").click()
+                assert "Machine" in page.locator("#storage-content").inner_text()
+                assert (
+                    "All panels in this study use this storage system"
+                    in page.locator("#storage-content").inner_text()
+                )
+                page.locator("#storage-details").screenshot(
+                    path=str(output / "storage-system.png")
+                )
+                page.locator("#storage-details summary").click()
+                page.evaluate("window.scrollTo(0, 0)")
                 for width in (1440, 768, 390, 320):
                     page.set_viewport_size({"width": width, "height": 1100})
                     page.evaluate(

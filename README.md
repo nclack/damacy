@@ -235,9 +235,9 @@ Full API reference and guides: **<https://nclack.github.io/damacy/>**
 
 Performance:
 
-- [Pareto analysis](https://nclack.github.io/damacy/pareto/) — throughput versus
-  compression across chunk, codec, and block settings, with application request
-  rates and NVMe IOPS. Cold NVMe and RAM-cached studies are labeled separately.
+- [Pareto analysis](https://nclack.github.io/damacy/pareto/) — image throughput,
+  compression ratio, bandwidth, and IOPS across chunk, codec, and block settings.
+  Each study identifies its storage system and cache conditions.
 - [Measurement protocol](https://nclack.github.io/damacy/performance/) — data,
   workloads, cache verification, hardware records, reproduction, and PR previews.
 - [Throughput history](https://nclack.github.io/damacy/throughput/) and

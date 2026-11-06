@@ -1,9 +1,6 @@
 export const plottable = row => Number.isFinite(row.compression_fold) && row.compression_fold > 0
   && Number.isFinite(row.metrics.useful_gib_s.median) && row.metrics.useful_gib_s.median > 0;
 
-export const ioPlottable = row => ["read_iops", "read_gib_s"].every(key =>
-  Number.isFinite(row.metrics[key]?.median) && row.metrics[key].median > 0);
-
 export const devicePlottable = row => ["device_iops", "device_read_gib_s"].every(key =>
   Number.isFinite(row.metrics[key]?.median) && row.metrics[key].median > 0);
 
@@ -60,23 +57,16 @@ export function layoutShapes(setting, key) {
 
 export function csv(rows, context = {}) {
   const columns = ["cache_policy", "host", "input", "backend", "workload", "codec", "chunk_bytes", "block_request_bytes",
-    "chunk_shape", "shard_shape", "compression_fold", "useful_gib_s_median", "useful_gib_s_min",
-    "useful_gib_s_max", "repeats", "read_amplification", "decode_amplification", "reference_spread_percent",
-    "read_iops_median", "read_iops_min", "read_iops_max", "read_gib_s_median", "read_gib_s_min", "read_gib_s_max",
-    "mean_read_bytes_median", "reads_per_useful_gib_median", "device_iops_median", "device_iops_min", "device_iops_max",
-    "device_read_gib_s_median", "device_read_gib_s_min", "device_read_gib_s_max", "device_mean_read_bytes_median",
-    "idle_device_iops_median", "idle_device_gib_s_median", "source_ids", "source_samples_per_pass",
-    "distinct_shards_per_pass", "peak_active_file_reads", "condition_id", "setting_id"];
+    "chunk_shape", "shard_shape", "compression_ratio", "image_throughput_gib_s_median", "image_throughput_gib_s_min",
+    "image_throughput_gib_s_max", "repeats", "bandwidth_gib_s_median", "bandwidth_gib_s_min", "bandwidth_gib_s_max",
+    "iops_median", "iops_min", "iops_max", "speed_vs_uncompressed", "source_ids", "source_samples_per_pass",
+    "distinct_shards_per_pass", "peak_simultaneous_file_reads", "condition_id", "setting_id"];
   const values = rows.map(row => [context.cache_policy, context.host, row.input_id, row.backend, row.workload, row.setting.codec,
     row.setting.chunk_bytes, row.setting.block_bytes, layoutShapes(row.setting, "chunk_shape"), layoutShapes(row.setting, "shard_shape"),
     row.compression_fold, row.metrics.useful_gib_s.median, row.metrics.useful_gib_s.min, row.metrics.useful_gib_s.max,
-    row.metrics.useful_gib_s.n, row.metrics.read_amplification?.median, row.metrics.decode_amplification?.median,
-    row.reference_spread_percent, row.metrics.read_iops?.median, row.metrics.read_iops?.min, row.metrics.read_iops?.max,
-    row.metrics.read_gib_s?.median, row.metrics.read_gib_s?.min, row.metrics.read_gib_s?.max,
-    row.metrics.mean_read_bytes?.median, row.metrics.reads_per_useful_gib?.median,
+    row.metrics.useful_gib_s.n, row.metrics.device_read_gib_s?.median, row.metrics.device_read_gib_s?.min, row.metrics.device_read_gib_s?.max,
     row.metrics.device_iops?.median, row.metrics.device_iops?.min, row.metrics.device_iops?.max,
-    row.metrics.device_read_gib_s?.median, row.metrics.device_read_gib_s?.min, row.metrics.device_read_gib_s?.max,
-    row.metrics.device_mean_read_bytes?.median, row.metrics.idle_device_iops?.median, row.metrics.idle_device_gib_s?.median,
+    row.reference_useful_gib_s ? row.metrics.useful_gib_s.median / row.reference_useful_gib_s.median : null,
     row.setting.sources?.map(source => source.input_id).join("; ") ?? row.input_id,
     row.query_summary ? JSON.stringify(row.query_summary.source_samples) : null,
     row.query_summary?.distinct_shards, row.metrics.peak_active_reads?.max, row.condition_id, row.id]);

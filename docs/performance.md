@@ -1,54 +1,62 @@
 # Read performance
 
-The [interactive Pareto report](pareto/index.html) compares useful read throughput
-with compression. Each point is a measured chunk, codec, and Blosc block setting.
-CPU and CUDA, image inputs, read patterns, machine sessions, and storage conditions
-have separate frontiers. Additional plots show application read requests and
-NVMe device IOPS against bandwidth. The appearance selector defaults to the
-system setting and remembers explicit light or dark choices.
+The [interactive Pareto report](pareto/index.html) has two views: **Image throughput
+and compression**, and **Storage reads**. Each point is a measured chunk, codec,
+and Blosc block setting. CPU and CUDA, source mixtures, read patterns, and machine
+sessions have separate frontiers. All panels within a study use one recorded
+storage system. Its host, processor, GPU, filesystem, and drives appear once in
+**Storage system**. Appearance follows the system setting by default, with saved
+light and dark overrides.
 
 The existing [throughput history](https://nclack.github.io/damacy/throughput/) and
 [timing history](https://nclack.github.io/damacy/timings/) retain the daily CI
-measurements. Those fixed scenarios help track changes on the CI machine.
-The retained Pareto studies explore which settings work well on a recorded machine.
+measurements. Those fixed scenarios track changes on the CI machine.
 
-## What the axes count
+## Four measurements
 
-| Measurement | Definition |
+| Name used throughout the report | Meaning |
 | --- | --- |
-| Useful GiB/s | Requested pixels × source bytes per pixel ÷ elapsed seconds ÷ 2³⁰ |
-| Compression fold | Original image bytes ÷ stored Zarr file bytes |
-| Application reads/s | Completed data read requests after combining adjacent requests ÷ elapsed seconds |
-| Encoded GiB/s | Bytes in those application read requests ÷ elapsed seconds ÷ 2³⁰ |
-| Mean application read | Encoded read bytes ÷ application read requests |
-| Requests / useful GiB | Application read requests ÷ useful source bytes × 2³⁰ |
-| NVMe read IOPS | Device read completions during measured batches ÷ elapsed seconds |
-| Device GiB/s | Device sectors read × 512 ÷ elapsed seconds ÷ 2³⁰ |
-| Read amplification | Encoded bytes read by the pipeline ÷ useful source bytes returned |
-| Decode amplification | Bytes reported by the decode stage ÷ useful source bytes returned |
+| Image throughput (GiB/s) | Requested pixels × source bytes per pixel ÷ elapsed seconds ÷ 2³⁰ |
+| Compression ratio (×) | Uncompressed image bytes in the stored arrays ÷ stored file bytes |
+| Bandwidth (GiB/s) | Read bytes recorded by Linux for the storage system ÷ elapsed seconds ÷ 2³⁰ |
+| IOPS (reads/s) | Completed reads recorded by Linux for that storage system ÷ elapsed seconds |
 
-Stored file bytes include edge padding, shard indexes, and array metadata. They
-are file lengths, not filesystem block allocation. Uncompressed settings can
-therefore have compression folds below one. A missing decode-byte counter is
-shown as unavailable. Overlapping or repeated requests can share encoded reads,
-so read amplification can be below one even without compression.
+Image throughput measures how quickly the reader delivers the requested pixels.
+Bandwidth and IOPS measure the storage work during that time, summed over the
+backing drives. They include metadata, read-ahead, and other processes using those
+drives. They are kernel device counters, not counts of internal SSD flash
+operations. Adjacent idle measurements remain available in **Diagnostics** and
+are not subtracted. The [kernel counter definitions](https://docs.kernel.org/admin-guide/iostats.html)
+describe the completed-read and sector counters used here.
 
-Returned tensor throughput is available in configuration details. For uint16
-input converted to float32, it is twice the useful source-byte rate. The primary
-axis keeps this conversion from inflating the reported read speed.
+All rates use wall time through completion, including the final GPU work.
+Initialization, warmup, and cache clearing are excluded. One GiB is 2³⁰ bytes.
+Converting source pixels to float32 does not increase image throughput. Stored
+file lengths include padding, shard indexes, and array metadata; they are not
+filesystem block allocation. Compression ratios below one mean the files are
+larger than the uncompressed image bytes.
 
-Elapsed measurement time includes pushing queries, reading, decoding, conversion,
-assembly, and waiting for the last CUDA work to finish. Setup and warmup are
-separate. Cold measurements also exclude cache clearing and counter collection.
-Stage intervals overlap and cannot be summed into elapsed time.
+## Reader diagnostics
 
-Application requests use the native `reads_issued` counter, not I/O wave counts
-or accumulated stage time. They exclude metadata reads and are not counts of
-NFS requests or physical disk commands. The kernel can split or combine requests,
-serve them from RAM, or read ahead. Device counters are reported separately and
-are shared with other activity on those devices. Their adjacent idle rates are
-shown without subtracting an assumed background rate. A high IOPS value alone
-does not make a setting better; request size and useful throughput provide context.
+The old **Encoded read GiB/s** label counted the bytes in Damacy's file read
+requests before decompression. These are compressed bytes when a codec is used
+and raw bytes for uncompressed files. It did not measure bytes at the drives.
+The old **Application read requests/s** counted those byte-range requests after
+adjacent requests were combined; it did not measure storage IOPS.
+
+For example, one 1 MiB file request could become eight 128 KiB storage reads.
+That would count as one reader request and eight storage operations, even if
+both byte counts were 1 MiB. Cache hits can avoid storage reads; read-ahead can
+fetch extra bytes. Thus both request counts and byte counts can differ between
+the reader and the storage system.
+
+The separate application-read plot has been removed. **Diagnostics** retains
+file read requests/s, file read bandwidth, mean request size, bytes read or decoded
+per requested image byte, stage timings, metadata activity, and idle storage
+measurements. These help investigate the reader. Stage timings overlap and
+cannot be added into elapsed time. The JSON retains all original counters,
+including output-byte rates after float32 conversion. CSV exports use the same
+four main measurement names as the plots and sidebar.
 
 ## Mixed-source cold NVMe results
 
@@ -62,7 +70,7 @@ The prepared files total 769.17 GiB, representing 1008 GiB of uncompressed pixel
 For the complete source mixture, two layouts form the observed frontier in both
 read patterns:
 
-| Layout | Compression | Crop useful GiB/s | Whole-frame useful GiB/s |
+| Layout | Compression ratio | Crop image throughput (GiB/s) | Whole-frame image throughput (GiB/s) |
 | --- | ---: | ---: | ---: |
 | Zstd, 1 MiB chunks | 1.441× | 1.205 | 5.579 |
 | Blosc-Zstd, 256 KiB chunks and blocks | 1.504× | 1.030 | 4.472 |
@@ -75,17 +83,17 @@ source mixture and read pattern.
 
 All 758 measured passes passed the zero-resident-page check and recorded NVMe
 reads. Peak overlapping application read calls reached 16 in every execution.
-Device read rates ranged from about 32,000 to 141,000 IOPS across executions;
+IOPS ranged from about 32,000 to 141,000 across executions;
 these rates describe the measured requests and include device activity outside
 the process. The adjacent idle rate reached 455 read IOPS. For all-source
-whole-frame Zstd/1 MiB reads, the median device rate was 70,375 IOPS and
-7.343 GiB/s, while useful source throughput was 5.579 GiB/s and returned
-float32 throughput was 10.414 GiB/s.
+whole-frame Zstd/1 MiB reads, the medians were 70,375 IOPS, 7.343 GiB/s bandwidth, and
+5.579 GiB/s image throughput.
 
 Omitting DynaCell changes the highest-median layout to Blosc-Zstd/256 KiB for
 both read patterns. Omitting BBBC010 changes whole-frame Zstd/1 MiB throughput
 by only −0.47%, while its compression falls 10.14%, from 1.441× to 1.295×.
-The sensitivity panel shows both axes and each mixture's raw-normalized speedup.
+The sensitivity panel shows each mixture's compression ratio and speed vs its
+own uncompressed control, including the all-source mixture as a reference.
 Omissions change source types and file counts as well as the pixel distribution;
 see the [study protocol](#mixed-source-microscopy-study) for those limits.
 The [retained JSON](pareto/data/542501404495a92083a9.json) includes every observation,
@@ -166,7 +174,7 @@ measurements, the exact allocation, and source and binary hashes.
 The block-size tradeoff is already visible. For DynaCell whole-plane CUDA reads,
 with 256 KiB chunks and otherwise identical Blosc-Zstd settings:
 
-| Blosc block size | Useful GiB/s, median | Observed range | Compression fold |
+| Blosc block size | Image throughput (GiB/s), median | Observed range | Compression ratio |
 | --- | ---: | ---: | ---: |
 | 16 KiB | 11.67 | 11.48–11.85 | 1.137× |
 | 256 KiB | 1.102 | 1.102–1.103 | 1.151× |
@@ -239,16 +247,17 @@ Two workloads use retained, deterministic query streams:
 Each pass returns 1 GiB of float32 samples per input: 4096 crops or 64 whole
 frames, mixed across the seven sources. The complete mixture therefore returns
 7 GiB and requests 3.75 GiB of source pixels per pass. Original dtype sizes are
-used when computing useful bytes. Compression aggregates the equal 16 GiB
+used when computing image throughput. Compression aggregates the equal 16 GiB
 source volumes by summing logical and stored bytes; read weights are equal
 sample counts, which give unequal source-byte contributions across types.
 
 Leave-one-out cases remove a whole dataset collection and retain all remaining
 coordinates and their relative ordering. Both OpenCell channels are removed
 together. The pass contains less work after an omission, with the same work per
-retained input. The report compares useful and returned rates and changes in
-speedup against each mixture's uncompressed reference. Changes also reflect the
-reduced number of source files; they are sensitivity measurements, not causal
+retained input. The report compares compression ratio and speed vs each mixture's
+uncompressed control (256 KiB chunks). Speed is image throughput divided by control
+image throughput, so the mixture's source-byte weighting cancels in that ratio.
+Changes also reflect the reduced number of source files; they are sensitivity measurements, not causal
 estimates of a source's compression cost.
 
 The new `cold-pass` policy evicts and checks every shard-data file before a
