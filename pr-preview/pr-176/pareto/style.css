@@ -61,6 +61,16 @@ button, summary { cursor: pointer; }
 button:hover, select:hover { border-color: var(--blue); }
 button:focus-visible, a:focus-visible, select:focus-visible, summary:focus-visible, circle:focus-visible { outline: 3px solid var(--blue); outline-offset: 3px; }
 .note { font-size: .82rem; color: var(--muted); max-width: 72rem; }
+.storage-details { margin: .75rem 0; font-size: .82rem; max-width: 65rem; }
+.storage-details dl, .metric-definitions { display: grid; grid-template-columns: minmax(8rem, 1fr) minmax(0, 3fr); gap: .5rem 1rem; }
+.storage-details dd, .metric-definitions dd { text-align: left; }
+.metric-definitions dt { color: var(--ink); font-weight: 650; }
+.primary-metrics > p { color: var(--muted); font-size: .75rem; }
+.diagnostics { border-top: 1px solid var(--border); margin-top: 1rem; padding-top: .75rem; }
+.diagnostics > summary { font-weight: 650; }
+.sensitivity-comparison { border-top: 1px solid var(--border); padding-top: .5rem; }
+.sensitivity-comparison h4 { font-size: .82rem; margin: .35rem 0; font-weight: 600; }
+.sensitivity-comparison dl { margin: .5rem 0; }
 .more-filters { margin: .75rem 0; font-size: .85rem; }
 .more-filters .filters { margin-top: .75rem; }
 .check { flex-direction: row; align-items: center; gap: .5rem; padding-top: 1.2rem; }
@@ -121,4 +131,6 @@ td button { border: 0; padding: .15rem; color: var(--blue); background: transpar
   .filters label { flex: 1 1 100%; }
   select { width: 100%; max-width: 100%; }
   .panel { padding: .7rem; }
+  .storage-details dl, .metric-definitions { grid-template-columns: 1fr; }
+  .storage-details dd, .metric-definitions dd { margin-bottom: .5rem; }
 }
