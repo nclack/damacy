@@ -344,7 +344,7 @@ function table(rows, isIO, isCrop = false) {
 
 function updateContext() {
   const cohort = study.cohorts?.find(value => value.id === $("input").value);
-  const bakedFiles = study.rows.find(row => row.input_id === cohort?.id && row.access_pattern === "baked")?.query_summary.distinct_shards;
+  const bakedFiles = study.baked && cohort?.input_ids.reduce((total, name) => total + study.baked.source_shards[name], 0);
   let geometry = cohort
     ? `${cohort.input_ids.length} source inputs, mixed within each pass. ${cohort.omitted_dataset ? `Omitted collection: ${cohort.omitted_dataset}. ` : ""}${study.volume.frame_shape.join(" × ")} frames; ${study.volume.shard_spatial_shape.join(" × ")} spatial shards; ${number(study.volume.shard_bytes / 2 ** 30)} GiB uncompressed per shard. ${study.weighting}. Compression combines equal logical source volumes. Expanded pixels are tiled source distributions.`
     : "Each input is a small replayed image pack.";

@@ -5,6 +5,11 @@ set -euo pipefail
 study_backend=${1:?Expected cpu or cuda}
 study_root=${2:?Expected shared study directory with source/ and plan.json}
 study_corpus=${3:?Expected materialized microscopy corpus}
+study_reuse=${4:-}
+study_prepare=()
+if [[ -n "$study_reuse" ]]; then
+  study_prepare=(--reuse "$study_reuse")
+fi
 study_source="$study_root/source"
 study_scratch=$(mktemp -d /tmp/damacy-mixture.XXXXXXXX)
 trap 'rm -rf "$study_scratch"' EXIT
@@ -36,7 +41,8 @@ case "$study_backend" in
     ctest --test-dir build --output-on-failure \
       -R '^(test_benchmark_cpu|test_cold_read|test_cpu_executor|test_cpu_pipeline|test_blosc_codecs|test_file_reader)$'
     uv run --script bench/pareto.py prepare "$study_root/plan.json" \
-      --corpus "$study_corpus" --output "$study_root/data" --workers 3
+      --corpus "$study_corpus" --output "$study_root/data" --workers 3 \
+      "${study_prepare[@]}"
     study_backends=(--backend cpu)
     ;;
   cuda)

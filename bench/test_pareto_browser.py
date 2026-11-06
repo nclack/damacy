@@ -451,8 +451,11 @@ def crop_fixture():
         rows=[],
         observations=[],
     )
-    study["cohorts"] = study["cohorts"][:1]
-    study["baked"] = {"active_shards": 16, "shard_bytes": 2**30}
+    study["baked"] = {
+        "active_shards": 16,
+        "shard_bytes": 2**30,
+        "source_shards": {"image-a": 8, "image-b": 8},
+    }
     study["batch_output_bytes"] = 36 * 2**20
     study["lookahead_output_bytes"] = 144 * 2**20
     for access in ("random", "baked"):
@@ -511,6 +514,18 @@ def crop_fixture():
                 row["observation_ids"] = [row["id"]]
                 study["rows"].append(row)
                 study["observations"].append(observation)
+    for original in study["rows"].copy():
+        row = copy.deepcopy(original)
+        row.update(
+            id=f"omission-{original['id']}",
+            input_id="without-b",
+            condition_id=f"omission-{original['condition_id']}",
+        )
+        row["setting"]["sources"] = row["setting"]["sources"][:1]
+        row["query_summary"]["distinct_shards"] //= 2
+        row["query_summary"]["samples"] //= 2
+        row["query_summary"]["useful_bytes"] //= 2
+        study["rows"].append(row)
     return study
 
 
@@ -603,6 +618,12 @@ def verify_crop_study(page, document, output):
     page.select_option("#workload", "baked")
     assert page.locator("#chunk").input_value() == ""
     assert page.locator("circle.point").count() > 0
+    if any(cohort["id"] == "without-b" for cohort in document["cohorts"]):
+        page.select_option("#input", "without-b")
+        assert (
+            "8 shard files total per process" in page.locator("#context").inner_text()
+        )
+        page.select_option("#input", "all-sources")
     page.locator(".more-filters").evaluate("node => { node.open = false; }")
 
 
