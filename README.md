@@ -237,6 +237,7 @@ Performance:
 
 - [Pareto analysis](https://nclack.github.io/damacy/pareto/) — image throughput,
   compression ratio, storage bandwidth, and IOPS across chunk, codec, and block settings.
+  The crop study compares random crops and baked samples at 128², 192², and 256².
   Each study identifies its storage system and cache conditions.
 - [Measurement protocol](https://nclack.github.io/damacy/performance/) — data,
   workloads, cache verification, hardware records, reproduction, and PR previews.

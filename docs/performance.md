@@ -1,13 +1,13 @@
 # Read performance
 
-The [interactive Pareto report](pareto/index.html) has two views: **Image throughput
-and compression**, and **Storage reads**. Each point is a measured chunk, codec,
-and Blosc block setting. CPU and CUDA, source mixtures, read patterns, and machine
-sessions have separate frontiers. All panels within a study use one recorded
+The [interactive Pareto report](pareto/index.html) compares **Image throughput
+and compression**, **Storage reads**, and, for crop studies, **Crop size and
+samples/s**. Each point is a measured chunk, codec, and Blosc block setting.
+CPU and CUDA, source mixtures, read patterns, crop sizes, and machine sessions
+have separate frontiers. All panels within a study use one recorded
 storage system. Its host, processor, GPU, filesystem, and drives appear once in
 **Storage system**. Appearance follows the system setting by default, with saved
-light and dark overrides. Crop studies add a **Crop size and samples/s** view,
-with a separate Pareto frontier for each crop size.
+light and dark overrides.
 
 The existing [throughput history](https://nclack.github.io/damacy/throughput/) and
 [timing history](https://nclack.github.io/damacy/timings/) retain the daily CI
@@ -59,7 +59,57 @@ cannot be added into elapsed time. The JSON retains all original counters,
 including output-byte rates after float32 conversion. CSV exports use the same
 four main measurement names as the plots and sidebar.
 
-## Paired CPU and H100 cold-read results
+## Crop results
+
+The [November 6 EPYC crop study](pareto/index.html#study=2f6063ce5114fc47763a)
+contains **31 settings and 129 executions**, with three process repetitions per
+setting. It compares uniformly translated random crops with sequential reads of
+the same baked pixels, across the complete seven-input mixture. Baked layouts
+use 16 files total and one sample per compression chunk. The paired H100 CPU/CUDA
+run is in progress.
+
+These are the highest observed image-throughput medians among the tested layouts
+for each condition, in **GiB/s**:
+
+| Crop | Random | Baked | Baked / random |
+| --- | ---: | ---: | ---: |
+| 128² | 0.558 | 2.700 | 4.84× |
+| 192² | 0.746 | 6.713 | 9.00× |
+| 256² | 1.081 | 7.844 | 7.26× |
+
+The random-layout selections are Zstd with 16 KiB chunks at 128², Blosc-LZ4 with
+256 KiB chunks at 192², and Blosc-Zstd with 256 KiB chunks at 256². Both selected
+Blosc layouts use whole-chunk blocks. The baked selections are Blosc-LZ4 at 128²
+and 256², and Blosc-Zstd at 192², also with whole-chunk blocks.
+
+**Baking produces a large improvement; close codec rankings remain unresolved.**
+The median min–max spread across settings is 11.34% of the median, with a maximum
+of 24.61%. Bracketing uncompressed controls span 11.51–26.33%. These are observed
+ranges from three repetitions and six controls per condition, not confidence
+intervals. The plotted frontiers use medians, so small apparent advantages should
+not be treated as established dominance.
+
+Small chunks remain useful for 128² random crops: 16 KiB Zstd reaches 0.558 GiB/s
+with 1.391× compression, versus 0.460 GiB/s and 1.475× for the fastest Blosc setting.
+Baked layouts avoid decoding unused pixels. At 128², the fastest baked setting
+uses about 25.6 kB of storage reads and 0.196 storage operations per sample, versus
+153.5 kB and 6.75 operations for the fastest random setting. Lower IOPS can therefore
+accompany faster sample delivery.
+
+The machine is an AMD EPYC 9655P with 32 allowed logical CPUs, 16 CPU decode workers,
+and 16 file workers. Its storage system is XFS on eight 7.68 TB Intel NVMe drives;
+the exact inventory is in the report. All **448 timed passes** verified zero
+resident shard-data pages. Peak overlapping reads reached 16 in every execution.
+IOPS ranged from 12,514 to 128,561; adjacent idle traffic was at most 5 IOPS and
+0.012% of the corresponding measured rate. The
+[retained JSON](pareto/data/2f6063ce5114fc47763a.json) includes every observation
+and the paired query streams are available from each result.
+
+The [crop protocol below](#random-crops-and-baked-samples) describes fixed byte
+budgets, source construction, batching effects, and the separate generative,
+image, and video training follow-ups.
+
+## Earlier paired CPU and H100 cold-read results
 
 The [November 6 paired study](pareto/index.html#study=81fe76d51bbbd3212ed6)
 contains **252 settings and 616 executions**: nine layouts, both read patterns,
@@ -251,7 +301,7 @@ The full matrix has not been measured.
 ## Random crops and baked samples
 
 The current [`bench/studies/microscopy.json`](https://github.com/nclack/damacy/blob/bench/microscopy-pareto/bench/studies/microscopy.json)
-defines the next, smaller study. **These measurements have not been published yet.**
+defines the smaller study whose [CPU results are above](#crop-results).
 It compares 128 × 128, 192 × 192, and 256 × 256 crops from the complete seven-input
 mixture. Whole-frame reads remain in the historical reports.
 
@@ -302,6 +352,11 @@ batches. Worker counts and CPU/GPU memory limits stay fixed. Each condition has 
 own uncompressed controls before and after the settings, and three process
 repetitions by default. The pilot changes repetitions and duration, not the source
 mixture or layout selection.
+
+The CPU reader holds at most 256 compression chunks in each input buffer.
+With one chunk per baked sample, 128² batches need three read/decode groups;
+192² and 256² batches each fit in one. The crop curves include this batching
+effect and per-sample processing costs.
 
 This is **62 settings and 258 executions** across CPU and CUDA, with one all-source
 mixture. Leave-one-out runs, extra repeats, intermediate chunk sizes, and grouping
