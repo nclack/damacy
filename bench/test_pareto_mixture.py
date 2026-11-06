@@ -21,7 +21,7 @@ def mixture_fixture():
             *[(asset["id"], [asset]) for asset in assets[2:]],
         ]
     ]
-    definition = read_json(Path(__file__).parent / "studies/microscopy.json")
+    definition = read_json(Path(__file__).parent / "studies/microscopy-mixture-v2.json")
     return definition, corpus
 
 

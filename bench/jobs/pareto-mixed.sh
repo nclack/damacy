@@ -63,7 +63,8 @@ if required > available:
 print(f"Copying {required - 1024**3} prepared bytes to local NVMe", flush=True)
 source = Path(sys.argv[1]).parent
 output = Path(sys.argv[2]) / "data"
-files = [path for path in source.rglob("*") if path.is_file()]
+files = [source / item["path"] for variant in prepared["variants"] for item in variant["files"]]
+files += [source / "prepared.json", *sorted((source / "queries").glob("*.bin"))]
 def copy_file(path):
     destination = output / path.relative_to(source)
     destination.parent.mkdir(parents=True, exist_ok=True)

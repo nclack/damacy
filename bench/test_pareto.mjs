@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {csv, devicePlottable, frontier, matches, sensitivity} from "../docs/pareto/analysis.mjs";
+import {cropSeries, csv, devicePlottable, frontier, matches, samplesPerSecond, sensitivity} from "../docs/pareto/analysis.mjs";
 
 function point(id, fold, rate, condition = "cpu") {
   return {id, condition_id: condition, input_id: "image", backend: condition, workload: "crop",
@@ -8,6 +8,40 @@ function point(id, fold, rate, condition = "cpu") {
       chunk_shape: [1, 128, 256], shard_shape: [1, 1024, 1024]},
     metrics: {useful_gib_s: {median: rate, min: rate * .9, max: rate * 1.1, n: 3}}};
 }
+
+test("crop comparisons preserve access, encoding, and backend groups", () => {
+  const a = {...point("128", 1, 2), crop_size: 128, access_pattern: "random"};
+  a.setting.recipe_id = "zstd";
+  const b = structuredClone(a);
+  b.crop_size = 256;
+  b.id = "256";
+  b.condition_id = "cpu-256";
+  const baked = structuredClone(a);
+  baked.access_pattern = "baked";
+  baked.setting.chunk_mode = "sample";
+  baked.setting.chunk_bytes = null;
+  baked.setting.block_mode = "chunk";
+  baked.setting.block_bytes = null;
+  baked.setting.codec = "blosc-zstd";
+  assert(matches(a, {workload: "random", crop: "128"}));
+  assert(!matches(b, {workload: "random", crop: "128"}));
+  assert(!matches(baked, {workload: "random"}));
+  assert(matches(baked, {chunk: "sample", block: "chunk"}));
+  assert(!matches(a, {chunk: "sample"}));
+  assert.deepEqual(cropSeries([b, baked, a]).map(series => series.map(row => row.crop_size)), [[128, 256], [128]]);
+  assert.equal(frontier([a, b]).length, 2);
+});
+
+test("sample rates convert image-byte rates using the exact mixed query composition", () => {
+  const row = point("mixed", 2, 3);
+  row.query_summary = {samples: 7 * 4096, useful_bytes: 3.75 * 2 ** 30};
+  const metric = samplesPerSecond(row);
+  assert.equal(metric.median, 3 * 7 * 4096 / 3.75);
+  assert.equal(metric.n, 3);
+  assert(Math.abs(metric.min / metric.median - .9) < 1e-12);
+  assert(Math.abs(metric.max / metric.median - 1.1) < 1e-12);
+  assert.equal(samplesPerSecond(point("old", 1, 1)), null);
+});
 
 test("joint frontier keeps codec and size tradeoffs", () => {
   const rows = [point("fast", 1, 10), point("small", 5, 2), point("balanced", 3, 5), point("dominated", 2, 4)];

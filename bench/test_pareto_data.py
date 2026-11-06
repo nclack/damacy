@@ -9,12 +9,82 @@ from unittest.mock import patch
 
 import numpy as np
 from pareto import file_hash, identity, read_json
-from pareto_data import compressors, prepare, tiled_shard, write_volume
+from pareto_crops import baked_origins, random_origins
+from pareto_data import chunk_records, compressors, prepare, tiled_shard, write_volume
 
 import zarr
 
 
 class TilingTests(unittest.TestCase):
+    def test_baked_pixels_pair_with_cross_shard_crops_in_every_codec(self):
+        bits = np.array(
+            [0, 0x80000000, 0x7FC00001, 0x7F800000, 0x3F800000, 0xBF800000],
+            dtype=np.uint32,
+        )
+        pixels = bits.view(np.float32).reshape(1, 2, 3)
+        source = {
+            "id": "example",
+            "dtype": "float32",
+            "shape": [4, 8, 8],
+            "shard_shape": [4, 4, 4],
+        }
+        tiling = {"method": "shifted-periodic-planes", "seed": 42}
+        original = tiled_shard(
+            pixels,
+            {"input_id": "example", "shard_shape": source["shape"], "tiling": tiling},
+            (0, 0, 0),
+        )
+        sample = [1, 3, 3]
+        coordinates = random_origins(source, 7, "crop-3", 20, sample)
+        self.assertTrue(
+            any(
+                y // 4 != (y + 2) // 4 or x // 4 != (x + 2) // 4
+                for _, y, x in coordinates
+            )
+        )
+        for codec in ("none", "zstd", "blosc-zstd", "blosc-lz4"):
+            with self.subTest(codec=codec), tempfile.TemporaryDirectory() as temporary:
+                variant = {
+                    "id": "baked",
+                    "input_id": "example",
+                    "dtype": "float32",
+                    "codec": codec,
+                    "shape": [20, 3, 3],
+                    "shard_shape": [10, 3, 3],
+                    "chunk_shape": sample,
+                    "chunk_bytes": 36,
+                    "block_bytes": 36 if codec.startswith("blosc") else None,
+                    "level": 3,
+                    "baked": {
+                        "source": source,
+                        "seed": 7,
+                        "coordinate_key": "crop-3",
+                        "sample_shape": sample,
+                        "tiling": tiling,
+                    },
+                }
+                path = Path(temporary) / "array"
+                array = zarr.create_array(
+                    store=str(path),
+                    shape=variant["shape"],
+                    chunks=sample,
+                    shards=variant["shard_shape"],
+                    dtype=pixels.dtype,
+                    compressors=compressors(variant),
+                    config={"write_empty_chunks": True},
+                )
+                write_volume(array, pixels, variant)
+                for (z, y, x), (index, _, _) in zip(
+                    coordinates, baked_origins(variant, 20), strict=True
+                ):
+                    self.assertEqual(
+                        array[index].tobytes(),
+                        original[z, y : y + 3, x : x + 3].tobytes(),
+                    )
+                self.assertTrue(
+                    chunk_records(path, variant)["contiguous_sample_chunks"]
+                )
+
     def test_spatial_seams_match_a_single_tiled_plane(self):
         pixels = np.arange(3 * 5 * 7, dtype=np.uint16).reshape(3, 5, 7)
         variant = {
@@ -149,6 +219,11 @@ class TilingTests(unittest.TestCase):
             with patch("pareto_data.require_compute"):
                 prepare(plan, corpus, output, workers=1)
             self.assertEqual(read_json(output / "prepared.json"), prepared)
+            reused = root / "reused"
+            with patch("pareto_data.require_compute"):
+                prepare(plan, corpus, reused, workers=1, reuse=output)
+            self.assertEqual(read_json(reused / "prepared.json"), prepared)
+            self.assertTrue(all((reused / v["id"]).is_symlink() for v in variants))
 
 
 if __name__ == "__main__":

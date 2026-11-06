@@ -156,7 +156,12 @@ def verify_scales(page, view="pareto"):
         read_gib_s: point.__data__.metrics.read_gib_s?.median,
         device_iops: point.__data__.metrics.device_iops?.median,
         device_read_gib_s: point.__data__.metrics.device_read_gib_s?.median,
-        metrics: point.__data__.metrics,
+        crop_size: point.__data__.crop_size,
+        samples_per_second: point.__data__.query_summary ? point.__data__.metrics.useful_gib_s.median
+          * point.__data__.query_summary.samples * 2 ** 30 / point.__data__.query_summary.useful_bytes : null,
+        metrics: {...point.__data__.metrics, samples_per_second: point.__data__.query_summary ? Object.fromEntries(
+          ['min', 'median', 'max'].map(key => [key, point.__data__.metrics.useful_gib_s[key]
+            * point.__data__.query_summary.samples * 2 ** 30 / point.__data__.query_summary.useful_bytes])) : null},
         ranges: [...point.parentNode.querySelectorAll('path.range')].map(path => {
           const box = path.getBBox();
           return {x: box.x, y: box.y, width: box.width, height: box.height,
@@ -170,6 +175,7 @@ def verify_scales(page, view="pareto"):
             ("device_iops", float, "x", 1),
             ("device_read_gib_s", float, "y", -1),
         ),
+        "crop": (("crop_size", float, "x", 1), ("samples_per_second", float, "y", -1)),
     }
     for points in panels:
         for key, transform, coordinate, sign in axes[view]:
@@ -188,7 +194,7 @@ def verify_scales(page, view="pareto"):
                     transform(point[key]) - transform(low[key])
                 )
                 assert math.isclose(point[coordinate], expected, abs_tol=1e-6)
-                if key == "fold":
+                if key in {"fold", "crop_size"}:
                     continue
                 metric = point["metrics"]["useful_gib_s" if key == "rate" else key]
                 limits = sorted(
@@ -261,7 +267,10 @@ def verify_mark_contrast(page):
     }""")
 
 
-def verify_study(page, document):
+def verify_study(page, document, output):
+    if document.get("baked"):
+        verify_crop_study(page, document, output)
+        return
     for asset in document.get("cohorts", document["inputs"]):
         page.select_option("#input", asset["id"])
         for workload in sorted(
@@ -420,6 +429,165 @@ def mixture_fixture():
     return study
 
 
+def crop_fixture():
+    study = mixture_fixture()
+    base_rows = [
+        row
+        for row in study["rows"]
+        if row["input_id"] == "all-sources" and row["workload"] == "balanced-256"
+    ]
+    observations = {row["task"]["id"]: row for row in study["observations"]}
+    study.update(
+        id="2" * 20,
+        label="Crop-size browser fixture — not measured",
+        rows=[],
+        observations=[],
+    )
+    study["cohorts"] = study["cohorts"][:1]
+    study["baked"] = {"active_shards": 16, "shard_bytes": 2**30}
+    study["batch_output_bytes"] = 36 * 2**20
+    study["lookahead_output_bytes"] = 144 * 2**20
+    for access in ("random", "baked"):
+        for crop in (128, 192, 256):
+            for original in base_rows:
+                row = copy.deepcopy(original)
+                row.update(
+                    id=f"{access}-{crop}-{original['id']}",
+                    access_pattern=access,
+                    crop_size=crop,
+                    workload=f"{access}-{crop}",
+                    condition_id=f"{access}-{crop}-{row['backend']}",
+                )
+                row["sampling"]["sample_shape"] = [1, crop, crop]
+                row["pipeline"] = {
+                    "lookahead_samples": 144 * 2**20 // (crop * crop * 4)
+                }
+                row["query_summary"]["useful_bytes"] = (
+                    row["query_summary"]["samples"] * crop * crop * 2
+                )
+                row["query_summary"]["samples_crossing_shards"] = (
+                    0 if access == "baked" else 30
+                )
+                setting = row["setting"]
+                setting["recipe_id"] = f"{setting['codec']}-{setting['block_bytes']}"
+                setting["chunk_mode"] = "sample" if access == "baked" else "bytes"
+                setting["block_mode"] = (
+                    "chunk"
+                    if setting["block_bytes"] == 262144
+                    else "bytes"
+                    if setting["block_bytes"]
+                    else "none"
+                )
+                if setting["block_mode"] == "chunk":
+                    setting["block_bytes"] = None
+                for source in setting["sources"]:
+                    source["chunk_bytes"] = 262144
+                if access == "baked":
+                    setting["chunk_bytes"] = None
+                    row["query_summary"]["source_query_id"] = "f" * 20
+                    row["query_summary"]["distinct_shards"] = 16
+                    for source in setting["sources"]:
+                        depth = 2**30 // (crop * crop * 2)
+                        source.update(
+                            baked={"sample_shape": [1, crop, crop]},
+                            shape=[8 * depth, crop, crop],
+                            shard_shape=[depth, crop, crop],
+                            chunk_shape=[1, crop, crop],
+                            chunk_bytes=crop * crop * 2,
+                            shard_files=8,
+                        )
+                observation = copy.deepcopy(
+                    observations[original["observation_ids"][0]]
+                )
+                observation["task"]["id"] = row["id"]
+                row["observation_ids"] = [row["id"]]
+                study["rows"].append(row)
+                study["observations"].append(observation)
+    return study
+
+
+def verify_crop_study(page, document, output):
+    page.select_option("#input", "all-sources")
+    for access in ("random", "baked"):
+        page.select_option("#workload", access)
+        page.select_option("#view", "pareto")
+        for crop in (128, 192, 256):
+            page.select_option("#crop", str(crop))
+            expected = [
+                row
+                for row in document["rows"]
+                if row["input_id"] == "all-sources"
+                and row["access_pattern"] == access
+                and row["crop_size"] == crop
+            ]
+            assert page.locator("circle.point").count() == len(expected)
+            assert page.locator(".panel").count() == 2
+            assert page.locator("path.frontier").evaluate_all(
+                "paths => paths.every(path => new Set(path.__data__.map(row => row.crop_size)).size === 1)"
+            )
+            verify_scales(page)
+            verify_table(page, expected, "pareto")
+        page.locator("circle.point").first.click()
+        detail = page.locator("#detail-content").inner_text()
+        assert "Samples/s" in detail
+        if access == "baked":
+            assert "One sample" in detail and "Baked shape" in detail
+            assert "Download paired source coordinates" in detail
+            assert (
+                "16 shard files total per process"
+                in page.locator("#context").inner_text()
+            )
+        page.select_option("#view", "crop")
+        assert page.locator("#crop-label").is_hidden()
+        assert page.locator("#frontier-filter").is_hidden()
+        assert page.locator("path.frontier").count() == 0
+        assert page.locator("circle.point").count() == sum(
+            row["input_id"] == "all-sources" and row["access_pattern"] == access
+            for row in document["rows"]
+        )
+        verify_scales(page, "crop")
+        assert page.locator("path.crop-series").evaluate_all(
+            "paths => paths.every(path => new Set(path.__data__.map(row => row.setting.recipe_id)).size === 1)"
+        )
+        with page.expect_download() as downloaded:
+            page.locator("#csv").click()
+        rows = list(
+            csv.DictReader(io.StringIO(Path(downloaded.value.path()).read_text()))
+        )
+        expected_by_id = {row["id"]: row for row in document["rows"]}
+        for row in rows:
+            original = expected_by_id[row["setting_id"]]
+            expected_rate = (
+                original["metrics"]["useful_gib_s"]["median"]
+                * original["query_summary"]["samples"]
+                * 2**30
+                / original["query_summary"]["useful_bytes"]
+            )
+            assert math.isclose(
+                float(row["samples_per_second_median"]), expected_rate, rel_tol=1e-14
+            )
+            assert row["access_pattern"] == access
+        for theme in ("light", "dark"):
+            page.select_option("#appearance", theme)
+            for width in (1440, 390, 320):
+                page.set_viewport_size({"width": width, "height": 1100})
+                page.evaluate(
+                    "() => new Promise(resolve => requestAnimationFrame(resolve))"
+                )
+                assert page.evaluate(
+                    "document.documentElement.scrollWidth <= innerWidth + 1"
+                )
+                verify_scales(page, "crop")
+                verify_mark_contrast(page)
+                page.screenshot(
+                    path=str(output / f"crops-{access}-{theme}-{width}.png"),
+                    full_page=True,
+                )
+        page.set_viewport_size({"width": 1440, "height": 1100})
+    page.select_option("#view", "pareto")
+    page.select_option("#appearance", "system")
+
+
 def check(assets, output, actual):
     with tempfile.TemporaryDirectory(prefix="damacy-browser-") as temporary:
         root = Path(temporary)
@@ -448,6 +616,16 @@ def check(assets, output, actual):
                 }
             )
             (report / f"data/{mixed['id']}.json").write_text(json.dumps(mixed))
+            crops = crop_fixture()
+            index["studies"].append(
+                {
+                    "id": crops["id"],
+                    "file": f"{crops['id']}.json",
+                    "label": crops["label"],
+                    "pilot": True,
+                }
+            )
+            (report / f"data/{crops['id']}.json").write_text(json.dumps(crops))
             (report / "data/index.json").write_text(json.dumps(index))
             (report / f"data/{document['id']}.json").write_text(json.dumps(document))
         index = json.loads((report / "data/index.json").read_text())
@@ -488,8 +666,8 @@ def check(assets, output, actual):
                     current = json.loads((report / "data" / entry["file"]).read_text())
                     page.select_option("#study", entry["id"])
                     page.wait_for_selector("#workspace", state="visible")
-                    verify_study(page, current)
-                    if current.get("cohorts"):
+                    verify_study(page, current, output)
+                    if current.get("cohorts") and not current.get("baked"):
                         page.select_option("#input", "all-sources")
                         point = page.locator("circle.point").last
                         point.click()

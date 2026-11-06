@@ -151,6 +151,12 @@ def chunk_shape(byte_count, itemsize):
 
 
 def make_plan(definition, corpus, *, pilot=False):
+    if definition["version"] == 3:
+        from pareto_crops import make_crop_plan
+
+        plan = make_crop_plan(definition, corpus, pilot=pilot)
+        schedule(plan)
+        return plan
     if definition["version"] == 2:
         from pareto_mixture import make_mixture_plan
 
@@ -308,17 +314,37 @@ def case_variant(case, variants):
         return variants[case["variant_id"]]
     selected = [variants[key] for key in case["variant_ids"]]
     first = selected[0]
-    setting = {
+    setting = case.get("setting") or {
         key: first[key]
         for key in ("codec", "chunk_bytes", "block_bytes", "level", "shuffle")
     }
-    if any(
+    if "setting" not in case and any(
         any(value[key] != expected for key, expected in setting.items())
         for value in selected
     ):
         raise ValueError(
             "A mixture must use the same codec and byte settings for every source"
         )
+    if "setting" in case:
+        for value in selected:
+            if any(value[key] != setting[key] for key in ("codec", "level", "shuffle")):
+                raise ValueError("Prepared source does not match the encoding recipe")
+            if setting["chunk_mode"] == "sample":
+                if value["chunk_shape"] != case["sampling"]["sample_shape"]:
+                    raise ValueError("Baked chunks must contain exactly one sample")
+            elif value["chunk_bytes"] != setting["chunk_bytes"]:
+                raise ValueError("Prepared chunk bytes differ from the recipe")
+            block = (
+                value["chunk_bytes"]
+                if setting["block_mode"] == "chunk"
+                else (
+                    min(value["chunk_bytes"], setting["block_bytes"])
+                    if setting["block_bytes"]
+                    else None
+                )
+            )
+            if value["block_bytes"] != block:
+                raise ValueError("Prepared block bytes differ from the recipe")
     return {
         **setting,
         "id": case["variant_id"],
@@ -585,7 +611,11 @@ def scenario_for(plan, case, data, *, reference=False, variant=None, storage=Non
     sampling = copy.deepcopy(case["sampling"])
     if reference:
         sampling["min_seconds"] = plan["profile"]["reference_seconds"]
-    pipeline = {**plan["pipeline"], "executor": case["backend"]}
+    pipeline = {
+        **plan["pipeline"],
+        **case.get("pipeline", {}),
+        "executor": case["backend"],
+    }
     if pipeline["lookahead_samples"] < sampling["samples_per_batch"]:
         raise ValueError("Lookahead must hold at least one batch")
     scenario = {
@@ -1035,6 +1065,11 @@ def summarize(directory):
                 "backend": case["backend"],
                 "workload": case["workload"],
                 "sampling": case["sampling"],
+                **{
+                    key: case[key]
+                    for key in ("access_pattern", "crop_size", "pipeline")
+                    if key in case
+                },
                 **(
                     {"query_summary": case["query_summary"]}
                     if "query_summary" in case
@@ -1073,6 +1108,11 @@ def summarize(directory):
         "reference_setting": plan["reference_setting"],
         "preparation_packages": prepared["packages"],
         "inputs": public_inputs,
+        **{
+            key: plan[key]
+            for key in ("baked", "batch_output_bytes", "lookahead_output_bytes")
+            if key in plan
+        },
         **(
             {key: plan[key] for key in ("cohorts", "volume", "weighting")}
             if "cohorts" in plan
@@ -1134,6 +1174,9 @@ def main():
     prepare.add_argument("--corpus", type=Path, required=True)
     prepare.add_argument("--output", type=Path, required=True)
     prepare.add_argument("--workers", type=int, default=1)
+    prepare.add_argument(
+        "--reuse", type=Path, help="Reuse matching, checksum-verified prepared layouts"
+    )
     run = commands.add_parser(
         "run", help="Run repeated, randomized measurements on a compute node"
     )
@@ -1201,6 +1244,7 @@ def main():
                     str(args.output.resolve()),
                     "--workers",
                     str(args.workers),
+                    *(["--reuse", str(args.reuse.resolve())] if args.reuse else []),
                 ],
                 check=True,
             )

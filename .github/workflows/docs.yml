@@ -72,7 +72,7 @@ jobs:
       - name: Check performance analysis
         run: |
           ruff check bench/pareto*.py bench/test_pareto*.py
-          PYTHONPATH=bench python -m unittest test_pareto test_pareto_mixture test_pareto_data
+          PYTHONPATH=bench python -m unittest test_pareto test_pareto_mixture test_pareto_crops test_pareto_data
           node --test bench/test_pareto.mjs
           node --input-type=module --check < docs/pareto/report.js
           node --check docs/pareto/appearance.js

@@ -99,13 +99,21 @@ def chunk_records(array, variant):
         with file.open("rb") as stream:
             stream.seek(-index_bytes, 2)
             index = stream.read(index_bytes)
+            previous_end = 0
             for offset, length in struct.iter_unpack("<QQ", index[:-4]):
                 if offset == 2**64 - 1 and length == 2**64 - 1:
+                    if "baked" in variant:
+                        raise ValueError("Baked samples must all be stored")
                     continue
                 if offset + length > size - index_bytes:
                     raise ValueError("Invalid shard index")
                 payload_bytes += length
                 chunks += 1
+                if "baked" in variant and offset != previous_end:
+                    raise ValueError(
+                        "Baked sample chunks must be contiguous in file order"
+                    )
+                previous_end = offset + length
                 if variant["codec"].startswith("blosc-"):
                     stream.seek(offset)
                     header = stream.read(16)
@@ -126,13 +134,18 @@ def chunk_records(array, variant):
         "stored_chunks": chunks,
         "padded_chunk_bytes": chunks * variant["chunk_bytes"],
         "actual_block_bytes": sorted(blocks),
+        **({"contiguous_sample_chunks": True} if "baked" in variant else {}),
     }
 
 
 def tiled_shard(pixels, variant, origin):
+    return tiled_region(pixels, variant, origin, variant["shard_shape"])
+
+
+def tiled_region(pixels, variant, origin, shape):
     if variant["tiling"]["method"] != "shifted-periodic-planes":
         raise ValueError("Unsupported tiling method")
-    shape = tuple(variant["shard_shape"])
+    shape = tuple(shape)
     result = np.empty(shape, dtype=pixels.dtype)
     seed = int(identity([variant["input_id"], variant["tiling"]]), 16)
     for local_z in range(shape[0]):
@@ -148,7 +161,45 @@ def tiled_shard(pixels, variant, origin):
     return result
 
 
+def baked_shard(pixels, variant, start, coordinates):
+    baked = variant["baked"]
+    depth = variant["shard_shape"][0]
+    shards = variant["shape"][0] // depth
+    lane = start // depth
+    result = np.empty(tuple(variant["shard_shape"]), dtype=pixels.dtype)
+    source = {"input_id": variant["input_id"], "tiling": baked["tiling"]}
+    for offset in range(depth):
+        index = offset * shards + lane
+        result[offset] = tiled_region(
+            pixels, source, coordinates[index], baked["sample_shape"]
+        )[0]
+    return result
+
+
 def write_volume(array, pixels, variant):
+    if "baked" in variant:
+        from pareto_crops import random_origins
+
+        baked = variant["baked"]
+        coordinates = random_origins(
+            baked["source"],
+            baked["seed"],
+            baked["coordinate_key"],
+            variant["shape"][0],
+            baked["sample_shape"],
+        )
+        for start in range(0, variant["shape"][0], variant["shard_shape"][0]):
+            selection = slice(start, start + variant["shard_shape"][0])
+            expected = baked_shard(pixels, variant, start, coordinates)
+            array[selection] = expected
+            actual = array[selection]
+            if not np.array_equal(actual.view(np.uint8), expected.view(np.uint8)):
+                raise ValueError(
+                    f"Baked shard does not round-trip exactly: {variant['id']} {start}"
+                )
+            del actual, expected
+            print(f"  verified baked shard {start}", flush=True)
+        return
     if "tiling" not in variant:
         array[:] = pixels
         if array[:].tobytes() != pixels.tobytes():
@@ -174,9 +225,17 @@ def write_volume(array, pixels, variant):
                 print(f"  verified shard {origin}", flush=True)
 
 
-def prepare_variant(variant, asset, path, output):
+def prepare_variant(variant, asset, path, output, reuse=None):
     zarr.config.set({"async.concurrency": 8, "threading.max_workers": 8})
     destination = output / variant["id"]
+    if (
+        not destination.exists()
+        and reuse
+        and (reuse / variant["id"] / "layout.json").is_file()
+    ):
+        destination.symlink_to(
+            (reuse / variant["id"]).resolve(), target_is_directory=True
+        )
     if destination.exists():
         record = read_json(destination / "layout.json")
         if any(record[key] != value for key, value in variant.items()):
@@ -230,11 +289,17 @@ def prepare_variant(variant, asset, path, output):
     return record
 
 
-def prepare_variants(plan, inputs, paths, output, workers):
+def prepare_variants(plan, inputs, paths, output, workers, reuse=None):
     if workers < 1:
         raise ValueError("Preparation needs at least one worker")
     arguments = [
-        (variant, inputs[variant["input_id"]], paths[variant["input_id"]], output)
+        (
+            variant,
+            inputs[variant["input_id"]],
+            paths[variant["input_id"]],
+            output,
+            reuse,
+        )
         for variant in plan["variants"]
     ]
     if workers == 1:
@@ -253,7 +318,7 @@ def prepare_variants(plan, inputs, paths, output, workers):
                 future.cancel()
 
 
-def prepare(plan, corpus, output, *, workers=1):
+def prepare(plan, corpus, output, *, workers=1, reuse=None):
     require_compute()
     if identity(read_json(corpus / "manifest.json")) != plan["corpus_sha256"]:
         raise ValueError("Corpus metadata changed after planning")
@@ -273,7 +338,7 @@ def prepare(plan, corpus, output, *, workers=1):
     write_queries(plan, output)
     records = {}
     for number, record in enumerate(
-        prepare_variants(plan, inputs, paths, output, workers), 1
+        prepare_variants(plan, inputs, paths, output, workers, reuse), 1
     ):
         records[record["id"]] = record
         print(
@@ -299,8 +364,15 @@ def main():
     parser.add_argument("--corpus", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument("--reuse", type=Path)
     args = parser.parse_args()
-    prepare(read_json(args.plan), args.corpus, args.output, workers=args.workers)
+    prepare(
+        read_json(args.plan),
+        args.corpus,
+        args.output,
+        workers=args.workers,
+        reuse=args.reuse,
+    )
 
 
 if __name__ == "__main__":

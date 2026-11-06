@@ -79,6 +79,20 @@ def layouts(definition, pilot):
 
 
 def source_queries(source, query):
+    if query.get("method") == "random-translations":
+        from pareto_crops import random_origins
+
+        return random_origins(
+            source,
+            query["seed"],
+            query["coordinate_key"],
+            query["samples_per_source"],
+            query["sample_shape"],
+        )
+    if query.get("method") == "baked-sequential":
+        from pareto_crops import baked_origins
+
+        return baked_origins(source, query["samples_per_source"])
     rng = random.Random(
         int(identity([query["seed"], query["workload"], source["id"]]), 16)
     )
@@ -154,6 +168,7 @@ def query_summary(query, data):
         "lookahead": (query["lookahead_samples"], set(), []),
     }
     all_shards = set()
+    crossing = 0
     records = list(struct.iter_unpack("<4I", data[16:]))
     for number, (source_id, *origin) in enumerate(records, 1):
         source = selected[source_id]
@@ -170,6 +185,7 @@ def query_summary(query, data):
             for x in range(origin[2] // shards[2], last[2] // shards[2] + 1)
         }
         all_shards.update(touched)
+        crossing += len(touched) > 1
         for size, pending, samples in windows.values():
             pending.update(touched)
             if number % size == 0 or number == len(records):
@@ -186,6 +202,7 @@ def query_summary(query, data):
         for source in selected
     ]
     return {
+        **({"samples_crossing_shards": crossing} if "method" in query else {}),
         "sha256": hashlib.sha256(data).hexdigest(),
         "samples": len(records),
         "useful_bytes": sum(item["useful_bytes"] for item in composition),
