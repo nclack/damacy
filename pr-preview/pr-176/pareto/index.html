@@ -87,10 +87,10 @@
       <dl class="metric-definitions">
         <dt>Image throughput</dt><dd>Requested image bytes delivered per second, counted in the source data type. Converting uint16 to float32 does not increase this number.</dd>
         <dt>Compression ratio</dt><dd>Uncompressed image bytes in the stored arrays divided by their file bytes. Larger values mean less storage is needed.</dd>
-        <dt>Bandwidth</dt><dd>Read bytes per second recorded by Linux for the storage system. This includes any extra reads needed to deliver the requested pixels.</dd>
+        <dt>Storage bandwidth</dt><dd>Read bytes per second recorded by Linux for the storage system. This includes any extra reads needed to deliver the requested pixels.</dd>
         <dt>IOPS</dt><dd>Completed read operations per second recorded by Linux for that same storage system. One file read request can produce several storage operations.</dd>
       </dl>
-      <p>Image throughput and bandwidth use GiB/s, where 1 GiB is 2³⁰ bytes. IOPS uses reads/s. All rates use elapsed measurement time, including reading, decoding, and final GPU completion. Initialization, warmup, and cache clearing are excluded. The Storage system section identifies the shared hardware; Diagnostics contains reader-level counters.</p>
+      <p>Image throughput and storage bandwidth use GiB/s, where 1 GiB is 2³⁰ bytes. IOPS uses reads/s. All rates use elapsed measurement time, including reading, decoding, and final GPU completion. Initialization, warmup, and cache clearing are excluded. The Storage system section identifies the shared hardware; Diagnostics contains reader-level counters.</p>
       <details>
         <summary>Measurement limits</summary>
         <p>The observed frontier compares settings within the same input, read pattern, backend, machine session, and storage condition. Filters recompute it. Connections join measured points; they do not predict unmeasured settings. All compared panels use the same axes.</p>

@@ -66,6 +66,7 @@ button:focus-visible, a:focus-visible, select:focus-visible, summary:focus-visib
 .storage-details dd, .metric-definitions dd { text-align: left; }
 .metric-definitions dt { color: var(--ink); font-weight: 650; }
 .primary-metrics > p { color: var(--muted); font-size: .75rem; }
+.measurement-definition { grid-column: 1 / -1; text-align: left; color: var(--muted); font-size: .75rem; margin-bottom: .5rem; }
 .diagnostics { border-top: 1px solid var(--border); margin-top: 1rem; padding-top: .75rem; }
 .diagnostics > summary { font-weight: 650; }
 .sensitivity-comparison { border-top: 1px solid var(--border); padding-top: .5rem; }

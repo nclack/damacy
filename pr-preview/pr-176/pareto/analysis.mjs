@@ -58,7 +58,7 @@ export function layoutShapes(setting, key) {
 export function csv(rows, context = {}) {
   const columns = ["cache_policy", "host", "input", "backend", "workload", "codec", "chunk_bytes", "block_request_bytes",
     "chunk_shape", "shard_shape", "compression_ratio", "image_throughput_gib_s_median", "image_throughput_gib_s_min",
-    "image_throughput_gib_s_max", "repeats", "bandwidth_gib_s_median", "bandwidth_gib_s_min", "bandwidth_gib_s_max",
+    "image_throughput_gib_s_max", "repeats", "storage_bandwidth_gib_s_median", "storage_bandwidth_gib_s_min", "storage_bandwidth_gib_s_max",
     "iops_median", "iops_min", "iops_max", "speed_vs_uncompressed", "source_ids", "source_samples_per_pass",
     "distinct_shards_per_pass", "peak_simultaneous_file_reads", "condition_id", "setting_id"];
   const values = rows.map(row => [context.cache_policy, context.host, row.input_id, row.backend, row.workload, row.setting.codec,

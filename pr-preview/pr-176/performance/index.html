@@ -845,7 +845,7 @@ measurements. Those fixed scenarios track changes on the CI machine.</p>
 <td>Uncompressed image bytes in the stored arrays ÷ stored file bytes</td>
 </tr>
 <tr>
-<td>Bandwidth (GiB/s)</td>
+<td>Storage bandwidth (GiB/s)</td>
 <td>Read bytes recorded by Linux for the storage system ÷ elapsed seconds ÷ 2³⁰</td>
 </tr>
 <tr>
@@ -855,7 +855,7 @@ measurements. Those fixed scenarios track changes on the CI machine.</p>
 </tbody>
 </table>
 <p>Image throughput measures how quickly the reader delivers the requested pixels.
-Bandwidth and IOPS measure the storage work during that time, summed over the
+Storage bandwidth and IOPS measure the storage work during that time, summed over the
 backing drives. They include metadata, read-ahead, and other processes using those
 drives. They are kernel device counters, not counts of internal SSD flash
 operations. Adjacent idle measurements remain available in <strong>Diagnostics</strong> and
@@ -928,7 +928,7 @@ reads. Peak overlapping application read calls reached 16 in every execution.
 IOPS ranged from about 32,000 to 141,000 across executions;
 these rates describe the measured requests and include device activity outside
 the process. The adjacent idle rate reached 455 read IOPS. For all-source
-whole-frame Zstd/1 MiB reads, the medians were 70,375 IOPS, 7.343 GiB/s bandwidth, and
+whole-frame Zstd/1 MiB reads, the medians were 70,375 IOPS, 7.343 GiB/s storage bandwidth, and
 5.579 GiB/s image throughput.</p>
 <p>Omitting DynaCell changes the highest-median layout to Blosc-Zstd/256 KiB for
 both read patterns. Omitting BBBC010 changes whole-frame Zstd/1 MiB throughput
