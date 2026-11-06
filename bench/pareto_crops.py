@@ -226,6 +226,21 @@ def make_crop_plan(definition, corpus, *, pilot=False):
             raise ValueError(
                 "Output byte budgets must contain whole samples of every crop size"
             )
+        cache_samples = lookahead + 2 * batch
+        for key, required in (
+            ("n_array_meta_cache", cache_samples),
+            ("n_chunk_layout_cache", cache_samples),
+            (
+                "n_shard_index_cache",
+                cache_samples
+                * positive_int(
+                    definition["pipeline"]["max_shards_per_sample"],
+                    "max_shards_per_sample",
+                ),
+            ),
+        ):
+            if positive_int(definition["pipeline"][key], key) < required:
+                raise ValueError(f"{key} must be at least {required} for crop {crop}")
         count = (
             math.ceil(profile["returned_bytes_per_source"] / (sample_bytes * batch))
             * batch

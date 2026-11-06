@@ -104,9 +104,9 @@
     "max_chunk_uncompressed_mb": 1,
     "max_substreams_per_chunk": 64,
     "max_read_op_kb": 2048,
-    "n_array_meta_cache": 1024,
-    "n_shard_index_cache": 16384,
-    "n_chunk_layout_cache": 1024,
+    "n_array_meta_cache": 4096,
+    "n_shard_index_cache": 65536,
+    "n_chunk_layout_cache": 4096,
     "max_shards_per_sample": 16
   },
   "batch_output_bytes": 37748736,

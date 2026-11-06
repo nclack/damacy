@@ -147,6 +147,25 @@ class CropTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "one sample"):
             case_variant(case, variants)
 
+    def test_insufficient_caches_fail_before_preparation(self):
+        for key in (
+            "n_array_meta_cache",
+            "n_chunk_layout_cache",
+            "n_shard_index_cache",
+        ):
+            with self.subTest(cache=key):
+                definition = copy.deepcopy(self.definition)
+                smallest_crop = min(definition["crop_sizes"])
+                required = (
+                    definition["lookahead_output_bytes"]
+                    + 2 * definition["batch_output_bytes"]
+                ) // (smallest_crop**2 * 4)
+                if key == "n_shard_index_cache":
+                    required *= definition["pipeline"]["max_shards_per_sample"]
+                definition["pipeline"][key] = required - 1
+                with self.assertRaisesRegex(ValueError, key):
+                    make_plan(definition, self.corpus)
+
 
 if __name__ == "__main__":
     unittest.main()

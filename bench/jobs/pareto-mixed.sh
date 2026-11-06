@@ -40,6 +40,9 @@ case "$study_backend" in
     cmake --build build --parallel 16
     ctest --test-dir build --output-on-failure \
       -R '^(test_benchmark_cpu|test_cold_read|test_cpu_executor|test_cpu_pipeline|test_blosc_codecs|test_file_reader)$'
+    PYTHONPATH=bench uv run --no-project --python 3.12 \
+      --with 'numpy==2.5.2' --with 'zarr==3.3.0' --with 'numcodecs==0.16.5' \
+      python -m unittest test_pareto test_pareto_mixture test_pareto_crops test_pareto_data
     uv run --script bench/pareto.py prepare "$study_root/plan.json" \
       --corpus "$study_corpus" --output "$study_root/data" --workers 3 \
       "${study_prepare[@]}"
@@ -54,6 +57,40 @@ case "$study_backend" in
     exit 2
     ;;
 esac
+
+uv run --no-project --python 3.12 python - "$study_root" "$study_backend" <<'PY_PREFLIGHT'
+import subprocess
+import sys
+from pathlib import Path
+sys.path.insert(0, "bench")
+from pareto import read_json, scenario_for, write_json
+root = Path(sys.argv[1])
+backend = sys.argv[2]
+plan = read_json(root / "plan.json")
+case = max(
+    (case for case in plan["cases"] if case["backend"] == backend),
+    key=lambda case: (
+        case["sampling"]["samples_per_batch"],
+        case.get("access_pattern") == "baked",
+        case.get("setting", {}).get("codec") == "none",
+    ),
+)
+scenario = scenario_for({**plan, "cache_policy": "preloaded files"}, case, root / "data")
+scenario["sampling"]["min_seconds"] = 0
+output = root / f"preflight-{backend}"
+output.mkdir(exist_ok=True)
+write_json(output / "scenario.json", scenario)
+print(f"Checking {backend} reader with largest batch before copying data", flush=True)
+with (output / "stdout.json").open("w") as stdout, (output / "stderr.txt").open("w") as stderr:
+    subprocess.run(
+        ["build/bench/damacy_bench", str(output / "scenario.json")],
+        stdout=stdout,
+        stderr=stderr,
+        check=True,
+        timeout=plan["profile"]["timeout_seconds"],
+    )
+print("Reader check passed; these shared-filesystem timings are excluded", flush=True)
+PY_PREFLIGHT
 
 uv run --no-project --python 3.12 python - "$study_root/data/prepared.json" "$study_scratch" <<'PY_SPACE'
 import json
