@@ -6,8 +6,10 @@
 //
 // All path/timestamp orchestration belongs in bench/run.py; this binary
 // is the timing core only.
+#include "cold_read.h"
 #include "damacy_config.h"
 #include "damacy_pipeline.h"
+#include "query_stream.h"
 
 #include "util/json.h"
 #include "util/json_writer.h"
@@ -113,6 +115,10 @@ struct scenario
   uint32_t n_warmup_batches;
   uint32_t samples_per_batch;
   uint64_t sampling_seed;
+  double min_seconds;
+  int whole_planes;
+  char query_file[512];
+  int cold_reads;
 
   // pipeline
   uint32_t lookahead_samples;
@@ -129,6 +135,7 @@ struct scenario
   uint32_t n_shard_index_cache;
   uint32_t n_chunk_layout_cache;
   uint32_t max_shards_per_sample;
+  uint32_t max_substreams_per_chunk;
   uint8_t host_buffer_waves; // 0 → tuning_defaults() baseline
   uint8_t bypass_decode;
   struct damacy_latency_model metadata_latency;
@@ -372,6 +379,57 @@ parse_scenario(struct cslice src, struct scenario* sc)
       return 1;
     sc->samples_per_batch = (uint32_t)v;
     read_uint_opt(src, p_s, countof(p_s), &sc->sampling_seed, 1234);
+    static const struct json_query p_duration[] = {
+      { QUERY_KEY, .key = "sampling" }, { QUERY_KEY, .key = "min_seconds" }
+    };
+    read_double_opt(
+      src, p_duration, countof(p_duration), &sc->min_seconds, 0.0);
+    static const struct json_query p_pattern[] = {
+      { QUERY_KEY, .key = "sampling" }, { QUERY_KEY, .key = "pattern" }
+    };
+    char pattern[32] = "random";
+    read_string_into(
+      src, p_pattern, countof(p_pattern), pattern, sizeof(pattern));
+    if (strcmp(pattern, "random") && strcmp(pattern, "planes") &&
+        strcmp(pattern, "queries"))
+      return 1;
+    if (!strcmp(pattern, "queries")) {
+      static const struct json_query p_file[] = {
+        { QUERY_KEY, .key = "sampling" }, { QUERY_KEY, .key = "query_file" }
+      };
+      if (sc->rank != 3 ||
+          read_string_into(src,
+                           p_file,
+                           countof(p_file),
+                           sc->query_file,
+                           sizeof sc->query_file) ||
+          !sc->query_file[0] || sc->n_warmup_batches > sc->n_batches)
+        return 1;
+    }
+    sc->whole_planes = !strcmp(pattern, "planes");
+    if (!sc->n_batches || !sc->samples_per_batch || sc->min_seconds < 0.0 ||
+        sc->min_seconds > 600.0)
+      return 1;
+  }
+  {
+    static const struct json_query policy[] = {
+      { QUERY_KEY, .key = "cache" }, { QUERY_KEY, .key = "policy" }
+    };
+    struct json_node value;
+    enum json_err error =
+      json_resolve(src, policy, countof(policy), &value, NULL);
+    if (error != JSON_ERR_NOT_FOUND) {
+      if (error != JSON_OK ||
+          (!json_str_eq(value, "cold") && !json_str_eq(value, "cold-pass")))
+        return 1;
+      if ((json_str_eq(value, "cold") && sc->n_batches != 1) ||
+          !sc->n_warmup_batches) {
+        fprintf(stderr,
+                "bench: cold reads require one batch per pass and warmup\n");
+        return 1;
+      }
+      sc->cold_reads = 1;
+    }
   }
 
   // pipeline
@@ -448,6 +506,18 @@ parse_scenario(struct cslice src, struct scenario* sc)
     if (!v || v > UINT32_MAX)
       return 1;
     sc->chunks_per_input_buffer = (uint32_t)v;
+    static const struct json_query p_blocks[] = {
+      { QUERY_KEY, .key = "pipeline" },
+      { QUERY_KEY, .key = "max_substreams_per_chunk" }
+    };
+    read_uint_opt(src,
+                  p_blocks,
+                  countof(p_blocks),
+                  &v,
+                  DAMACY_DEFAULT_MAX_SUBSTREAMS_PER_CHUNK);
+    if (!v || v > DAMACY_HARD_MAX_SUBSTREAMS_PER_CHUNK)
+      return 1;
+    sc->max_substreams_per_chunk = (uint32_t)v;
     read_uint_opt(src, p_g, countof(p_g), &v, 0);
     sc->max_gpu_memory_bytes = v << 20;
     read_uint_opt(src, p_c, countof(p_c), &v, 0);
@@ -555,6 +625,8 @@ struct array_table
 {
   char* uris;      // n * BENCH_MAX_URI (absolute)
   int64_t* shapes; // n * DAMACY_MAX_RANK
+  uint8_t* bytes_per_pixel;
+  struct query_stream queries;
   uint32_t n;
   uint8_t rank;
 };
@@ -566,6 +638,8 @@ array_table_free(struct array_table* t)
     return;
   free(t->uris);
   free(t->shapes);
+  free(t->bytes_per_pixel);
+  query_stream_free(&t->queries);
   t->uris = NULL;
   t->shapes = NULL;
 }
@@ -597,7 +671,10 @@ array_table_init_fmt(struct array_table* t,
 }
 
 static int
-read_array_shape(const char* abs_uri, int64_t* shape, uint8_t* rank)
+read_array_shape(const char* abs_uri,
+                 int64_t* shape,
+                 uint8_t* rank,
+                 uint8_t* bytes_per_pixel)
 {
   char path[BENCH_MAX_URI + 16];
   if (snprintf(path, sizeof path, "%s/zarr.json", abs_uri) >= (int)sizeof path)
@@ -609,6 +686,13 @@ read_array_shape(const char* abs_uri, int64_t* shape, uint8_t* rank)
   struct cslice s = { .beg = buf, .end = buf + len };
   static const struct json_query p[] = { { QUERY_KEY, .key = "shape" } };
   int rc = read_int_array(s, p, countof(p), shape, DAMACY_MAX_RANK, rank);
+  static const struct json_query p_type[] = { { QUERY_KEY,
+                                                .key = "data_type" } };
+  enum damacy_dtype dtype;
+  if (parse_dtype(s, p_type, countof(p_type), &dtype))
+    rc = 1;
+  else
+    *bytes_per_pixel = damacy_dtype_bpe(dtype);
   free(buf);
   return rc;
 }
@@ -650,7 +734,8 @@ array_table_init_uris(struct array_table* t,
     return 1;
   t->uris = (char*)calloc((size_t)cap, BENCH_MAX_URI);
   t->shapes = (int64_t*)calloc((size_t)cap * DAMACY_MAX_RANK, sizeof(int64_t));
-  if (!t->uris || !t->shapes)
+  t->bytes_per_pixel = calloc(cap, sizeof(*t->bytes_per_pixel));
+  if (!t->uris || !t->shapes || !t->bytes_per_pixel)
     return 1;
   t->rank = rank;
   t->n = 0;
@@ -677,7 +762,7 @@ array_table_init_uris(struct array_table* t,
       return 1;
     int64_t shp[DAMACY_MAX_RANK];
     uint8_t r = 0;
-    if (read_array_shape(slot, shp, &r)) {
+    if (read_array_shape(slot, shp, &r, &t->bytes_per_pixel[t->n])) {
       fprintf(stderr, "bench: cannot read shape from %s/zarr.json\n", slot);
       return 1;
     }
@@ -725,6 +810,11 @@ fill_random_sample(const struct scenario* sc,
 
 struct run_metrics
 {
+  struct cold_read_result cold;
+  struct damacy_stats startup_stats;
+  struct damacy_stats measurement_baseline;
+  double warmup_ms;
+  uint64_t measurement_passes;
   double init_ms;
   double ttfb_ms; // first push -> first OK pop
   double wall_ms; // steady-state only (after warmup, after stats reset)
@@ -781,8 +871,39 @@ drive(struct damacy* d,
         cursor = 0;
         uint64_t remaining = samples_target - pushed_local;
         in_pool = remaining < pool_cap ? (uint32_t)remaining : pool_cap;
-        for (uint32_t i = 0; i < in_pool; ++i)
-          fill_random_sample(sc, at, rng, &pool[i]);
+        for (uint32_t i = 0; i < in_pool; ++i) {
+          if (at->queries.records) {
+            const struct query_record* query =
+              &at->queries.records[pushed_local + i];
+            struct damacy_sample* sample = &pool[i];
+            sample->uri = &at->uris[(size_t)query->array * BENCH_MAX_URI];
+            sample->rank = 3;
+            for (unsigned axis = 0; axis < 3; ++axis) {
+              int64_t begin = query->origin[axis];
+              sample->axes[axis] = (struct damacy_axis_selection){
+                .kind = DAMACY_AXIS_INTERVAL,
+                .interval = { begin, begin + sc->sample_shape[axis] }
+              };
+            }
+          } else if (sc->whole_planes) {
+            uint64_t index = pushed_local + i;
+            uint32_t z = (uint32_t)(index % at->n);
+            const int64_t* shape = &at->shapes[(size_t)z * DAMACY_MAX_RANK];
+            struct damacy_sample* sample = &pool[i];
+            sample->uri = &at->uris[(size_t)z * BENCH_MAX_URI];
+            sample->rank = at->rank;
+            for (uint8_t axis = 0; axis < at->rank; ++axis) {
+              int64_t begin =
+                axis == 0 ? (int64_t)((index / at->n) % shape[0]) : 0;
+              sample->axes[axis] = (struct damacy_axis_selection){
+                .kind = DAMACY_AXIS_INTERVAL,
+                .interval = { begin, begin + sc->sample_shape[axis] }
+              };
+            }
+          } else {
+            fill_random_sample(sc, at, rng, &pool[i]);
+          }
+        }
       }
       struct damacy_sample_slice slice = { .beg = pool + cursor,
                                            .end = pool + in_pool };
@@ -827,6 +948,20 @@ drive(struct damacy* d,
   *pushed += pushed_local;
   *popped += popped_local;
   free(pool);
+  return 0;
+}
+
+static int
+finish_device(const struct scenario* sc)
+{
+#ifdef DAMACY_HAS_CUDA
+  if (!sc->cpu && cuCtxSynchronize() != CUDA_SUCCESS) {
+    fprintf(stderr, "bench: CUDA completion failed\n");
+    return 1;
+  }
+#else
+  (void)sc;
+#endif
   return 0;
 }
 
@@ -886,7 +1021,37 @@ emit_metadata_op_latency(struct json_writer* jw, const struct run_metrics* rm)
 }
 
 static void
-emit_results(const struct scenario* sc, const struct run_metrics* rm, FILE* out)
+emit_metadata_counts(struct json_writer* jw,
+                     const struct damacy_stats* stats,
+                     const struct damacy_stats* baseline)
+{
+  static const char* names[] = { "statx", "open", "read", "close" };
+  const struct damacy_stats zero = { 0 };
+  if (!baseline)
+    baseline = &zero;
+  jw_object_begin(jw);
+  jw_key(jw, "array_metadata_misses");
+  jw_uint(jw, stats->array_meta.misses - baseline->array_meta.misses);
+  jw_key(jw, "shard_index_misses");
+  jw_uint(jw, stats->shard_index.misses - baseline->shard_index.misses);
+  jw_key(jw, "read_jobs");
+  jw_uint(jw,
+          stats->metadata_backend.read_jobs -
+            baseline->metadata_backend.read_jobs);
+  for (unsigned i = 0; i < countof(names); ++i) {
+    jw_key(jw, names[i]);
+    jw_uint(jw,
+            stats->metadata_op_latency[i].count -
+              baseline->metadata_op_latency[i].count);
+  }
+  jw_object_end(jw);
+}
+
+static void
+emit_results(const struct scenario* sc,
+             const struct run_metrics* rm,
+             const struct array_table* at,
+             FILE* out)
 {
   struct strbuf sb = { 0 };
   struct json_writer jw;
@@ -904,11 +1069,73 @@ emit_results(const struct scenario* sc, const struct run_metrics* rm, FILE* out)
     jw_raw(&jw, sc->src.beg);
   }
 
+  jw_key(&jw, "measurement_passes");
+  jw_uint(&jw, rm->measurement_passes);
+
+  jw_key(&jw, "metadata");
+  jw_object_begin(&jw);
+  jw_key(&jw, "version");
+  jw_uint(&jw, 2);
+  jw_key(&jw, "startup");
+  emit_metadata_counts(&jw, &rm->startup_stats, NULL);
+  jw_key(&jw, "measured");
+  emit_metadata_counts(&jw, &rm->stats, &rm->measurement_baseline);
+  jw_object_end(&jw);
+
+  if (sc->cold_reads) {
+    jw_key(&jw, "cold_reads");
+    jw_object_begin(&jw);
+    jw_key(&jw, "passes");
+    jw_uint(&jw, rm->cold.passes);
+    jw_key(&jw, "files");
+    jw_uint(&jw, rm->cold.files);
+    jw_key(&jw, "pages_per_check");
+    jw_uint(&jw, rm->cold.pages);
+    jw_key(&jw, "resident_pages_before");
+    jw_uint(&jw, rm->cold.resident_pages_before);
+    jw_key(&jw, "resident_pages_after");
+    jw_uint(&jw, rm->cold.resident_pages_after);
+    jw_key(&jw, "preparation_ms");
+    jw_float(&jw, rm->cold.preparation_ms);
+    jw_key(&jw, "device_reads");
+    jw_uint(&jw, rm->cold.device.reads);
+    jw_key(&jw, "device_read_bytes");
+    jw_uint(&jw, rm->cold.device.bytes);
+    jw_key(&jw, "device_writes");
+    jw_uint(&jw, rm->cold.device.writes);
+    jw_key(&jw, "idle_seconds");
+    jw_float(&jw, rm->cold.idle_seconds);
+    jw_key(&jw, "idle_device_reads");
+    jw_uint(&jw, rm->cold.idle.reads);
+    jw_key(&jw, "idle_device_read_bytes");
+    jw_uint(&jw, rm->cold.idle.bytes);
+    jw_key(&jw, "idle_device_writes");
+    jw_uint(&jw, rm->cold.idle.writes);
+    jw_object_end(&jw);
+  }
+
+  if (at->queries.records) {
+    jw_key(&jw, "query_stream");
+    jw_object_begin(&jw);
+    jw_key(&jw, "samples_per_pass");
+    jw_uint(&jw, at->queries.count);
+    jw_key(&jw, "source_bytes_per_pass");
+    jw_uint(&jw, at->queries.source_bytes);
+    jw_key(&jw, "samples_per_source");
+    jw_array_begin(&jw);
+    for (uint32_t i = 0; i < at->n; ++i)
+      jw_uint(&jw, at->queries.samples_per_source[i]);
+    jw_array_end(&jw);
+    jw_object_end(&jw);
+  }
+
   // Timings.
   jw_key(&jw, "timings_ms");
   jw_object_begin(&jw);
   jw_key(&jw, "init");
   jw_float(&jw, rm->init_ms);
+  jw_key(&jw, "warmup");
+  jw_float(&jw, rm->warmup_ms);
   jw_key(&jw, "time_to_first_batch");
   jw_float(&jw, rm->ttfb_ms);
   jw_key(&jw, "wall");
@@ -996,6 +1223,10 @@ emit_results(const struct scenario* sc, const struct run_metrics* rm, FILE* out)
   jw_uint(&jw, rm->stats.metadata_latency.total_sleep_ns);
   jw_key(&jw, "metadata_latency_max_sleep_ns");
   jw_uint(&jw, rm->stats.metadata_latency.max_sleep_ns);
+  jw_key(&jw, "data_backend_read_jobs");
+  jw_uint(&jw, rm->stats.data_backend.read_jobs);
+  jw_key(&jw, "data_backend_read_max_active");
+  jw_uint(&jw, rm->stats.data_backend.read_max_active);
   jw_key(&jw, "metadata_backend_read_jobs");
   jw_uint(&jw, rm->stats.metadata_backend.read_jobs);
   jw_key(&jw, "metadata_backend_read_active");
@@ -1191,6 +1422,37 @@ main(int argc, char** argv)
     }
   }
 
+  if (sc.query_file[0] &&
+      (!at.bytes_per_pixel || at.n != sc.n_zarrs ||
+       query_stream_load(sc.query_file,
+                         at.n,
+                         at.shapes,
+                         DAMACY_MAX_RANK,
+                         at.bytes_per_pixel,
+                         sc.sample_shape,
+                         (uint64_t)sc.n_batches * sc.samples_per_batch,
+                         &at.queries))) {
+    fprintf(stderr,
+            "bench: query stream is invalid or does not match the arrays\n");
+    array_table_free(&at);
+    free(json_buf);
+    return 1;
+  }
+
+  if (sc.whole_planes) {
+    for (uint32_t z = 0; z < at.n; ++z) {
+      const int64_t* shape = &at.shapes[(size_t)z * DAMACY_MAX_RANK];
+      if (at.rank != 3 || sc.sample_shape[0] != 1 ||
+          sc.sample_shape[1] != shape[1] || sc.sample_shape[2] != shape[2]) {
+        fprintf(stderr,
+                "bench: planes requires sample_shape [1, height, width]\n");
+        array_table_free(&at);
+        free(json_buf);
+        return 1;
+      }
+    }
+  }
+
   fprintf(
     stderr,
     "scenario: store_root=%s n_arrays=%u rank=%u batches=%u (warmup=%u)\n",
@@ -1216,6 +1478,7 @@ main(int argc, char** argv)
   cfg.tuning.n_shard_index_cache = sc.n_shard_index_cache;
   cfg.tuning.n_chunk_layout_cache = sc.n_chunk_layout_cache;
   cfg.tuning.max_shards_per_sample = sc.max_shards_per_sample;
+  cfg.tuning.max_substreams_per_chunk = sc.max_substreams_per_chunk;
   cfg.tuning.metadata_io_concurrency = sc.metadata_io_concurrency;
   if (sc.max_chunk_uncompressed_bytes)
     cfg.tuning.max_chunk_uncompressed_bytes = sc.max_chunk_uncompressed_bytes;
@@ -1261,7 +1524,6 @@ main(int argc, char** argv)
   struct run_metrics rm = { 0 };
   rm.init_ms = (t_init_b - t_init_a) * 1e3;
 
-  // ttfb covers cold caches: from very first push attempt to first OK pop.
   double t_first_push = now_seconds();
   double t_first_pop = 0.0;
 
@@ -1286,57 +1548,86 @@ main(int argc, char** argv)
       free(json_buf);
       return 1;
     }
+    if (finish_device(&sc)) {
+      pipeline_destroy(&pipeline);
+      array_table_free(&at);
+      free(json_buf);
+      return 1;
+    }
+    rm.warmup_ms = (now_seconds() - t_first_push) * 1e3;
+    damacy_stats_get(d, &rm.startup_stats);
     damacy_stats_reset(d);
   }
 
   rm.ttfb_ms = (t_first_pop > 0.0 ? (t_first_pop - t_first_push) : 0.0) * 1e3;
+  damacy_stats_get(d, &rm.measurement_baseline);
 
-  // Steady-state run. drive() pushes exactly n_batches * samples_per_batch
-  // samples and pops exactly n_batches batches, so the pipeline drains on
-  // return.
-  uint64_t pushed_steady = 0, popped_steady = 0;
-  double t_steady_a = now_seconds();
-  double t_first_pop_steady = 0.0;
-  if (sc.n_warmup_batches == 0) {
-    if (drive(d,
-              &sc,
-              &at,
-              &rng,
-              sc.n_batches,
-              sc.consumer_hold_ms,
-              &pushed_steady,
-              &popped_steady,
-              &t_first_pop,
-              &rm.consumer_block_ms_total,
-              &rm.consumer_push_ms_total,
-              &rm.consumer_pop_wait_ms_total)) {
-      pipeline_destroy(&pipeline);
-      array_table_free(&at);
-      free(json_buf);
-      return 1;
-    }
-    rm.ttfb_ms = (t_first_pop - t_first_push) * 1e3;
-  } else {
-    if (drive(d,
-              &sc,
-              &at,
-              &rng,
-              sc.n_batches,
-              sc.consumer_hold_ms,
-              &pushed_steady,
-              &popped_steady,
-              &t_first_pop_steady,
-              &rm.consumer_block_ms_total,
-              &rm.consumer_push_ms_total,
-              &rm.consumer_pop_wait_ms_total)) {
-      pipeline_destroy(&pipeline);
-      array_table_free(&at);
-      free(json_buf);
-      return 1;
-    }
+  struct cold_read* cold = NULL;
+  if (sc.cold_reads && (cold_read_create(src, &cold) || cold_read_idle(cold))) {
+    fprintf(stderr, "bench: cannot initialize cold-read verification\n");
+    cold_read_destroy(cold);
+    pipeline_destroy(&pipeline);
+    array_table_free(&at);
+    free(json_buf);
+    return 1;
   }
-  double t_steady_b = now_seconds();
-  rm.wall_ms = (t_steady_b - t_steady_a) * 1e3;
+
+  uint64_t pushed_steady = 0, popped_steady = 0;
+  double t_first_pop_steady = 0.0;
+  do {
+    if (cold && cold_read_begin(cold)) {
+      fprintf(stderr, "bench: cold-read preparation failed\n");
+      cold_read_destroy(cold);
+      pipeline_destroy(&pipeline);
+      array_table_free(&at);
+      free(json_buf);
+      return 1;
+    }
+    if (sc.min_seconds > 0.0)
+      rng.s = sc.sampling_seed ? sc.sampling_seed : 0xdeadbeefULL;
+    double t_pass = now_seconds();
+    if (drive(d,
+              &sc,
+              &at,
+              &rng,
+              sc.n_batches,
+              sc.consumer_hold_ms,
+              &pushed_steady,
+              &popped_steady,
+              rm.measurement_passes == 0 ? &t_first_pop_steady : NULL,
+              &rm.consumer_block_ms_total,
+              &rm.consumer_push_ms_total,
+              &rm.consumer_pop_wait_ms_total) ||
+        finish_device(&sc)) {
+      cold_read_destroy(cold);
+      pipeline_destroy(&pipeline);
+      array_table_free(&at);
+      free(json_buf);
+      return 1;
+    }
+    rm.wall_ms += (now_seconds() - t_pass) * 1e3;
+    if (cold && cold_read_end(cold)) {
+      cold_read_destroy(cold);
+      pipeline_destroy(&pipeline);
+      array_table_free(&at);
+      free(json_buf);
+      return 1;
+    }
+    ++rm.measurement_passes;
+  } while (rm.wall_ms / 1e3 < sc.min_seconds);
+  if (cold) {
+    if (cold_read_idle(cold)) {
+      cold_read_destroy(cold);
+      pipeline_destroy(&pipeline);
+      array_table_free(&at);
+      free(json_buf);
+      return 1;
+    }
+    cold_read_result(cold, &rm.cold);
+    cold_read_destroy(cold);
+  }
+  if (sc.n_warmup_batches == 0)
+    rm.ttfb_ms = (t_first_pop_steady - t_first_push) * 1e3;
 
   rm.pushed += pushed_steady;
   rm.popped += popped_steady;
@@ -1346,9 +1637,8 @@ main(int argc, char** argv)
   if (getrusage(RUSAGE_SELF, &usage) == 0)
     rm.peak_host_bytes = (uint64_t)usage.ru_maxrss * 1024;
   pipeline_destroy(&pipeline);
+  emit_results(&sc, &rm, &at, stdout);
   array_table_free(&at);
-
-  emit_results(&sc, &rm, stdout);
   free(json_buf);
   return 0;
 }

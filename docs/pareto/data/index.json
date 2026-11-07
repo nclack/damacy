@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "studies": [
+    {
+      "id": "f0166121dda806b1b509",
+      "label": "H100 CPU/CUDA · crops 128–256 · cold · 2026-11-06",
+      "pilot": false,
+      "file": "f0166121dda806b1b509.json",
+      "cache_policy": "cold-pass"
+    },
+    {
+      "id": "2f6063ce5114fc47763a",
+      "label": "EPYC CPU · crops 128–256 · cold · 2026-11-06",
+      "pilot": false,
+      "file": "2f6063ce5114fc47763a.json",
+      "cache_policy": "cold-pass"
+    },
+    {
+      "id": "81fe76d51bbbd3212ed6",
+      "label": "H100 CPU/CUDA · cold · 2026-11-06",
+      "pilot": true,
+      "file": "81fe76d51bbbd3212ed6.json",
+      "cache_policy": "cold-pass"
+    },
+    {
+      "id": "542501404495a92083a9",
+      "label": "EPYC CPU · cold · 2026-11-05",
+      "pilot": true,
+      "file": "542501404495a92083a9.json",
+      "cache_policy": "cold-pass"
+    },
+    {
+      "id": "5add8a3675356a860c8e",
+      "label": "EPYC CPU · single-batch cold · 2026-11-04",
+      "pilot": true,
+      "file": "5add8a3675356a860c8e.json",
+      "cache_policy": "cold"
+    },
+    {
+      "id": "f0aa215f44b8b59093a0",
+      "label": "H100 CPU/CUDA · cached · 2026-11-04",
+      "pilot": true,
+      "file": "f0aa215f44b8b59093a0.json",
+      "cache_policy": "preloaded files"
+    }
+  ]
+}

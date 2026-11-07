@@ -1,0 +1,144 @@
+{
+  "version": 2,
+  "id": "microscopy-mixed-cold-v2",
+  "label": "Mixed microscopy: 1 GiB shards on cold NVMe",
+  "corpus_version": 3,
+  "cache_policy": "cold-pass",
+  "inputs": "all",
+  "backends": [
+    "cpu",
+    "cuda"
+  ],
+  "chunk_bytes": [
+    16384,
+    65536,
+    262144,
+    1048576
+  ],
+  "codecs": [
+    "none",
+    "zstd",
+    "blosc-zstd",
+    "blosc-lz4"
+  ],
+  "level": 3,
+  "blosc_block_bytes": [
+    16384,
+    "chunk"
+  ],
+  "patterns": [
+    {
+      "id": "balanced-256",
+      "sample_shape": [
+        1,
+        256,
+        256
+      ],
+      "samples_per_batch": 128
+    },
+    {
+      "id": "whole-planes",
+      "samples_per_batch": 8
+    }
+  ],
+  "profile": {
+    "repeats": 3,
+    "returned_bytes_per_source": 1073741824,
+    "warmup_batches": 4,
+    "min_seconds": 3,
+    "reference_seconds": 6,
+    "timeout_seconds": 180
+  },
+  "pilot_profile": {
+    "repeats": 2,
+    "returned_bytes_per_source": 1073741824,
+    "warmup_batches": 4,
+    "min_seconds": 2,
+    "reference_seconds": 4,
+    "timeout_seconds": 180
+  },
+  "pilot_settings": [
+    {
+      "codec": "none",
+      "chunk_bytes": 262144,
+      "block_bytes": null
+    },
+    {
+      "codec": "none",
+      "chunk_bytes": 1048576,
+      "block_bytes": null
+    },
+    {
+      "codec": "zstd",
+      "chunk_bytes": 16384,
+      "block_bytes": null
+    },
+    {
+      "codec": "zstd",
+      "chunk_bytes": 262144,
+      "block_bytes": null
+    },
+    {
+      "codec": "zstd",
+      "chunk_bytes": 1048576,
+      "block_bytes": null
+    },
+    {
+      "codec": "blosc-zstd",
+      "chunk_bytes": 262144,
+      "block_bytes": 16384
+    },
+    {
+      "codec": "blosc-zstd",
+      "chunk_bytes": 262144,
+      "block_bytes": 262144
+    },
+    {
+      "codec": "blosc-lz4",
+      "chunk_bytes": 262144,
+      "block_bytes": 16384
+    },
+    {
+      "codec": "blosc-lz4",
+      "chunk_bytes": 262144,
+      "block_bytes": 262144
+    }
+  ],
+  "reference_setting": {
+    "codec": "none",
+    "chunk_bytes": 262144,
+    "block_bytes": null
+  },
+  "query_seed": 1234,
+  "order_seed": 20261105,
+  "pipeline": {
+    "dtype": "f32",
+    "lookahead_samples": 512,
+    "n_io_threads": 16,
+    "metadata_io_concurrency": 32,
+    "decode_workers": 16,
+    "chunks_per_input_buffer": 256,
+    "max_cpu_memory_mb": 8192,
+    "max_gpu_memory_mb": 6144,
+    "max_chunk_uncompressed_mb": 1,
+    "max_substreams_per_chunk": 64,
+    "max_read_op_kb": 2048,
+    "n_array_meta_cache": 1024,
+    "n_shard_index_cache": 16384,
+    "n_chunk_layout_cache": 1024,
+    "max_shards_per_sample": 16
+  },
+  "leave_one_out": true,
+  "volume": {
+    "frame_shape": [
+      2048,
+      2048
+    ],
+    "shard_spatial_shape": [
+      512,
+      512
+    ],
+    "shard_bytes": 1073741824,
+    "seed": 20261105
+  }
+}

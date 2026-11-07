@@ -1,5 +1,10 @@
 # Benchmark tracking
 
+The [retained Pareto studies](../docs/performance.md) compare chunk, codec, and
+block settings on recorded hardware, with separate cold-NVMe and cached modes,
+application request rates, and device IOPS. They use `bench/pareto.py` and publish to
+`docs/pareto/data`; they do not run in the daily benchmark workflow below.
+
 Wall-clock and throughput numbers from `damacy_bench` are tracked over
 time on the `gh-pages` branch via
 [github-action-benchmark](https://github.com/benchmark-action/github-action-benchmark).

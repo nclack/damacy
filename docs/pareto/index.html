@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Read performance · Damacy</title>
+  <script src="appearance.js"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <a class="brand" href="../">Damacy</a>
+    <nav aria-label="Performance reports">
+      <a href="./" aria-current="page">Read performance</a>
+      <a href="https://nclack.github.io/damacy/throughput/">Throughput history</a>
+      <a href="https://nclack.github.io/damacy/timings/">Timing history</a>
+      <a href="../performance/">Method</a>
+    </nav>
+    <label class="appearance">Appearance<select id="appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+  </header>
+  <main>
+    <p class="eyebrow">CHUNKS · CODECS · READ PATTERNS</p>
+    <h1>Image throughput and storage tradeoffs</h1>
+    <p class="intro">Find the settings that deliver more requested image data per second while storing fewer bytes.</p>
+    <p id="status" role="status">Loading measurements…</p>
+    <noscript><p>Enable JavaScript for interactive plots. The <a href="data/index.json">study index</a> links to the measurements.</p></noscript>
+    <section id="workspace" hidden aria-label="Performance study">
+      <div class="filters">
+        <label>Study<select id="study"></select></label>
+        <label><span id="input-label">Image input</span><select id="input"></select></label>
+        <label>Read pattern<select id="workload"></select></label>
+        <label id="crop-label" hidden>Crop size<select id="crop"></select></label>
+        <label>Plot<select id="view"></select></label>
+      </div>
+      <p id="cache-condition" class="note"></p>
+      <p id="context" class="note"></p>
+      <details id="storage-details" class="storage-details">
+        <summary>Storage system</summary>
+        <div id="storage-content"></div>
+      </details>
+      <details class="more-filters">
+        <summary>Filter settings</summary>
+        <div class="filters">
+          <label>Codec<select id="codec"></select></label>
+          <label>Chunk size<select id="chunk"></select></label>
+          <label>Blosc block request<select id="block"></select></label>
+          <label class="check" id="frontier-filter"><input id="frontier-only" type="checkbox">Show frontier only</label>
+        </div>
+      </details>
+      <div class="toolbar">
+        <p id="count" role="status"></p>
+        <div><button id="csv" type="button">Download CSV</button> <a id="raw">Study JSON</a></div>
+      </div>
+      <div class="legend" aria-label="Codec colors">
+        <span><i class="none"></i>Uncompressed</span>
+        <span><i class="zstd"></i>Zstd</span>
+        <span><i class="blosc-zstd"></i>Blosc Zstd · bitshuffle</span>
+        <span><i class="blosc-lz4"></i>Blosc LZ4 · bitshuffle</span>
+      </div>
+      <p class="note" id="plot-note"></p>
+      <div class="results">
+        <div>
+          <div id="plots" class="plots"></div>
+          <div class="selection">
+            <p id="selection-status" role="status" aria-atomic="true">Select a point or table setting to inspect its measurements.</p>
+            <a id="selection-details" href="#detail-heading" hidden>View configuration details</a>
+          </div>
+          <details class="measurements">
+            <summary>All configuration measurements</summary>
+            <div class="table-scroll">
+              <table>
+                <caption id="table-description"></caption>
+                <thead><tr id="columns"></tr></thead>
+                <tbody id="rows"></tbody>
+              </table>
+            </div>
+          </details>
+        </div>
+        <aside id="detail" aria-label="Selected configuration">
+          <h2 id="detail-heading" tabindex="-1">Configuration details</h2>
+          <div id="detail-content"><p>Select a point or table setting to inspect its measurements and layout.</p></div>
+        </aside>
+      </div>
+    </section>
+    <section class="method">
+      <h2>Reading the measurements</h2>
+      <dl class="metric-definitions">
+        <dt>Image throughput</dt><dd>Requested image bytes delivered per second, counted in the source data type. Converting uint16 to float32 does not increase this number.</dd>
+        <dt>Compression ratio</dt><dd>Uncompressed image bytes in the stored arrays divided by their file bytes. Larger values mean less storage is needed.</dd>
+        <dt>Storage bandwidth</dt><dd>Read bytes per second recorded by Linux for the storage system. This includes any extra reads needed to deliver the requested pixels.</dd>
+        <dt>IOPS</dt><dd>Completed read operations per second recorded by Linux for that same storage system. One file read request can produce several storage operations.</dd>
+      </dl>
+      <p>Image throughput and storage bandwidth use GiB/s, where 1 GiB is 2³⁰ bytes. IOPS uses reads/s. All rates use elapsed measurement time, including reading, decoding, and final GPU completion. Initialization, warmup, and cache clearing are excluded. The Storage system section identifies the shared hardware; Diagnostics contains reader-level counters.</p>
+      <details>
+        <summary>Measurement limits</summary>
+        <p>The observed frontier compares settings within the same input, crop size, read pattern, backend, machine session, and storage condition. Filters recompute it. Connections join measured points; they do not predict unmeasured settings. All compared panels use the same axes.</p>
+        <p>Ranges are observed minima and maxima, not confidence intervals. Use the measurements table or keyboard to select overlapping points. Pilot studies cover a limited set of settings and do not establish a final frontier.</p>
+        <p>Compression ratio includes padding, shard indexes, and array metadata. Mixed studies use expanded, tiled source distributions. A ratio below one means the files are larger than the uncompressed image bytes. The compression axis is logarithmic.</p>
+        <p>Cold studies verify zero resident data-file pages before each timed pass; codecs and metadata are warmed. Earlier cached studies replay files preloaded into RAM. Storage counters include read-ahead and other activity on the same drives. Idle measurements are available in Diagnostics, and SSD/controller caches are not controlled.</p>
+      </details>
+      <p><a href="../performance/">Measurement protocol and reproduction</a> · Design inspired by the <a href="https://acquire-project.github.io/chucky/microscopy.html">chucky microscopy analysis</a>.</p>
+    </section>
+  </main>
+  <script src="vendor/d3.v7.9.0.min.js"></script>
+  <script type="module" src="report.js"></script>
+</body>
+</html>
