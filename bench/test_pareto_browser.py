@@ -563,8 +563,14 @@ def verify_crop_study(page, document, output):
         point.press("Enter")
         assert point.get_attribute("aria-pressed") == "true"
         selected_id = point.evaluate("node => node.__data__.id")
+        measurements = page.locator(".measurements")
+        was_open = measurements.evaluate("node => node.open")
+        if not was_open:
+            measurements.locator("summary").click()
         page.locator(f'#rows button[data-setting="{selected_id}"]').click()
         assert point.get_attribute("aria-pressed") == "true"
+        if not was_open:
+            measurements.locator("summary").click()
         detail = page.locator("#detail-content").inner_text()
         assert "Samples/s" in detail
         if access == "baked":
