@@ -986,6 +986,8 @@ are not subtracted. The <a href="https://docs.kernel.org/admin-guide/iostats.htm
 describe the completed-read and sector counters used here.</p>
 <p>All rates use wall time through completion, including the final GPU work.
 Initialization, warmup, and cache clearing are excluded. One GiB is 2³⁰ bytes.
+The CPU backend returns batches in system RAM; CUDA returns them in GPU memory.
+CPU rates exclude a subsequent transfer to the GPU.
 Converting source pixels to float32 does not increase image throughput. Stored
 file lengths include padding, shard indexes, and array metadata; they are not
 filesystem block allocation. Compression ratios below one mean the files are
@@ -1009,17 +1011,19 @@ cannot be added into elapsed time. The JSON retains all original counters,
 including output-byte rates after float32 conversion. CSV exports use the same
 four main measurement names as the plots and sidebar.</p>
 <h2 id="crop-results">Crop results<a class="headerlink" href="#crop-results" title="Permanent link">&para;</a></h2>
-<p>The <a href="../pareto/#study=2f6063ce5114fc47763a">November 6 EPYC crop study</a>
-contains <strong>31 settings and 129 executions</strong>, with three process repetitions per
-setting. It compares uniformly translated random crops with sequential reads of
-the same baked pixels, across the complete seven-input mixture. Baked layouts
-use 16 files total and one sample per compression chunk. The paired H100 CPU/CUDA
-run is in progress.</p>
+<p>The <a href="../pareto/#study=f0166121dda806b1b509">paired H100 crop study</a> and
+<a href="../pareto/#study=2f6063ce5114fc47763a">Turin CPU crop study</a> are complete:
+<strong>93 settings and 387 executions</strong>, with three process repetitions per setting.
+Both compare uniformly translated random crops with sequential reads of the same
+baked pixels, across all seven inputs. Baked layouts use 16 shard files total per
+process and one sample per compression chunk.</p>
 <p>These are the highest observed image-throughput medians among the tested layouts
-for each condition, in <strong>GiB/s</strong>:</p>
+for each condition, in <strong>GiB/s</strong>. The selected encoding can differ between the
+random and baked columns. CPU output is in system RAM; CUDA output is in GPU memory.</p>
 <table>
 <thead>
 <tr>
+<th>Reader</th>
 <th>Crop</th>
 <th style="text-align: right;">Random</th>
 <th style="text-align: right;">Baked</th>
@@ -1028,52 +1032,128 @@ for each condition, in <strong>GiB/s</strong>:</p>
 </thead>
 <tbody>
 <tr>
+<td>Turin CPU</td>
 <td>128²</td>
 <td style="text-align: right;">0.558</td>
 <td style="text-align: right;">2.700</td>
 <td style="text-align: right;">4.84×</td>
 </tr>
 <tr>
+<td>H100 node · CPU</td>
+<td>128²</td>
+<td style="text-align: right;">0.544</td>
+<td style="text-align: right;">2.349</td>
+<td style="text-align: right;">4.32×</td>
+</tr>
+<tr>
+<td>H100 node · CUDA</td>
+<td>128²</td>
+<td style="text-align: right;">0.533</td>
+<td style="text-align: right;">2.286</td>
+<td style="text-align: right;">4.29×</td>
+</tr>
+<tr>
+<td>Turin CPU</td>
 <td>192²</td>
 <td style="text-align: right;">0.746</td>
 <td style="text-align: right;">6.713</td>
 <td style="text-align: right;">9.00×</td>
 </tr>
 <tr>
+<td>H100 node · CPU</td>
+<td>192²</td>
+<td style="text-align: right;">0.713</td>
+<td style="text-align: right;">6.744</td>
+<td style="text-align: right;">9.46×</td>
+</tr>
+<tr>
+<td>H100 node · CUDA</td>
+<td>192²</td>
+<td style="text-align: right;">0.745</td>
+<td style="text-align: right;">6.129</td>
+<td style="text-align: right;">8.23×</td>
+</tr>
+<tr>
+<td>Turin CPU</td>
 <td>256²</td>
 <td style="text-align: right;">1.081</td>
 <td style="text-align: right;">7.844</td>
 <td style="text-align: right;">7.26×</td>
 </tr>
+<tr>
+<td>H100 node · CPU</td>
+<td>256²</td>
+<td style="text-align: right;">1.039</td>
+<td style="text-align: right;">10.784</td>
+<td style="text-align: right;">10.38×</td>
+</tr>
+<tr>
+<td>H100 node · CUDA</td>
+<td>256²</td>
+<td style="text-align: right;">1.021</td>
+<td style="text-align: right;">9.321</td>
+<td style="text-align: right;">9.13×</td>
+</tr>
 </tbody>
 </table>
-<p>The random-layout selections are Zstd with 16 KiB chunks at 128², Blosc-LZ4 with
-256 KiB chunks at 192², and Blosc-Zstd with 256 KiB chunks at 256². Both selected
-Blosc layouts use whole-chunk blocks. The baked selections are Blosc-LZ4 at 128²
-and 256², and Blosc-Zstd at 192², also with whole-chunk blocks.</p>
-<p><strong>Baking produces a large improvement; close codec rankings remain unresolved.</strong>
-The median min–max spread across settings is 11.34% of the median, with a maximum
-of 24.61%. Bracketing uncompressed controls span 11.51–26.33%. These are observed
-ranges from three repetitions and six controls per condition, not confidence
-intervals. The plotted frontiers use medians, so small apparent advantages should
-not be treated as established dominance.</p>
-<p>Small chunks remain useful for 128² random crops: 16 KiB Zstd reaches 0.558 GiB/s
-with 1.391× compression, versus 0.460 GiB/s and 1.475× for the fastest Blosc setting.
-Baked layouts avoid decoding unused pixels. At 128², the fastest baked setting
-uses about 25.6 kB of storage reads and 0.196 storage operations per sample, versus
-153.5 kB and 6.75 operations for the fastest random setting. Lower IOPS can therefore
-accompany faster sample delivery.</p>
-<p>The machine is an AMD EPYC 9655P with 32 allowed logical CPUs, 16 CPU decode workers,
-and 16 file workers. Its storage system is XFS on eight 7.68 TB Intel NVMe drives;
-the exact inventory is in the report. All <strong>448 timed passes</strong> verified zero
-resident shard-data pages. Peak overlapping reads reached 16 in every execution.
-IOPS ranged from 12,514 to 128,561; adjacent idle traffic was at most 5 IOPS and
-0.012% of the corresponding measured rate. The
-<a href="../pareto/data/2f6063ce5114fc47763a.json">retained JSON</a> includes every observation
-and the paired query streams are available from each result.</p>
-<p>The <a href="#random-crops-and-baked-samples">crop protocol below</a> describes fixed byte
-budgets, source construction, batching effects, and the separate generative,
-image, and video training follow-ups.</p>
+<p><strong>Baking is the largest improvement:</strong> the best observed medians improve by
+4.29–10.38× across these comparisons. The gain is much larger than the repeat
+ranges. This includes changing the chunk shape to one stored sample per chunk,
+so it measures the complete baked layout rather than isolating file order alone.</p>
+<p><strong>Keep small chunks for 128² random crops.</strong> Zstd with 16 KiB chunks has the highest
+median in all three reader configurations, at 1.391× compression. On H100 CUDA it
+reaches 0.533 GiB/s, versus 0.467 GiB/s for the fastest Blosc setting at 1.475×.
+For 192² and 256², Blosc layouts lead the tested random choices. The 1 MiB Zstd
+layout is dominated in every measured random-crop condition. Intermediate small
+chunks at larger crop sizes remain unmeasured.</p>
+<p><strong>Baked codec choices depend on the backend.</strong> On the H100 node, CPU Blosc-LZ4 has
+the highest baked medians at all three sizes, with about 1.42× compression.
+Uncompressed data has the highest baked CUDA medians; at 128² its advantage over
+Blosc-LZ4 is under 1%, so both remain useful candidates. At 256², CUDA Blosc-Zstd
+with 16 KiB requested blocks reaches <strong>7.173 GiB/s at 1.463× compression</strong>.
+Whole-chunk blocks reach <strong>2.726 GiB/s at 1.473×</strong>. That small compression gain
+comes with a large throughput cost, so block size remains an important parameter.</p>
+<p><strong>There is no consistent Turin advantage in this sweep.</strong> The best random-crop medians are
+close across the machines. For baked 256² Blosc-LZ4, the H100 node's CPU reaches
+10.784 GiB/s versus 7.844 GiB/s on Turin, with separated repeat ranges. These are
+different hosts and storage arrays. CPU/GPU training comparisons also need to
+include the CPU-to-GPU transfer and the actual training loader.</p>
+<p>The samples/s view gives a different perspective on crop size. H100 CUDA's best
+random medians are about <strong>16,289, 10,127, and 7,804 samples/s</strong> at 128², 192², and
+256²; its best baked medians are <strong>69,914, 83,309, and 71,263 samples/s</strong>. More image
+bytes per second can accompany fewer completed samples. The
+<a href="#random-crops-and-baked-samples">crop protocol</a> also explains the fixed CPU
+input-buffer limit and the extra read/decode groups at 128².</p>
+<p>Lower IOPS can accompany faster sample delivery. At 128² on H100 CUDA, the fastest
+random setting uses about <strong>258 kB of storage reads and 7.68 storage operations per
+sample</strong>. The fastest baked setting uses about <strong>36 kB and 0.275 operations</strong>.
+The full report retains these storage counters, along with image throughput and
+compression, for every setting.</p>
+<p>The paired H100 run contains <strong>62 settings and 258 executions</strong>. It used one H100
+80 GB GPU, an Intel Xeon Platinum 8462Y+, 32 allowed logical CPUs, 16 CPU decode
+workers, and 16 file workers. It finished in <strong>45 minutes 16 seconds</strong>, including
+all 42 native tests, the reader check, staging, and measurements. The Turin run
+contains <strong>31 settings and 129 executions</strong>, on an AMD EPYC 9655P with the same
+worker counts and allowed CPU count. Each machine used XFS on its own array of
+eight 7.68 TB Intel NVMe drives. Exact hosts and inventories are recorded in the
+report's Storage system section.</p>
+<p>All <strong>1,353 timed passes</strong> verified zero resident shard-data pages: 448 on Turin
+and 905 on H100. Peak overlapping reads reached 16 in every execution. H100 IOPS
+ranged from 11,447 to 126,002, with adjacent idle reads at most 70 IOPS and 0.36%
+of the corresponding measured rate. Turin IOPS ranged from 12,514 to 128,561;
+idle reads were at most 5 IOPS and 0.012%.</p>
+<p>H100's median min–max repeat spread was <strong>1.74%</strong>, with a maximum of 9.07%; its
+bracketing control spreads were 0.96–7.84%. Turin was noisier: median 11.34%,
+maximum 24.61%, and control spreads of 11.51–26.33%. These are observed ranges
+from three repetitions and six controls per condition, not confidence intervals.
+The plotted frontiers use medians, so small apparent advantages should not be
+treated as established dominance.</p>
+<p>The <a href="../pareto/data/f0166121dda806b1b509.json">H100 JSON</a> and
+<a href="../pareto/data/2f6063ce5114fc47763a.json">Turin JSON</a> retain every observation, source
+geometry, query, and source/binary hash. Paired query streams are downloadable
+from each result. The protocol below describes the separate generative, image,
+and video training follow-ups; these measurements cover single-plane storage
+workloads.</p>
 <h2 id="earlier-paired-cpu-and-h100-cold-read-results">Earlier paired CPU and H100 cold-read results<a class="headerlink" href="#earlier-paired-cpu-and-h100-cold-read-results" title="Permanent link">&para;</a></h2>
 <p>The <a href="../pareto/#study=81fe76d51bbbd3212ed6">November 6 paired study</a>
 contains <strong>252 settings and 616 executions</strong>: nine layouts, both read patterns,
@@ -1317,7 +1397,7 @@ and checking file pages, so that estimate does not apply to the cold protocol.
 The full matrix has not been measured.</p>
 <h2 id="random-crops-and-baked-samples">Random crops and baked samples<a class="headerlink" href="#random-crops-and-baked-samples" title="Permanent link">&para;</a></h2>
 <p>The current <a href="https://github.com/nclack/damacy/blob/bench/microscopy-pareto/bench/studies/microscopy.json"><code>bench/studies/microscopy.json</code></a>
-defines the smaller study whose <a href="#crop-results">CPU results are above</a>.
+defines the smaller study whose <a href="#crop-results">measured results are above</a>.
 It compares 128 × 128, 192 × 192, and 256 × 256 crops from the complete seven-input
 mixture. Whole-frame reads remain in the historical reports.</p>
 <p><strong>Random crops</strong> choose each origin uniformly from every valid translation in the
@@ -1462,6 +1542,10 @@ ownership, 16 active files per process means <strong>128 active files per eight-
 Sixteen is a starting point per process, not a worker multiplier or an established
 scaling optimum. The processes share storage, CPU, and memory bandwidth; neither
 throughput nor file-worker counts should be extrapolated linearly.</p>
+<p>The measured H100 node has 128 logical CPUs, of which this one-GPU allocation
+uses 32. Dividing that node evenly among eight GPU processes would give 16 logical
+CPUs per process. The measured CPU budget therefore also needs reconsideration
+when scaling.</p>
 <p>For a target of <code>r</code> samples/s per GPU and <code>b</code> measured storage bytes per sample,
 the node needs approximately <code>8 × r × b</code> storage bytes/s. Apply the same calculation
 to storage operations per sample. Compare these demands with measured node limits

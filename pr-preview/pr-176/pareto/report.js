@@ -238,6 +238,7 @@ function panel(rows, scales, isIO, isCrop = false) {
   wrapper.className = "panel";
   const backend = first.backend === "cpu" ? "CPU" : "CUDA";
   wrapper.append(element("h2", backend));
+  wrapper.append(element("p", first.backend === "cpu" ? "Output: system RAM." : "Output: GPU memory."));
   $("plots").append(wrapper);
   const padding = parseFloat(getComputedStyle(wrapper).paddingLeft) + parseFloat(getComputedStyle(wrapper).paddingRight);
   const width = Math.max(240, wrapper.clientWidth - padding);
@@ -384,10 +385,19 @@ function render() {
   if (!valid.length) $("plots").append(element("p", isIO && filtered.length ? "Storage counters were not recorded for this study. File read requests cannot substitute for them." : "No measurements match these filters."));
   $("frontier-filter").hidden = isIO || isCrop;
   $("plot-note").textContent = isCrop
-    ? "Samples/s counts completed single-plane crops. Each line follows the same encoding recipe across measured crop sizes; dashed lines use a fixed Blosc block request. Lines are guides, not Pareto frontiers or predictions. Batch and lookahead byte budgets stay fixed. Points show medians; bars show observed ranges. Both panels use the same axes."
+    ? `Samples/s counts completed single-plane crops. Each line follows the same encoding recipe across measured crop sizes; dashed lines use a fixed Blosc block request. Lines are guides, not Pareto frontiers or predictions. Batch and lookahead byte budgets stay fixed. Points show medians; bars show observed ranges.${panels.length > 1 ? " Both panels use the same axes." : ""}`
     : isIO
     ? "Storage bandwidth counts bytes read from the storage system per second; IOPS counts completed read operations per second. Both are summed across its drives. More IOPS alone does not imply higher image throughput. Points show medians; bars show observed ranges."
     : "Image throughput counts requested pixel bytes per second in the source data type. Compression ratio is image bytes divided by stored file bytes. Upper right is better. Filled, connected points form each panel’s observed frontier. Points show medians; bars show observed ranges. All panels use the same axes.";
+  if (isCrop && filters.workload === "baked" && study.pipeline.chunks_per_input_buffer) {
+    const batches = [...new Map(valid.filter(row => row.backend === "cpu")
+      .map(row => [row.crop_size, row.sampling.samples_per_batch])).entries()].sort((a, b) => a[0] - b[0]);
+    if (batches.length && batches.every(([, samples]) => Number.isSafeInteger(samples) && samples > 0)) {
+      const limit = study.pipeline.chunks_per_input_buffer;
+      const counts = batches.map(([crop, samples]) => `${Math.ceil(samples / limit)} at ${crop}²`).join(", ");
+      $("plot-note").textContent += ` CPU input buffers hold ${limit} chunks; minimum read/decode groups per baked batch are ${counts}. This batching affects the curve.`;
+    }
+  }
   const count = groups(filtered).reduce((total, rows) => total + frontier(rows).length, 0);
   $("count").textContent = isCrop ? `${valid.length} settings across crop sizes` : `${isIO ? `${valid.length} settings with storage measurements` : `${filtered.length} settings · ${count} on the observed frontiers`} · larger markers indicate larger chunks${study.baked ? " (largest source chunk for mixed sizes)" : ""}`;
   table(filtered, isIO, isCrop);
