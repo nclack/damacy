@@ -31,7 +31,7 @@ function options(id, values, label = value => value, all = false) {
 }
 
 async function json(url) {
-  const response = await fetch(url);
+  const response = await fetch(url, {cache: "no-cache"});
   if (!response.ok) throw new Error(`Could not load measurements (${response.status}).`);
   return response.json();
 }

@@ -10,6 +10,7 @@ import csv
 import io
 import json
 import math
+import os
 import shutil
 import tempfile
 import threading
@@ -23,6 +24,44 @@ from playwright.sync_api import sync_playwright
 class QuietHandler(SimpleHTTPRequestHandler):
     def log_message(self, *_args):
         pass
+
+    def end_headers(self):
+        if self.path.split("?", 1)[0] == "/pareto/data/index.json":
+            self.send_header("Cache-Control", "max-age=600")
+        super().end_headers()
+
+
+def verify_study_refresh(browser, url, index_path):
+    original = index_path.read_text()
+    index = json.loads(original)
+    previous = {**index, "studies": index["studies"][1:]}
+    modified = index_path.stat().st_mtime - 60
+    context = browser.new_context()
+    try:
+        index_path.write_text(json.dumps(previous))
+        os.utime(index_path, (modified, modified))
+        page = context.new_page()
+        page.goto(url)
+        page.wait_for_selector("#workspace", state="visible")
+        assert page.locator("#study").input_value() == previous["studies"][0]["id"]
+
+        index_path.write_text(original)
+        os.utime(index_path, (modified + 2, modified + 2))
+        cached = page.evaluate("async () => (await fetch('data/index.json')).json()")
+        assert cached == previous
+
+        page.goto("about:blank")
+        latest = index["studies"][0]["id"]
+        page.goto(url + f"?revisit=1#study={latest}")
+        page.wait_for_selector("#workspace", state="visible")
+        assert page.locator("#study option").evaluate_all(
+            "options => options.map(option => option.value)"
+        ) == [entry["id"] for entry in index["studies"]]
+        assert page.locator("#study").input_value() == latest
+        assert page.locator("circle.point").count() > 0
+    finally:
+        index_path.write_text(original)
+        context.close()
 
 
 def fixture():
@@ -721,6 +760,9 @@ def check(assets, output, actual):
                 browser = playwright.chromium.launch(
                     headless=True, args=["--no-sandbox"]
                 )
+                url = f"http://127.0.0.1:{server.server_port}/pareto/"
+                if not actual:
+                    verify_study_refresh(browser, url, report / "data/index.json")
                 page = browser.new_page(
                     viewport={"width": 1440, "height": 1100},
                     device_scale_factor=1,
@@ -728,7 +770,6 @@ def check(assets, output, actual):
                     locale="en-US",
                 )
                 page.on("pageerror", lambda error: errors.append(str(error)))
-                url = f"http://127.0.0.1:{server.server_port}/pareto/"
                 page.goto(url + "?check=default")
                 page.wait_for_selector("#workspace", state="visible")
                 assert page.locator("#study").input_value() == index["studies"][0]["id"]
