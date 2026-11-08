@@ -6,29 +6,60 @@
   <meta name="color-scheme" content="light dark">
   <title>Read performance · Damacy</title>
   <script src="appearance.js"></script>
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=crops-20261108">
 </head>
 <body>
   <header>
     <a class="brand" href="../">Damacy</a>
     <nav aria-label="Performance reports">
       <a href="./" aria-current="page">Read performance</a>
-      <a href="https://nclack.github.io/damacy/throughput/">Throughput history</a>
-      <a href="https://nclack.github.io/damacy/timings/">Timing history</a>
+      <a href="#explorer" id="explore-link">Explore settings</a>
       <a href="../performance/">Method</a>
     </nav>
     <label class="appearance">Appearance<select id="appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
   </header>
   <main>
-    <p class="eyebrow">CHUNKS · CODECS · READ PATTERNS</p>
-    <h1>Image throughput and storage tradeoffs</h1>
-    <p class="intro">Find the settings that deliver more requested image data per second while storing fewer bytes.</p>
+    <p class="eyebrow">LOCAL STORAGE · COLD READS · 128–256 PIXEL CROPS</p>
+    <h1>How should we store training samples?</h1>
+    <p class="intro">Random crops and preassembled samples, measured on an H100 node and an EPYC node. Seven image sources, three crop sizes, and the same pixels in both layouts.</p>
     <p id="status" role="status">Loading measurements…</p>
     <noscript><p>Enable JavaScript for interactive plots. The <a href="data/index.json">study index</a> links to the measurements.</p></noscript>
-    <section id="workspace" hidden aria-label="Performance study">
+    <section id="overview" hidden aria-label="Conclusions from the two crop studies">
+      <section class="finding" aria-labelledby="layout-title">
+        <div class="finding-heading"><p class="figure-number">01 / LAYOUT</p><h2 id="layout-title">Baked layouts deliver more image data per second</h2></div>
+        <p class="figure-description">Best observed medians among tested settings. Baking combines one sample per chunk with sequential reads across 16 files; the selected codec can also change. This compares the complete layouts.</p>
+        <p class="figure-key"><span>○ Random crops</span><span>◆ Baked samples</span><span>Small marks: other tested settings</span><span>Ranges: observed min–max, n = 3</span></p>
+        <div id="layout-comparison" class="comparison-grid three-columns"></div>
+        <p class="comparison-note">Values are image throughput in GiB/s, median [min–max]. Every panel uses the same scale. Select an encoding to inspect its measurements. Close medians with overlapping ranges are not established winners.</p>
+      </section>
+      <section class="finding" aria-labelledby="crop-title">
+        <div class="finding-heading"><p class="figure-number">02 / CROP SIZE &amp; READER</p><h2 id="crop-title">More image bytes per second can mean fewer samples</h2></div>
+        <p class="figure-description">Follow a fixed encoding across crop sizes, and compare all three readers on matched settings. The fastest reader depends on the crop and encoding.</p>
+        <label class="recipe-control">Encoding for both plots<select id="overview-recipe"></select></label>
+        <p id="recipe-description" class="comparison-note"></p>
+        <div id="crop-comparison" class="comparison-grid two-columns"></div>
+        <p id="crop-finding" class="finding-callout"></p>
+        <p class="comparison-note">CPU output is in system RAM; CUDA output is in GPU memory. CPU results exclude the transfer needed for GPU training. The machines have separate storage arrays, so this does not isolate processor performance.</p>
+        <p class="comparison-note">Batching also changes: 128² baked CPU batches need three read/decode groups; 192² and 256² need one. This is a storage comparison, not an isolated crop-size effect or a complete training benchmark.</p>
+        <details class="comparison-method"><summary>Batch and memory limits</summary><p>Batches hold 36 MiB of float32 output and lookahead holds 144 MiB at every crop size. CPU input buffers hold 256 chunks. These limits give batches of 576, 256, and 144 samples at 128², 192², and 256² respectively.</p></details>
+      </section>
+      <section class="finding" aria-labelledby="parameter-title">
+        <div class="finding-heading"><p class="figure-number">03 / CHUNKS &amp; BLOCKS</p><h2 id="parameter-title">Change one encoding parameter at a time</h2></div>
+        <p class="figure-description">These comparisons keep the codec, crop, and read pattern fixed. Each pair shows image throughput, median [min–max] across three repetitions. The two figures have different scales.</p>
+        <div id="parameter-comparison" class="comparison-grid two-columns"></div>
+      </section>
+      <details class="study-method"><summary>What was measured: two machines, one storage setup per machine</summary>
+        <p>The November 6, 2026 studies contain 93 settings and 387 executions. Every timed pass began with zero resident shard-data pages. Warmup, initialization, and cache clearing are outside the timer; reading, decoding, and final GPU completion are inside it.</p>
+        <p>H100 node: Intel Xeon Platinum 8462Y+ and one H100 80 GB. EPYC node: AMD EPYC 9655P. Each used 32 allowed logical CPUs, 16 file workers, and 16 CPU decode workers, with XFS on its own array of eight 7.68 TB Intel drives. Exact inventories and idle activity are in the explorer.</p>
+        <p>EPYC measurements were noisier: median min–max spread 11.3%, versus 1.7% on the H100 node. Ranges describe three observations, not confidence intervals. Random arrays have 16 spatial shards per source; baked samples use 16 files total. Shards target about 1 GiB uncompressed. <a href="../performance/">Full protocol, sources, and reproduction.</a></p>
+      </details>
+    </section>
+    <details id="explorer" class="explorer" open>
+      <summary><h2 id="explorer-heading" tabindex="-1">Explore all settings</h2><span>Compression tradeoffs, storage work, and individual measurements</span></summary>
+    <section id="workspace" hidden aria-label="Performance study explorer">
       <div class="filters">
         <label>Study<select id="study"></select></label>
-        <label><span id="input-label">Image input</span><select id="input"></select></label>
+        <label id="input-filter"><span id="input-label">Image input</span><select id="input"></select></label>
         <label>Read pattern<select id="workload"></select></label>
         <label id="crop-label" hidden>Crop size<select id="crop"></select></label>
         <label>Plot<select id="view"></select></label>
@@ -52,7 +83,7 @@
         <p id="count" role="status"></p>
         <div><button id="csv" type="button">Download CSV</button> <a id="raw">Study JSON</a></div>
       </div>
-      <div class="legend" aria-label="Codec colors">
+      <div id="codec-legend" class="legend" aria-label="Codec colors">
         <span><i class="none"></i>Uncompressed</span>
         <span><i class="zstd"></i>Zstd</span>
         <span><i class="blosc-zstd"></i>Blosc Zstd · bitshuffle</span>
@@ -83,6 +114,7 @@
         </aside>
       </div>
     </section>
+    </details>
     <section class="method">
       <h2>Reading the measurements</h2>
       <dl class="metric-definitions">
@@ -90,19 +122,20 @@
         <dt>Compression ratio</dt><dd>Uncompressed image bytes in the stored arrays divided by their file bytes. Larger values mean less storage is needed.</dd>
         <dt>Storage bandwidth</dt><dd>Read bytes per second recorded by Linux for the storage system. This includes any extra reads needed to deliver the requested pixels.</dd>
         <dt>IOPS</dt><dd>Completed read operations per second recorded by Linux for that same storage system. One file read request can produce several storage operations.</dd>
+        <dt>Storage work per sample</dt><dd>Storage bytes or completed read operations divided by the number of delivered crops in each execution. Lower values mean less storage work for the same crop size. One operation can serve multiple samples.</dd>
       </dl>
       <p>Image throughput and storage bandwidth use GiB/s, where 1 GiB is 2³⁰ bytes. IOPS uses reads/s. All rates use elapsed measurement time, including reading, decoding, and final GPU completion. Initialization, warmup, and cache clearing are excluded. The Storage system section identifies the shared hardware; Diagnostics contains reader-level counters.</p>
       <details>
         <summary>Measurement limits</summary>
         <p>The observed frontier compares settings within the same input, crop size, read pattern, backend, machine session, and storage condition. Filters recompute it. Connections join measured points; they do not predict unmeasured settings. All compared panels use the same axes.</p>
-        <p>Ranges are observed minima and maxima, not confidence intervals. Use the measurements table or keyboard to select overlapping points. Pilot studies cover a limited set of settings and do not establish a final frontier.</p>
+        <p>Ranges are observed minima and maxima, not confidence intervals. Use the measurements table or keyboard to select overlapping points. This is a reduced parameter sweep; unmeasured settings may perform better.</p>
         <p>Compression ratio includes padding, shard indexes, and array metadata. Mixed studies use expanded, tiled source distributions. A ratio below one means the files are larger than the uncompressed image bytes. The compression axis is logarithmic.</p>
-        <p>Cold studies verify zero resident data-file pages before each timed pass; codecs and metadata are warmed. Earlier cached studies replay files preloaded into RAM. Storage counters include read-ahead and other activity on the same drives. Idle measurements are available in Diagnostics, and SSD/controller caches are not controlled.</p>
+        <p>Every timed pass starts with zero resident data-file pages; codecs and metadata are warmed. Overlapping reads and read-ahead within each pass are included. Storage counters include other activity on the same drives. Idle measurements are available in Diagnostics, and SSD/controller caches are not controlled.</p>
       </details>
       <p><a href="../performance/">Measurement protocol and reproduction</a> · Design inspired by the <a href="https://acquire-project.github.io/chucky/microscopy.html">chucky microscopy analysis</a>.</p>
     </section>
   </main>
   <script src="vendor/d3.v7.9.0.min.js"></script>
-  <script type="module" src="report.js"></script>
+  <script type="module" src="report.js?v=crops-20261108"></script>
 </body>
 </html>

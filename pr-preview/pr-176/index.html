@@ -21,7 +21,7 @@
       
       
       <link rel="icon" href="assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.1">
     
     
       
@@ -353,10 +353,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#performance-dashboards" class="md-nav__link">
+  <a href="#read-performance" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Performance dashboards
+        Read performance
       
     </span>
   </a>
@@ -674,10 +674,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#performance-dashboards" class="md-nav__link">
+  <a href="#read-performance" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Performance dashboards
+        Read performance
       
     </span>
   </a>
@@ -783,16 +783,11 @@ documented only via its <code>.pyi</code> stub.</p>
   (<code>PoolStarved</code>, <code>BudgetExceeded</code>, missing CUDA context) and what
   to check first.</li>
 </ul>
-<h2 id="performance-dashboards">Performance dashboards<a class="headerlink" href="#performance-dashboards" title="Permanent link">&para;</a></h2>
-<p>Continuous benchmark history (auto-published from
-<a href="https://github.com/nclack/damacy/actions/workflows/bench.yml"><code>bench.yml</code></a>):</p>
-<!-- Absolute URLs because the dashboards live on the same gh-pages
-     branch but outside the mkdocs source tree (published by bench.yml).
-     mkdocs treats unresolved relative links as warnings under --strict. -->
-<ul>
-<li><a href="https://nclack.github.io/damacy/throughput/">Throughput</a> — bigger is better</li>
-<li><a href="https://nclack.github.io/damacy/timings/">Timings</a> — smaller is better</li>
-</ul>
+<h2 id="read-performance">Read performance<a class="headerlink" href="#read-performance" title="Permanent link">&para;</a></h2>
+<p>The <a href="pareto/">performance report</a> compares random crops and baked
+samples on H100 and EPYC nodes. It shows the layout, crop-size, and encoding
+tradeoffs before the detailed Pareto explorer. The <a href="performance/">measurement protocol</a>
+describes the source data, local storage, cold-read checks, and reproduction.</p>
 
 
 
@@ -851,7 +846,7 @@ documented only via its <code>.pyi</code> stub.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": ".", "features": ["navigation.instant", "navigation.tracking", "navigation.sections", "navigation.top", "content.code.copy", "content.code.annotate", "toc.follow"], "search": "assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="assets/javascripts/bundle.c21346df.min.js"></script>
+      <script src="assets/javascripts/bundle.a5f9d56c.min.js"></script>
       
     
   </body>
