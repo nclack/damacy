@@ -1,4 +1,4 @@
-import {cropSeries, csv, devicePlottable, frontier, groups, matches, plottable, samplesPerSecond, sensitivity} from "./analysis.mjs";
+import {cropSeries, csv, devicePlottable, frontier, groups, matches, plottable, samplesPerSecond, sensitivity} from "./analysis.mjs?v=crops-20261108";
 import {mountOverview} from "./overview.js";
 import {storagePerSample} from "./comparisons.mjs";
 import {storagePanel} from "./storage.js";
@@ -14,7 +14,7 @@ const codecs = {none: "Uncompressed", zstd: "Zstd", "blosc-zstd": "Blosc Zstd", 
 const workloads = {random: "Random crops", baked: "Baked samples · sequential", "balanced-256": "Shard-balanced 256 × 256 crops", "random-256": "Random 256 × 256 crops", "whole-planes": "Whole-plane reads"};
 const views = {pareto: "Image throughput and compression", device: "Storage reads", crop: "Crop size and samples/s"};
 const saved = new URLSearchParams(location.hash.slice(1));
-const openExplorer = saved.has("explorer") ? saved.get("explorer") === "open" : saved.has("study");
+const openExplorer = location.hash === "#explorer" || (saved.has("explorer") ? saved.get("explorer") === "open" : saved.has("study"));
 if (saved.get("view") === "io") saved.set("view", "device");
 let study, entries, selected, filtered = [], generation = 0;
 const documents = new Map();
@@ -243,8 +243,9 @@ function select(row, announce = true) {
   for (const button of $("rows").querySelectorAll("button")) button.setAttribute("aria-pressed", button.dataset.setting === selected);
   for (const button of $("plots").querySelectorAll("button")) button.setAttribute("aria-pressed", button.dataset.setting === selected);
   $("selection-details").hidden = false;
+  const message = `${configurationName(row)} selected. ${number(metrics.useful_gib_s.median)} GiB/s image throughput, ${number(row.compression_fold)}× compression ratio, ${metrics.useful_gib_s.n} process repetitions.`;
+  if ($("selection-status").textContent !== message) $("selection-status").textContent = message;
   if (announce) {
-    $("selection-status").textContent = `${configurationName(row)} selected. ${number(metrics.useful_gib_s.median)} GiB/s image throughput, ${number(row.compression_fold)}× compression ratio, ${metrics.useful_gib_s.n} process repetitions.`;
     const hash = new URLSearchParams(location.hash.slice(1));
     hash.set("setting", row.id);
     history.replaceState(null, "", `#${hash}`);

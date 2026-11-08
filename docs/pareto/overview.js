@@ -1,4 +1,4 @@
-import {samplesPerSecond} from "./analysis.mjs";
+import {samplesPerSecond} from "./analysis.mjs?v=crops-20261108";
 import {bestRows, comparableRows, cropSizes, fixedRecipes, readers, recipeLabel} from "./comparisons.mjs";
 
 const $ = id => document.getElementById(id);
@@ -17,7 +17,11 @@ function node(tag, text, className) {
 function settingLink(reader, row, text, openRow) {
   const link = node("a", text);
   link.href = `#study=${reader.document.id}&workload=${row.access_pattern}&crop=${row.crop_size}&setting=${row.id}`;
-  link.addEventListener("click", event => { event.preventDefault(); openRow(reader.document, row); });
+  link.addEventListener("click", event => {
+    if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    openRow(reader.document, row);
+  });
   return link;
 }
 

@@ -175,6 +175,8 @@ td button { border: 0; padding: .15rem; color: var(--blue); background: transpar
 .storage-work-grid .work-values { display: flex; justify-content: space-between; gap: .5rem; font-size: .8rem; font-variant-numeric: tabular-nums; }
 .storage-work-grid .work-values button { text-align: left; border: 0; padding: 0; min-height: 24px; color: var(--blue); }
 .storage-work-grid .work-values span { white-space: nowrap; }
+.storage-work circle { cursor: default; }
+.storage-work-grid button[aria-pressed="true"] { font-weight: 650; text-decoration: underline; }
 @media (max-width: 1100px) { .three-columns { grid-template-columns: 1fr; } }
 @media (max-width: 900px) { .two-columns { grid-template-columns: 1fr; } }
 @media (max-width: 1150px) { .plots { grid-template-columns: 1fr; } }

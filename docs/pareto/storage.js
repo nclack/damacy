@@ -30,6 +30,7 @@ export function storagePanel(target, document, rows, scales, select, selected) {
       button.type = "button";
       button.textContent = recipeLabel(row);
       button.dataset.setting = row.id;
+      button.setAttribute("aria-controls", "detail");
       button.setAttribute("aria-pressed", row.id === selected);
       button.addEventListener("click", () => select(row));
       const value = window.document.createElement("span");

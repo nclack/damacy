@@ -64,7 +64,7 @@ def verify_overview(page, documents, output):
     )
     assert page.locator(".layout-pair").count() == 9
     rows = {
-        row["id"]: (document, row)
+        (document["id"], row["id"]): (document, row)
         for document in documents.values()
         for row in document["rows"]
     }
@@ -74,7 +74,7 @@ def verify_overview(page, documents, output):
     assert len(links) == 18
     for href in links:
         query = parse_qs(urlparse(href).fragment)
-        document, row = rows[query["setting"][0]]
+        document, row = rows[(query["study"][0], query["setting"][0])]
         assert document["id"] == query["study"][0]
         peers = [
             candidate
@@ -218,6 +218,7 @@ def check_actual(assets, output):
                 assert not page.locator("#explorer").evaluate("node => node.open")
                 assert page.locator("#study option").count() == 2
                 assert "history" not in page.locator("header").inner_text().lower()
+                page.screenshot(path=str(output / "overview-initial.png"), full_page=True)
                 verify_overview(page, documents, output)
                 for document in documents.values():
                     page.select_option("#study", document["id"])

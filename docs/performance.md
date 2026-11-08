@@ -18,6 +18,9 @@ dark overrides. The report retains only the two crop studies from November 6, 20
 | Compression ratio (×) | Uncompressed image bytes in the stored arrays ÷ stored file bytes |
 | Storage bandwidth (GiB/s) | Read bytes recorded by Linux for the storage system ÷ elapsed seconds ÷ 2³⁰ |
 | IOPS (reads/s) | Completed reads recorded by Linux for that storage system ÷ elapsed seconds |
+| Samples/s | Completed single-plane crops ÷ elapsed seconds |
+| Storage bytes / sample (KiB) | Storage bytes ÷ completed crops ÷ 1024, calculated per execution |
+| Storage reads / sample | Completed storage operations ÷ completed crops, calculated per execution |
 
 Image throughput measures how quickly the reader delivers the requested pixels.
 Storage bandwidth and IOPS measure the storage work during that time, summed over the
@@ -99,7 +102,9 @@ close across the machines. For baked 256² Blosc-LZ4, the H100 node's CPU reache
 different hosts and storage arrays. CPU/GPU training comparisons also need to
 include the CPU-to-GPU transfer and the actual training loader.
 
-The overview keeps one encoding recipe per line when comparing samples/s across crop sizes. The following best observed medians are separate selections, not a fixed-recipe curve: H100 CUDA's best
+The overview keeps one encoding recipe per line when comparing samples/s across
+crop sizes. The following best observed medians are separate selections, not a
+fixed-recipe curve: H100 CUDA's best
 random medians are about **16,289, 10,127, and 7,804 samples/s** at 128², 192², and
 256²; its best baked medians are **69,914, 83,309, and 71,263 samples/s**. More image
 bytes per second can accompany fewer completed samples. The
