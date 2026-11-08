@@ -1,4 +1,4 @@
-import {storagePerSample} from "./comparisons.mjs";
+import {storagePerSample} from "./comparisons.mjs?v=dc1b0eb38b2f";
 
 export const plottable = row => Number.isFinite(row.compression_fold) && row.compression_fold > 0
   && Number.isFinite(row.metrics.useful_gib_s.median) && row.metrics.useful_gib_s.median > 0;

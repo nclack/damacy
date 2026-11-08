@@ -2,6 +2,13 @@ export const cropSizes = [128, 192, 256];
 export const codecNames = {none: "Uncompressed", zstd: "Zstd", "blosc-zstd": "Blosc Zstd", "blosc-lz4": "Blosc LZ4"};
 export const bytesLabel = value => value >= 2 ** 20 ? `${value / 2 ** 20} MiB` : `${value / 1024} KiB`;
 
+export function metricStrings(metric, digits = 3) {
+  const format = value => Number.isFinite(value) ? value.toLocaleString("en", {maximumSignificantDigits: digits}) : "—";
+  while (Number.isFinite(metric.min) && Number.isFinite(metric.max) && metric.min !== metric.max
+    && format(metric.min) === format(metric.max) && digits < 9) digits++;
+  return Object.fromEntries(["median", "min", "max"].map(key => [key, format(metric[key])]));
+}
+
 export function recipeLabel(row) {
   const setting = row.setting;
   const chunk = setting.chunk_mode === "sample" ? "one sample/chunk" : `${bytesLabel(setting.chunk_bytes)} chunks`;
