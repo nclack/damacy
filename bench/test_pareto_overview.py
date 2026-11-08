@@ -162,9 +162,20 @@ def verify_overview(page, documents, output):
     page.set_viewport_size({"width": 1440, "height": 1100})
     first = page.locator(".winner a").first
     setting = parse_qs(urlparse(first.get_attribute("href")).fragment)["setting"][0]
-    with page.expect_popup() as opened:
-        first.click(modifiers=["Control"])
-    popup = opened.value
+    assert (
+        first.evaluate("""link => {
+      let canceled;
+      link.addEventListener('click', event => {
+        canceled = event.defaultPrevented;
+        event.preventDefault();
+      }, {once: true});
+      link.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, ctrlKey: true}));
+      return canceled;
+    }""")
+        is False
+    )
+    popup = page.context.new_page()
+    popup.goto(first.evaluate("link => link.href"))
     popup.wait_for_selector("#workspace", state="visible")
     assert "selected" in popup.locator("#selection-status").inner_text()
     assert (
@@ -246,11 +257,12 @@ def check_actual(assets, output):
                 )
                 url = f"http://127.0.0.1:{server.server_port}/pareto/"
                 verify_study_refresh(browser, url, report / "data/index.json")
-                page = browser.new_page(
+                context = browser.new_context(
                     viewport={"width": 1440, "height": 1100},
                     locale="en-US",
                     color_scheme="light",
                 )
+                page = context.new_page()
                 page.on("pageerror", lambda error: errors.append(str(error)))
                 page.goto(url)
                 page.wait_for_selector("#overview", state="visible")
