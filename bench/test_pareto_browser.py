@@ -41,7 +41,7 @@ def verify_study_refresh(browser, url, index_path):
         index_path.write_text(json.dumps(previous))
         os.utime(index_path, (modified, modified))
         page = context.new_page()
-        page.goto(url)
+        page.goto(url + f"#study={previous['studies'][0]['id']}")
         page.wait_for_selector("#workspace", state="visible")
         assert page.locator("#study").input_value() == previous["studies"][0]["id"]
 
@@ -571,7 +571,8 @@ def crop_fixture():
 def verify_crop_study(page, document, output):
     output = output / f"study-{document['id']}"
     output.mkdir(exist_ok=True)
-    page.select_option("#input", "all-sources")
+    if page.locator("#input").is_visible():
+        page.select_option("#input", "all-sources")
     for access in ("random", "baked"):
         page.select_option("#workload", access)
         page.select_option("#view", "pareto")
@@ -594,7 +595,12 @@ def verify_crop_study(page, document, output):
             verify_scales(page)
             verify_table(page, expected, "pareto")
             page.select_option("#view", "device")
-            verify_scales(page, "device")
+            if page.locator("svg.storage-work").count():
+                from test_pareto_overview import verify_storage
+
+                verify_storage(page, document, expected)
+            else:
+                verify_scales(page, "device")
             verify_table(page, expected, "device")
             page.select_option("#view", "pareto")
         point = page.locator("circle.point").first
@@ -687,6 +693,10 @@ def verify_crop_study(page, document, output):
 
 
 def check(assets, output, actual):
+    if actual:
+        from test_pareto_overview import check_actual
+
+        return check_actual(assets, output)
     with tempfile.TemporaryDirectory(prefix="damacy-browser-") as temporary:
         root = Path(temporary)
         shutil.copytree(assets, root / "pareto")
@@ -771,6 +781,8 @@ def check(assets, output, actual):
                 )
                 page.on("pageerror", lambda error: errors.append(str(error)))
                 page.goto(url + "?check=default")
+                page.wait_for_function("document.getElementById('status').hidden")
+                page.locator("#explorer").evaluate("node => { node.open = true; }")
                 page.wait_for_selector("#workspace", state="visible")
                 assert page.locator("#study").input_value() == index["studies"][0]["id"]
                 assert page.locator("circle.point").count() > 0

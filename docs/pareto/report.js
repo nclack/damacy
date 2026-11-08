@@ -1,4 +1,7 @@
 import {cropSeries, csv, devicePlottable, frontier, groups, matches, plottable, samplesPerSecond, sensitivity} from "./analysis.mjs";
+import {mountOverview} from "./overview.js";
+import {storagePerSample} from "./comparisons.mjs";
+import {storagePanel} from "./storage.js";
 
 const $ = id => document.getElementById(id);
 const number = value => Number.isFinite(value) ? value.toLocaleString(undefined, {maximumSignificantDigits: 4}) : "—";
@@ -11,8 +14,10 @@ const codecs = {none: "Uncompressed", zstd: "Zstd", "blosc-zstd": "Blosc Zstd", 
 const workloads = {random: "Random crops", baked: "Baked samples · sequential", "balanced-256": "Shard-balanced 256 × 256 crops", "random-256": "Random 256 × 256 crops", "whole-planes": "Whole-plane reads"};
 const views = {pareto: "Image throughput and compression", device: "Storage reads", crop: "Crop size and samples/s"};
 const saved = new URLSearchParams(location.hash.slice(1));
+const openExplorer = saved.has("explorer") ? saved.get("explorer") === "open" : saved.has("study");
 if (saved.get("view") === "io") saved.set("view", "device");
 let study, entries, selected, filtered = [], generation = 0;
+const documents = new Map();
 
 function element(tag, text) {
   const item = document.createElement(tag);
@@ -90,6 +95,13 @@ function select(row, announce = true) {
   ]);
   if (row.crop_size) fields(summary, [["Samples/s", measurementValue(samplesPerSecond(row)),
     `Completed ${row.crop_size} × ${row.crop_size} single-plane crops per second. This is the same image throughput expressed as a sample count.`]]);
+  const work = storagePerSample(study, row);
+  if (work) fields(summary, [
+    ["Storage bytes / sample", measurementValue(Object.fromEntries(Object.entries(work.bytes).map(([key, value]) => [key, key === "n" ? value : value / 1024])), " KiB"),
+      "Storage bytes divided by completed crops in each execution; lower means less work for the same crop size."],
+    ["Storage reads / sample", measurementValue(work.reads),
+      "Completed storage operations divided by completed crops. One operation can serve multiple samples."],
+  ]);
   target.append(summary, element("h3", "Layout"));
   fields(target, [
     ["Chunk", chunkLabel(setting)],
@@ -229,8 +241,14 @@ function select(row, announce = true) {
   d3.selectAll("circle.point").attr("stroke-width", point => point.id === selected ? 3 : 1.5)
     .attr("aria-pressed", point => point.id === selected);
   for (const button of $("rows").querySelectorAll("button")) button.setAttribute("aria-pressed", button.dataset.setting === selected);
+  for (const button of $("plots").querySelectorAll("button")) button.setAttribute("aria-pressed", button.dataset.setting === selected);
   $("selection-details").hidden = false;
-  if (announce) $("selection-status").textContent = `${configurationName(row)} selected. ${number(metrics.useful_gib_s.median)} GiB/s image throughput, ${number(row.compression_fold)}× compression ratio, ${metrics.useful_gib_s.n} process repetitions.`;
+  if (announce) {
+    $("selection-status").textContent = `${configurationName(row)} selected. ${number(metrics.useful_gib_s.median)} GiB/s image throughput, ${number(row.compression_fold)}× compression ratio, ${metrics.useful_gib_s.n} process repetitions.`;
+    const hash = new URLSearchParams(location.hash.slice(1));
+    hash.set("setting", row.id);
+    history.replaceState(null, "", `#${hash}`);
+  }
 }
 
 function panel(rows, scales, isIO, isCrop = false) {
@@ -308,6 +326,13 @@ function table(rows, isIO, isCrop = false) {
     ["IOPS (reads/s)", row => row.metrics.device_iops],
     ["Storage bandwidth (GiB/s)", row => row.metrics.device_read_gib_s],
   );
+  if (isIO && rows.some(row => storagePerSample(study, row))) columns.push(
+    ["Storage bytes / sample (KiB)", row => {
+      const metric = storagePerSample(study, row)?.bytes;
+      return metric ? {...metric, median: metric.median / 1024, min: metric.min / 1024, max: metric.max / 1024} : null;
+    }],
+    ["Storage reads / sample", row => storagePerSample(study, row)?.reads],
+  );
   columns.push(
     ["Image throughput (GiB/s)", row => row.metrics.useful_gib_s],
     ["Compression ratio (×)", row => number(row.compression_fold)],
@@ -371,21 +396,33 @@ function render() {
   $("crop-label").hidden = isCrop || !study.rows.some(row => row.crop_size);
   filtered = study.rows.filter(row => matches(row, {...filters, crop: isCrop ? "" : filters.crop}));
   const query = new URLSearchParams({study: $("study").value, view: $("view").value, ...filters});
+  query.set("explorer", $("explorer").open ? "open" : "closed");
+  if ($("overview-recipe").value) query.set("recipe", $("overview-recipe").value);
+  if (filtered.some(row => row.id === selected)) query.set("setting", selected);
   history.replaceState(null, "", `#${query}`);
   $("plots").replaceChildren();
   $("rows").replaceChildren();
   const valid = filtered.filter(isIO ? devicePlottable : plottable);
+  const work = isIO && valid.length && valid.every(row => storagePerSample(study, row));
   const fold = valid.map(row => row.compression_fold);
   const max = d3.max(valid, row => isCrop ? samplesPerSecond(row).max : row.metrics[isIO ? "device_read_gib_s" : "useful_gib_s"].max);
   const scales = {x: isCrop ? [...new Set(study.rows.map(row => row.crop_size))].sort((a, b) => a - b) : isIO ? [0, d3.max(valid, row => row.metrics.device_iops.max) * 1.12]
     : [d3.min(fold) / 1.15, d3.max(fold) * 1.15], y: [0, max * 1.12]};
   const panels = (isCrop ? [...d3.group(valid, row => row.backend).values()] : groups(valid)).sort((a, b) => a[0].backend.localeCompare(b[0].backend));
   $("plots").classList.toggle("single-panel", panels.length === 1);
-  for (const rows of panels) panel(rows, scales, isIO, isCrop);
+  const storageScales = work ? Object.fromEntries(["bytes", "reads"].map(key => [key,
+    d3.max(valid, row => storagePerSample(study, row)[key].max)])) : null;
+  for (const rows of panels) {
+    if (work) storagePanel($("plots"), study, rows, storageScales, select, selected);
+    else panel(rows, scales, isIO, isCrop);
+  }
   if (!valid.length) $("plots").append(element("p", isIO && filtered.length ? "Storage counters were not recorded for this study. File read requests cannot substitute for them." : "No measurements match these filters."));
   $("frontier-filter").hidden = isIO || isCrop;
+  $("codec-legend").hidden = Boolean(work);
   $("plot-note").textContent = isCrop
     ? `Samples/s counts completed single-plane crops. Each line follows the same encoding recipe across measured crop sizes; dashed lines use a fixed Blosc block request. Lines are guides, not Pareto frontiers or predictions. Batch and lookahead byte budgets stay fixed. Points show medians; bars show observed ranges.${panels.length > 1 ? " Both panels use the same axes." : ""}`
+    : work
+    ? `Storage work per delivered crop: bytes and completed read operations, each divided by the samples completed in that execution, then summarized. Lower is better for the same crop size. Ranges are observed min–max.${panels.length > 1 ? " Both readers share each metric’s scale." : ""} Counts include metadata, read-ahead, and other activity on the drives. Storage bandwidth and IOPS remain in the table and configuration details.`
     : isIO
     ? "Storage bandwidth counts bytes read from the storage system per second; IOPS counts completed read operations per second. Both are summed across its drives. More IOPS alone does not imply higher image throughput. Points show medians; bars show observed ranges."
     : "Image throughput counts requested pixel bytes per second in the source data type. Compression ratio is image bytes divided by stored file bytes. Upper right is better. Filled, connected points form each panel’s observed frontier. Points show medians; bars show observed ranges. All panels use the same axes.";
@@ -399,7 +436,8 @@ function render() {
     }
   }
   const count = groups(filtered).reduce((total, rows) => total + frontier(rows).length, 0);
-  $("count").textContent = isCrop ? `${valid.length} settings across crop sizes` : `${isIO ? `${valid.length} settings with storage measurements` : `${filtered.length} settings · ${count} on the observed frontiers`} · larger markers indicate larger chunks${study.baked ? " (largest source chunk for mixed sizes)" : ""}`;
+  $("count").textContent = isCrop ? `${valid.length} settings across crop sizes` : work ? `${valid.length} settings · storage work per ${filters.crop} × ${filters.crop} crop`
+    : `${isIO ? `${valid.length} settings with storage measurements` : `${filtered.length} settings · ${count} on the observed frontiers`} · larger markers indicate larger chunks${study.baked ? " (largest source chunk for mixed sizes)" : ""}`;
   table(filtered, isIO, isCrop);
   if (!filtered.some(row => row.id === selected)) {
     selected = null;
@@ -416,16 +454,18 @@ async function loadStudy() {
   $("workspace").hidden = true;
   $("status").hidden = false;
   $("status").textContent = "Loading measurements…";
-  const value = await json(new URL(`data/${entry.file}`, import.meta.url));
+  const value = documents.get(entry.id) || await json(new URL(`data/${entry.file}`, import.meta.url));
   if (current !== generation) return;
   study = value;
-  selected = null;
+  selected = saved.get("setting");
+  saved.delete("setting");
   if (study.version !== 1 || !study.rows.length) throw new Error("This study has no supported measurements.");
   const hasCrops = study.rows.some(row => row.crop_size);
-  options("view", Object.keys(views).filter(id => id !== "crop" || hasCrops), id => views[id]);
+  options("view", Object.keys(views).filter(id => id !== "crop" || hasCrops), id => id === "device" && hasCrops ? "Storage work per sample" : views[id]);
   const choices = study.cohorts || study.inputs;
   $("input-label").textContent = study.cohorts ? "Source mixture" : "Image input";
   options("input", choices.map(input => input.id), id => choices.find(input => input.id === id).name);
+  $("input-filter").hidden = choices.length === 1;
   options("workload", [...new Set(study.rows.map(row => row.access_pattern || row.workload))], id => workloads[id] || id);
   options("crop", [...new Set(study.rows.map(row => row.crop_size).filter(Boolean))].sort((a, b) => a - b), size => `${size} × ${size}`);
   $("raw").href = `data/${entry.file}`;
@@ -467,6 +507,37 @@ function error(value) {
   $("status").textContent = `${value.message} Reload this page to try again.`;
 }
 
+async function openSetting(document, row) {
+  $("explorer").open = true;
+  $("study").value = document.id;
+  await loadStudy();
+  $("input").value = row.input_id;
+  $("workload").value = row.access_pattern;
+  $("crop").value = String(row.crop_size);
+  $("view").value = "pareto";
+  for (const id of ["codec", "chunk", "block"]) $(id).value = "";
+  $("frontier-only").checked = false;
+  selected = row.id;
+  render();
+  select(row);
+  $("explorer-heading").focus();
+}
+
+$("explore-link").addEventListener("click", event => {
+  event.preventDefault();
+  $("explorer").open = true;
+  $("explorer-heading").focus();
+});
+$("explorer").addEventListener("toggle", () => {
+  if (!study) return;
+  if ($("explorer").open) render();
+  else {
+    const hash = new URLSearchParams(location.hash.slice(1));
+    hash.set("explorer", "closed");
+    history.replaceState(null, "", `#${hash}`);
+  }
+});
+
 $("selection-details").addEventListener("click", event => {
   event.preventDefault();
   $("detail-heading").focus();
@@ -475,7 +546,7 @@ $("study").addEventListener("change", () => loadStudy().catch(error));
 for (const id of ["input", "workload", "crop", "view", "codec", "chunk", "block", "frontier-only"]) $(id).addEventListener("change", render);
 window.addEventListener("resize", () => { if (study && !$("workspace").hidden) render(); });
 $("csv").addEventListener("click", () => {
-  const url = URL.createObjectURL(new Blob([csv(filtered, {cache_policy: study.context.cache_policy, host: study.context.machine.host})], {type: "text/csv;charset=utf-8"}));
+  const url = URL.createObjectURL(new Blob([csv(filtered, {cache_policy: study.context.cache_policy, host: study.context.machine.host, document: study})], {type: "text/csv;charset=utf-8"}));
   const link = element("a");
   link.href = url;
   link.download = `damacy-${study.id}.csv`;
@@ -488,13 +559,17 @@ try {
   const index = await json(new URL("data/index.json", import.meta.url));
   entries = index.studies;
   if (!entries.length) {
-    $("status").textContent = "No retained reader study has been published yet. The measurement protocol describes the prepared microscopy study; existing throughput and timing histories remain available above.";
+    $("status").textContent = "No retained reader study has been published yet. See the measurement protocol for the prepared study.";
   } else {
     if (entries.some(entry => !/^[a-f0-9]{20}\.json$/.test(entry.file))) throw new Error("Invalid study index.");
     options("study", entries.map(entry => entry.id), id => {
       const entry = entries.find(value => value.id === id);
       return `${entry.label}${entry.pilot ? " (pilot)" : ""}`;
     });
+    const loaded = await Promise.all(entries.map(entry => json(new URL(`data/${entry.file}`, import.meta.url))));
+    loaded.forEach((document, index) => documents.set(entries[index].id, document));
+    mountOverview(loaded, (document, row) => openSetting(document, row).catch(error));
     await loadStudy();
+    if (!$("overview").hidden) $("explorer").open = openExplorer;
   }
 } catch (value) { error(value); }

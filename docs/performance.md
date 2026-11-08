@@ -1,19 +1,16 @@
 # Read performance
 
-The [interactive Pareto report](pareto/index.html) compares **Image throughput
-and compression**, **Storage reads**, and, for crop studies, **Crop size and
-samples/s**. Each point is a measured chunk, codec, and Blosc block setting.
-CPU and CUDA, source mixtures, read patterns, crop sizes, and machine sessions
-have separate frontiers. All panels within a study use one recorded
-storage system. Its host, processor, GPU, filesystem, and drives appear once in
-**Storage system**. Appearance follows the system setting by default, with saved
-light and dark overrides.
+The [interactive report](pareto/index.html) leads with the conclusions from two
+cold-read studies: random versus baked samples, sample delivery across crop sizes
+at a fixed encoding, and controlled chunk/block comparisons. The explorer retains
+compression Pareto plots, storage work per sample, all individual measurements,
+and CSV downloads. Select an overview result to inspect its exact configuration.
 
-The existing [throughput history](https://nclack.github.io/damacy/throughput/) and
-[timing history](https://nclack.github.io/damacy/timings/) retain the daily CI
-measurements. Those fixed scenarios track changes on the CI machine.
+The studies use an H100 node and an EPYC node, each with its own recorded storage
+system. Appearance follows the system setting by default, with saved light and
+dark overrides. The report retains only the two crop studies from November 6, 2026.
 
-## Four measurements
+## Measurement definitions
 
 | Name used throughout the report | Meaning |
 | --- | --- |
@@ -41,25 +38,15 @@ larger than the uncompressed image bytes.
 
 ## Reader diagnostics
 
-The old **Encoded read GiB/s** label counted the bytes in Damacy's file read
-requests before decompression. These are compressed bytes when a codec is used
-and raw bytes for uncompressed files. It did not measure bytes at the drives.
-The old **Application read requests/s** counted those byte-range requests after
-adjacent requests were combined; it did not measure storage IOPS.
+**Diagnostics** retains file read requests, bytes read before decompression,
+bytes decoded per requested image byte, stage timings, metadata activity, and
+idle storage measurements. These help explain behavior without adding more rate
+names to the main plots. Stage timings overlap and cannot be added into elapsed time.
 
-For example, one 1 MiB file request could become eight 128 KiB storage reads.
-That would count as one reader request and eight storage operations, even if
-both byte counts were 1 MiB. Cache hits can avoid storage reads; read-ahead can
-fetch extra bytes. Thus both request counts and byte counts can differ between
-the reader and the storage system.
-
-The separate application-read plot has been removed. **Diagnostics** retains
-file read requests/s, file read bandwidth, mean request size, bytes read or decoded
-per requested image byte, stage timings, metadata activity, and idle storage
-measurements. These help investigate the reader. Stage timings overlap and
-cannot be added into elapsed time. The JSON retains all original counters,
-including output-byte rates after float32 conversion. CSV exports use the same
-four main measurement names as the plots and sidebar.
+One file read request can become several storage operations; cached reads can
+avoid storage operations; read-ahead can fetch extra bytes. The JSON retains both
+reader and storage counters. CSV exports and configuration details retain storage
+bandwidth and IOPS alongside image throughput and compression.
 
 ## Crop results
 
@@ -112,18 +99,24 @@ close across the machines. For baked 256² Blosc-LZ4, the H100 node's CPU reache
 different hosts and storage arrays. CPU/GPU training comparisons also need to
 include the CPU-to-GPU transfer and the actual training loader.
 
-The samples/s view gives a different perspective on crop size. H100 CUDA's best
+The overview keeps one encoding recipe per line when comparing samples/s across crop sizes. The following best observed medians are separate selections, not a fixed-recipe curve: H100 CUDA's best
 random medians are about **16,289, 10,127, and 7,804 samples/s** at 128², 192², and
 256²; its best baked medians are **69,914, 83,309, and 71,263 samples/s**. More image
 bytes per second can accompany fewer completed samples. The
 [crop protocol](#random-crops-and-baked-samples) also explains the fixed CPU
 input-buffer limit and the extra read/decode groups at 128².
 
-Lower IOPS can accompany faster sample delivery. At 128² on H100 CUDA, the fastest
-random setting uses about **258 kB of storage reads and 7.68 storage operations per
-sample**. The fastest baked setting uses about **36 kB and 0.275 operations**.
-The full report retains these storage counters, along with image throughput and
-compression, for every setting.
+Lower IOPS can accompany faster sample delivery. Holding the codec uncompressed
+at 128² on H100 CUDA, random crops use about **420.9 kB of storage reads and 3.217
+storage operations per sample**, versus **36.1 kB and 0.275 operations** for baked
+samples. Image throughput rises from 0.366 to 2.286 GiB/s. This compares complete
+layouts, including different chunk shapes and file counts.
+
+The storage view divides each execution's bytes and operations by its completed
+samples, then summarizes the resulting values. It does not divide independently
+aggregated rate medians. Operations per sample can be below one because one
+storage operation can serve multiple samples. The table and sidebar retain
+storage bandwidth and IOPS for inspecting the measured rate.
 
 The paired H100 run contains **62 settings and 258 executions**. It used one H100
 80 GB GPU, an Intel Xeon Platinum 8462Y+, 32 allowed logical CPUs, 16 CPU decode
@@ -154,201 +147,12 @@ from each result. The protocol below describes the separate generative, image,
 and video training follow-ups; these measurements cover single-plane storage
 workloads.
 
-## Earlier paired CPU and H100 cold-read results
-
-The [November 6 paired study](pareto/index.html#study=81fe76d51bbbd3212ed6)
-contains **252 settings and 616 executions**: nine layouts, both read patterns,
-the complete seven-asset mixture, six dataset omissions, and both CPU and CUDA.
-Each setting has two process repetitions. Both backends ran on one H100 80 GB
-node with an Intel Xeon Platinum 8462Y+, 32 allowed logical CPUs, 16 CPU decode
-workers, and 16 file workers. Its storage system is XFS on an array of eight
-7.68 TB Intel SSDPF2KX076T1O PCIe NVMe drives. The run reused the verified
-769.17 GiB preparation and completed in 79 minutes 33 seconds, including local
-staging and all 42 native tests.
-
-These are all-source image-throughput medians in **GiB/s**, comparing the same
-layouts on that machine. The table includes every layout on at least one observed
-frontier. Blosc block sizes in the labels are requests; actual block sizes from
-the encoded headers are retained in the report.
-
-| Layout | Compression ratio | CPU crops | CUDA crops | CPU whole frames | CUDA whole frames |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Blosc-LZ4, 256 KiB chunks / 256 KiB blocks | 1.433× | 1.025 | 1.190 | 4.245 | 4.805 |
-| Zstd, 1 MiB chunks | 1.441× | 0.922 | 0.812 | 4.108 | 3.570 |
-| Blosc-Zstd, 256 KiB chunks / 16 KiB blocks | 1.475× | 0.944 | 1.187 | 4.002 | 4.959 |
-| Blosc-Zstd, 256 KiB chunks / 256 KiB blocks | 1.504× | 0.961 | 1.157 | 4.022 | 4.773 |
-
-On CUDA, the two Blosc-Zstd layouts trade whole-frame throughput against
-compression. Crop medians for Blosc-LZ4/256 KiB and Blosc-Zstd/16 KiB blocks are
-within 0.3%, with overlapping repeat ranges. CUDA does not improve every layout:
-Zstd/1 MiB is slower than its paired CPU measurement in both read patterns.
-The CPU values here come from the same allocation as the CUDA values; the
-November 5 EPYC study below describes a different machine.
-
-Across all settings, the median min–max throughput spread was 1.12% of the
-median, with a maximum of 12.08%. Bracketing raw-control spreads ranged from
-0.70% to 7.87%. Settings have two repetitions; control ranges span four
-bracketing executions. These are observed min–max ranges, not confidence
-intervals or a reliable ordering of close settings.
-
-All **1,374 measured passes** verified zero resident shard-data pages and
-recorded storage reads. Peak overlapping file read calls reached 16 in every
-execution. IOPS ranged from 29,945 to 134,864 across executions. Adjacent idle
-traffic reached 180 IOPS, at most 0.46% of the corresponding measured rate.
-For CUDA whole-frame Blosc-Zstd with 256 KiB chunks and 16 KiB requested blocks,
-the medians were **4.959 GiB/s image throughput**, **3.500 GiB/s storage bandwidth**,
-and **48,554 IOPS**, with **1.475× compression**.
-
-The report includes each dataset omission and its own uncompressed control.
-The [retained JSON](pareto/data/81fe76d51bbbd3212ed6.json) contains every observation,
-cache check, device counter, source geometry, and source, query, and binary hash.
-This completes the planned nine-layout paired study; the 22-layout matrix has
-not been measured.
-
-## Earlier mixed-source CPU results
-
-The [November 5 CPU study](pareto/index.html#study=542501404495a92083a9)
-contains **126 settings and 308 executions**, using all seven microscopy assets,
-nine layouts, two read patterns, and six dataset omissions. Each setting has two
-process repetitions. It ran on an AMD EPYC 9655P with 32 allowed logical CPUs,
-16 decode workers, 16 file workers, and eight 7.68 TB Intel PCIe NVMe drives.
-The prepared files total 769.17 GiB, representing 1008 GiB of uncompressed pixels.
-
-For the complete source mixture, two layouts form the observed frontier in both
-read patterns:
-
-| Layout | Compression ratio | Crop image throughput (GiB/s) | Whole-frame image throughput (GiB/s) |
-| --- | ---: | ---: | ---: |
-| Zstd, 1 MiB chunks | 1.441× | 1.205 | 5.579 |
-| Blosc-Zstd, 256 KiB chunks and blocks | 1.504× | 1.030 | 4.472 |
-
-These are medians from two repetitions, not an established ordering of close
-settings. Across the study, the median min–max throughput spread was 2.25% of
-the median, with a maximum of 16.82%. Bracketing raw-control spreads ranged from
-1.13% to 5.64%. The plots retain individual ranges and the controls for each
-source mixture and read pattern.
-
-All 758 measured passes passed the zero-resident-page check and recorded NVMe
-reads. Peak overlapping application read calls reached 16 in every execution.
-IOPS ranged from about 32,000 to 141,000 across executions;
-these rates describe the measured requests and include device activity outside
-the process. The adjacent idle rate reached 455 read IOPS. For all-source
-whole-frame Zstd/1 MiB reads, the medians were 70,375 IOPS, 7.343 GiB/s storage bandwidth, and
-5.579 GiB/s image throughput.
-
-Omitting DynaCell changes the highest-median layout to Blosc-Zstd/256 KiB for
-both read patterns. Omitting BBBC010 changes whole-frame Zstd/1 MiB throughput
-by only −0.47%, while its compression falls 10.14%, from 1.441× to 1.295×.
-The sensitivity panel shows each mixture's compression ratio and speed vs its
-own uncompressed control, including the all-source mixture as a reference.
-Omissions change source types and file counts as well as the pixel distribution;
-see the [study protocol](#mixed-source-microscopy-study) for those limits.
-The [retained JSON](pareto/data/542501404495a92083a9.json) includes every observation,
-cache check, device counter, and source, query, and binary hash.
-
-## Earlier cold NVMe pilot results
-
-The [cold CPU pilot](pareto/index.html#study=5add8a3675356a860c8e) contains
-72 executions of 24 settings on an AMD EPYC 9655P, with eight allowed logical
-CPUs and an array of eight 7.68 TB Intel PCIe NVMe drives. It covers BBBC010,
-DynaCell, and COSEM, both read patterns, and four layouts per input.
-
-All 24,825 measured batches passed the zero-resident-page check and recorded
-device reads. Device counters totaled 99.77 GiB read during the measured batches.
-The adjacent idle intervals recorded no device reads, but did record writes;
-the drives were not reserved exclusively for this study. The median throughput
-range across repeats was 3.0% of the median, with a maximum of 9.9%.
-Bracketing reference ranges also reached 9.9%. The
-[retained JSON](pareto/data/5add8a3675356a860c8e.json) includes cache checks,
-device counters, metadata activity, source hashes, and individual observations.
-Its metadata read-operation counts distinguish startup from timed work. The
-cache-miss fields in that retained native result are snapshots, so the page does
-not interpret them as additional timed metadata reads.
-
-This validates the cold protocol on local storage. It is a CPU-only pilot on a
-different machine from the cached H100 study; their rates are not a paired
-comparison of cache state. The paired cold H100 study above uses the larger,
-mixed-source protocol; the full 22-layout matrix remains unmeasured.
-
-## Earlier single-batch cold protocol
-
-The retained cold pilot used `"cache_policy": "cold"`. The cached pilot
-below used preloaded files; it remains a separate cached study and is not
-evidence of cold NVMe performance.
-
-1. Copy prepared files to a private directory on the compute node. Resolve the
-   mounted XFS/ext4 block device through partitions and storage arrays to its
-   physical devices. Require PCIe NVMe, record device models, and reject network
-   mounts or storage whose backing devices cannot be verified.
-2. Warm the reader, codecs, and GPU. Retain startup metadata-operation counts,
-   including array metadata and shard-index cache misses, then reset measurement
-   counters. The native result records startup and measured metadata separately.
-3. Flush writes to the owned data files, then use `POSIX_FADV_DONTNEED` and
-   `mincore` to evict and check every data-file page before **each** measured batch.
-   A successful advisory call is insufficient: any remaining resident page fails
-   the run. This does not flush the whole node's cache or clear the reader's
-   metadata cache. The kernel documents both the advisory nature of
-   [file-cache eviction](https://man7.org/linux/man-pages/man2/posix_fadvise.2.html)
-   and the snapshot nature of [residency checks](https://man7.org/linux/man-pages/man2/mincore.2.html).
-4. Time one batch through completion, including the final CUDA work. Repeat cold
-   batches until their summed elapsed time reaches the requested window. Cache
-   clearing, residency checks, initialization, and idle controls stay outside that
-   sum. The same query seed is used across layouts and backends. Whole-plane
-   batches contain at most the input's number of planes.
-5. Record NVMe read completions, bytes, and writes around each timed batch. Reject
-   a batch with no device reads. Retain 100 ms idle intervals before and after the
-   execution to expose background traffic. Device statistics follow the
-   [kernel counter definitions](https://docs.kernel.org/admin-guide/iostats.html).
-
-This measures **Linux page-cache-cold batches with warmed codecs and metadata**.
-SSD/controller caches are not controlled. Repeated small image packs do not
-establish sustained streaming bandwidth, and overlapping requests within a batch
-can share reads. Cold and cached runs have separate measurement conditions and
-frontiers. For a sustained-storage study, use a larger collection of distinct
-file extents and vary batch size and outstanding work; do not interpret this
-pilot as the drive's maximum bandwidth or IOPS.
-
-## Cached H100 pilot results
-
-The [November 4, 2026 pilot](pareto/index.html#study=f0aa215f44b8b59093a0)
-contains 144 executions of 48 settings on an NVIDIA H100 80 GB and Intel Xeon
-Platinum 8462Y+, with 16 allowed logical CPUs. It uses BBBC010, DynaCell, and
-COSEM inputs, two process repetitions, eight CPU decode workers, and eight file
-workers. Files were copied to node-local XFS storage and preloaded into the page
-cache. The [study JSON](pareto/data/f0aa215f44b8b59093a0.json) retains individual
-measurements, the exact allocation, and source and binary hashes.
-
-The block-size tradeoff is already visible. For DynaCell whole-plane CUDA reads,
-with 256 KiB chunks and otherwise identical Blosc-Zstd settings:
-
-| Blosc block size | Image throughput (GiB/s), median | Observed range | Compression ratio |
-| --- | ---: | ---: | ---: |
-| 16 KiB | 11.67 | 11.48–11.85 | 1.137× |
-| 256 KiB | 1.102 | 1.102–1.103 | 1.151× |
-
-The larger blocks reduce stored bytes by about 1.2% while reducing throughput
-by about 10.6-fold in this condition. These small, replayed image packs include
-overlapping and repeated requests; the rates describe those requests, not
-streaming through an equally large collection of distinct images.
-
-Across the 48 settings, the median min–max throughput spread was 1.9% of the
-median; the largest was 15.9%. Uncompressed medians from the 0.5-second windows
-were within 5.5% of the medians from the three-second reference windows.
-Reference ranges reached 9.4%. Small frontier differences need more repetitions
-and longer measurements before being treated as a reliable ordering.
-
-The measurement runner took 6.1 minutes, including 3.2 minutes of timed work.
-Applying its average process overhead to the cached full matrix gives approximately
-79 minutes before preparation and validation. Cold runs also spend time clearing
-and checking file pages, so that estimate does not apply to the cold protocol.
-The full matrix has not been measured.
-
 ## Random crops and baked samples
 
 The current [`bench/studies/microscopy.json`](https://github.com/nclack/damacy/blob/bench/microscopy-pareto/bench/studies/microscopy.json)
 defines the smaller study whose [measured results are above](#crop-results).
 It compares 128 × 128, 192 × 192, and 256 × 256 crops from the complete seven-input
-mixture. Whole-frame reads remain in the historical reports.
+mixture.
 
 **Random crops** choose each origin uniformly from every valid translation in the
 expanded source volume. The entire crop must be in bounds. Crops can cross both
@@ -410,7 +214,7 @@ The definition can enable dataset omissions while retaining the remaining query
 coordinates and order; omissions also reduce the baked file count. They are not
 part of the first sweep.
 
-Each crop size and access pattern has its own Pareto frontier. The **Crop size and
+Each crop size, access pattern, backend, and machine has its own Pareto frontier. The **Crop size and
 samples/s** view compares completed crops per second at the fixed byte budgets.
 It converts the image throughput using the exact source composition of each query
 stream. A line follows one encoding recipe, not a frontier across different tasks.
@@ -419,7 +223,7 @@ equal logical bytes per source; baked arrays have equal sample counts. Their
 compression ratios therefore weight native source types differently. The paired
 read rates use the same source samples and byte counts.
 
-The cold-pass protocol below applies unchanged. Every timed pass begins with zero
+The cold-pass protocol below applies to both layouts. Every timed pass begins with zero
 resident shard-data pages, following warmup or preparation. Cache reuse and
 read-ahead within a pass are part of the measured reader. This is not a guarantee
 that every individual crop reaches storage.
@@ -477,15 +281,12 @@ files and outstanding work per process while enforcing disjoint samples and file
 ownership. Generative source synchronization and image/video batch partitioning
 must also retain their original source weights.
 
-## Mixed-source microscopy study
+## Source distributions and cold reads
 
-The retained [`bench/studies/microscopy-mixture-v2.json`](https://github.com/nclack/damacy/blob/bench/microscopy-pareto/bench/studies/microscopy-mixture-v2.json)
-uses every asset in the version-3 [corpus manifest](https://github.com/nclack/chucky-benchmarks-data).
-The current seven inputs are OpenCell DNA and protein, BBBC010 brightfield,
-JUMP-Scope fluorescence, DynaCell phase, COSEM EM, and BBBC022 MitoTracker.
-The November 5 CPU and November 6 paired H100 studies above use this geometry
-and protocol.
-The older single-input pilots retain their original, smaller inputs.
+The version-3 [corpus manifest](https://github.com/nclack/chucky-benchmarks-data)
+provides seven inputs: OpenCell DNA and protein, BBBC010 brightfield, JUMP-Scope
+fluorescence, DynaCell phase, COSEM EM, and BBBC022 MitoTracker. Original source
+URLs, licenses, hashes, shapes, and per-file sizes are retained in each result.
 
 Each source becomes a 2048 × 2048 frame sequence. A 4 × 4 spatial grid gives
 16 shard files per frame, with each shard containing **1 GiB of uncompressed
@@ -512,78 +313,22 @@ create new specimens or establish realistic depth correlations, especially for
 single-plane inputs. Chunk layouts extending across planes must be interpreted
 with that limitation.
 
-That earlier matrix compares raw bytes, Zstd, Blosc-Zstd, and Blosc-LZ4; compression
-level is three and Blosc uses bitshuffle. Chunk sizes are 16, 64, 256, and 1024 KiB;
-Blosc block requests are 16 KiB or the whole chunk. Chunk dimensions divide the
-512 × 512 spatial shards. When a large chunk cannot fit in one spatial plane, it
-extends along the plane axis. Actual block sizes are read back from encoded headers.
-The [Zarr sharding specification](https://zarr-specs.readthedocs.io/en/latest/v3/codecs/sharding-indexed/)
-requires each inner chunk dimension to divide its shard dimension.
+Every timed pass evicts and checks every shard-data file before running many
+batches through the pipeline. It records storage counters around the pass and
+repeats checked passes until the minimum time is reached. Pixels are not preloaded
+into RAM for measurement. Codecs and metadata are warmed, with eviction after
+preparation and warmup. Kernel read-ahead and overlapping reads within a pass are
+part of the measured buffered reader. SSD/controller caches are not controlled.
 
-Two workloads use retained, deterministic query streams:
-
-- **Shard-balanced 256 × 256 crops.** Each source contributes equally many
-  samples. Queries rotate through all 16 spatial shards, choose a random crop
-  inside each selected shard, and avoid revisiting any maximum-chunk-size plane
-  extent in that shard during a pass. Crops may cross inner chunk boundaries,
-  but do not cross shard boundaries; this is an explicit workload constraint.
-- **Whole-frame reads.** Each source contributes sampled 2048 × 2048 planes,
-  each touching all 16 spatial shards. Selected planes do not reuse the same
-  maximum-chunk-size depth extent within a pass.
-
-Each pass returns 1 GiB of float32 samples per input: 4096 crops or 64 whole
-frames, mixed across the seven sources. The complete mixture therefore returns
-7 GiB and requests 3.75 GiB of source pixels per pass. Original dtype sizes are
-used when computing image throughput. Compression aggregates the equal 16 GiB
-source volumes by summing logical and stored bytes; read weights are equal
-sample counts, which give unequal source-byte contributions across types.
-
-Leave-one-out cases remove a whole dataset collection and retain all remaining
-coordinates and their relative ordering. Both OpenCell channels are removed
-together. The pass contains less work after an omission, with the same work per
-retained input. The report compares compression ratio and speed vs each mixture's
-uncompressed control (256 KiB chunks). Speed is image throughput divided by control
-image throughput, so the mixture's source-byte weighting cancels in that ratio.
-Changes also reflect the reduced number of source files; they are sensitivity measurements, not causal
-estimates of a source's compression cost.
-
-The new `cold-pass` policy evicts and checks every shard-data file before a
-multi-batch pass, then lets the pipeline overlap reads and decoding through the
-whole pass. It records device counters around each pass and repeats checked
-passes until the minimum time is reached. It does not preload pixels into RAM
-for measurement. Codecs and metadata are warmed; eviction follows any preparation
-or warmup reads. Kernel readahead and incidental reuse within a pass remain part
-of the measured buffered reader. The original `cold` policy remains available
-for reproducing the earlier one-batch pilots.
-
-The study uses 16 file workers, 16 CPU decode workers, and a lookahead of 512
-samples. These are resource limits, not a claim that 16 shard files are always
-being read simultaneously. The report records planned distinct shard files per
-batch and lookahead window separately from the measured peak number of overlapping
-file read calls. The latter can include multiple calls to the same file and
-excludes the metadata reader's separate activity.
-
-Both the pilot and full study include all seven assets, both backends, both
-workloads, the complete mixture, and six dataset omissions. The pilot has nine
-layouts per input (63 encoded arrays, 1008 GiB logical preparation), 252 settings,
-and 616 process executions across both backends. Its minimum timed work totals
-1456 seconds; encoding, validation, startup, warmup, cache clearing, and completed
-pass overruns are additional. The full study uses 22 layouts per input, 616
-settings, and 2016 executions. It encodes 2464 GiB of logical pixels. Encoded
-storage requirements are measured during preparation, rather than estimated
-from the small earlier pilots.
-
-Repeated results report medians and observed min–max ranges. Bracketing raw
-controls show variation during each condition. The previous definitions are
-retained in `bench/studies/microscopy-pilot-v1.json` and
-`bench/studies/microscopy-mixture-v2.json` for reproducing old data.
-
+The 16 file workers and 16 CPU decode workers are resource limits. They do not
+mean that 16 different files are always being read at once. The report records
+planned distinct files per batch and lookahead window separately from the measured
+peak number of overlapping file read calls, which can include calls to the same file.
 
 ## Reproduce a study
 
 Use a materialized version-3 corpus with `manifest.json` and the declared raw
-files. Planning reads metadata only. The default definition is the new crop study; use
-`microscopy-mixture-v2.json --pilot` to reproduce the completed mixed study:
+files. Planning reads metadata only. The default definition is the crop study:
 
 ```sh
 uv run --script bench/pareto.py plan bench/studies/microscopy.json \
@@ -635,7 +380,6 @@ new definition retain their earlier identities, so only the baked arrays need en
 The docs workflow builds and checks the page in Chromium. Pull requests from a
 branch in this repository publish their site under
 `https://nclack.github.io/damacy/pr-preview/pr-N/`, with the report at `pareto/`.
-The workflow summary links to the preview. Production docs and benchmark histories
-keep their existing URLs. Every docs build also uploads a `docs-site` artifact;
+The workflow summary links to the preview. The production report keeps its existing URL. Every docs build also uploads a `docs-site` artifact;
 download and unzip it, then run `python -m http.server` from that directory.
 Fork pull requests provide the artifact without publishing to Pages.

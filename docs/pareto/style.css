@@ -59,7 +59,7 @@ select, button { font: inherit; border: 1px solid var(--border); border-radius: 
 select { max-width: min(100%, 28rem); }
 button, summary { cursor: pointer; }
 button:hover, select:hover { border-color: var(--blue); }
-button:focus-visible, a:focus-visible, select:focus-visible, summary:focus-visible, circle:focus-visible { outline: 3px solid var(--blue); outline-offset: 3px; }
+button:focus-visible, a:focus-visible, select:focus-visible, summary:focus-visible, [tabindex]:focus-visible { outline: 3px solid var(--blue); outline-offset: 3px; }
 .note { font-size: .82rem; color: var(--muted); max-width: 72rem; }
 .storage-details { margin: .75rem 0; font-size: .82rem; max-width: 65rem; }
 .storage-details dl, .metric-definitions { display: grid; grid-template-columns: minmax(8rem, 1fr) minmax(0, 3fr); gap: .5rem 1rem; }
@@ -120,6 +120,63 @@ td button { border: 0; padding: .15rem; color: var(--blue); background: transpar
 .method { margin-top: 2.5rem; border-top: 1px solid var(--border); padding-top: 1.5rem; max-width: 65rem; font-size: .88rem; color: var(--muted); }
 .method h2 { color: var(--ink); }
 #status { padding: 1rem; border: 1px solid var(--border); border-radius: .4rem; background: var(--surface); }
+.intro { max-width: 55rem; font-size: 1.05rem; }
+.finding { margin: 2.5rem 0; }
+.finding-heading { max-width: 65rem; }
+.figure-number { color: var(--muted); font-size: .72rem; letter-spacing: .09em; margin: 0 0 .4rem; font-weight: 650; }
+.finding h2 { font-size: clamp(1.25rem, 2vw, 1.65rem); line-height: 1.3; letter-spacing: -.015em; margin: 0; }
+.figure-description { max-width: 62rem; margin: .7rem 0 1rem; color: var(--muted); font-size: .9rem; }
+.figure-key, .summary-legend { display: flex; flex-wrap: wrap; gap: .4rem 1.3rem; font-size: .8rem; color: var(--muted); padding: 0; }
+.figure-key span:nth-child(2) { color: var(--blue); }
+.comparison-grid { display: grid; gap: 1rem; }
+.three-columns { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.two-columns { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.comparison-panel { border: 1px solid var(--border); border-radius: .55rem; background: var(--surface); padding: 1.1rem; min-width: 0; }
+.comparison-panel h3 { font-size: 1.05rem; margin: 0; line-height: 1.4; }
+.reader-output { margin: .2rem 0 .7rem; font-size: .78rem; color: var(--muted); }
+.layout-pair { padding: .8rem 0; border-top: 1px solid var(--border); }
+.comparison-panel h4 { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .25rem .5rem; font-size: .85rem; margin: 0 0 .35rem; }
+.gain { color: var(--muted); font-weight: 500; font-size: .75rem; }
+.winner { font-size: .75rem; line-height: 1.45; margin: .4rem 0 0; }
+.winner-value { display: block; font-variant-numeric: tabular-nums; font-size: .82rem; font-weight: 650; }
+.winner a { display: inline-block; color: var(--muted); text-decoration-color: var(--border); text-wrap: pretty; }
+.winner a:hover { color: var(--blue); text-decoration-color: currentColor; }
+.summary-grid { stroke: var(--border); }
+.summary-range { fill: none; stroke-width: 1.5; pointer-events: none; }
+.summary-mark { cursor: pointer; }
+.summary-mark:hover { stroke-width: 3; }
+.summary-curve { fill: none; stroke-width: 1.7; }
+.summary-axis-label, .comparison-panel .tick text { font-size: 13px; }
+.comparison-note { font-size: .82rem; color: var(--muted); max-width: 75rem; margin: .7rem 0; }
+.comparison-panel .comparison-note:last-child { margin-bottom: 0; }
+.summary-legend { list-style: none; margin: .7rem 0 1rem; gap: .4rem 1rem; }
+.summary-swatch { display: inline-block; margin-right: .35rem; }
+.recipe-control { flex-direction: row; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; font-size: .85rem; }
+.crop-values { margin-bottom: 0; font-size: .8rem; }
+.crop-values th, .crop-values td { padding: .6rem .4rem; }
+.crop-values th:first-child { font-weight: 550; white-space: normal; min-width: 5.5rem; }
+.crop-values .observed-range { font-size: .7rem; }
+.crop-values a { display: inline-block; padding: .15rem 0; }
+.finding-callout { padding: 1rem 1.2rem; border-left: 3px solid var(--blue); background: var(--surface); font-size: .9rem; }
+.comparison-method, .study-method { font-size: .85rem; max-width: 65rem; color: var(--muted); }
+.comparison-method summary, .study-method summary { color: var(--ink); padding: .4rem 0; }
+.parameter-pair { border-top: 1px solid var(--border); padding: .7rem 0; }
+.parameter-value { display: flex; flex-wrap: wrap; gap: .2rem 1rem; justify-content: space-between; font-size: .78rem; margin: .3rem 0; font-variant-numeric: tabular-nums; }
+.parameter-value a { color: var(--muted); }
+.parameter-value span { white-space: nowrap; }
+.explorer { margin-top: 2.5rem; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.explorer > summary { padding: 1.1rem 0; }
+.explorer > summary h2 { display: inline; font-size: 1.25rem; }
+.explorer > summary > span { display: block; font-size: .82rem; color: var(--muted); margin: .35rem 0 0 1.2rem; }
+.explorer[open] > #workspace { padding-bottom: 1.5rem; }
+.storage-work-grid { display: grid; gap: 1rem; }
+.storage-work-grid .metric-row { padding: .5rem 0; border-top: 1px solid var(--border); }
+.storage-work-grid h3 { font-size: .85rem; margin: 0 0 .5rem; }
+.storage-work-grid .work-values { display: flex; justify-content: space-between; gap: .5rem; font-size: .8rem; font-variant-numeric: tabular-nums; }
+.storage-work-grid .work-values button { text-align: left; border: 0; padding: 0; min-height: 24px; color: var(--blue); }
+.storage-work-grid .work-values span { white-space: nowrap; }
+@media (max-width: 1100px) { .three-columns { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .two-columns { grid-template-columns: 1fr; } }
 @media (max-width: 1150px) { .plots { grid-template-columns: 1fr; } }
 @media (max-width: 900px) {
   header { align-items: start; flex-direction: column; }
@@ -132,6 +189,9 @@ td button { border: 0; padding: .15rem; color: var(--blue); background: transpar
   .filters label { flex: 1 1 100%; }
   select { width: 100%; max-width: 100%; }
   .panel { padding: .7rem; }
+  .comparison-panel { padding: .9rem; }
+  .finding { margin: 2rem 0; }
+  .recipe-control { flex-direction: column; align-items: stretch; }
   .storage-details dl, .metric-definitions { grid-template-columns: 1fr; }
   .storage-details dd, .metric-definitions dd { margin-bottom: .5rem; }
 }

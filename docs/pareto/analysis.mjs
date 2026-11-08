@@ -1,3 +1,5 @@
+import {storagePerSample} from "./comparisons.mjs";
+
 export const plottable = row => Number.isFinite(row.compression_fold) && row.compression_fold > 0
   && Number.isFinite(row.metrics.useful_gib_s.median) && row.metrics.useful_gib_s.median > 0;
 
@@ -80,7 +82,10 @@ export function csv(rows, context = {}) {
     "image_throughput_gib_s_max", "repeats", "storage_bandwidth_gib_s_median", "storage_bandwidth_gib_s_min", "storage_bandwidth_gib_s_max",
     "iops_median", "iops_min", "iops_max", "speed_vs_uncompressed", "source_ids", "source_samples_per_pass",
     "distinct_shards_per_pass", "peak_simultaneous_file_reads", "access_pattern", "crop_size", "chunk_mode", "block_mode",
-    "samples_per_second_median", "samples_per_second_min", "samples_per_second_max", "source_query_id", "condition_id", "setting_id"];
+    "samples_per_second_median", "samples_per_second_min", "samples_per_second_max", "source_query_id",
+    "storage_bytes_per_sample_median", "storage_bytes_per_sample_min", "storage_bytes_per_sample_max",
+    "storage_reads_per_sample_median", "storage_reads_per_sample_min", "storage_reads_per_sample_max", "condition_id", "setting_id"];
+  const work = row => context.document ? storagePerSample(context.document, row) : null;
   const values = rows.map(row => [context.cache_policy, context.host, row.input_id, row.backend, row.workload, row.setting.codec,
     row.setting.chunk_bytes, row.setting.block_bytes, layoutShapes(row.setting, "chunk_shape"), layoutShapes(row.setting, "shard_shape"),
     row.compression_fold, row.metrics.useful_gib_s.median, row.metrics.useful_gib_s.min, row.metrics.useful_gib_s.max,
@@ -91,7 +96,9 @@ export function csv(rows, context = {}) {
     row.query_summary ? JSON.stringify(row.query_summary.source_samples) : null,
     row.query_summary?.distinct_shards, row.metrics.peak_active_reads?.max, row.access_pattern, row.crop_size,
     row.setting.chunk_mode, row.setting.block_mode, samplesPerSecond(row)?.median, samplesPerSecond(row)?.min,
-    samplesPerSecond(row)?.max, row.query_summary?.source_query_id, row.condition_id, row.id]);
+    samplesPerSecond(row)?.max, row.query_summary?.source_query_id,
+    work(row)?.bytes.median, work(row)?.bytes.min, work(row)?.bytes.max,
+    work(row)?.reads.median, work(row)?.reads.min, work(row)?.reads.max, row.condition_id, row.id]);
   const quote = value => `"${String(value ?? "").replaceAll('"', '""')}"`;
   return [columns, ...values].map(row => row.map(quote).join(",")).join("\r\n") + "\r\n";
 }

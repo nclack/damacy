@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import {readFileSync} from "node:fs";
 import {cropSeries, csv, devicePlottable, frontier, matches, samplesPerSecond, sensitivity} from "../docs/pareto/analysis.mjs";
+import {bestRows, comparableRows, fixedRecipes, readers, storagePerSample} from "../docs/pareto/comparisons.mjs";
 
 function point(id, fold, rate, condition = "cpu") {
   return {id, condition_id: condition, input_id: "image", backend: condition, workload: "crop",
@@ -123,4 +125,55 @@ test("sensitivity only compares matching settings and backends", () => {
   assert(Math.abs(values[0].useful_percent + 20) < 1e-12);
   assert(Math.abs(values[0].returned_percent - 10) < 1e-12);
   assert.equal(frontier([baseline, omission]).length, 2);
+});
+
+test("the layout overview selects a median and keeps that setting's repeat range", () => {
+  const a = {...point("best-median", 1, 5), crop_size: 128, access_pattern: "random"};
+  const b = {...point("wide-range", 1, 4), crop_size: 128, access_pattern: "random"};
+  b.metrics.useful_gib_s.max = 20;
+  b.metrics.useful_gib_s.min = 1;
+  const other = {...point("other-size", 1, 100), crop_size: 256, access_pattern: "random"};
+  const rows = [b, other, a];
+  assert.equal(bestRows({rows}, 128, "random")[0], a);
+  assert.deepEqual(bestRows({rows}, 128, "random")[0].metrics.useful_gib_s, a.metrics.useful_gib_s);
+  assert.equal(rows[0], b);
+});
+
+test("storage work summarizes per-observation samples, including repeated passes", () => {
+  const row = {...point("sample-work", 1, 1), query_summary: {samples: 10}, observation_ids: ["a", "b", "c"]};
+  const observation = (id, passes, bytes, reads) => ({task: {id}, metrics: {passes}, result: {cold_reads: {device_read_bytes: bytes, device_reads: reads}}});
+  const document = {observations: [observation("a", 1, 100, 1), observation("b", 5, 200, 20), observation("c", 10, 900, 30), observation("unrelated", 1, 1e9, 1e9)]};
+  const result = storagePerSample(document, row);
+  assert.deepEqual(result.bytes, {median: 9, min: 4, max: 10, n: 3});
+  assert.deepEqual(result.reads, {median: .3, min: .1, max: .4, n: 3});
+  assert.notEqual(result.bytes.median, 200 / 50);
+  const exported = csv([row], {document});
+  assert(exported.includes('"storage_reads_per_sample_median"'));
+  assert(exported.includes('"9","4","10","0.3","0.1","0.4"'));
+  document.observations[0].result.cold_reads = null;
+  assert.equal(storagePerSample(document, row), null);
+});
+
+test("current overview only joins complete, matching recipes across the two studies", () => {
+  const directory = new URL("../docs/pareto/data/", import.meta.url);
+  const index = JSON.parse(readFileSync(new URL("index.json", directory)));
+  assert.equal(index.studies.length, 2);
+  const documents = index.studies.map(entry => JSON.parse(readFileSync(new URL(entry.file, directory))));
+  assert.equal(documents.flatMap(document => document.rows).length, 93);
+  const readerList = readers(documents), recipes = fixedRecipes(readerList);
+  assert.deepEqual(readerList.map(reader => reader.label), ["EPYC CPU", "H100-node CPU", "H100 CUDA"]);
+  assert.equal(recipes.length, 5);
+  assert.equal(recipes[0].randomRow.setting.codec, "none");
+  assert(recipes.every(recipe => recipe.randomRow.setting.chunk_bytes !== 16384));
+  for (const recipe of recipes) for (const access of ["random", "baked"]) {
+    const series = comparableRows(readerList, recipe, access);
+    assert.equal(series.length, 3);
+    for (const {rows} of series) {
+      assert.deepEqual(rows.map(row => row.crop_size), [128, 192, 256]);
+      assert(rows.every(row => row.setting.recipe_id === recipe[access]));
+    }
+  }
+  const changed = structuredClone(readerList);
+  changed[0].rows.find(row => row.setting.recipe_id === recipes[0].random && row.crop_size === 128).sampling.query_sha256 = "different-query";
+  assert(comparableRows(changed, recipes[0], "random").every(series => series.rows.length === 2));
 });

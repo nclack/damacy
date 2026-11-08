@@ -1,19 +1,3 @@
-# Build the mkdocs+material+mkdocstrings site and (on push to main /
-# workflow_dispatch) publish it to the gh-pages branch alongside the
-# bench dashboards.
-#
-# mkdocstrings introspects damacy via griffe's static AST parse — no
-# `import damacy` happens, so this runs on a stock GitHub-hosted runner
-# without CUDA / nvcomp / the C extension.
-#
-# The bench workflow (bench.yml) publishes /timings/ and /throughput/
-# to the same gh-pages branch via benchmark-action. peaceiris is run
-# with keep_files: true so a docs deploy preserves those subtrees;
-# benchmark-action only edits files under those dirs, so a bench run
-# also leaves the docs untouched.
-#
-# Site URL: https://nclack.github.io/damacy/
-
 name: docs
 
 on:
@@ -22,11 +6,6 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Serialize pushes to gh-pages. bench.yml uses the gpu-runner group for
-# benchmark serialisation and pushes via benchmark-action (with its own
-# pull/push retry); peaceiris also retries on conflict, so cross-workflow
-# races recover automatically. This group only protects docs against
-# itself.
 concurrency:
   group: gh-pages-docs
   cancel-in-progress: false
@@ -75,6 +54,8 @@ jobs:
           PYTHONPATH=bench python -m unittest test_pareto test_pareto_mixture test_pareto_crops test_pareto_data
           node --test bench/test_pareto.mjs
           node --input-type=module --check < docs/pareto/report.js
+          node --input-type=module --check < docs/pareto/overview.js
+          node --input-type=module --check < docs/pareto/storage.js
           node --check docs/pareto/appearance.js
 
       - name: Check report in Chromium
@@ -153,9 +134,7 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./site
           publish_branch: gh-pages
-          # Preserve /timings/ and /throughput/ subtrees that bench.yml
-          # publishes to the same branch via benchmark-action. Without
-          # this flag peaceiris would force-replace the whole tree.
+          # Keep independently published PR previews.
           keep_files: true
           user_name: "github-actions[bot]"
           user_email: "github-actions[bot]@users.noreply.github.com"
