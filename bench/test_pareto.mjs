@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {readFileSync} from "node:fs";
 import {cropSeries, csv, devicePlottable, frontier, matches, samplesPerSecond, sensitivity} from "../docs/pareto/analysis.mjs";
-import {bestRows, comparableRows, fixedRecipes, readers, storagePerSample} from "../docs/pareto/comparisons.mjs";
+import {bestRows, comparableRows, fixedRecipes, metricStrings, readers, storagePerSample} from "../docs/pareto/comparisons.mjs";
 
 function point(id, fold, rate, condition = "cpu") {
   return {id, condition_id: condition, input_id: "image", backend: condition, workload: "crop",
@@ -137,6 +137,14 @@ test("the layout overview selects a median and keeps that setting's repeat range
   assert.equal(bestRows({rows}, 128, "random")[0], a);
   assert.deepEqual(bestRows({rows}, 128, "random")[0].metrics.useful_gib_s, a.metrics.useful_gib_s);
   assert.equal(rows[0], b);
+});
+
+test("displayed ranges retain observed differences without moving the median outside them", () => {
+  assert.deepEqual(metricStrings({median: 16630, min: 16609.8, max: 16649.7}),
+    {median: "16,630", min: "16,610", max: "16,650"});
+  assert.deepEqual(metricStrings({median: .54402, min: .54401, max: .54404}),
+    {median: "0.54402", min: "0.54401", max: "0.54404"});
+  assert.deepEqual(metricStrings({median: 10, min: 10, max: 10}), {median: "10", min: "10", max: "10"});
 });
 
 test("storage work summarizes per-observation samples, including repeated passes", () => {

@@ -41,7 +41,20 @@ jobs:
             'numpy==2.5.2' 'zarr==3.3.0' 'numcodecs==0.16.5'
 
       - name: Build site (--strict)
-        run: mkdocs build --strict
+        run: |
+          mkdocs build --strict
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          revision = os.environ["GITHUB_SHA"][:12]
+          assets = r'(?:appearance|report|overview|storage)\.js|(?:analysis|comparisons)\.mjs|style\.css'
+          pattern = rf'({assets})(?=["\x27])'
+          for path in Path("site/pareto").iterdir():
+              if path.suffix in {".html", ".js", ".mjs"}:
+                  path.write_text(re.sub(pattern, rf'\1?v={revision}', path.read_text()))
+          PY
 
       - name: Set up Node for report checks
         uses: actions/setup-node@v4

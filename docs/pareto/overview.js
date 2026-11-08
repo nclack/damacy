@@ -1,9 +1,12 @@
-import {samplesPerSecond} from "./analysis.mjs?v=crops-20261108";
-import {bestRows, comparableRows, cropSizes, fixedRecipes, readers, recipeLabel} from "./comparisons.mjs";
+import {samplesPerSecond} from "./analysis.mjs";
+import {bestRows, comparableRows, cropSizes, fixedRecipes, metricStrings, readers, recipeLabel} from "./comparisons.mjs";
 
 const $ = id => document.getElementById(id);
 const number = value => value.toLocaleString("en", {maximumSignificantDigits: 3});
-const metricText = metric => `${number(metric.median)} [${number(metric.min)}–${number(metric.max)}]`;
+const metricText = metric => {
+  const value = metricStrings(metric);
+  return `${value.median} [${value.min}–${value.max}]`;
+};
 const colors = ["var(--gray)", "var(--blue)", "var(--orange)"];
 const symbols = [d3.symbolCircle, d3.symbolSquare, d3.symbolDiamond];
 
@@ -136,8 +139,10 @@ function cropTable(target, series, openRow) {
       const td = node("td"), row = rows.find(value => value.crop_size === crop);
       if (row) {
         const metric = samplesPerSecond(row);
-        td.append(settingLink(reader, row, number(metric.median), openRow),
-          node("span", `${number(metric.min)}–${number(metric.max)}`, "observed-range"));
+        const value = metricStrings(metric), label = node("span", `${crop}²`, "mobile-crop-label");
+        label.setAttribute("aria-hidden", "true");
+        td.append(label, settingLink(reader, row, value.median, openRow),
+          node("span", `${value.min}–${value.max}`, "observed-range"));
       } else td.textContent = "Not matched";
       line.append(td);
     }
@@ -152,17 +157,18 @@ function cropOverview(readerList, recipes, openRow) {
   const recipe = recipes.find(value => value.id === $("overview-recipe").value);
   if (!recipe) return;
   const random = comparableRows(readerList, recipe, "random"), baked = comparableRows(readerList, recipe, "baked");
-  const maximum = d3.max([...random, ...baked].flatMap(series => series.rows), row => samplesPerSecond(row).max);
-  const yDomain = d3.scaleLinear().domain([0, maximum * 1.08]).nice(4).domain();
   $("recipe-description").textContent = `Random: ${recipeLabel(recipe.randomRow)}. Baked: ${recipeLabel(recipe.bakedRow)}. Each line keeps this recipe and follows the same paired queries across machines.`;
   for (const [access, series] of [["random", random], ["baked", baked]]) {
+    const maximum = d3.max(series.flatMap(value => value.rows), row => samplesPerSecond(row).max);
+    const yDomain = d3.scaleLinear().domain([0, maximum * 1.04]).nice(4).domain();
     const card = node("article", undefined, "comparison-panel");
     card.append(node("h3", access === "random" ? "Random crops" : "Baked samples"));
     target.append(card);
     legend(card, readerList.map(reader => ({label: reader.label})));
     const plot = node("div"); card.append(plot);
     const height = 270, left = 52, top = 14, bottom = 48, right = 18;
-    const {svg, width} = chart(plot, height, `${access}: samples per second at a fixed encoding, common axes`);
+    const {svg, width} = chart(plot, height, `${access}: samples per second at a fixed encoding; all readers share this scale, the other read pattern has a different scale`);
+    svg.attr("data-access", access).attr("data-maximum", yDomain[1]);
     const x = d3.scalePoint().domain(cropSizes).padding(.3).range([left, width - right]);
     const y = d3.scaleLinear().domain(yDomain).range([height - bottom, top]);
     svg.append("g").attr("class", "grid").attr("transform", `translate(${left},0)`)

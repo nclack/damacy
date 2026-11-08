@@ -1,6 +1,4 @@
-import {recipeLabel, storagePerSample} from "./comparisons.mjs";
-
-const number = value => value.toLocaleString("en", {maximumSignificantDigits: 3});
+import {metricStrings, recipeLabel, storagePerSample} from "./comparisons.mjs";
 
 export function storagePanel(target, document, rows, scales, select, selected) {
   const wrapper = window.document.createElement("section");
@@ -22,6 +20,7 @@ export function storagePanel(target, document, rows, scales, select, selected) {
     const x = d3.scaleLinear().domain([0, scales[key] * 1.05 / factor]).nice(4).range([left, width - right]);
     for (const row of ordered) {
       const metric = storagePerSample(document, row)[key];
+      const formatted = metricStrings({median: metric.median / factor, min: metric.min / factor, max: metric.max / factor});
       const group = window.document.createElement("div");
       group.className = "metric-row";
       const values = window.document.createElement("div");
@@ -34,13 +33,13 @@ export function storagePanel(target, document, rows, scales, select, selected) {
       button.setAttribute("aria-pressed", row.id === selected);
       button.addEventListener("click", () => select(row));
       const value = window.document.createElement("span");
-      value.textContent = number(metric.median / factor);
+      value.textContent = formatted.median;
       values.append(button, value); group.append(values); section.append(group);
       const svg = d3.select(group).append("svg").attr("viewBox", `0 0 ${width} 34`)
         .attr("role", "img").attr("class", "storage-work").attr("data-metric", key)
         .attr("data-setting", row.id).attr("data-median", metric.median / factor)
         .attr("data-min", metric.min / factor).attr("data-max", metric.max / factor)
-        .attr("aria-label", `${label}: ${number(metric.median / factor)}, observed ${number(metric.min / factor)}–${number(metric.max / factor)}, ${metric.n} repetitions`);
+        .attr("aria-label", `${label}: ${formatted.median}, observed ${formatted.min}–${formatted.max}, ${metric.n} repetitions`);
       for (const tick of x.ticks(4)) svg.append("line").attr("class", "summary-grid")
         .attr("x1", x(tick)).attr("x2", x(tick)).attr("y1", 0).attr("y2", 34);
       svg.append("path").attr("class", "summary-range").attr("stroke", "var(--blue)")

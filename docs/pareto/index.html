@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="light dark">
   <title>Read performance · Damacy</title>
   <script src="appearance.js"></script>
-  <link rel="stylesheet" href="style.css?v=crops-20261108">
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <header>
@@ -37,6 +37,7 @@
         <p class="figure-description">Follow a fixed encoding across crop sizes, and compare all three readers on matched settings. The fastest reader depends on the crop and encoding.</p>
         <label class="recipe-control">Encoding for both plots<select id="overview-recipe"></select></label>
         <p id="recipe-description" class="comparison-note"></p>
+        <p class="scale-note">Different vertical scales; compare crop sizes and readers within each panel.</p>
         <div id="crop-comparison" class="comparison-grid two-columns"></div>
         <p id="crop-finding" class="finding-callout"></p>
         <p class="comparison-note">CPU output is in system RAM; CUDA output is in GPU memory. CPU results exclude the transfer needed for GPU training. The machines have separate storage arrays, so this does not isolate processor performance.</p>
@@ -94,7 +95,7 @@
         <div>
           <div id="plots" class="plots"></div>
           <div class="selection">
-            <p id="selection-status" role="status" aria-atomic="true">Select a point or table setting to inspect its measurements.</p>
+            <p id="selection-status" role="status" aria-atomic="true">Select a setting to inspect its measurements.</p>
             <a id="selection-details" href="#detail-heading" hidden>View configuration details</a>
           </div>
           <details class="measurements">
@@ -110,7 +111,7 @@
         </div>
         <aside id="detail" aria-label="Selected configuration">
           <h2 id="detail-heading" tabindex="-1">Configuration details</h2>
-          <div id="detail-content"><p>Select a point or table setting to inspect its measurements and layout.</p></div>
+          <div id="detail-content"><p>Select a setting to inspect its measurements and layout.</p></div>
         </aside>
       </div>
     </section>
@@ -136,6 +137,6 @@
     </section>
   </main>
   <script src="vendor/d3.v7.9.0.min.js"></script>
-  <script type="module" src="report.js?v=crops-20261108"></script>
+  <script type="module" src="report.js"></script>
 </body>
 </html>

@@ -102,14 +102,19 @@ def verify_overview(page, documents, output):
                 curve["recipe"]
             }
             assert [row["crop_size"] for row in curve["rows"]] == [128, 192, 256]
-        axes = page.locator(".summary-y-axis").evaluate_all(
-            "axes => axes.map(axis => axis.textContent)"
+        axes = page.locator("svg[data-access]").evaluate_all(
+            "nodes => nodes.map(node => ({access: node.dataset.access, maximum: +node.dataset.maximum, ticks: [...node.querySelectorAll('.summary-y-axis .tick')].map(tick => tick.__data__)}))"
         )
-        assert axes[0] == axes[1]
+        assert axes[0]["maximum"] < axes[1]["maximum"]
+        for axis in axes:
+            assert axis["ticks"][0] == 0
+            assert axis["ticks"][-1] == axis["maximum"]
         assert page.locator("#crop-comparison .summary-mark").count() == 18
         assert page.locator("#crop-comparison tbody tr").count() == 6
     page.reload()
     page.wait_for_selector("#overview", state="visible")
+    page.wait_for_function("document.getElementById('status').hidden")
+    assert not page.locator("#explorer").evaluate("node => node.open")
     assert page.locator("#overview-recipe").input_value() == options[-1]
     page.select_option("#overview-recipe", options[0])
     assert "83,300" in page.locator("#crop-finding").inner_text()
@@ -125,6 +130,10 @@ def verify_overview(page, documents, output):
             assert page.evaluate(
                 "document.documentElement.scrollWidth <= innerWidth + 1"
             ), width
+            if width <= 390:
+                assert page.locator(".crop-values td").evaluate_all(
+                    "cells => cells.every(cell => cell.getBoundingClientRect().right <= innerWidth - 16)"
+                )
             assert page.locator(".summary-mark").evaluate_all(r"""nodes => {
               const luminance = color => {
                 const values = color.match(/[\d.]+/g).slice(0, 3).map(Number).map(value => {
@@ -153,6 +162,18 @@ def verify_overview(page, documents, output):
     page.set_viewport_size({"width": 1440, "height": 1100})
     first = page.locator(".winner a").first
     setting = parse_qs(urlparse(first.get_attribute("href")).fragment)["setting"][0]
+    with page.expect_popup() as opened:
+        first.click(modifiers=["Control"])
+    popup = opened.value
+    popup.wait_for_selector("#workspace", state="visible")
+    assert "selected" in popup.locator("#selection-status").inner_text()
+    assert (
+        popup.locator('circle.point[aria-pressed="true"]').evaluate(
+            "node => node.__data__.id"
+        )
+        == setting
+    )
+    popup.close()
     first.focus()
     first.press("Enter")
     page.wait_for_function("document.activeElement.id === 'explorer-heading'")
@@ -170,6 +191,25 @@ def verify_overview(page, documents, output):
             "node => node.__data__.id"
         )
         == setting
+    )
+    assert "selected" in page.locator("#selection-status").inner_text()
+    other = next(
+        document
+        for document in documents.values()
+        if document["id"] != page.locator("#study").input_value()
+    )
+    other_row = next(row for row in other["rows"] if row["access_pattern"] == "baked")
+    fragment = f"study={other['id']}&workload=baked&crop={other_row['crop_size']}&setting={other_row['id']}"
+    page.evaluate("fragment => { location.hash = fragment; }", fragment)
+    page.wait_for_function(
+        "id => document.querySelector('#study').value === id && !document.getElementById('workspace').hidden",
+        arg=other["id"],
+    )
+    assert (
+        page.locator('circle.point[aria-pressed="true"]').evaluate(
+            "node => node.__data__.id"
+        )
+        == other_row["id"]
     )
 
 
@@ -218,7 +258,9 @@ def check_actual(assets, output):
                 assert not page.locator("#explorer").evaluate("node => node.open")
                 assert page.locator("#study option").count() == 2
                 assert "history" not in page.locator("header").inner_text().lower()
-                page.screenshot(path=str(output / "overview-initial.png"), full_page=True)
+                page.screenshot(
+                    path=str(output / "overview-initial.png"), full_page=True
+                )
                 verify_overview(page, documents, output)
                 for document in documents.values():
                     page.select_option("#study", document["id"])

@@ -1,6 +1,6 @@
-import {cropSeries, csv, devicePlottable, frontier, groups, matches, plottable, samplesPerSecond, sensitivity} from "./analysis.mjs?v=crops-20261108";
+import {cropSeries, csv, devicePlottable, frontier, groups, matches, plottable, samplesPerSecond, sensitivity} from "./analysis.mjs";
 import {mountOverview} from "./overview.js";
-import {storagePerSample} from "./comparisons.mjs";
+import {metricStrings, storagePerSample} from "./comparisons.mjs";
 import {storagePanel} from "./storage.js";
 
 const $ = id => document.getElementById(id);
@@ -8,7 +8,11 @@ const number = value => Number.isFinite(value) ? value.toLocaleString(undefined,
 const kib = bytes => bytes == null ? "—" : `${number(bytes / 1024)} KiB`;
 const chunkLabel = setting => setting.chunk_mode === "sample" ? "One sample" : kib(setting.chunk_bytes);
 const blockLabel = setting => setting.block_mode === "chunk" ? "Whole chunk" : kib(setting.block_bytes);
-const range = metric => metric ? `${number(metric.min)}–${number(metric.max)}` : "Not recorded";
+const range = metric => {
+  if (!metric) return "Not recorded";
+  const value = metricStrings(metric, 4);
+  return `${value.min}–${value.max}`;
+};
 const colors = {none: "var(--gray)", zstd: "var(--blue)", "blosc-zstd": "var(--orange)", "blosc-lz4": "var(--green)"};
 const codecs = {none: "Uncompressed", zstd: "Zstd", "blosc-zstd": "Blosc Zstd", "blosc-lz4": "Blosc LZ4"};
 const workloads = {random: "Random crops", baked: "Baked samples · sequential", "balanced-256": "Shard-balanced 256 × 256 crops", "random-256": "Random 256 × 256 crops", "whole-planes": "Whole-plane reads"};
@@ -64,7 +68,7 @@ function configurationName(row) {
 }
 
 function measurementValue(metric, unit = "") {
-  const value = element("span", metric ? `${number(metric.median)}${unit}` : "Not recorded");
+  const value = element("span", metric ? `${metricStrings(metric, 4).median}${unit}` : "Not recorded");
   if (metric) {
     const limits = element("span", range(metric));
     limits.className = "observed-range";
@@ -358,7 +362,7 @@ function table(rows, isIO, isCrop = false) {
     for (const [, value] of columns) {
       const cell = element("td"), metric = value(row);
       if (metric && typeof metric === "object") {
-        cell.append(element("span", number(metric.median)));
+        cell.append(element("span", metricStrings(metric, 4).median));
         const observed = element("span", range(metric));
         observed.className = "observed-range";
         cell.append(observed);
@@ -442,9 +446,9 @@ function render() {
   table(filtered, isIO, isCrop);
   if (!filtered.some(row => row.id === selected)) {
     selected = null;
-    $("selection-status").textContent = "Select a point or table setting to inspect its measurements.";
+    $("selection-status").textContent = "Select a setting to inspect its measurements.";
     $("selection-details").hidden = true;
-    $("detail-content").replaceChildren(element("p", "Select a point or table setting to inspect its measurements."));
+    $("detail-content").replaceChildren(element("p", "Select a setting to inspect its measurements."));
   } else {
     select(filtered.find(row => row.id === selected), false);
   }
@@ -525,6 +529,7 @@ async function openSetting(document, row) {
 }
 
 $("explore-link").addEventListener("click", event => {
+  if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
   event.preventDefault();
   $("explorer").open = true;
   $("explorer-heading").focus();
@@ -546,6 +551,15 @@ $("selection-details").addEventListener("click", event => {
 $("study").addEventListener("change", () => loadStudy().catch(error));
 for (const id of ["input", "workload", "crop", "view", "codec", "chunk", "block", "frontier-only"]) $(id).addEventListener("change", render);
 window.addEventListener("resize", () => { if (study && !$("workspace").hidden) render(); });
+window.addEventListener("hashchange", () => {
+  if (location.hash === "#explorer") {
+    $("explorer").open = true;
+    $("explorer-heading").focus();
+  } else {
+    const query = new URLSearchParams(location.hash.slice(1));
+    if (["study", "view", "input", "workload", "crop", "codec", "chunk", "block", "setting", "recipe", "explorer"].some(key => query.has(key))) location.reload();
+  }
+});
 $("csv").addEventListener("click", () => {
   const url = URL.createObjectURL(new Blob([csv(filtered, {cache_policy: study.context.cache_policy, host: study.context.machine.host, document: study})], {type: "text/csv;charset=utf-8"}));
   const link = element("a");
