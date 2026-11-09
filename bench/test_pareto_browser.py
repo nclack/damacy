@@ -1063,7 +1063,8 @@ def check(assets, output, actual):
                 page.select_option("#view", "device")
                 page.locator(".measurements summary").click()
                 page.locator("#rows button").first.click()
-                assert page.locator('circle.point[aria-pressed="true"]').count() == 1
+                assert page.locator('#rows button[aria-pressed="true"]').count() == 1
+                assert "selected" in page.locator("#selection-status").inner_text()
                 page.screenshot(
                     path=str(output / "device-table-dark.png"), full_page=True
                 )
