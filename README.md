@@ -4,7 +4,7 @@
 [![test](https://github.com/nclack/damacy/actions/workflows/test.yml/badge.svg)](https://github.com/nclack/damacy/actions/workflows/test.yml)
 [![fuzz](https://github.com/nclack/damacy/actions/workflows/fuzz.yml/badge.svg?branch=main&event=schedule)](https://github.com/nclack/damacy/actions/workflows/fuzz.yml)
 [![codecov](https://codecov.io/gh/nclack/damacy/branch/main/graph/badge.svg)](https://codecov.io/gh/nclack/damacy)
-[![bench](https://github.com/nclack/damacy/actions/workflows/bench.yml/badge.svg)](https://nclack.github.io/damacy/throughput/)
+[![bench](https://github.com/nclack/damacy/actions/workflows/bench.yml/badge.svg)](https://github.com/nclack/damacy/actions/workflows/bench.yml)
 [![docs](https://github.com/nclack/damacy/actions/workflows/docs.yml/badge.svg)](https://nclack.github.io/damacy/)
 
 Streamed assembly of n-dimensional tensors from Zarr sources into RAM or GPU memory.
@@ -233,7 +233,10 @@ Full API reference and guides: **<https://nclack.github.io/damacy/>**
 - [Multi-GPU & distributed training](https://nclack.github.io/damacy/distributed/)
   — device binding model + torchrun / DDP examples.
 
-Performance dashboards (auto-published from `bench.yml`):
+Performance:
 
-- [Throughput](https://nclack.github.io/damacy/throughput/) — bigger is better
-- [Timings](https://nclack.github.io/damacy/timings/) — smaller is better
+- [Read performance](https://nclack.github.io/damacy/pareto/) — random versus baked
+  samples, crop-size and reader comparisons, and chunk/codec tradeoffs on H100 and
+  EPYC nodes. Includes compression Pareto plots, storage bandwidth, and IOPS.
+- [Measurement protocol](https://nclack.github.io/damacy/performance/) — data,
+  workloads, cache verification, hardware records, reproduction, and PR previews.

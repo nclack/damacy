@@ -90,13 +90,9 @@ documented only via its `.pyi` stub.
   (`PoolStarved`, `BudgetExceeded`, missing CUDA context) and what
   to check first.
 
-## Performance dashboards
+## Read performance
 
-Continuous benchmark history (auto-published from
-[`bench.yml`](https://github.com/nclack/damacy/actions/workflows/bench.yml)):
-
-<!-- Absolute URLs because the dashboards live on the same gh-pages
-     branch but outside the mkdocs source tree (published by bench.yml).
-     mkdocs treats unresolved relative links as warnings under --strict. -->
-- [Throughput](https://nclack.github.io/damacy/throughput/) — bigger is better
-- [Timings](https://nclack.github.io/damacy/timings/) — smaller is better
+The [performance report](pareto/index.html) compares random crops and baked
+samples on H100 and EPYC nodes. It shows the layout, crop-size, and encoding
+tradeoffs before the detailed Pareto explorer. The [measurement protocol](performance.md)
+describes the source data, local storage, cold-read checks, and reproduction.

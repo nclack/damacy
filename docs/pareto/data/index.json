@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "studies": [
+    {
+      "id": "f0166121dda806b1b509",
+      "label": "H100 node · CPU and CUDA",
+      "pilot": false,
+      "file": "f0166121dda806b1b509.json",
+      "cache_policy": "cold-pass"
+    },
+    {
+      "id": "2f6063ce5114fc47763a",
+      "label": "EPYC node · CPU",
+      "pilot": false,
+      "file": "2f6063ce5114fc47763a.json",
+      "cache_policy": "cold-pass"
+    }
+  ]
+}

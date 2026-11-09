@@ -382,6 +382,11 @@ extern "C"
       uint64_t read_active;
       uint64_t read_max_active;
     } metadata_backend;
+    struct
+    {
+      uint64_t read_jobs;
+      uint64_t read_max_active;
+    } data_backend;
     // Measured metadata-operation latency: submit-to-completion on Linux,
     // syscall duration on macOS, by kind (stat/open/read/close). Distinct from
     // the injected synthetic latency in metadata_latency above. Buckets are

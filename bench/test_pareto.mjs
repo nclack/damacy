@@ -1,0 +1,191 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {readFileSync} from "node:fs";
+import {cropSeries, csv, frontier, matches, samplesPerSecond, sensitivity} from "../docs/pareto/analysis.mjs";
+import {bestRows, comparableRows, fileReadMetrics, fixedRecipes, metricStrings, readers} from "../docs/pareto/comparisons.mjs";
+
+function point(id, fold, rate, condition = "cpu") {
+  return {id, condition_id: condition, input_id: "image", backend: condition, workload: "crop",
+    compression_fold: fold, setting: {codec: "zstd", chunk_bytes: 65536, block_bytes: null,
+      chunk_shape: [1, 128, 256], shard_shape: [1, 1024, 1024]},
+    metrics: {useful_gib_s: {median: rate, min: rate * .9, max: rate * 1.1, n: 3}}};
+}
+
+test("crop comparisons preserve access, encoding, and backend groups", () => {
+  const a = {...point("128", 1, 2), crop_size: 128, access_pattern: "random"};
+  a.setting.recipe_id = "zstd";
+  const b = structuredClone(a);
+  b.crop_size = 256;
+  b.id = "256";
+  b.condition_id = "cpu-256";
+  const baked = structuredClone(a);
+  baked.access_pattern = "baked";
+  baked.setting.chunk_mode = "sample";
+  baked.setting.chunk_bytes = null;
+  baked.setting.block_mode = "chunk";
+  baked.setting.block_bytes = null;
+  baked.setting.codec = "blosc-zstd";
+  assert(matches(a, {workload: "random", crop: "128"}));
+  assert(!matches(b, {workload: "random", crop: "128"}));
+  assert(!matches(baked, {workload: "random"}));
+  assert(matches(baked, {chunk: "sample", block: "chunk"}));
+  assert(!matches(a, {chunk: "sample"}));
+  assert.deepEqual(cropSeries([b, baked, a]).map(series => series.map(row => row.crop_size)), [[128, 256], [128]]);
+  assert.equal(frontier([a, b]).length, 2);
+});
+
+test("sample rates convert image-byte rates using the exact mixed query composition", () => {
+  const row = point("mixed", 2, 3);
+  row.query_summary = {samples: 7 * 4096, useful_bytes: 3.75 * 2 ** 30};
+  const metric = samplesPerSecond(row);
+  assert.equal(metric.median, 3 * 7 * 4096 / 3.75);
+  assert.equal(metric.n, 3);
+  assert(Math.abs(metric.min / metric.median - .9) < 1e-12);
+  assert(Math.abs(metric.max / metric.median - 1.1) < 1e-12);
+  assert.equal(samplesPerSecond(point("old", 1, 1)), null);
+});
+
+test("joint frontier keeps codec and size tradeoffs", () => {
+  const rows = [point("fast", 1, 10), point("small", 5, 2), point("balanced", 3, 5), point("dominated", 2, 4)];
+  assert.deepEqual(frontier(rows).map(row => row.id), ["fast", "balanced", "small"]);
+});
+
+test("different measurement conditions never dominate each other", () => {
+  const rows = [point("cpu", 1, 1), point("gpu", 10, 10, "cuda")];
+  assert.equal(frontier(rows).length, 2);
+});
+
+test("ties remain observable and invalid objectives are excluded", () => {
+  const rows = [point("a", .5, 2), point("b", .5, 2), point("invalid", 0, 10), point("missing", 2, NaN)];
+  assert.deepEqual(frontier(rows).map(row => row.id), ["a", "b"]);
+});
+
+test("Blosc block filters preserve raw controls", () => {
+  const raw = point("raw", 2, 2), blosc = point("blosc", 3, 3);
+  blosc.setting.codec = "blosc-zstd";
+  blosc.setting.block_bytes = 65536;
+  assert(matches(raw, {block: "16384"}));
+  assert(!matches(blosc, {block: "16384"}));
+  assert(matches(blosc, {block: "65536"}));
+  blosc.setting.codec = "blosc-lz4";
+  assert(!matches(blosc, {block: "16384"}));
+});
+
+test("CSV keeps exact values and measurement identities", () => {
+  const row = point("exact", 2.123456789012345, 4.123456789012345);
+  row.input_id = 'quoted "image"';
+  const output = csv([row]);
+  assert(output.includes('"2.123456789012345"'));
+  assert(output.includes('"4.123456789012345"'));
+  assert(output.includes('"quoted ""image"""'));
+  assert(output.includes('"cpu","exact"'));
+});
+
+test("CSV keeps device rates separate from file read measurements", () => {
+  const row = point("reads", 2, 4);
+  row.metrics.read_iops = {median: 12345.678901234};
+  row.metrics.read_gib_s = {median: 1.2345678901234};
+  const output = csv([row]);
+  assert(!output.includes('"12345.678901234"'));
+  assert(!output.includes('"1.2345678901234"'));
+  assert(output.includes('"storage_bandwidth_gib_s_median"'));
+  assert(output.includes('"device_iops_median"'));
+  assert(!output.includes('"read_iops_median"'));
+  row.metrics.device_iops = {median: 17};
+  row.metrics.device_read_gib_s = {median: 1};
+  const measured = csv([row]);
+  assert(measured.includes('"17"'));
+  assert(measured.includes('"1"'));
+});
+
+test("sensitivity only compares matching settings and backends", () => {
+  const baseline = point("all", 2, 10);
+  baseline.input_id = "all-sources";
+  baseline.metrics.returned_gib_s = {median: 20};
+  baseline.reference_useful_gib_s = {median: 10};
+  const omission = structuredClone(baseline);
+  omission.id = "omit";
+  omission.input_id = "without-source";
+  omission.condition_id = "omitted";
+  omission.compression_fold = 1.6;
+  omission.metrics.useful_gib_s.median = 8;
+  omission.metrics.returned_gib_s.median = 22;
+  omission.reference_useful_gib_s.median = 16;
+  const unrelated = structuredClone(omission);
+  unrelated.backend = "cuda";
+  const values = sensitivity([baseline, omission, unrelated], omission);
+  assert.equal(values.length, 1);
+  assert(Math.abs(values[0].compression_percent + 20) < 1e-12);
+  assert.equal(values[0].raw_relative_percent, -50);
+  assert(Math.abs(values[0].useful_percent + 20) < 1e-12);
+  assert(Math.abs(values[0].returned_percent - 10) < 1e-12);
+  assert.equal(frontier([baseline, omission]).length, 2);
+});
+
+test("the layout overview selects a median and keeps that setting's repeat range", () => {
+  const a = {...point("best-median", 1, 5), crop_size: 128, access_pattern: "random"};
+  const b = {...point("wide-range", 1, 4), crop_size: 128, access_pattern: "random"};
+  b.metrics.useful_gib_s.max = 20;
+  b.metrics.useful_gib_s.min = 1;
+  const other = {...point("other-size", 1, 100), crop_size: 256, access_pattern: "random"};
+  const rows = [b, other, a];
+  assert.equal(bestRows({rows}, 128, "random")[0], a);
+  assert.deepEqual(bestRows({rows}, 128, "random")[0].metrics.useful_gib_s, a.metrics.useful_gib_s);
+  assert.equal(rows[0], b);
+});
+
+test("displayed ranges retain observed differences without moving the median outside them", () => {
+  assert.deepEqual(metricStrings({median: 16630, min: 16609.8, max: 16649.7}),
+    {median: "16,630", min: "16,610", max: "16,650"});
+  assert.deepEqual(metricStrings({median: .54402, min: .54401, max: .54404}),
+    {median: "0.54402", min: "0.54401", max: "0.54404"});
+  assert.deepEqual(metricStrings({median: 10, min: 10, max: 10}), {median: "10", min: "10", max: "10"});
+});
+
+test("file reads summarize per-execution ratios, including repeated passes", () => {
+  const row = {...point("sample-work", 1, 1), query_summary: {samples: 10}, observation_ids: ["a", "b", "c"]};
+  const observation = (id, passes, amplification, requests) => ({task: {id}, metrics: {passes, read_amplification: amplification},
+    result: {counters: {reads_issued: requests}, cold_reads: {device_read_bytes: 1e9, device_reads: 1e6}}});
+  const document = {observations: [observation("a", 1, 10, 1), observation("b", 5, 4, 20), observation("c", 10, 9, 30), observation("unrelated", 1, 1e9, 1e9)]};
+  const result = fileReadMetrics(document, row);
+  assert.deepEqual(result.requests, {median: .3, min: .1, max: .4, n: 3});
+  assert.deepEqual(result.amplification, {median: 9, min: 4, max: 10, n: 3});
+  assert.notEqual(result.requests.median, 20 / 50);
+  const exported = csv([row], {document});
+  assert(exported.includes('"file_read_requests_per_sample_median"'));
+  assert(exported.includes('"read_amplification_median"'));
+  assert(exported.includes('"0.3","0.1","0.4","9","4","10"'));
+  assert(!exported.includes('"storage_reads_per_sample_median"'));
+  assert.equal(fileReadMetrics({observations: document.observations.slice(1)}, row), null);
+  document.observations[0].result.counters = {};
+  assert.equal(fileReadMetrics(document, row), null);
+});
+
+test("current overview only joins complete, matching recipes across the two studies", () => {
+  const directory = new URL("../docs/pareto/data/", import.meta.url);
+  const index = JSON.parse(readFileSync(new URL("index.json", directory)));
+  assert.equal(index.studies.length, 2);
+  const documents = index.studies.map(entry => JSON.parse(readFileSync(new URL(entry.file, directory))));
+  assert.equal(documents.flatMap(document => document.rows).length, 93);
+  for (const document of documents) for (const row of document.rows) {
+    const metrics = fileReadMetrics(document, row);
+    assert.equal(metrics.requests.n, row.metrics.useful_gib_s.n);
+    assert.deepEqual(metrics.amplification, row.metrics.read_amplification);
+  }
+  const readerList = readers(documents), recipes = fixedRecipes(readerList);
+  assert.deepEqual(readerList.map(reader => reader.label), ["EPYC CPU", "H100-node CPU", "H100 CUDA"]);
+  assert.equal(recipes.length, 5);
+  assert.equal(recipes[0].randomRow.setting.codec, "none");
+  assert(recipes.every(recipe => recipe.randomRow.setting.chunk_bytes !== 16384));
+  for (const recipe of recipes) for (const access of ["random", "baked"]) {
+    const series = comparableRows(readerList, recipe, access);
+    assert.equal(series.length, 3);
+    for (const {rows} of series) {
+      assert.deepEqual(rows.map(row => row.crop_size), [128, 192, 256]);
+      assert(rows.every(row => row.setting.recipe_id === recipe[access]));
+    }
+  }
+  const changed = structuredClone(readerList);
+  changed[0].rows.find(row => row.setting.recipe_id === recipes[0].random && row.crop_size === 128).sampling.query_sha256 = "different-query";
+  assert(comparableRows(changed, recipes[0], "random").every(series => series.rows.length === 2));
+});

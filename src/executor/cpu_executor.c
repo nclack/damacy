@@ -846,7 +846,15 @@ cpu_busy(const struct damacy_executor* base)
 static void
 cpu_stats(struct damacy_executor* base, struct damacy_stats* out)
 {
-  out->host_bytes_committed = ((struct cpu_executor*)base)->committed;
+  struct cpu_executor* self = (struct cpu_executor*)base;
+  out->host_bytes_committed = self->committed;
+  reader_io_stats(self->reader, out);
+}
+
+static void
+cpu_reset_stats(struct damacy_executor* base)
+{
+  reader_io_stats_reset(((struct cpu_executor*)base)->reader);
 }
 
 static void
@@ -864,6 +872,8 @@ static const struct damacy_executor_ops cpu_ops = { .start = cpu_start,
                                                       cpu_wait_event,
                                                     .busy = cpu_busy,
                                                     .stats = cpu_stats,
+                                                    .reset_stats =
+                                                      cpu_reset_stats,
                                                     .stop = cpu_stop,
                                                     .destroy = cpu_destroy };
 

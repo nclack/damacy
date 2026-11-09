@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Read performance · Damacy</title>
+  <script src="appearance.js"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <a class="brand" href="../">Damacy</a>
+    <nav aria-label="Performance reports">
+      <a href="./" aria-current="page">Read performance</a>
+      <a href="#explorer" id="explore-link">Explore settings</a>
+      <a href="../performance/">Method</a>
+    </nav>
+    <label class="appearance">Appearance<select id="appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+  </header>
+  <main>
+    <p class="eyebrow">LOCAL STORAGE · COLD READS · 128–256 PIXEL CROPS</p>
+    <h1>How should we store training samples?</h1>
+    <p class="intro">Random crops and preassembled samples, measured on an H100 node and an EPYC node. Seven image sources, three crop sizes, and the same pixels in both layouts.</p>
+    <p id="status" role="status">Loading measurements…</p>
+    <noscript><p>Enable JavaScript for interactive plots. The <a href="data/index.json">study index</a> links to the measurements.</p></noscript>
+    <section id="overview" hidden aria-label="Conclusions from the two crop studies">
+      <section class="finding" aria-labelledby="layout-title">
+        <div class="finding-heading"><p class="figure-number">01 / LAYOUT</p><h2 id="layout-title">Baked layouts deliver more image data per second</h2></div>
+        <p class="figure-description">Best observed medians among tested settings. Baking combines one sample per chunk with sequential reads across 16 files; the selected codec can also change. This compares the complete layouts.</p>
+        <p class="figure-key"><span>○ Random crops</span><span>◆ Baked samples</span><span>Small marks: other tested settings</span><span>Ranges: observed min–max, n = 3</span></p>
+        <div id="layout-comparison" class="comparison-grid three-columns"></div>
+        <p class="comparison-note">Values are image throughput in GiB/s, median [min–max]. Every panel uses the same scale. Select an encoding to inspect its measurements. Close medians with overlapping ranges are not established winners.</p>
+      </section>
+      <section class="finding" aria-labelledby="crop-title">
+        <div class="finding-heading"><p class="figure-number">02 / CROP SIZE &amp; READER</p><h2 id="crop-title">More image bytes per second can mean fewer samples</h2></div>
+        <p class="figure-description">Follow a fixed encoding across crop sizes, and compare all three readers on matched settings. The fastest reader depends on the crop and encoding.</p>
+        <label class="recipe-control">Encoding for both plots<select id="overview-recipe"></select></label>
+        <p id="recipe-description" class="comparison-note"></p>
+        <p class="scale-note">Different vertical scales; compare crop sizes and readers within each panel.</p>
+        <div id="crop-comparison" class="comparison-grid two-columns"></div>
+        <p id="crop-finding" class="finding-callout"></p>
+        <p class="comparison-note">CPU output is in system RAM; CUDA output is in GPU memory. CPU results exclude the transfer needed for GPU training. The machines have separate storage arrays, so this does not isolate processor performance.</p>
+      </section>
+      <section class="finding" aria-labelledby="parameter-title">
+        <div class="finding-heading"><p class="figure-number">03 / CHUNKS &amp; BLOCKS</p><h2 id="parameter-title">Change one encoding parameter at a time</h2></div>
+        <p class="figure-description">These comparisons keep the codec, crop, and read pattern fixed. Each pair shows image throughput, median [min–max] across three repetitions. The two figures have different scales.</p>
+        <div id="parameter-comparison" class="comparison-grid two-columns"></div>
+      </section>
+      <details class="study-method"><summary>What was measured: two machines, one storage setup per machine</summary>
+        <p>The November 6, 2026 studies contain 93 settings and 387 executions. Every timed pass began with zero resident shard-data pages. Warmup, initialization, and cache clearing are outside the timer; reading, decoding, and final GPU completion are inside it.</p>
+        <p>H100 node: Intel Xeon Platinum 8462Y+ and one H100 80 GB. EPYC node: AMD EPYC 9655P. Each used 32 allowed logical CPUs, 16 file workers, and 16 CPU decode workers, with XFS on its own array of eight 7.68 TB Intel drives. Exact inventories and idle activity are in the explorer.</p>
+        <p>EPYC measurements were noisier: median min–max spread 11.3%, versus 1.7% on the H100 node. Ranges describe three observations, not confidence intervals. Random arrays have 16 spatial shards per source; baked samples use 16 files total. Shards target about 1 GiB uncompressed. <a href="../performance/">Full protocol, sources, and reproduction.</a></p>
+      </details>
+    </section>
+    <details id="explorer" class="explorer" open>
+      <summary><h2 id="explorer-heading" tabindex="-1">Explore all settings</h2><span>Compression tradeoffs, file reads, and individual measurements</span></summary>
+    <section id="workspace" hidden aria-label="Performance study explorer">
+      <div class="filters">
+        <label>Study<select id="study"></select></label>
+        <label id="input-filter"><span id="input-label">Image input</span><select id="input"></select></label>
+        <label>Read pattern<select id="workload"></select></label>
+        <label id="crop-label" hidden>Crop size<select id="crop"></select></label>
+        <label>Plot<select id="view"></select></label>
+      </div>
+      <p id="cache-condition" class="note"></p>
+      <p id="context" class="note"></p>
+      <details id="storage-details" class="storage-details">
+        <summary>Storage system</summary>
+        <div id="storage-content"></div>
+      </details>
+      <details class="more-filters">
+        <summary>Filter settings</summary>
+        <div class="filters">
+          <label>Codec<select id="codec"></select></label>
+          <label>Chunk size<select id="chunk"></select></label>
+          <label>Blosc block request<select id="block"></select></label>
+          <label class="check" id="frontier-filter"><input id="frontier-only" type="checkbox">Show frontier only</label>
+        </div>
+      </details>
+      <div class="toolbar">
+        <p id="count" role="status"></p>
+        <div><button id="csv" type="button">Download CSV</button> <a id="raw">Study JSON</a></div>
+      </div>
+      <div id="codec-legend" class="legend" aria-label="Codec colors">
+        <span><i class="none"></i>Uncompressed</span>
+        <span><i class="zstd"></i>Zstd</span>
+        <span><i class="blosc-zstd"></i>Blosc Zstd · bitshuffle</span>
+        <span><i class="blosc-lz4"></i>Blosc LZ4 · bitshuffle</span>
+      </div>
+      <p class="note" id="plot-note"></p>
+      <div class="results">
+        <div>
+          <div id="plots" class="plots"></div>
+          <div class="selection">
+            <p id="selection-status" role="status" aria-atomic="true">Select a setting to inspect its measurements.</p>
+            <a id="selection-details" href="#detail-heading" hidden>View configuration details</a>
+          </div>
+          <details class="measurements">
+            <summary>All configuration measurements</summary>
+            <div class="table-scroll">
+              <table>
+                <caption id="table-description"></caption>
+                <thead><tr id="columns"></tr></thead>
+                <tbody id="rows"></tbody>
+              </table>
+            </div>
+          </details>
+        </div>
+        <aside id="detail" aria-label="Selected configuration">
+          <h2 id="detail-heading" tabindex="-1">Configuration details</h2>
+          <div id="detail-content"><p>Select a setting to inspect its measurements and layout.</p></div>
+        </aside>
+      </div>
+    </section>
+    </details>
+    <section class="method">
+      <h2>Reading the measurements</h2>
+      <dl class="metric-definitions">
+        <dt>Samples/s</dt><dd>Completed single-plane crops per second on the measured system. Compare rates at the same crop size.</dd>
+        <dt>Image throughput</dt><dd>Requested image bytes delivered per second, counted in the source data type. Converting uint16 to float32 does not increase this number.</dd>
+        <dt>Compression ratio</dt><dd>Uncompressed image bytes in the stored arrays divided by their file bytes. Larger values mean less storage is needed.</dd>
+        <dt>File read requests / sample</dt><dd>Data-file read requests issued by Damacy divided by delivered crops. Excludes metadata. One request can serve multiple crops, so this can be below one.</dd>
+        <dt>Read amplification</dt><dd>File bytes requested divided by uncompressed bytes in the delivered crops, counted in the source data type. A value of 4× means four file bytes requested per image byte delivered; compression can bring this below 1×.</dd>
+      </dl>
+      <p>Image throughput uses GiB/s, where 1 GiB is 2³⁰ bytes. All rates use elapsed measurement time, including reading, decoding, and final GPU completion. Initialization, warmup, and cache clearing are excluded. The Storage system section identifies the hardware; Diagnostics retains device IOPS and storage bandwidth.</p>
+      <details>
+        <summary>Measurement limits</summary>
+        <p>File read counts and read amplification describe demand on storage. They depend on the layout and reader, including how it combines or aligns requests. They do not include the operating system’s extra reads or other processes, and do not by themselves predict performance on another storage system.</p>
+        <p>The observed frontier compares settings within the same input, crop size, read pattern, backend, machine session, and storage condition. Filters recompute it. Connections join measured points; they do not predict unmeasured settings. All compared panels use the same axes.</p>
+        <p>Ranges are observed minima and maxima, not confidence intervals. Use the measurements table or keyboard to select overlapping points. This is a reduced parameter sweep; unmeasured settings may perform better.</p>
+        <p>Compression ratio includes padding, shard indexes, and array metadata. Mixed studies use expanded, tiled source distributions. A ratio below one means the files are larger than the uncompressed image bytes. The compression axis is logarithmic.</p>
+        <p>Every timed pass starts with zero resident data-file pages; codecs and metadata are warmed. Overlapping reads and read-ahead within each pass are included. Storage counters include other activity on the same drives. Idle measurements are available in Diagnostics, and SSD/controller caches are not controlled.</p>
+      </details>
+      <p><a href="../performance/">Measurement protocol and reproduction</a> · Design inspired by the <a href="https://acquire-project.github.io/chucky/microscopy.html">chucky microscopy analysis</a>.</p>
+    </section>
+  </main>
+  <script src="vendor/d3.v7.9.0.min.js"></script>
+  <script type="module" src="report.js"></script>
+</body>
+</html>

@@ -2,10 +2,26 @@
 
 #include "damacy_config.h"
 #include "log/log.h"
+#include "store/store_fs.h"
 
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+
+void
+reader_io_stats(struct damacy_reader* reader, struct damacy_stats* out)
+{
+  struct store_fs_io_stats stats = { 0 };
+  store_fs_io_stats_get(reader->file_store, &stats);
+  out->data_backend.read_jobs = stats.read_jobs;
+  out->data_backend.read_max_active = stats.read_max_active;
+}
+
+void
+reader_io_stats_reset(struct damacy_reader* reader)
+{
+  store_fs_io_stats_reset(reader->file_store);
+}
 
 enum damacy_status
 batch_spec_layout(const struct damacy_batch_spec* spec,
@@ -83,6 +99,7 @@ damacy_file_reader_create_with_config(
     free(reader);
     return DAMACY_OOM;
   }
+  reader->file_store = (struct store_fs*)reader->store;
   *out = reader;
   return DAMACY_OK;
 }

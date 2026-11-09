@@ -552,8 +552,16 @@ cuda_busy(const struct damacy_executor* base)
 static void
 cuda_stats(struct damacy_executor* base, struct damacy_stats* out)
 {
-  out->gpu_bytes_committed =
-    gpu_budget_committed(((struct cuda_executor*)base)->budget);
+  struct cuda_executor* self = (struct cuda_executor*)base;
+  out->gpu_bytes_committed = gpu_budget_committed(self->budget);
+  if (!self->gds)
+    reader_io_stats(self->reader, out);
+}
+
+static void
+cuda_reset_stats(struct damacy_executor* base)
+{
+  reader_io_stats_reset(((struct cuda_executor*)base)->reader);
 }
 
 static void
@@ -573,6 +581,7 @@ static const struct damacy_executor_ops cuda_ops = {
   .wait_event = cuda_wait_event,
   .busy = cuda_busy,
   .stats = cuda_stats,
+  .reset_stats = cuda_reset_stats,
   .stop = cuda_stop,
   .destroy = cuda_destroy
 };

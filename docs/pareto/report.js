@@ -1,0 +1,561 @@
+import {cropSeries, csv, frontier, groups, matches, plottable, samplesPerSecond, sensitivity} from "./analysis.mjs";
+import {mountOverview} from "./overview.js";
+import {fileReadMetrics, metricStrings} from "./comparisons.mjs";
+import {storagePanel} from "./storage.js";
+
+const $ = id => document.getElementById(id);
+const number = value => Number.isFinite(value) ? value.toLocaleString(undefined, {maximumSignificantDigits: 4}) : "—";
+const kib = bytes => bytes == null ? "—" : `${number(bytes / 1024)} KiB`;
+const chunkLabel = setting => setting.chunk_mode === "sample" ? "One sample" : kib(setting.chunk_bytes);
+const blockLabel = setting => setting.block_mode === "chunk" ? "Whole chunk" : kib(setting.block_bytes);
+const range = metric => {
+  if (!metric) return "Not recorded";
+  const value = metricStrings(metric, 4);
+  return `${value.min}–${value.max}`;
+};
+const colors = {none: "var(--gray)", zstd: "var(--blue)", "blosc-zstd": "var(--orange)", "blosc-lz4": "var(--green)"};
+const codecs = {none: "Uncompressed", zstd: "Zstd", "blosc-zstd": "Blosc Zstd", "blosc-lz4": "Blosc LZ4"};
+const workloads = {random: "Random crops", baked: "Baked samples · sequential", "balanced-256": "Shard-balanced 256 × 256 crops", "random-256": "Random 256 × 256 crops", "whole-planes": "Whole-plane reads"};
+const views = {pareto: "Image throughput and compression", device: "File reads", crop: "Crop size and samples/s"};
+const saved = new URLSearchParams(location.hash.slice(1));
+const openExplorer = location.hash === "#explorer" || (saved.has("explorer") ? saved.get("explorer") === "open" : saved.has("study"));
+if (saved.get("view") === "io") saved.set("view", "device");
+let study, entries, selected, filtered = [], generation = 0;
+const documents = new Map();
+
+function element(tag, text) {
+  const item = document.createElement(tag);
+  if (text !== undefined) item.textContent = text;
+  return item;
+}
+
+function options(id, values, label = value => value, all = false) {
+  const select = $(id);
+  const previous = saved.get(id) ?? select.value;
+  select.replaceChildren();
+  if (all) select.append(new Option("All", ""));
+  for (const value of values) select.append(new Option(label(value), value));
+  if ([...select.options].some(option => option.value === previous)) select.value = previous;
+  saved.delete(id);
+}
+
+async function json(url) {
+  const response = await fetch(url, {cache: "no-cache"});
+  if (!response.ok) throw new Error(`Could not load measurements (${response.status}).`);
+  return response.json();
+}
+
+function fields(target, rows) {
+  const list = element("dl");
+  for (const [name, value, description] of rows) {
+    const cell = element("dd");
+    if (value instanceof Node) cell.append(value);
+    else cell.textContent = value;
+    list.append(element("dt", name), cell);
+    if (description) {
+      const definition = element("dd", description);
+      definition.className = "measurement-definition";
+      list.append(definition);
+    }
+  }
+  target.append(list);
+}
+
+function configurationName(row) {
+  return `${codecs[row.setting.codec]} · ${row.backend.toUpperCase()} · ${chunkLabel(row.setting)} chunk`
+    + (row.crop_size ? ` · ${row.crop_size} × ${row.crop_size} crop` : "")
+    + (row.setting.block_bytes == null && row.setting.block_mode !== "chunk" ? "" : ` · ${blockLabel(row.setting)} block`);
+}
+
+function measurementValue(metric, unit = "") {
+  const value = element("span", metric ? `${metricStrings(metric, 4).median}${unit}` : "Not recorded");
+  if (metric) {
+    const limits = element("span", range(metric));
+    limits.className = "observed-range";
+    value.append(limits);
+  }
+  return value;
+}
+
+function select(row, announce = true) {
+  selected = row.id;
+  const target = $("detail-content");
+  const diagnosticsOpen = target.querySelector(".diagnostics")?.open ?? false;
+  target.replaceChildren(element("p", `${codecs[row.setting.codec]} · ${row.backend.toUpperCase()}`));
+  const setting = row.setting, metrics = row.metrics;
+  const summary = element("section");
+  summary.className = "primary-metrics";
+  summary.setAttribute("aria-label", "Measurements");
+  summary.append(element("p", `Medians and observed ranges across ${metrics.useful_gib_s.n} process repetitions. Compression ratio is fixed by the stored files.`));
+  if (row.crop_size) fields(summary, [["Samples/s", measurementValue(samplesPerSecond(row)),
+    `Completed ${row.crop_size} × ${row.crop_size} single-plane crops per second.`]]);
+  fields(summary, [
+    ["Image throughput", measurementValue(metrics.useful_gib_s, " GiB/s"),
+      "Requested pixel bytes delivered per second, in the source data type."],
+    ["Compression ratio", `${number(row.compression_fold)}×`,
+      "Uncompressed image bytes divided by stored file bytes."],
+  ]);
+  const work = fileReadMetrics(study, row);
+  if (work) fields(summary, [
+    ["File read requests / sample", measurementValue(work.requests),
+      "Data-file read requests issued by Damacy divided by delivered crops. Excludes metadata. One request can serve multiple crops."],
+    ["Read amplification", measurementValue(work.amplification, "×"),
+      "File bytes requested divided by uncompressed bytes in the delivered crops, in the source data type. Compression can bring this below 1×."],
+  ]);
+  target.append(summary, element("h3", "Layout"));
+  fields(target, [
+    ["Chunk", chunkLabel(setting)],
+    ["Chunk shape", setting.sources ? "Per source, below" : setting.chunk_shape.join(" × ")],
+    ["Shard shape", setting.sources ? "Per source, below" : setting.shard_shape.join(" × ")],
+    ["Blosc block", blockLabel(setting)],
+    ["Compression level", setting.level || "—"],
+    ["Source type", setting.dtype],
+    ["Sample shape", row.sampling.sample_shape.join(" × ")],
+  ]);
+  if (row.query_summary) {
+    const query = row.query_summary;
+    target.append(element("h3", "Query coverage"));
+    fields(target, [
+      ["Samples per pass", number(query.samples)],
+      ["Image bytes per pass", `${number(query.useful_bytes / 2 ** 30)} GiB`],
+      ["Shard files per pass", number(query.distinct_shards)],
+      ["Planned files per batch", range(query.shards_per_window.batch)],
+      [`Planned files per ${row.pipeline?.lookahead_samples ?? study.pipeline.lookahead_samples}-query block`, range(query.shards_per_window.lookahead)],
+      ["Peak simultaneous file reads", metrics.peak_active_reads ? number(metrics.peak_active_reads.max) : "Not recorded"],
+    ]);
+    target.append(element("p", "Planned shard coverage counts distinct files. Simultaneous file reads can include multiple reads from the same file."));
+    const link = element("a", "Download retained query stream");
+    link.href = `data/queries/${row.sampling.query_id}.bin`;
+    target.append(link);
+    if (query.samples_crossing_shards !== undefined) fields(target, [["Crops crossing shards", `${number(query.samples_crossing_shards)} / ${number(query.samples)}`]]);
+    if (query.source_query_id) {
+      const coordinates = element("a", "Download paired source coordinates");
+      coordinates.href = `data/queries/${query.source_query_id}.bin`;
+      target.append(element("p", "Baked samples preserve these random crops and native pixel types. Each pass reads forward through a prefix of every file; it does not scan the full baked corpus."), coordinates);
+    }
+    const comparisons = sensitivity(study.rows, row);
+    if (comparisons.length) {
+      const baseline = study.rows.find(value => value.input_id === "all-sources"
+        && value.backend === row.backend && value.workload === row.workload
+        && ["codec", "chunk_bytes", "block_bytes", "level", "shuffle", "recipe_id"].every(key => value.setting[key] === row.setting[key]));
+      target.append(element("h3", "Leave-one-out sensitivity"));
+      target.append(element("p", `Speed vs uncompressed divides image throughput by the same mixture’s uncompressed control${study.reference_setting?.chunk_bytes ? ` (${kib(study.reference_setting.chunk_bytes)} chunks)` : ""}. A value of 1.2× means 20% faster. This accounts for source-type differences; removing a collection also changes file count.`));
+      for (const comparison of [baseline, ...comparisons.map(value => value.row)]) {
+        const group = element("section");
+        group.className = "sensitivity-comparison";
+        group.dataset.input = comparison.input_id;
+        group.append(element("h4", study.cohorts.find(cohort => cohort.id === comparison.input_id).name));
+        fields(group, [
+          ["Compression ratio", `${number(comparison.compression_fold)}×`],
+          ["Speed vs uncompressed", comparison.reference_useful_gib_s
+            ? `${number(comparison.metrics.useful_gib_s.median / comparison.reference_useful_gib_s.median)}×` : "Not recorded"],
+        ]);
+        target.append(group);
+      }
+      target.append(element("p", "These are comparisons of medians, not significance tests."));
+    }
+  }
+  const diagnostics = element("details");
+  diagnostics.className = "diagnostics";
+  diagnostics.open = diagnosticsOpen;
+  diagnostics.append(element("summary", "Diagnostics"));
+  diagnostics.append(element("h3", "Reader requests"));
+  diagnostics.append(element("p", "File read requests are the byte ranges Damacy reads before decompression, after adjacent ranges are combined. They exclude metadata. The OS can cache, split, combine, or read ahead of these requests, so their counts and bytes differ from storage measurements."));
+  fields(diagnostics, [
+    ["File read requests/s", number(metrics.read_iops?.median)],
+    ["File read bandwidth", measurementValue(metrics.read_gib_s, " GiB/s")],
+    ["Mean file read size", kib(metrics.mean_read_bytes?.median)],
+    ["Decoded bytes / image bytes", metrics.decode_amplification ? `${number(metrics.decode_amplification.median)}×` : "Not recorded"],
+    ["Output type", study.pipeline.dtype],
+    ["Blocks in headers", setting.actual_block_bytes.map(kib).join(", ") || "—"],
+    ["Initial first batch", `${number(metrics.first_batch_ms.median)} ms`],
+    ["Uncompressed control variation", `${number(row.reference_spread_percent)}%`],
+    ["Stored file bytes", number(setting.stored_bytes)],
+    ["Image bytes in stored arrays", number(setting.logical_bytes)],
+  ]);
+  if (metrics.device_iops) {
+    diagnostics.append(element("h3", "Storage checks"));
+    diagnostics.append(element("p", "Linux device counters cover all activity on the selected drives, including metadata and read-ahead. They depend on caching and how requests are combined or split. Idle measurements are taken beside each execution and are not subtracted."));
+    fields(diagnostics, [
+      ["Storage bandwidth", measurementValue(metrics.device_read_gib_s, " GiB/s"),
+        "Bytes read across the storage system’s drives per second, including extra reads."],
+      ["Device IOPS", measurementValue(metrics.device_iops, " reads/s"),
+        "Completed read operations per second recorded by Linux for those drives. This does not count internal SSD flash reads."],
+      ["Mean storage read size", kib(metrics.device_mean_read_bytes.median)],
+      ["Storage bytes / image bytes", `${number(metrics.device_read_amplification.median)}×`],
+      ["Idle IOPS", number(metrics.idle_device_iops.median)],
+      ["Idle storage bandwidth", `${number(metrics.idle_device_gib_s.median)} GiB/s`],
+      ["Cache clearing (excluded)", `${number(metrics.cache_preparation_seconds.median)} s`],
+    ]);
+  }
+  diagnostics.append(element("h3", "Stage timings"));
+  diagnostics.append(element("p", "Execution nearest the image throughput median. Stage timings overlap and cannot be added together."));
+  const plottedMetric = "useful_gib_s";
+  const observations = study.observations.filter(value => row.observation_ids.includes(value.task.id));
+  observations.sort((a, b) => Math.abs(a.metrics[plottedMetric] - metrics[plottedMetric]?.median)
+    - Math.abs(b.metrics[plottedMetric] - metrics[plottedMetric]?.median));
+  fields(diagnostics, observations[0].result.stages.map(stage => [stage.name.replaceAll("_", " "), `${number(stage.ms_total)} ms`]));
+  const metadata = observations[0].result.metadata;
+  if (metadata) {
+    diagnostics.append(element("h3", "Metadata requests"));
+    const counts = [
+      ["Startup read operations", number(metadata.startup.read)],
+      ["Measured read operations", number(metadata.measured.read)],
+    ];
+    if (metadata.version === 2) counts.push(
+      ["Startup Zarr metadata misses", number(metadata.startup.array_metadata_misses)],
+      ["Measured Zarr metadata misses", number(metadata.measured.array_metadata_misses)],
+      ["Startup shard-index misses", number(metadata.startup.shard_index_misses)],
+      ["Measured shard-index misses", number(metadata.measured.shard_index_misses)],
+    );
+    fields(diagnostics, counts);
+  }
+  target.append(element("h3", "Input and source"));
+  const sources = setting.sources || [setting];
+  for (const source of sources) {
+    const input = study.inputs.find(value => value.id === (source.input_id || row.input_id));
+    const group = setting.sources ? element("details") : target;
+    if (setting.sources) {
+      group.className = "source-details";
+      group.open = source === sources[0];
+      group.append(element("summary", input.name));
+      target.append(group);
+    }
+    const link = element("a", setting.sources ? "Source attribution" : input.name);
+    if (/^https?:\/\//.test(input.source.url)) link.href = input.source.url;
+    group.append(link, element("p", input.source.attribution), element("p", `License: ${input.source.license}`));
+    if (setting.sources) fields(group, [
+      ["Original shape", source.source_shape.join(" × ")],
+      [source.baked ? "Baked shape" : "Expanded shape", source.shape.join(" × ")],
+      ["Source type", source.dtype],
+      ["Chunk shape", source.chunk_shape.join(" × ")],
+      ["Chunk bytes", kib(source.chunk_bytes)],
+      ["Shard shape", source.shard_shape.join(" × ")],
+      ["Shard files", source.shard_files],
+      ["Stored shard range", `${number(Math.min(...source.shard_file_bytes) / 2 ** 30)}–${number(Math.max(...source.shard_file_bytes) / 2 ** 30)} GiB`],
+      ["Input SHA256", source.input_sha256],
+    ]);
+  }
+  diagnostics.append(element("h3", "Provenance"));
+  fields(diagnostics, [["Revision", `${study.context.source.revision?.slice(0, 12) || "Unknown"}${study.context.source.local_changes ? " + local changes" : ""}`],
+    ["Binary SHA256", study.context.binary_sha256], ["Input SHA256", setting.input_sha256]]);
+  if (row.sampling.query_sha256) fields(diagnostics, [["Query SHA256", row.sampling.query_sha256]]);
+  target.append(diagnostics);
+  d3.selectAll("circle.point").attr("stroke-width", point => point.id === selected ? 3 : 1.5)
+    .attr("aria-pressed", point => point.id === selected);
+  for (const button of $("rows").querySelectorAll("button")) button.setAttribute("aria-pressed", button.dataset.setting === selected);
+  for (const button of $("plots").querySelectorAll("button")) button.setAttribute("aria-pressed", button.dataset.setting === selected);
+  $("selection-details").hidden = false;
+  const message = `${configurationName(row)} selected. ${number(metrics.useful_gib_s.median)} GiB/s image throughput, ${number(row.compression_fold)}× compression ratio, ${metrics.useful_gib_s.n} process repetitions.`;
+  if ($("selection-status").textContent !== message) $("selection-status").textContent = message;
+  if (announce) {
+    const hash = new URLSearchParams(location.hash.slice(1));
+    hash.set("setting", row.id);
+    history.replaceState(null, "", `#${hash}`);
+  }
+}
+
+function panel(rows, scales, isCrop = false) {
+  const first = rows[0], wrapper = element("section");
+  wrapper.className = "panel";
+  const backend = first.backend === "cpu" ? "CPU" : "CUDA";
+  wrapper.append(element("h2", backend));
+  wrapper.append(element("p", first.backend === "cpu" ? "Output: system RAM." : "Output: GPU memory."));
+  $("plots").append(wrapper);
+  const padding = parseFloat(getComputedStyle(wrapper).paddingLeft) + parseFloat(getComputedStyle(wrapper).paddingRight);
+  const width = Math.max(240, wrapper.clientWidth - padding);
+  const height = Math.max(260, Math.min(325, width * .65 + 70)), left = 57, right = 18, top = 18, bottom = 54;
+  const x = (isCrop ? d3.scalePoint().padding(.4) : d3.scaleLog()).domain(scales.x).range([left, width - right]);
+  const y = d3.scaleLinear().domain(scales.y).nice().range([height - bottom, top]);
+  const xValue = row => isCrop ? row.crop_size : row.compression_fold;
+  const yMetric = row => isCrop ? samplesPerSecond(row) : row.metrics.useful_gib_s;
+  const svg = d3.select(wrapper).append("svg").attr("viewBox", `0 0 ${width} ${height}`)
+    .attr("role", "group").attr("aria-label", `${backend}: ${isCrop ? "Samples per second versus crop size" : "Image throughput versus compression ratio"}`);
+  svg.append("g").attr("class", "grid").attr("transform", `translate(${left},0)`)
+    .call(d3.axisLeft(y).ticks(5).tickSize(-(width - left - right)).tickFormat(""));
+  svg.append("g").attr("transform", `translate(0,${height - bottom})`)
+    .call(d3.axisBottom(x).ticks(5, ".2~g"));
+  svg.append("g").attr("class", "y-axis").attr("transform", `translate(${left},0)`)
+    .call(d3.axisLeft(y).ticks(5, isCrop ? "~s" : undefined));
+  svg.append("text").attr("class", "axis-label").attr("x", (left + width - right) / 2)
+    .attr("y", height - 7).attr("text-anchor", "middle").text(isCrop ? "Square crop width (pixels)" : "Compression ratio (×, log scale)");
+  svg.append("text").attr("class", "axis-label").attr("transform", "rotate(-90)")
+    .attr("x", -(top + height - bottom) / 2).attr("y", 14).attr("text-anchor", "middle").text(isCrop ? "Samples/s" : "Image throughput (GiB/s)");
+  const boundary = isCrop ? [] : frontier(rows), ids = new Set(boundary.map(row => row.id));
+  const shown = rows.filter(row => isCrop || !$("frontier-only").checked || ids.has(row.id));
+  if (!isCrop) svg.append("path").datum(boundary).attr("class", "frontier").attr("fill", "none").attr("stroke", "var(--muted)")
+    .attr("stroke-width", 1.5).attr("d", d3.line().x(row => x(xValue(row))).y(row => y(yMetric(row).median)));
+  if (isCrop) for (const series of cropSeries(rows)) svg.append("path").datum(series)
+    .attr("class", "crop-series").attr("fill", "none").attr("stroke", colors[series[0].setting.codec])
+    .attr("stroke-width", 1.5).attr("stroke-dasharray", series[0].setting.block_mode === "bytes" ? "5 4" : null)
+    .attr("d", d3.line().x(row => x(xValue(row))).y(row => y(yMetric(row).median)));
+  const points = svg.append("g").selectAll("g").data(shown).join("g");
+  const radius = row => isCrop ? 5 : 4 + Math.sqrt((row.setting.chunk_bytes ?? Math.max(...row.setting.sources.map(source => source.chunk_bytes))) / 16384) * .6;
+  points.append("circle").attr("class", "point").attr("tabindex", 0).attr("role", "button")
+    .attr("aria-pressed", row => row.id === selected).attr("aria-controls", "detail")
+    .attr("aria-label", row => `${configurationName(row)}, ${isCrop ? `${number(yMetric(row).median)} samples/s` : `${number(yMetric(row).median)} GiB/s image throughput, ${number(row.compression_fold)}× compression ratio`}`)
+    .attr("cx", row => x(xValue(row))).attr("cy", row => y(yMetric(row).median))
+    .attr("r", radius)
+    .attr("fill", row => isCrop || ids.has(row.id) ? colors[row.setting.codec] : "var(--surface)")
+    .attr("stroke", row => colors[row.setting.codec])
+    .attr("stroke-width", row => row.id === selected ? 3 : 1.5)
+    .on("click", (_, row) => select(row)).on("keydown", (event, row) => {
+      if (event.key === "Enter" || event.key === " ") { event.preventDefault(); select(row); }
+    }).append("title").text(row => `${configurationName(row)}\n${isCrop ? `Samples/s: ${number(yMetric(row).median)}` : `Image throughput: ${number(yMetric(row).median)} GiB/s · Compression ratio: ${number(row.compression_fold)}×`}`);
+  points.append("path").attr("class", "range").attr("aria-hidden", "true")
+    .attr("d", row => {
+      const cx = x(xValue(row)), low = y(yMetric(row).min), high = y(yMetric(row).max), cap = radius(row) + 3;
+      return `M${cx},${low}V${high}M${cx - cap},${low}H${cx + cap}M${cx - cap},${high}H${cx + cap}`;
+    });
+}
+
+function table(rows, isIO) {
+  const columns = [
+    ["Backend", row => row.backend.toUpperCase()],
+    ["Chunk", row => chunkLabel(row.setting)],
+    ["Block request", row => blockLabel(row.setting)],
+  ];
+  if (rows.some(row => row.crop_size)) columns.unshift(["Crop", row => `${row.crop_size} × ${row.crop_size}`]);
+  if (rows.some(row => row.crop_size)) columns.push(["Samples/s", samplesPerSecond]);
+  if (isIO) columns.push(
+    ["File read requests / sample", row => fileReadMetrics(study, row)?.requests],
+    ["Read amplification (×)", row => fileReadMetrics(study, row)?.amplification],
+  );
+  columns.push(
+    ["Image throughput (GiB/s)", row => row.metrics.useful_gib_s],
+    ["Compression ratio (×)", row => number(row.compression_fold)],
+    ["Repeats", row => row.metrics.useful_gib_s.n],
+  );
+  $("columns").replaceChildren(...["Setting", ...columns.map(([name]) => name)].map(name => {
+    const heading = element("th", name);
+    heading.scope = "col";
+    return heading;
+  }));
+  $("table-description").textContent = `${views[$("view").value]}. Measurements show medians with observed min–max below, across independent process repetitions.`;
+  for (const row of rows) {
+    const tr = element("tr"), td = element("td"), button = element("button", codecs[row.setting.codec]);
+    button.type = "button";
+    button.dataset.setting = row.id;
+    button.setAttribute("aria-label", `Select ${configurationName(row)}`);
+    button.setAttribute("aria-controls", "detail");
+    button.setAttribute("aria-pressed", row.id === selected);
+    button.addEventListener("click", () => select(row));
+    td.append(button);
+    tr.append(td);
+    for (const [, value] of columns) {
+      const cell = element("td"), metric = value(row);
+      if (metric && typeof metric === "object") {
+        cell.append(element("span", metricStrings(metric, 4).median));
+        const observed = element("span", range(metric));
+        observed.className = "observed-range";
+        cell.append(observed);
+      } else cell.textContent = metric ?? "Not recorded";
+      tr.append(cell);
+    }
+    $("rows").append(tr);
+  }
+}
+
+function updateContext() {
+  const cohort = study.cohorts?.find(value => value.id === $("input").value);
+  const bakedFiles = study.baked && cohort?.input_ids.reduce((total, name) => total + study.baked.source_shards[name], 0);
+  let geometry = cohort
+    ? `${cohort.input_ids.length} source inputs, mixed within each pass. ${cohort.omitted_dataset ? `Omitted collection: ${cohort.omitted_dataset}. ` : ""}${study.volume.frame_shape.join(" × ")} frames; ${study.volume.shard_spatial_shape.join(" × ")} spatial shards; ${number(study.volume.shard_bytes / 2 ** 30)} GiB uncompressed per shard. ${study.weighting}. Compression combines equal logical source volumes. Expanded pixels are tiled source distributions.`
+    : "Each input is a small replayed image pack.";
+  if (study.baked) geometry = $("workload").value === "baked"
+    ? `${cohort.input_ids.length} source inputs. ${bakedFiles} shard files total per process, approximately ${number(study.baked.shard_bytes / 2 ** 30)} GiB uncompressed each. One crop per compression chunk, read forward through each file. The paired random coordinates and native pixel types are preserved. Compression is weighted by the stored sample mixture.`
+    : `${cohort.input_ids.length} source inputs, mixed within each pass. Uniform random translations across ${study.volume.frame_shape.join(" × ")} frames; crops may cross chunk and shard boundaries. ${number(study.volume.shard_bytes / 2 ** 30)} GiB uncompressed per spatial shard. Repeated or overlapping reads within a cold-start pass are allowed. Compression combines equal logical source volumes.`;
+  if (study.baked) geometry += " These measurements cover single-plane storage reads.";
+  $("context").textContent = `${study.pilot ? "Pilot · limited settings. " : ""}${study.profile?.repeats ?? study.rows[0].metrics.useful_gib_s.n} process repetitions per setting · ${study.pipeline.decode_workers} CPU decode workers · ${study.pipeline.n_io_threads} file workers. ${geometry}`;
+}
+
+function render() {
+  updateContext();
+  const isIO = $("view").value === "device";
+  const isCrop = $("view").value === "crop";
+  const candidates = study.rows.filter(row => matches(row, {input: $("input").value,
+    workload: $("workload").value, crop: isCrop ? "" : $("crop").value}));
+  options("codec", [...new Set(candidates.map(row => row.setting.codec))], id => codecs[id], true);
+  const byCodec = candidates.filter(row => matches(row, {codec: $("codec").value}));
+  options("chunk", [...new Set(byCodec.map(row => row.setting.chunk_mode === "sample" ? "sample" : row.setting.chunk_bytes))].sort((a, b) => a - b), value => value === "sample" ? "One sample" : kib(value), true);
+  const byChunk = byCodec.filter(row => matches(row, {chunk: $("chunk").value}));
+  options("block", [...new Set(byChunk.map(row => row.setting.block_mode === "chunk" ? "chunk" : row.setting.block_bytes).filter(Boolean))].sort((a, b) => a - b), value => value === "chunk" ? "Whole chunk" : kib(value), true);
+  const filters = Object.fromEntries(["input", "workload", "crop", "codec", "chunk", "block"].map(id => [id, $(id).value]));
+  $("crop-label").hidden = isCrop || !study.rows.some(row => row.crop_size);
+  filtered = study.rows.filter(row => matches(row, {...filters, crop: isCrop ? "" : filters.crop}));
+  const query = new URLSearchParams({study: $("study").value, view: $("view").value, ...filters});
+  query.set("explorer", $("explorer").open ? "open" : "closed");
+  if ($("overview-recipe").value) query.set("recipe", $("overview-recipe").value);
+  if (filtered.some(row => row.id === selected)) query.set("setting", selected);
+  history.replaceState(null, "", `#${query}`);
+  $("plots").replaceChildren();
+  $("rows").replaceChildren();
+  const valid = filtered.filter(row => isIO ? fileReadMetrics(study, row) : plottable(row));
+  const fold = valid.map(row => row.compression_fold);
+  const max = d3.max(valid, row => isCrop ? samplesPerSecond(row).max : row.metrics.useful_gib_s.max);
+  const scales = {x: isCrop ? [...new Set(study.rows.map(row => row.crop_size))].sort((a, b) => a - b)
+    : [d3.min(fold) / 1.15, d3.max(fold) * 1.15], y: [0, max * 1.12]};
+  const panels = (isCrop ? [...d3.group(valid, row => row.backend).values()] : groups(valid)).sort((a, b) => a[0].backend.localeCompare(b[0].backend));
+  $("plots").classList.toggle("single-panel", panels.length === 1);
+  const storageScales = isIO ? Object.fromEntries(["requests", "amplification"].map(key => [key,
+    d3.max(valid, row => fileReadMetrics(study, row)[key].max)])) : null;
+  for (const rows of panels) {
+    if (isIO) storagePanel($("plots"), study, rows, storageScales, select, selected);
+    else panel(rows, scales, isCrop);
+  }
+  if (!valid.length) $("plots").append(element("p", isIO && filtered.length ? "File read requests per sample were not recorded for this study." : "No measurements match these filters."));
+  $("frontier-filter").hidden = isIO || isCrop;
+  $("codec-legend").hidden = isIO;
+  $("plot-note").textContent = isCrop
+    ? `Samples/s counts completed single-plane crops. Each line follows the same encoding recipe across measured crop sizes; dashed lines use a fixed Blosc block request. Lines are guides, not Pareto frontiers or predictions. Points show medians; bars show observed ranges.${panels.length > 1 ? " Both panels use the same axes." : ""}`
+    : isIO
+    ? `File read requests / sample measures request count; read amplification measures bytes requested relative to the crop bytes delivered. Both exclude metadata and reflect the layout and reader. Lower values reduce demand on storage but do not by themselves predict samples/s. Points show medians; ranges are observed min–max.${panels.length > 1 ? " Both readers share each metric’s scale." : ""} Device IOPS and storage bandwidth are in Diagnostics.`
+    : "Image throughput counts requested pixel bytes per second in the source data type. Compression ratio is image bytes divided by stored file bytes. Upper right is better. Filled, connected points form each panel’s observed frontier. Points show medians; bars show observed ranges. All panels use the same axes.";
+  const count = groups(filtered).reduce((total, rows) => total + frontier(rows).length, 0);
+  $("count").textContent = isCrop ? `${valid.length} settings across crop sizes` : isIO ? `${valid.length} settings with file read measurements${filters.crop ? ` · ${filters.crop} × ${filters.crop} crops` : ""}`
+    : `${filtered.length} settings · ${count} on the observed frontiers · larger markers indicate larger chunks${study.baked ? " (largest source chunk for mixed sizes)" : ""}`;
+  table(filtered, isIO);
+  if (!filtered.some(row => row.id === selected)) {
+    selected = null;
+    $("selection-status").textContent = "Select a setting to inspect its measurements.";
+    $("selection-details").hidden = true;
+    $("detail-content").replaceChildren(element("p", "Select a setting to inspect its measurements."));
+  } else {
+    select(filtered.find(row => row.id === selected), false);
+  }
+}
+
+async function loadStudy() {
+  const current = ++generation, entry = entries.find(value => value.id === $("study").value);
+  $("workspace").hidden = true;
+  $("status").hidden = false;
+  $("status").textContent = "Loading measurements…";
+  const value = documents.get(entry.id) || await json(new URL(`data/${entry.file}`, import.meta.url));
+  if (current !== generation) return;
+  study = value;
+  selected = saved.get("setting");
+  saved.delete("setting");
+  if (study.version !== 1 || !study.rows.length) throw new Error("This study has no supported measurements.");
+  const hasCrops = study.rows.some(row => row.crop_size);
+  options("view", Object.keys(views).filter(id => id !== "crop" || hasCrops), id => views[id]);
+  const choices = study.cohorts || study.inputs;
+  $("input-label").textContent = study.cohorts ? "Source mixture" : "Image input";
+  options("input", choices.map(input => input.id), id => choices.find(input => input.id === id).name);
+  $("input-filter").hidden = choices.length === 1;
+  options("workload", [...new Set(study.rows.map(row => row.access_pattern || row.workload))], id => workloads[id] || id);
+  options("crop", [...new Set(study.rows.map(row => row.crop_size).filter(Boolean))].sort((a, b) => a - b), size => `${size} × ${size}`);
+  $("raw").href = `data/${entry.file}`;
+  const context = study.context;
+  const storage = context.machine.local_storage;
+  const system = $("storage-content");
+  system.replaceChildren(element("p", "All panels in this study use this storage system. Storage bandwidth and IOPS are Linux counters summed over its drives, including metadata, read-ahead, and other processes. They are not internal SSD flash-operation counts."));
+  const models = new Map();
+  for (const device of storage?.devices || []) {
+    const model = `${device.model}${device.bytes ? ` (${number(device.bytes / 10 ** 12)} TB each)` : ""}`;
+    models.set(model, (models.get(model) || 0) + 1);
+  }
+  const gpu = context.machine.gpu?.split("\n")[0]?.split(",");
+  const filesystem = storage?.filesystem || context.machine.filesystem?.filesystems?.[0];
+  fields(system, [
+    ["Machine", context.machine.host],
+    ["CPU", context.machine.cpu?.["Model name"] || "Not recorded"],
+    ["Allowed logical CPUs", context.machine.cpu_affinity?.length ?? "Not recorded"],
+    ["GPU", gpu?.[0] || "None"],
+    ["GPU driver", gpu?.[2]?.trim() || "Not recorded"],
+    ["Filesystem", filesystem ? `${filesystem.fstype}${filesystem.source ? ` on ${filesystem.source.split("[")[0]}` : ""}` : "Not recorded"],
+    ["Drives", storage ? `${storage.devices.length} PCIe NVMe drives` : "Not recorded"],
+    ["Drive models", [...models].map(([model, count]) => `${count} × ${model}`).join("; ") || "Not recorded"],
+  ]);
+  system.append(element("p", storage ? "The drives are not reserved exclusively for this study. Idle activity is retained in Diagnostics. SSD/controller caches are not controlled." : "A drive inventory and storage counters were not recorded for this cached study."));
+  $("cache-condition").textContent = context.cache_policy === "cold-pass"
+    ? "Cold file-cache passes. Every timed pass starts with zero resident shard-data pages and runs many batches through the pipeline. Storage reads are verified. Codecs and metadata are warmed."
+    : context.cache_policy === "cold"
+    ? "Cold file-cache reads. Every timed batch starts with zero resident data-file pages; storage reads are verified. Codecs and metadata are warmed."
+    : "Cached pilot. Files were preloaded into RAM and reads were replayed. Storage bandwidth and IOPS were not recorded.";
+  $("workspace").hidden = false;
+  $("status").hidden = true;
+  render();
+}
+
+function error(value) {
+  $("workspace").hidden = true;
+  $("status").hidden = false;
+  $("status").textContent = `${value.message} Reload this page to try again.`;
+}
+
+async function openSetting(document, row) {
+  $("explorer").open = true;
+  $("study").value = document.id;
+  await loadStudy();
+  $("input").value = row.input_id;
+  $("workload").value = row.access_pattern;
+  $("crop").value = String(row.crop_size);
+  $("view").value = "pareto";
+  for (const id of ["codec", "chunk", "block"]) $(id).value = "";
+  $("frontier-only").checked = false;
+  selected = row.id;
+  render();
+  select(row);
+  $("explorer-heading").focus();
+}
+
+$("explore-link").addEventListener("click", event => {
+  if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  event.preventDefault();
+  $("explorer").open = true;
+  $("explorer-heading").focus();
+});
+$("explorer").addEventListener("toggle", () => {
+  if (!study) return;
+  if ($("explorer").open) render();
+  else {
+    const hash = new URLSearchParams(location.hash.slice(1));
+    hash.set("explorer", "closed");
+    history.replaceState(null, "", `#${hash}`);
+  }
+});
+
+$("selection-details").addEventListener("click", event => {
+  event.preventDefault();
+  $("detail-heading").focus();
+});
+$("study").addEventListener("change", () => loadStudy().catch(error));
+for (const id of ["input", "workload", "crop", "view", "codec", "chunk", "block", "frontier-only"]) $(id).addEventListener("change", render);
+window.addEventListener("resize", () => { if (study && !$("workspace").hidden) render(); });
+window.addEventListener("hashchange", () => {
+  if (location.hash === "#explorer") {
+    $("explorer").open = true;
+    $("explorer-heading").focus();
+  } else {
+    const query = new URLSearchParams(location.hash.slice(1));
+    if (["study", "view", "input", "workload", "crop", "codec", "chunk", "block", "setting", "recipe", "explorer"].some(key => query.has(key))) location.reload();
+  }
+});
+$("csv").addEventListener("click", () => {
+  const url = URL.createObjectURL(new Blob([csv(filtered, {cache_policy: study.context.cache_policy, host: study.context.machine.host, document: study})], {type: "text/csv;charset=utf-8"}));
+  const link = element("a");
+  link.href = url;
+  link.download = `damacy-${study.id}.csv`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
+
+try {
+  if (!globalThis.d3) throw new Error("The plotting library could not be loaded.");
+  const index = await json(new URL("data/index.json", import.meta.url));
+  entries = index.studies;
+  if (!entries.length) {
+    $("status").textContent = "No retained reader study has been published yet. See the measurement protocol for the prepared study.";
+  } else {
+    if (entries.some(entry => !/^[a-f0-9]{20}\.json$/.test(entry.file))) throw new Error("Invalid study index.");
+    options("study", entries.map(entry => entry.id), id => {
+      const entry = entries.find(value => value.id === id);
+      return `${entry.label}${entry.pilot ? " (pilot)" : ""}`;
+    });
+    const loaded = await Promise.all(entries.map(entry => json(new URL(`data/${entry.file}`, import.meta.url))));
+    loaded.forEach((document, index) => documents.set(entries[index].id, document));
+    mountOverview(loaded, (document, row) => openSetting(document, row).catch(error));
+    await loadStudy();
+    if (!$("overview").hidden) $("explorer").open = openExplorer;
+  }
+} catch (value) { error(value); }
