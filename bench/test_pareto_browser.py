@@ -969,10 +969,15 @@ def check(assets, output, actual):
                 page.locator("#frontier-only").check()
                 assert page.locator("circle.point").count() > 0
                 page.select_option("#view", "device")
-                assert page.locator("circle.point").count() == sum(
+                assert page.locator("#rows tr").count() == sum(
                     not row["setting"]["codec"].startswith("blosc-")
                     or row["setting"]["block_bytes"] == 16384
                     for row in expected
+                )
+                assert page.locator("circle.point").count() == 0
+                assert (
+                    "File read requests per sample were not recorded"
+                    in page.locator("#plots").inner_text()
                 )
                 page.select_option("#view", "pareto")
                 page.locator("#frontier-only").uncheck()
