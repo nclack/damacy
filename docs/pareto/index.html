@@ -41,8 +41,6 @@
         <div id="crop-comparison" class="comparison-grid two-columns"></div>
         <p id="crop-finding" class="finding-callout"></p>
         <p class="comparison-note">CPU output is in system RAM; CUDA output is in GPU memory. CPU results exclude the transfer needed for GPU training. The machines have separate storage arrays, so this does not isolate processor performance.</p>
-        <p class="comparison-note">Batching also changes: 128² baked CPU batches need three read/decode groups; 192² and 256² need one. This is a storage comparison, not an isolated crop-size effect or a complete training benchmark.</p>
-        <details class="comparison-method"><summary>Batch and memory limits</summary><p>Batches hold 36 MiB of float32 output and lookahead holds 144 MiB at every crop size. CPU input buffers hold 256 chunks. These limits give batches of 576, 256, and 144 samples at 128², 192², and 256² respectively.</p></details>
       </section>
       <section class="finding" aria-labelledby="parameter-title">
         <div class="finding-heading"><p class="figure-number">03 / CHUNKS &amp; BLOCKS</p><h2 id="parameter-title">Change one encoding parameter at a time</h2></div>

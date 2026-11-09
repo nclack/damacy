@@ -382,7 +382,7 @@ function updateContext() {
   if (study.baked) geometry = $("workload").value === "baked"
     ? `${cohort.input_ids.length} source inputs. ${bakedFiles} shard files total per process, approximately ${number(study.baked.shard_bytes / 2 ** 30)} GiB uncompressed each. One crop per compression chunk, read forward through each file. The paired random coordinates and native pixel types are preserved. Compression is weighted by the stored sample mixture.`
     : `${cohort.input_ids.length} source inputs, mixed within each pass. Uniform random translations across ${study.volume.frame_shape.join(" × ")} frames; crops may cross chunk and shard boundaries. ${number(study.volume.shard_bytes / 2 ** 30)} GiB uncompressed per spatial shard. Repeated or overlapping reads within a cold-start pass are allowed. Compression combines equal logical source volumes.`;
-  if (study.batch_output_bytes) geometry += ` Batches hold ${number(study.batch_output_bytes / 2 ** 20)} MiB of float32 output; lookahead holds ${number(study.lookahead_output_bytes / 2 ** 20)} MiB at every crop size. These are single-plane storage workloads, not complete training batches.`;
+  if (study.baked) geometry += " These measurements cover single-plane storage reads.";
   $("context").textContent = `${study.pilot ? "Pilot · limited settings. " : ""}${study.profile?.repeats ?? study.rows[0].metrics.useful_gib_s.n} process repetitions per setting · ${study.pipeline.decode_workers} CPU decode workers · ${study.pipeline.n_io_threads} file workers. ${geometry}`;
 }
 
@@ -425,21 +425,12 @@ function render() {
   $("frontier-filter").hidden = isIO || isCrop;
   $("codec-legend").hidden = Boolean(work);
   $("plot-note").textContent = isCrop
-    ? `Samples/s counts completed single-plane crops. Each line follows the same encoding recipe across measured crop sizes; dashed lines use a fixed Blosc block request. Lines are guides, not Pareto frontiers or predictions. Batch and lookahead byte budgets stay fixed. Points show medians; bars show observed ranges.${panels.length > 1 ? " Both panels use the same axes." : ""}`
+    ? `Samples/s counts completed single-plane crops. Each line follows the same encoding recipe across measured crop sizes; dashed lines use a fixed Blosc block request. Lines are guides, not Pareto frontiers or predictions. Points show medians; bars show observed ranges.${panels.length > 1 ? " Both panels use the same axes." : ""}`
     : work
     ? `Storage work per delivered crop: bytes and completed read operations, each divided by the samples completed in that execution, then summarized. Lower is better for the same crop size. Ranges are observed min–max.${panels.length > 1 ? " Both readers share each metric’s scale." : ""} Counts include metadata, read-ahead, and other activity on the drives. Storage bandwidth and IOPS remain in the table and configuration details.`
     : isIO
     ? "Storage bandwidth counts bytes read from the storage system per second; IOPS counts completed read operations per second. Both are summed across its drives. More IOPS alone does not imply higher image throughput. Points show medians; bars show observed ranges."
     : "Image throughput counts requested pixel bytes per second in the source data type. Compression ratio is image bytes divided by stored file bytes. Upper right is better. Filled, connected points form each panel’s observed frontier. Points show medians; bars show observed ranges. All panels use the same axes.";
-  if (isCrop && filters.workload === "baked" && study.pipeline.chunks_per_input_buffer) {
-    const batches = [...new Map(valid.filter(row => row.backend === "cpu")
-      .map(row => [row.crop_size, row.sampling.samples_per_batch])).entries()].sort((a, b) => a[0] - b[0]);
-    if (batches.length && batches.every(([, samples]) => Number.isSafeInteger(samples) && samples > 0)) {
-      const limit = study.pipeline.chunks_per_input_buffer;
-      const counts = batches.map(([crop, samples]) => `${Math.ceil(samples / limit)} at ${crop}²`).join(", ");
-      $("plot-note").textContent += ` CPU input buffers hold ${limit} chunks; minimum read/decode groups per baked batch are ${counts}. This batching affects the curve.`;
-    }
-  }
   const count = groups(filtered).reduce((total, rows) => total + frontier(rows).length, 0);
   $("count").textContent = isCrop ? `${valid.length} settings across crop sizes` : work ? `${valid.length} settings · storage work per ${filters.crop} × ${filters.crop} crop`
     : `${isIO ? `${valid.length} settings with storage measurements` : `${filtered.length} settings · ${count} on the observed frontiers`} · larger markers indicate larger chunks${study.baked ? " (largest source chunk for mixed sizes)" : ""}`;

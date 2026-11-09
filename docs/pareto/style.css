@@ -160,8 +160,8 @@ td button { border: 0; padding: .15rem; color: var(--blue); background: transpar
 .crop-values .observed-range { font-size: .7rem; }
 .crop-values a { display: inline-block; padding: .15rem 0; }
 .finding-callout { padding: 1rem 1.2rem; border-left: 3px solid var(--blue); background: var(--surface); font-size: .9rem; }
-.comparison-method, .study-method { font-size: .85rem; max-width: 65rem; color: var(--muted); }
-.comparison-method summary, .study-method summary { color: var(--ink); padding: .4rem 0; }
+.study-method { font-size: .85rem; max-width: 65rem; color: var(--muted); }
+.study-method summary { color: var(--ink); padding: .4rem 0; }
 .parameter-pair { border-top: 1px solid var(--border); padding: .7rem 0; }
 .parameter-value { display: flex; flex-wrap: wrap; gap: .2rem 1rem; justify-content: space-between; font-size: .78rem; margin: .3rem 0; font-variant-numeric: tabular-nums; }
 .parameter-value a { color: var(--muted); }
