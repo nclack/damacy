@@ -1,4 +1,4 @@
-import {fileReadMetrics, metricStrings, recipeLabel} from "./comparisons.mjs?v=5d9b4385b308";
+import {fileReadMetrics, metricStrings, recipeLabel} from "./comparisons.mjs?v=7b29074891fc";
 
 export function storagePanel(target, document, rows, scales, select, selected) {
   const wrapper = window.document.createElement("section");

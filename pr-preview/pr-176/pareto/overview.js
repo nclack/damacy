@@ -1,5 +1,5 @@
-import {samplesPerSecond} from "./analysis.mjs?v=5d9b4385b308";
-import {bestRows, comparableRows, cropSizes, fixedRecipes, metricStrings, readers, recipeLabel} from "./comparisons.mjs?v=5d9b4385b308";
+import {samplesPerSecond} from "./analysis.mjs?v=7b29074891fc";
+import {bestRows, comparableRows, cropSizes, fixedRecipes, metricStrings, readers, recipeLabel} from "./comparisons.mjs?v=7b29074891fc";
 
 const $ = id => document.getElementById(id);
 const number = value => value.toLocaleString("en", {maximumSignificantDigits: 3});

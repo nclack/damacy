@@ -1,7 +1,7 @@
-import {cropSeries, csv, frontier, groups, matches, plottable, samplesPerSecond, sensitivity} from "./analysis.mjs?v=5d9b4385b308";
-import {mountOverview} from "./overview.js?v=5d9b4385b308";
-import {fileReadMetrics, metricStrings} from "./comparisons.mjs?v=5d9b4385b308";
-import {storagePanel} from "./storage.js?v=5d9b4385b308";
+import {cropSeries, csv, frontier, groups, matches, plottable, samplesPerSecond, sensitivity} from "./analysis.mjs?v=7b29074891fc";
+import {mountOverview} from "./overview.js?v=7b29074891fc";
+import {fileReadMetrics, metricStrings} from "./comparisons.mjs?v=7b29074891fc";
+import {storagePanel} from "./storage.js?v=7b29074891fc";
 
 const $ = id => document.getElementById(id);
 const number = value => Number.isFinite(value) ? value.toLocaleString(undefined, {maximumSignificantDigits: 4}) : "—";

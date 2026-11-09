@@ -394,10 +394,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#both-katamari-training-paths" class="md-nav__link">
+  <a href="#example-training-workloads" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Both Katamari training paths
+        Example training workloads
       
     </span>
   </a>
@@ -749,10 +749,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#both-katamari-training-paths" class="md-nav__link">
+  <a href="#example-training-workloads" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Both Katamari training paths
+        Example training workloads
       
     </span>
   </a>
@@ -1145,11 +1145,11 @@ read rates use the same source samples and byte counts.</p>
 resident shard-data pages, following warmup or preparation. Cache reuse and
 read-ahead within a pass are part of the measured reader. This is not a guarantee
 that every individual crop reaches storage.</p>
-<h3 id="both-katamari-training-paths">Both Katamari training paths<a class="headerlink" href="#both-katamari-training-paths" title="Permanent link">&para;</a></h3>
-<p>The spatial sweep is a storage experiment shared by both targets. It is not a
-replay of either full training loader. The following source-read contracts were
-checked against Katamari revision
-<a href="https://github.com/evolutionaryscale/evolutionaryscale/tree/41ca4527e42017ad60c8e948fbb3c087168c294e/projects/katamari"><code>41ca4527e420</code></a>:</p>
+<h3 id="example-training-workloads">Example training workloads<a class="headerlink" href="#example-training-workloads" title="Permanent link">&para;</a></h3>
+<p>The spatial sweep measures storage performance. Follow-up profiles cover
+generative training and image/video pretraining of an example vision transformer
+(ViT). The source-read requirements below define those profiles; the current
+measurements do not replay a full training loader.</p>
 <table>
 <thead>
 <tr>
@@ -1172,15 +1172,13 @@ checked against Katamari revision
 </tr>
 </tbody>
 </table>
-<p>The <a href="https://github.com/evolutionaryscale/evolutionaryscale/blob/41ca4527e42017ad60c8e948fbb3c087168c294e/projects/katamari/configs/experiment/generative/rae/fm/baselines/v7.yaml#L263">generative v7 configuration</a>
-produces 256² model inputs, but nominal source ROIs include 96² and 160², derived
-from physical field of view and pixel size. Manifest calibration can override
-those defaults. The chosen 128/192/256 storage sweep does not stand in for that
-actual ROI distribution. The active
-<a href="https://github.com/evolutionaryscale/evolutionaryscale/blob/41ca4527e42017ad60c8e948fbb3c087168c294e/projects/katamari/configs/experiment/prod/img-vid/active/vit_s.yaml#L13">image/video recipe</a>
-uses the legacy loader with homogeneous batches and log-weighted source selection.
-Its model channel limits are applied after source reads. Reading only the final
-channel count would understate storage work.</p>
+<p>The example generative profile produces 256² model inputs, but nominal source
+ROIs include 96² and 160², derived from physical field of view and pixel size.
+Manifest calibration can override those defaults. The chosen 128/192/256 storage
+sweep does not stand in for that actual ROI distribution. The example image/video
+pretraining profile uses homogeneous batches and log-weighted source selection.
+It applies model channel limits after source reads. Reading only the final channel
+count would understate storage work.</p>
 <p>A subsequent trace-based check should replay these three profiles on the selected
 layouts, retaining actual source/channel/time/ROI selections and source weights.
 For generative baking, preserve captions, conditioning, channel identities, masks,

@@ -1,4 +1,4 @@
-import {fileReadMetrics} from "./comparisons.mjs?v=5d9b4385b308";
+import {fileReadMetrics} from "./comparisons.mjs?v=7b29074891fc";
 
 export const plottable = row => Number.isFinite(row.compression_fold) && row.compression_fold > 0
   && Number.isFinite(row.metrics.useful_gib_s.median) && row.metrics.useful_gib_s.median > 0;
