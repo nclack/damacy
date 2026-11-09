@@ -237,12 +237,12 @@ resident shard-data pages, following warmup or preparation. Cache reuse and
 read-ahead within a pass are part of the measured reader. This is not a guarantee
 that every individual crop reaches storage.
 
-### Both Katamari training paths
+### Example training workloads
 
-The spatial sweep is a storage experiment shared by both targets. It is not a
-replay of either full training loader. The following source-read contracts were
-checked against Katamari revision
-[`41ca4527e420`](https://github.com/evolutionaryscale/evolutionaryscale/tree/41ca4527e42017ad60c8e948fbb3c087168c294e/projects/katamari):
+The spatial sweep measures storage performance. Follow-up profiles cover
+generative training and image/video pretraining of an example vision transformer
+(ViT). The source-read requirements below define those profiles; the current
+measurements do not replay a full training loader.
 
 | Follow-up profile | Source reads to preserve |
 | --- | --- |
@@ -250,15 +250,13 @@ checked against Katamari revision
 | Image pretraining | One timepoint and Z plane; all manifest-selected channels; usually 256² source crops, with a 224² exception |
 | Video pretraining | 12 or 16 timepoints, one Z plane, all manifest-selected channels; temporal stride 1 or 2 |
 
-The [generative v7 configuration](https://github.com/evolutionaryscale/evolutionaryscale/blob/41ca4527e42017ad60c8e948fbb3c087168c294e/projects/katamari/configs/experiment/generative/rae/fm/baselines/v7.yaml#L263)
-produces 256² model inputs, but nominal source ROIs include 96² and 160², derived
-from physical field of view and pixel size. Manifest calibration can override
-those defaults. The chosen 128/192/256 storage sweep does not stand in for that
-actual ROI distribution. The active
-[image/video recipe](https://github.com/evolutionaryscale/evolutionaryscale/blob/41ca4527e42017ad60c8e948fbb3c087168c294e/projects/katamari/configs/experiment/prod/img-vid/active/vit_s.yaml#L13)
-uses the legacy loader with homogeneous batches and log-weighted source selection.
-Its model channel limits are applied after source reads. Reading only the final
-channel count would understate storage work.
+The example generative profile produces 256² model inputs, but nominal source
+ROIs include 96² and 160², derived from physical field of view and pixel size.
+Manifest calibration can override those defaults. The chosen 128/192/256 storage
+sweep does not stand in for that actual ROI distribution. The example image/video
+pretraining profile uses homogeneous batches and log-weighted source selection.
+It applies model channel limits after source reads. Reading only the final channel
+count would understate storage work.
 
 A subsequent trace-based check should replay these three profiles on the selected
 layouts, retaining actual source/channel/time/ROI selections and source weights.
