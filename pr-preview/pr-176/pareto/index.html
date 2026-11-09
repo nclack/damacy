@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>Read performance · Damacy</title>
-  <script src="appearance.js?v=74e63ec5e1a3"></script>
-  <link rel="stylesheet" href="style.css?v=74e63ec5e1a3">
+  <script src="appearance.js?v=c285918697b8"></script>
+  <link rel="stylesheet" href="style.css?v=c285918697b8">
 </head>
 <body>
   <header>
@@ -54,7 +54,7 @@
       </details>
     </section>
     <details id="explorer" class="explorer" open>
-      <summary><h2 id="explorer-heading" tabindex="-1">Explore all settings</h2><span>Compression tradeoffs, storage work, and individual measurements</span></summary>
+      <summary><h2 id="explorer-heading" tabindex="-1">Explore all settings</h2><span>Compression tradeoffs, file reads, and individual measurements</span></summary>
     <section id="workspace" hidden aria-label="Performance study explorer">
       <div class="filters">
         <label>Study<select id="study"></select></label>
@@ -117,15 +117,16 @@
     <section class="method">
       <h2>Reading the measurements</h2>
       <dl class="metric-definitions">
+        <dt>Samples/s</dt><dd>Completed single-plane crops per second on the measured system. Compare rates at the same crop size.</dd>
         <dt>Image throughput</dt><dd>Requested image bytes delivered per second, counted in the source data type. Converting uint16 to float32 does not increase this number.</dd>
         <dt>Compression ratio</dt><dd>Uncompressed image bytes in the stored arrays divided by their file bytes. Larger values mean less storage is needed.</dd>
-        <dt>Storage bandwidth</dt><dd>Read bytes per second recorded by Linux for the storage system. This includes any extra reads needed to deliver the requested pixels.</dd>
-        <dt>IOPS</dt><dd>Completed read operations per second recorded by Linux for that same storage system. One file read request can produce several storage operations.</dd>
-        <dt>Storage work per sample</dt><dd>Storage bytes or completed read operations divided by the number of delivered crops in each execution. Lower values mean less storage work for the same crop size. One operation can serve multiple samples.</dd>
+        <dt>File read requests / sample</dt><dd>Data-file read requests issued by Damacy divided by delivered crops. Excludes metadata. One request can serve multiple crops, so this can be below one.</dd>
+        <dt>Read amplification</dt><dd>File bytes requested divided by uncompressed bytes in the delivered crops, counted in the source data type. A value of 4× means four file bytes requested per image byte delivered; compression can bring this below 1×.</dd>
       </dl>
-      <p>Image throughput and storage bandwidth use GiB/s, where 1 GiB is 2³⁰ bytes. IOPS uses reads/s. All rates use elapsed measurement time, including reading, decoding, and final GPU completion. Initialization, warmup, and cache clearing are excluded. The Storage system section identifies the shared hardware; Diagnostics contains reader-level counters.</p>
+      <p>Image throughput uses GiB/s, where 1 GiB is 2³⁰ bytes. All rates use elapsed measurement time, including reading, decoding, and final GPU completion. Initialization, warmup, and cache clearing are excluded. The Storage system section identifies the hardware; Diagnostics retains device IOPS and storage bandwidth.</p>
       <details>
         <summary>Measurement limits</summary>
+        <p>File read counts and read amplification describe demand on storage. They depend on the layout and reader, including how it combines or aligns requests. They do not include the operating system’s extra reads or other processes, and do not by themselves predict performance on another storage system.</p>
         <p>The observed frontier compares settings within the same input, crop size, read pattern, backend, machine session, and storage condition. Filters recompute it. Connections join measured points; they do not predict unmeasured settings. All compared panels use the same axes.</p>
         <p>Ranges are observed minima and maxima, not confidence intervals. Use the measurements table or keyboard to select overlapping points. This is a reduced parameter sweep; unmeasured settings may perform better.</p>
         <p>Compression ratio includes padding, shard indexes, and array metadata. Mixed studies use expanded, tiled source distributions. A ratio below one means the files are larger than the uncompressed image bytes. The compression axis is logarithmic.</p>
@@ -135,6 +136,6 @@
     </section>
   </main>
   <script src="vendor/d3.v7.9.0.min.js"></script>
-  <script type="module" src="report.js?v=74e63ec5e1a3"></script>
+  <script type="module" src="report.js?v=c285918697b8"></script>
 </body>
 </html>

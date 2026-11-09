@@ -832,7 +832,8 @@
 <p>The <a href="../pareto/">interactive report</a> leads with the conclusions from two
 cold-read studies: random versus baked samples, sample delivery across crop sizes
 at a fixed encoding, and controlled chunk/block comparisons. The explorer retains
-compression Pareto plots, storage work per sample, all individual measurements,
+compression Pareto plots, file read requests per sample, read amplification,
+all individual measurements,
 and CSV downloads. Select an overview result to inspect its exact configuration.</p>
 <p>The studies use an H100 node and an EPYC node, each with its own recorded storage
 system. Appearance follows the system setting by default, with saved light and
@@ -847,6 +848,10 @@ dark overrides. The report retains only the two crop studies from November 6, 20
 </thead>
 <tbody>
 <tr>
+<td>Samples/s</td>
+<td>Completed single-plane crops ÷ elapsed seconds</td>
+</tr>
+<tr>
 <td>Image throughput (GiB/s)</td>
 <td>Requested pixels × source bytes per pixel ÷ elapsed seconds ÷ 2³⁰</td>
 </tr>
@@ -855,34 +860,22 @@ dark overrides. The report retains only the two crop studies from November 6, 20
 <td>Uncompressed image bytes in the stored arrays ÷ stored file bytes</td>
 </tr>
 <tr>
-<td>Storage bandwidth (GiB/s)</td>
-<td>Read bytes recorded by Linux for the storage system ÷ elapsed seconds ÷ 2³⁰</td>
+<td>File read requests / sample</td>
+<td>Data-file read requests issued by Damacy ÷ delivered crops, calculated per execution</td>
 </tr>
 <tr>
-<td>IOPS (reads/s)</td>
-<td>Completed reads recorded by Linux for that storage system ÷ elapsed seconds</td>
-</tr>
-<tr>
-<td>Samples/s</td>
-<td>Completed single-plane crops ÷ elapsed seconds</td>
-</tr>
-<tr>
-<td>Storage bytes / sample (KiB)</td>
-<td>Storage bytes ÷ completed crops ÷ 1024, calculated per execution</td>
-</tr>
-<tr>
-<td>Storage reads / sample</td>
-<td>Completed storage operations ÷ completed crops, calculated per execution</td>
+<td>Read amplification (×)</td>
+<td>File bytes requested ÷ uncompressed bytes in delivered crops, in the source data type, calculated per execution</td>
 </tr>
 </tbody>
 </table>
-<p>Image throughput measures how quickly the reader delivers the requested pixels.
-Storage bandwidth and IOPS measure the storage work during that time, summed over the
-backing drives. They include metadata, read-ahead, and other processes using those
-drives. They are kernel device counters, not counts of internal SSD flash
-operations. Adjacent idle measurements remain available in <strong>Diagnostics</strong> and
-are not subtracted. The <a href="https://docs.kernel.org/admin-guide/iostats.html">kernel counter definitions</a>
-describe the completed-read and sector counters used here.</p>
+<p>Samples/s and image throughput measure delivery on the recorded system. File read
+requests and read amplification describe the demand on storage: request count and
+bytes requested. These exclude metadata, operating-system read-ahead, and activity
+from other processes. They depend on the layout and reader, including how it
+combines or aligns requests, and do not alone predict another system's performance.
+A request can serve multiple samples, so requests per sample can be below one.
+Compression can bring read amplification below 1×.</p>
 <p>All rates use wall time through completion, including the final GPU work.
 Initialization, warmup, and cache clearing are excluded. One GiB is 2³⁰ bytes.
 The CPU backend returns batches in system RAM; CUDA returns them in GPU memory.
@@ -892,14 +885,19 @@ file lengths include padding, shard indexes, and array metadata; they are not
 filesystem block allocation. Compression ratios below one mean the files are
 larger than the uncompressed image bytes.</p>
 <h2 id="reader-diagnostics">Reader diagnostics<a class="headerlink" href="#reader-diagnostics" title="Permanent link">&para;</a></h2>
-<p><strong>Diagnostics</strong> retains file read requests, bytes read before decompression,
-bytes decoded per requested image byte, stage timings, metadata activity, and
-idle storage measurements. These help explain behavior without adding more rate
-names to the main plots. Stage timings overlap and cannot be added into elapsed time.</p>
+<p><strong>Diagnostics</strong> retains file request rates, file read bandwidth, bytes decoded per
+requested image byte, stage timings, metadata activity, and storage measurements.
+Stage timings overlap and cannot be added into elapsed time.</p>
+<p><strong>Storage bandwidth (GiB/s)</strong> is bytes read per second, and <strong>Device IOPS (reads/s)</strong>
+is completed reads per second, both recorded by Linux and summed across the backing
+drives. They include metadata, read-ahead, and other processes using those drives.
+These are kernel device counters, not internal SSD flash operations. Adjacent idle
+measurements are not subtracted. The <a href="https://docs.kernel.org/admin-guide/iostats.html">kernel counter definitions</a>
+describe the completed-read and sector counters used here.</p>
 <p>One file read request can become several storage operations; cached reads can
 avoid storage operations; read-ahead can fetch extra bytes. The JSON retains both
-reader and storage counters. CSV exports and configuration details retain storage
-bandwidth and IOPS alongside image throughput and compression.</p>
+reader and storage counters. CSV exports include the plotted file-read metrics and
+retain storage bandwidth and explicitly named device IOPS as diagnostics.</p>
 <h2 id="crop-results">Crop results<a class="headerlink" href="#crop-results" title="Permanent link">&para;</a></h2>
 <p>The <a href="../pareto/#study=f0166121dda806b1b509">paired H100 crop study</a> and
 <a href="../pareto/#study=2f6063ce5114fc47763a">Turin CPU crop study</a> are complete:
@@ -1014,16 +1012,17 @@ fixed-recipe curve: H100 CUDA's best
 random medians are about <strong>16,289, 10,127, and 7,804 samples/s</strong> at 128², 192², and
 256²; its best baked medians are <strong>69,914, 83,309, and 71,263 samples/s</strong>. More image
 bytes per second can accompany fewer completed samples.</p>
-<p>Lower IOPS can accompany faster sample delivery. Holding the codec uncompressed
-at 128² on H100 CUDA, random crops use about <strong>420.9 kB of storage reads and 3.217
-storage operations per sample</strong>, versus <strong>36.1 kB and 0.275 operations</strong> for baked
-samples. Image throughput rises from 0.366 to 2.286 GiB/s. This compares complete
-layouts, including different chunk shapes and file counts.</p>
-<p>The storage view divides each execution's bytes and operations by its completed
-samples, then summarizes the resulting values. It does not divide independently
-aggregated rate medians. Operations per sample can be below one because one
-storage operation can serve multiple samples. The table and sidebar retain
-storage bandwidth and IOPS for inspecting the measured rate.</p>
+<p>Holding the codec uncompressed at 128² on H100 CUDA, random crops issue about
+<strong>1.76 file read requests per sample with 13.2× read amplification</strong>, versus
+<strong>0.028 requests per sample and 1.0×</strong> for baked samples. Image throughput rises
+from 0.366 to 2.286 GiB/s. This compares complete layouts, including different
+chunk shapes and file counts; the reduction in file reads is not a predicted
+speedup for other storage systems.</p>
+<p>The file reads view calculates requests per delivered sample and requested file
+bytes per uncompressed crop byte within each execution, then summarizes those
+ratios. It does not divide independently aggregated rate medians. The plots,
+table, sidebar, and CSV use the same definitions. Device IOPS and storage
+bandwidth remain in Diagnostics for inspecting the measured hardware activity.</p>
 <p>The paired H100 run contains <strong>62 settings and 258 executions</strong>. It used one H100
 80 GB GPU, an Intel Xeon Platinum 8462Y+, 32 allowed logical CPUs, 16 CPU decode
 workers, and 16 file workers. It finished in <strong>45 minutes 16 seconds</strong>, including

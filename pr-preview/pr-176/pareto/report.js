@@ -1,7 +1,7 @@
-import {cropSeries, csv, devicePlottable, frontier, groups, matches, plottable, samplesPerSecond, sensitivity} from "./analysis.mjs?v=74e63ec5e1a3";
-import {mountOverview} from "./overview.js?v=74e63ec5e1a3";
-import {metricStrings, storagePerSample} from "./comparisons.mjs?v=74e63ec5e1a3";
-import {storagePanel} from "./storage.js?v=74e63ec5e1a3";
+import {cropSeries, csv, frontier, groups, matches, plottable, samplesPerSecond, sensitivity} from "./analysis.mjs?v=c285918697b8";
+import {mountOverview} from "./overview.js?v=c285918697b8";
+import {fileReadMetrics, metricStrings} from "./comparisons.mjs?v=c285918697b8";
+import {storagePanel} from "./storage.js?v=c285918697b8";
 
 const $ = id => document.getElementById(id);
 const number = value => Number.isFinite(value) ? value.toLocaleString(undefined, {maximumSignificantDigits: 4}) : "—";
@@ -16,7 +16,7 @@ const range = metric => {
 const colors = {none: "var(--gray)", zstd: "var(--blue)", "blosc-zstd": "var(--orange)", "blosc-lz4": "var(--green)"};
 const codecs = {none: "Uncompressed", zstd: "Zstd", "blosc-zstd": "Blosc Zstd", "blosc-lz4": "Blosc LZ4"};
 const workloads = {random: "Random crops", baked: "Baked samples · sequential", "balanced-256": "Shard-balanced 256 × 256 crops", "random-256": "Random 256 × 256 crops", "whole-planes": "Whole-plane reads"};
-const views = {pareto: "Image throughput and compression", device: "Storage reads", crop: "Crop size and samples/s"};
+const views = {pareto: "Image throughput and compression", device: "File reads", crop: "Crop size and samples/s"};
 const saved = new URLSearchParams(location.hash.slice(1));
 const openExplorer = location.hash === "#explorer" || (saved.has("explorer") ? saved.get("explorer") === "open" : saved.has("study"));
 if (saved.get("view") === "io") saved.set("view", "device");
@@ -87,24 +87,20 @@ function select(row, announce = true) {
   summary.className = "primary-metrics";
   summary.setAttribute("aria-label", "Measurements");
   summary.append(element("p", `Medians and observed ranges across ${metrics.useful_gib_s.n} process repetitions. Compression ratio is fixed by the stored files.`));
+  if (row.crop_size) fields(summary, [["Samples/s", measurementValue(samplesPerSecond(row)),
+    `Completed ${row.crop_size} × ${row.crop_size} single-plane crops per second.`]]);
   fields(summary, [
     ["Image throughput", measurementValue(metrics.useful_gib_s, " GiB/s"),
       "Requested pixel bytes delivered per second, in the source data type."],
     ["Compression ratio", `${number(row.compression_fold)}×`,
       "Uncompressed image bytes divided by stored file bytes."],
-    ["Storage bandwidth", measurementValue(metrics.device_read_gib_s, " GiB/s"),
-      "Bytes read across the storage system’s drives per second, including extra reads."],
-    ["IOPS", measurementValue(metrics.device_iops, " reads/s"),
-      "Read operations completed by the storage system per second."],
   ]);
-  if (row.crop_size) fields(summary, [["Samples/s", measurementValue(samplesPerSecond(row)),
-    `Completed ${row.crop_size} × ${row.crop_size} single-plane crops per second. This is the same image throughput expressed as a sample count.`]]);
-  const work = storagePerSample(study, row);
+  const work = fileReadMetrics(study, row);
   if (work) fields(summary, [
-    ["Storage bytes / sample", measurementValue(Object.fromEntries(Object.entries(work.bytes).map(([key, value]) => [key, key === "n" ? value : value / 1024])), " KiB"),
-      "Storage bytes divided by completed crops in each execution; lower means less work for the same crop size."],
-    ["Storage reads / sample", measurementValue(work.reads),
-      "Completed storage operations divided by completed crops. One operation can serve multiple samples."],
+    ["File read requests / sample", measurementValue(work.requests),
+      "Data-file read requests issued by Damacy divided by delivered crops. Excludes metadata. One request can serve multiple crops."],
+    ["Read amplification", measurementValue(work.amplification, "×"),
+      "File bytes requested divided by uncompressed bytes in the delivered crops, in the source data type. Compression can bring this below 1×."],
   ]);
   target.append(summary, element("h3", "Layout"));
   fields(target, [
@@ -169,7 +165,6 @@ function select(row, announce = true) {
     ["File read requests/s", number(metrics.read_iops?.median)],
     ["File read bandwidth", measurementValue(metrics.read_gib_s, " GiB/s")],
     ["Mean file read size", kib(metrics.mean_read_bytes?.median)],
-    ["File bytes / image bytes", `${number(metrics.read_amplification?.median)}×`],
     ["Decoded bytes / image bytes", metrics.decode_amplification ? `${number(metrics.decode_amplification.median)}×` : "Not recorded"],
     ["Output type", study.pipeline.dtype],
     ["Blocks in headers", setting.actual_block_bytes.map(kib).join(", ") || "—"],
@@ -180,8 +175,12 @@ function select(row, announce = true) {
   ]);
   if (metrics.device_iops) {
     diagnostics.append(element("h3", "Storage checks"));
-    diagnostics.append(element("p", "Idle measurements are taken beside each execution and are not subtracted. Storage counters cover all activity on the selected drives."));
+    diagnostics.append(element("p", "Linux device counters cover all activity on the selected drives, including metadata and read-ahead. They depend on caching and how requests are combined or split. Idle measurements are taken beside each execution and are not subtracted."));
     fields(diagnostics, [
+      ["Storage bandwidth", measurementValue(metrics.device_read_gib_s, " GiB/s"),
+        "Bytes read across the storage system’s drives per second, including extra reads."],
+      ["Device IOPS", measurementValue(metrics.device_iops, " reads/s"),
+        "Completed read operations per second recorded by Linux for those drives. This does not count internal SSD flash reads."],
       ["Mean storage read size", kib(metrics.device_mean_read_bytes.median)],
       ["Storage bytes / image bytes", `${number(metrics.device_read_amplification.median)}×`],
       ["Idle IOPS", number(metrics.idle_device_iops.median)],
@@ -256,7 +255,7 @@ function select(row, announce = true) {
   }
 }
 
-function panel(rows, scales, isIO, isCrop = false) {
+function panel(rows, scales, isCrop = false) {
   const first = rows[0], wrapper = element("section");
   wrapper.className = "panel";
   const backend = first.backend === "cpu" ? "CPU" : "CUDA";
@@ -266,29 +265,25 @@ function panel(rows, scales, isIO, isCrop = false) {
   const padding = parseFloat(getComputedStyle(wrapper).paddingLeft) + parseFloat(getComputedStyle(wrapper).paddingRight);
   const width = Math.max(240, wrapper.clientWidth - padding);
   const height = Math.max(260, Math.min(325, width * .65 + 70)), left = 57, right = 18, top = 18, bottom = 54;
-  const xTicks = isIO ? Math.max(2, Math.min(5, Math.floor((width - left - right) / 55))) : 5;
-  const x = (isCrop ? d3.scalePoint().padding(.4) : isIO ? d3.scaleLinear() : d3.scaleLog()).domain(scales.x).range([left, width - right]);
-  if (isIO) x.nice();
+  const x = (isCrop ? d3.scalePoint().padding(.4) : d3.scaleLog()).domain(scales.x).range([left, width - right]);
   const y = d3.scaleLinear().domain(scales.y).nice().range([height - bottom, top]);
-  const iopsMetric = "device_iops";
-  const bandwidthMetric = "device_read_gib_s";
-  const xValue = row => isCrop ? row.crop_size : isIO ? row.metrics[iopsMetric].median : row.compression_fold;
-  const yMetric = row => isCrop ? samplesPerSecond(row) : row.metrics[isIO ? bandwidthMetric : "useful_gib_s"];
+  const xValue = row => isCrop ? row.crop_size : row.compression_fold;
+  const yMetric = row => isCrop ? samplesPerSecond(row) : row.metrics.useful_gib_s;
   const svg = d3.select(wrapper).append("svg").attr("viewBox", `0 0 ${width} ${height}`)
-    .attr("role", "group").attr("aria-label", `${backend}: ${isCrop ? "Samples per second versus crop size" : isIO ? "Storage bandwidth versus IOPS" : "Image throughput versus compression ratio"}`);
+    .attr("role", "group").attr("aria-label", `${backend}: ${isCrop ? "Samples per second versus crop size" : "Image throughput versus compression ratio"}`);
   svg.append("g").attr("class", "grid").attr("transform", `translate(${left},0)`)
     .call(d3.axisLeft(y).ticks(5).tickSize(-(width - left - right)).tickFormat(""));
   svg.append("g").attr("transform", `translate(0,${height - bottom})`)
-    .call(d3.axisBottom(x).ticks(xTicks, isIO ? "~s" : ".2~g"));
+    .call(d3.axisBottom(x).ticks(5, ".2~g"));
   svg.append("g").attr("class", "y-axis").attr("transform", `translate(${left},0)`)
     .call(d3.axisLeft(y).ticks(5, isCrop ? "~s" : undefined));
   svg.append("text").attr("class", "axis-label").attr("x", (left + width - right) / 2)
-    .attr("y", height - 7).attr("text-anchor", "middle").text(isCrop ? "Square crop width (pixels)" : isIO ? "IOPS (reads/s)" : "Compression ratio (×, log scale)");
+    .attr("y", height - 7).attr("text-anchor", "middle").text(isCrop ? "Square crop width (pixels)" : "Compression ratio (×, log scale)");
   svg.append("text").attr("class", "axis-label").attr("transform", "rotate(-90)")
-    .attr("x", -(top + height - bottom) / 2).attr("y", 14).attr("text-anchor", "middle").text(isCrop ? "Samples/s" : isIO ? "Storage bandwidth (GiB/s)" : "Image throughput (GiB/s)");
-  const boundary = isIO || isCrop ? [] : frontier(rows), ids = new Set(boundary.map(row => row.id));
-  const shown = rows.filter(row => isIO || isCrop || !$("frontier-only").checked || ids.has(row.id));
-  if (!isIO && !isCrop) svg.append("path").datum(boundary).attr("class", "frontier").attr("fill", "none").attr("stroke", "var(--muted)")
+    .attr("x", -(top + height - bottom) / 2).attr("y", 14).attr("text-anchor", "middle").text(isCrop ? "Samples/s" : "Image throughput (GiB/s)");
+  const boundary = isCrop ? [] : frontier(rows), ids = new Set(boundary.map(row => row.id));
+  const shown = rows.filter(row => isCrop || !$("frontier-only").checked || ids.has(row.id));
+  if (!isCrop) svg.append("path").datum(boundary).attr("class", "frontier").attr("fill", "none").attr("stroke", "var(--muted)")
     .attr("stroke-width", 1.5).attr("d", d3.line().x(row => x(xValue(row))).y(row => y(yMetric(row).median)));
   if (isCrop) for (const series of cropSeries(rows)) svg.append("path").datum(series)
     .attr("class", "crop-series").attr("fill", "none").attr("stroke", colors[series[0].setting.codec])
@@ -298,45 +293,33 @@ function panel(rows, scales, isIO, isCrop = false) {
   const radius = row => isCrop ? 5 : 4 + Math.sqrt((row.setting.chunk_bytes ?? Math.max(...row.setting.sources.map(source => source.chunk_bytes))) / 16384) * .6;
   points.append("circle").attr("class", "point").attr("tabindex", 0).attr("role", "button")
     .attr("aria-pressed", row => row.id === selected).attr("aria-controls", "detail")
-    .attr("aria-label", row => `${configurationName(row)}, ${isCrop ? `${number(yMetric(row).median)} samples/s` : isIO ? `${number(xValue(row))} IOPS, ${number(yMetric(row).median)} GiB/s storage bandwidth` : `${number(yMetric(row).median)} GiB/s image throughput, ${number(row.compression_fold)}× compression ratio`}`)
+    .attr("aria-label", row => `${configurationName(row)}, ${isCrop ? `${number(yMetric(row).median)} samples/s` : `${number(yMetric(row).median)} GiB/s image throughput, ${number(row.compression_fold)}× compression ratio`}`)
     .attr("cx", row => x(xValue(row))).attr("cy", row => y(yMetric(row).median))
     .attr("r", radius)
-    .attr("fill", row => isIO || isCrop || ids.has(row.id) ? colors[row.setting.codec] : "var(--surface)")
+    .attr("fill", row => isCrop || ids.has(row.id) ? colors[row.setting.codec] : "var(--surface)")
     .attr("stroke", row => colors[row.setting.codec])
     .attr("stroke-width", row => row.id === selected ? 3 : 1.5)
     .on("click", (_, row) => select(row)).on("keydown", (event, row) => {
       if (event.key === "Enter" || event.key === " ") { event.preventDefault(); select(row); }
-    }).append("title").text(row => `${configurationName(row)}\n${isCrop ? `Samples/s: ${number(yMetric(row).median)}` : `${isIO ? "Storage bandwidth" : "Image throughput"}: ${number(yMetric(row).median)} GiB/s · ${isIO ? `IOPS: ${number(xValue(row))} reads/s` : `Compression ratio: ${number(row.compression_fold)}×`}`}`);
+    }).append("title").text(row => `${configurationName(row)}\n${isCrop ? `Samples/s: ${number(yMetric(row).median)}` : `Image throughput: ${number(yMetric(row).median)} GiB/s · Compression ratio: ${number(row.compression_fold)}×`}`);
   points.append("path").attr("class", "range").attr("aria-hidden", "true")
     .attr("d", row => {
       const cx = x(xValue(row)), low = y(yMetric(row).min), high = y(yMetric(row).max), cap = radius(row) + 3;
       return `M${cx},${low}V${high}M${cx - cap},${low}H${cx + cap}M${cx - cap},${high}H${cx + cap}`;
     });
-  if (isIO) points.append("path").attr("class", "range").attr("aria-hidden", "true")
-    .attr("d", row => {
-      const cy = y(yMetric(row).median), low = x(row.metrics[iopsMetric].min), high = x(row.metrics[iopsMetric].max), cap = radius(row) + 3;
-      return `M${low},${cy}H${high}M${low},${cy - cap}V${cy + cap}M${high},${cy - cap}V${cy + cap}`;
-    });
 }
 
-function table(rows, isIO, isCrop = false) {
+function table(rows, isIO) {
   const columns = [
     ["Backend", row => row.backend.toUpperCase()],
     ["Chunk", row => chunkLabel(row.setting)],
     ["Block request", row => blockLabel(row.setting)],
   ];
   if (rows.some(row => row.crop_size)) columns.unshift(["Crop", row => `${row.crop_size} × ${row.crop_size}`]);
-  if (isCrop) columns.push(["Samples/s", samplesPerSecond]);
+  if (rows.some(row => row.crop_size)) columns.push(["Samples/s", samplesPerSecond]);
   if (isIO) columns.push(
-    ["IOPS (reads/s)", row => row.metrics.device_iops],
-    ["Storage bandwidth (GiB/s)", row => row.metrics.device_read_gib_s],
-  );
-  if (isIO && rows.some(row => storagePerSample(study, row))) columns.push(
-    ["Storage bytes / sample (KiB)", row => {
-      const metric = storagePerSample(study, row)?.bytes;
-      return metric ? {...metric, median: metric.median / 1024, min: metric.min / 1024, max: metric.max / 1024} : null;
-    }],
-    ["Storage reads / sample", row => storagePerSample(study, row)?.reads],
+    ["File read requests / sample", row => fileReadMetrics(study, row)?.requests],
+    ["Read amplification (×)", row => fileReadMetrics(study, row)?.amplification],
   );
   columns.push(
     ["Image throughput (GiB/s)", row => row.metrics.useful_gib_s],
@@ -348,7 +331,7 @@ function table(rows, isIO, isCrop = false) {
     heading.scope = "col";
     return heading;
   }));
-  $("table-description").textContent = `${views[$("view").value]}. Rates show medians with observed min–max below, across independent process repetitions.`;
+  $("table-description").textContent = `${views[$("view").value]}. Measurements show medians with observed min–max below, across independent process repetitions.`;
   for (const row of rows) {
     const tr = element("tr"), td = element("td"), button = element("button", codecs[row.setting.codec]);
     button.type = "button";
@@ -407,34 +390,31 @@ function render() {
   history.replaceState(null, "", `#${query}`);
   $("plots").replaceChildren();
   $("rows").replaceChildren();
-  const valid = filtered.filter(isIO ? devicePlottable : plottable);
-  const work = isIO && valid.length && valid.every(row => storagePerSample(study, row));
+  const valid = filtered.filter(row => isIO ? fileReadMetrics(study, row) : plottable(row));
   const fold = valid.map(row => row.compression_fold);
-  const max = d3.max(valid, row => isCrop ? samplesPerSecond(row).max : row.metrics[isIO ? "device_read_gib_s" : "useful_gib_s"].max);
-  const scales = {x: isCrop ? [...new Set(study.rows.map(row => row.crop_size))].sort((a, b) => a - b) : isIO ? [0, d3.max(valid, row => row.metrics.device_iops.max) * 1.12]
+  const max = d3.max(valid, row => isCrop ? samplesPerSecond(row).max : row.metrics.useful_gib_s.max);
+  const scales = {x: isCrop ? [...new Set(study.rows.map(row => row.crop_size))].sort((a, b) => a - b)
     : [d3.min(fold) / 1.15, d3.max(fold) * 1.15], y: [0, max * 1.12]};
   const panels = (isCrop ? [...d3.group(valid, row => row.backend).values()] : groups(valid)).sort((a, b) => a[0].backend.localeCompare(b[0].backend));
   $("plots").classList.toggle("single-panel", panels.length === 1);
-  const storageScales = work ? Object.fromEntries(["bytes", "reads"].map(key => [key,
-    d3.max(valid, row => storagePerSample(study, row)[key].max)])) : null;
+  const storageScales = isIO ? Object.fromEntries(["requests", "amplification"].map(key => [key,
+    d3.max(valid, row => fileReadMetrics(study, row)[key].max)])) : null;
   for (const rows of panels) {
-    if (work) storagePanel($("plots"), study, rows, storageScales, select, selected);
-    else panel(rows, scales, isIO, isCrop);
+    if (isIO) storagePanel($("plots"), study, rows, storageScales, select, selected);
+    else panel(rows, scales, isCrop);
   }
-  if (!valid.length) $("plots").append(element("p", isIO && filtered.length ? "Storage counters were not recorded for this study. File read requests cannot substitute for them." : "No measurements match these filters."));
+  if (!valid.length) $("plots").append(element("p", isIO && filtered.length ? "File read requests per sample were not recorded for this study." : "No measurements match these filters."));
   $("frontier-filter").hidden = isIO || isCrop;
-  $("codec-legend").hidden = Boolean(work);
+  $("codec-legend").hidden = isIO;
   $("plot-note").textContent = isCrop
     ? `Samples/s counts completed single-plane crops. Each line follows the same encoding recipe across measured crop sizes; dashed lines use a fixed Blosc block request. Lines are guides, not Pareto frontiers or predictions. Points show medians; bars show observed ranges.${panels.length > 1 ? " Both panels use the same axes." : ""}`
-    : work
-    ? `Storage work per delivered crop: bytes and completed read operations, each divided by the samples completed in that execution, then summarized. Lower is better for the same crop size. Ranges are observed min–max.${panels.length > 1 ? " Both readers share each metric’s scale." : ""} Counts include metadata, read-ahead, and other activity on the drives. Storage bandwidth and IOPS remain in the table and configuration details.`
     : isIO
-    ? "Storage bandwidth counts bytes read from the storage system per second; IOPS counts completed read operations per second. Both are summed across its drives. More IOPS alone does not imply higher image throughput. Points show medians; bars show observed ranges."
+    ? `File read requests / sample measures request count; read amplification measures bytes requested relative to the crop bytes delivered. Both exclude metadata and reflect the layout and reader. Lower values reduce demand on storage but do not by themselves predict samples/s. Points show medians; ranges are observed min–max.${panels.length > 1 ? " Both readers share each metric’s scale." : ""} Device IOPS and storage bandwidth are in Diagnostics.`
     : "Image throughput counts requested pixel bytes per second in the source data type. Compression ratio is image bytes divided by stored file bytes. Upper right is better. Filled, connected points form each panel’s observed frontier. Points show medians; bars show observed ranges. All panels use the same axes.";
   const count = groups(filtered).reduce((total, rows) => total + frontier(rows).length, 0);
-  $("count").textContent = isCrop ? `${valid.length} settings across crop sizes` : work ? `${valid.length} settings · storage work per ${filters.crop} × ${filters.crop} crop`
-    : `${isIO ? `${valid.length} settings with storage measurements` : `${filtered.length} settings · ${count} on the observed frontiers`} · larger markers indicate larger chunks${study.baked ? " (largest source chunk for mixed sizes)" : ""}`;
-  table(filtered, isIO, isCrop);
+  $("count").textContent = isCrop ? `${valid.length} settings across crop sizes` : isIO ? `${valid.length} settings with file read measurements${filters.crop ? ` · ${filters.crop} × ${filters.crop} crops` : ""}`
+    : `${filtered.length} settings · ${count} on the observed frontiers · larger markers indicate larger chunks${study.baked ? " (largest source chunk for mixed sizes)" : ""}`;
+  table(filtered, isIO);
   if (!filtered.some(row => row.id === selected)) {
     selected = null;
     $("selection-status").textContent = "Select a setting to inspect its measurements.";
