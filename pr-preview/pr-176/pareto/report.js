@@ -1,7 +1,7 @@
-import {cropSeries, csv, frontier, groups, matches, plottable, samplesPerSecond, sensitivity} from "./analysis.mjs?v=c285918697b8";
-import {mountOverview} from "./overview.js?v=c285918697b8";
-import {fileReadMetrics, metricStrings} from "./comparisons.mjs?v=c285918697b8";
-import {storagePanel} from "./storage.js?v=c285918697b8";
+import {cropSeries, csv, frontier, groups, matches, plottable, samplesPerSecond, sensitivity} from "./analysis.mjs?v=5d9b4385b308";
+import {mountOverview} from "./overview.js?v=5d9b4385b308";
+import {fileReadMetrics, metricStrings} from "./comparisons.mjs?v=5d9b4385b308";
+import {storagePanel} from "./storage.js?v=5d9b4385b308";
 
 const $ = id => document.getElementById(id);
 const number = value => Number.isFinite(value) ? value.toLocaleString(undefined, {maximumSignificantDigits: 4}) : "—";
@@ -437,7 +437,7 @@ async function loadStudy() {
   saved.delete("setting");
   if (study.version !== 1 || !study.rows.length) throw new Error("This study has no supported measurements.");
   const hasCrops = study.rows.some(row => row.crop_size);
-  options("view", Object.keys(views).filter(id => id !== "crop" || hasCrops), id => id === "device" && hasCrops ? "Storage work per sample" : views[id]);
+  options("view", Object.keys(views).filter(id => id !== "crop" || hasCrops), id => views[id]);
   const choices = study.cohorts || study.inputs;
   $("input-label").textContent = study.cohorts ? "Source mixture" : "Image input";
   options("input", choices.map(input => input.id), id => choices.find(input => input.id === id).name);
