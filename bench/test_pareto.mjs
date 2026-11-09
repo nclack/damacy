@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {readFileSync} from "node:fs";
-import {cropSeries, csv, devicePlottable, frontier, matches, samplesPerSecond, sensitivity} from "../docs/pareto/analysis.mjs";
-import {bestRows, comparableRows, fixedRecipes, metricStrings, readers, storagePerSample} from "../docs/pareto/comparisons.mjs";
+import {cropSeries, csv, frontier, matches, samplesPerSecond, sensitivity} from "../docs/pareto/analysis.mjs";
+import {bestRows, comparableRows, fileReadMetrics, fixedRecipes, metricStrings, readers} from "../docs/pareto/comparisons.mjs";
 
 function point(id, fold, rate, condition = "cpu") {
   return {id, condition_id: condition, input_id: "image", backend: condition, workload: "crop",
@@ -81,26 +81,21 @@ test("CSV keeps exact values and measurement identities", () => {
   assert(output.includes('"cpu","exact"'));
 });
 
-test("application and device counters cannot substitute for each other", () => {
+test("CSV keeps device rates separate from file read measurements", () => {
   const row = point("reads", 2, 4);
-  assert(!devicePlottable(row));
   row.metrics.read_iops = {median: 12345.678901234};
   row.metrics.read_gib_s = {median: 1.2345678901234};
-  assert(!devicePlottable(row));
   const output = csv([row]);
   assert(!output.includes('"12345.678901234"'));
   assert(!output.includes('"1.2345678901234"'));
   assert(output.includes('"storage_bandwidth_gib_s_median"'));
-  assert(output.includes('"iops_median"'));
+  assert(output.includes('"device_iops_median"'));
   assert(!output.includes('"read_iops_median"'));
   row.metrics.device_iops = {median: 17};
   row.metrics.device_read_gib_s = {median: 1};
-  assert(devicePlottable(row));
   const measured = csv([row]);
   assert(measured.includes('"17"'));
   assert(measured.includes('"1"'));
-  row.metrics.device_iops.median = NaN;
-  assert(!devicePlottable(row));
 });
 
 test("sensitivity only compares matching settings and backends", () => {
@@ -147,19 +142,23 @@ test("displayed ranges retain observed differences without moving the median out
   assert.deepEqual(metricStrings({median: 10, min: 10, max: 10}), {median: "10", min: "10", max: "10"});
 });
 
-test("storage work summarizes per-observation samples, including repeated passes", () => {
+test("file reads summarize per-execution ratios, including repeated passes", () => {
   const row = {...point("sample-work", 1, 1), query_summary: {samples: 10}, observation_ids: ["a", "b", "c"]};
-  const observation = (id, passes, bytes, reads) => ({task: {id}, metrics: {passes}, result: {cold_reads: {device_read_bytes: bytes, device_reads: reads}}});
-  const document = {observations: [observation("a", 1, 100, 1), observation("b", 5, 200, 20), observation("c", 10, 900, 30), observation("unrelated", 1, 1e9, 1e9)]};
-  const result = storagePerSample(document, row);
-  assert.deepEqual(result.bytes, {median: 9, min: 4, max: 10, n: 3});
-  assert.deepEqual(result.reads, {median: .3, min: .1, max: .4, n: 3});
-  assert.notEqual(result.bytes.median, 200 / 50);
+  const observation = (id, passes, amplification, requests) => ({task: {id}, metrics: {passes, read_amplification: amplification},
+    result: {counters: {reads_issued: requests}, cold_reads: {device_read_bytes: 1e9, device_reads: 1e6}}});
+  const document = {observations: [observation("a", 1, 10, 1), observation("b", 5, 4, 20), observation("c", 10, 9, 30), observation("unrelated", 1, 1e9, 1e9)]};
+  const result = fileReadMetrics(document, row);
+  assert.deepEqual(result.requests, {median: .3, min: .1, max: .4, n: 3});
+  assert.deepEqual(result.amplification, {median: 9, min: 4, max: 10, n: 3});
+  assert.notEqual(result.requests.median, 20 / 50);
   const exported = csv([row], {document});
-  assert(exported.includes('"storage_reads_per_sample_median"'));
-  assert(exported.includes('"9","4","10","0.3","0.1","0.4"'));
-  document.observations[0].result.cold_reads = null;
-  assert.equal(storagePerSample(document, row), null);
+  assert(exported.includes('"file_read_requests_per_sample_median"'));
+  assert(exported.includes('"read_amplification_median"'));
+  assert(exported.includes('"0.3","0.1","0.4","9","4","10"'));
+  assert(!exported.includes('"storage_reads_per_sample_median"'));
+  assert.equal(fileReadMetrics({observations: document.observations.slice(1)}, row), null);
+  document.observations[0].result.counters = {};
+  assert.equal(fileReadMetrics(document, row), null);
 });
 
 test("current overview only joins complete, matching recipes across the two studies", () => {
@@ -168,6 +167,11 @@ test("current overview only joins complete, matching recipes across the two stud
   assert.equal(index.studies.length, 2);
   const documents = index.studies.map(entry => JSON.parse(readFileSync(new URL(entry.file, directory))));
   assert.equal(documents.flatMap(document => document.rows).length, 93);
+  for (const document of documents) for (const row of document.rows) {
+    const metrics = fileReadMetrics(document, row);
+    assert.equal(metrics.requests.n, row.metrics.useful_gib_s.n);
+    assert.deepEqual(metrics.amplification, row.metrics.read_amplification);
+  }
   const readerList = readers(documents), recipes = fixedRecipes(readerList);
   assert.deepEqual(readerList.map(reader => reader.label), ["EPYC CPU", "H100-node CPU", "H100 CUDA"]);
   assert.equal(recipes.length, 5);

@@ -89,13 +89,15 @@ export function observed(values) {
     min: sorted[0], max: sorted.at(-1), n: sorted.length};
 }
 
-export function storagePerSample(document, row) {
+export function fileReadMetrics(document, row) {
   const observations = document.observations.filter(value => row.observation_ids.includes(value.task.id));
+  if (!observations.length || observations.length !== row.observation_ids.length) return null;
   const values = observations.map(value => {
     const samples = value.metrics.passes * row.query_summary?.samples;
-    const reads = value.result.cold_reads;
-    return samples > 0 && reads ? {bytes: reads.device_read_bytes / samples, reads: reads.device_reads / samples} : null;
+    const requests = value.result.counters?.reads_issued;
+    return samples > 0 && Number.isFinite(requests) && requests >= 0
+      ? {requests: requests / samples, amplification: value.metrics.read_amplification} : null;
   });
-  if (!values.length || values.some(value => !value || !Number.isFinite(value.bytes) || !Number.isFinite(value.reads))) return null;
-  return {bytes: observed(values.map(value => value.bytes)), reads: observed(values.map(value => value.reads))};
+  if (values.some(value => !value || !Number.isFinite(value.requests) || !Number.isFinite(value.amplification) || value.amplification < 0)) return null;
+  return {requests: observed(values.map(value => value.requests)), amplification: observed(values.map(value => value.amplification))};
 }

@@ -21,32 +21,59 @@ def verify_storage(page, document, rows):
     )
     assert len(plotted) == len(rows) * 2
     by_id = {row["id"]: row for row in rows}
+    headings = page.locator("#columns th").all_text_contents()
+    cells = page.locator("#rows tr").evaluate_all("""rows => Object.fromEntries(rows.map(row => [
+      row.querySelector('button').dataset.setting,
+      [...row.children].map(cell => ({median: cell.firstChild.textContent, range: cell.querySelector('.observed-range')?.textContent}))
+    ]))""")
     for point in plotted:
         row = by_id[point["setting"]]
         values = []
         for identity in row["observation_ids"]:
             observation = observations[identity]
             samples = observation["metrics"]["passes"] * row["query_summary"]["samples"]
-            counter = (
-                "device_read_bytes" if point["metric"] == "bytes" else "device_reads"
-            )
-            divisor = 1024 if point["metric"] == "bytes" else 1
-            values.append(
-                observation["result"]["cold_reads"][counter] / samples / divisor
-            )
-        for name, value in (
+            if point["metric"] == "requests":
+                values.append(
+                    observation["result"]["counters"]["reads_issued"] / samples
+                )
+            else:
+                assert point["metric"] == "amplification"
+                stage = next(
+                    s for s in observation["result"]["stages"] if s["name"] == "io"
+                )
+                image_bytes = (
+                    observation["metrics"]["passes"]
+                    * row["query_summary"]["useful_bytes"]
+                )
+                values.append(stage["input_bytes"] / image_bytes)
+        expected = (
             ("median", statistics.median(values)),
             ("min", min(values)),
             ("max", max(values)),
-        ):
+        )
+        for name, value in expected:
             assert math.isclose(float(point[name]), value, rel_tol=1e-12)
-    for metric in ("bytes", "reads"):
+        heading = (
+            "File read requests / sample"
+            if point["metric"] == "requests"
+            else "Read amplification (\N{MULTIPLICATION SIGN})"
+        )
+        cell = cells[row["id"]][headings.index(heading)]
+        displayed = [cell["median"], *cell["range"].split("\N{EN DASH}")]
+        for shown, (_, value) in zip(displayed, expected):
+            assert math.isclose(float(shown.replace(",", "")), value, rel_tol=5e-4)
+    for metric in ("requests", "amplification"):
         axes = page.locator(f'.storage-axis[data-metric="{metric}"]').evaluate_all(
             "axes => axes.map(axis => [...axis.querySelectorAll('.tick')].map(tick => [tick.textContent, tick.getAttribute('transform')]))"
         )
         assert all(axis == axes[0] for axis in axes)
         points = [point for point in plotted if point["metric"] == metric]
         low, high = min(points, key=lambda p: p["x"]), max(points, key=lambda p: p["x"])
+        if float(high["median"]) == float(low["median"]):
+            assert all(
+                math.isclose(point["x"], low["x"], abs_tol=1e-6) for point in points
+            )
+            continue
         slope = (high["x"] - low["x"]) / (float(high["median"]) - float(low["median"]))
         assert slope > 0
         for point in points:
@@ -54,6 +81,19 @@ def verify_storage(page, document, rows):
                 float(point["median"]) - float(low["median"])
             )
             assert math.isclose(point["x"], expected, abs_tol=1e-6)
+    button = page.locator(".storage-panel button").first
+    button.focus()
+    button.press("Enter")
+    assert button.get_attribute("aria-pressed") == "true"
+    assert page.locator(".primary-metrics dt").all_text_contents() == [
+        "Samples/s",
+        "Image throughput",
+        "Compression ratio",
+        "File read requests / sample",
+        "Read amplification",
+    ]
+    assert "Device IOPS" in page.locator(".diagnostics dt").all_text_contents()
+    assert "Storage bandwidth" in page.locator(".diagnostics dt").all_text_contents()
 
 
 def verify_overview(page, documents, output):

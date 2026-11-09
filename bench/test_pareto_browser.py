@@ -12,6 +12,7 @@ import json
 import math
 import os
 import shutil
+import statistics
 import tempfile
 import threading
 from functools import partial
@@ -270,10 +271,10 @@ def verify_table(page, rows, view):
         for word in ("Encoded", "Application", "NVMe", "Useful", "Device")
     )
     if view == "device":
-        metrics += [
-            ("IOPS (reads/s)", "device_iops"),
-            ("Storage bandwidth (GiB/s)", "device_read_gib_s"),
-        ]
+        assert "File read requests / sample" in headers
+        assert "Read amplification (\N{MULTIPLICATION SIGN})" in headers
+        assert "IOPS (reads/s)" not in headers
+        assert "Storage bandwidth (GiB/s)" not in headers
     assert {row["id"] for row in cells} == set(by_id)
     for row in cells:
         original = by_id[row["id"]]
@@ -393,15 +394,15 @@ def verify_study(page, document, output):
                         / original["reference_useful_gib_s"]["median"],
                         rel_tol=5e-4,
                     )
-            for view, metric in (("device", "device_iops"),):
-                page.select_option("#view", view)
-                assert page.locator("circle.point").count() == sum(
-                    bool(row["metrics"].get(metric)) for row in expected
-                )
-                assert page.locator("path.frontier").count() == 0
-                assert page.locator("#frontier-filter").is_hidden()
-                verify_scales(page, view)
-                verify_table(page, expected, view)
+            page.select_option("#view", "device")
+            assert page.locator("circle.point").count() == 0
+            assert (
+                "File read requests per sample were not recorded"
+                in page.locator("#plots").inner_text()
+            )
+            assert page.locator("path.frontier").count() == 0
+            assert page.locator("#frontier-filter").is_hidden()
+            verify_table(page, expected, "device")
             page.select_option("#view", "pareto")
 
 
@@ -571,6 +572,7 @@ def crop_fixture():
 def verify_crop_study(page, document, output):
     output = output / f"study-{document['id']}"
     output.mkdir(exist_ok=True)
+    observations = {value["task"]["id"]: value for value in document["observations"]}
     if page.locator("#input").is_visible():
         page.select_option("#input", "all-sources")
     for access in ("random", "baked"):
@@ -600,7 +602,10 @@ def verify_crop_study(page, document, output):
 
                 verify_storage(page, document, expected)
             else:
-                verify_scales(page, "device")
+                assert (
+                    "File read requests per sample were not recorded"
+                    in page.locator("#plots").inner_text()
+                )
             verify_table(page, expected, "device")
             page.select_option("#view", "pareto")
         point = page.locator("circle.point").first
@@ -655,6 +660,38 @@ def verify_crop_study(page, document, output):
                 float(row["samples_per_second_median"]), expected_rate, rel_tol=1e-14
             )
             assert row["access_pattern"] == access
+            executions = [
+                observations[identity] for identity in original["observation_ids"]
+            ]
+            if all(
+                "reads_issued" in value["result"].get("counters", {})
+                for value in executions
+            ):
+                requests = [
+                    value["result"]["counters"]["reads_issued"]
+                    / (
+                        value["metrics"]["passes"]
+                        * original["query_summary"]["samples"]
+                    )
+                    for value in executions
+                ]
+                for name, calculate in (
+                    ("median", statistics.median),
+                    ("min", min),
+                    ("max", max),
+                ):
+                    assert math.isclose(
+                        float(row[f"file_read_requests_per_sample_{name}"]),
+                        calculate(requests),
+                        rel_tol=1e-14,
+                    )
+                    assert (
+                        float(row[f"read_amplification_{name}"])
+                        == original["metrics"]["read_amplification"][name]
+                    )
+            else:
+                assert row["file_read_requests_per_sample_median"] == ""
+                assert row["read_amplification_median"] == ""
         for theme in ("light", "dark"):
             page.select_option("#appearance", theme)
             for width in (1440, 390, 320):
@@ -791,7 +828,7 @@ def check(assets, output, actual):
                 assert page.locator("#view").input_value() == "device"
                 assert page.locator("#view option").all_text_contents() == [
                     "Image throughput and compression",
-                    "Storage reads",
+                    "File reads",
                 ]
                 page.select_option("#view", "pareto")
                 for entry in index["studies"]:
@@ -861,8 +898,6 @@ def check(assets, output, actual):
                 assert page.locator(".primary-metrics dt").all_text_contents() == [
                     "Image throughput",
                     "Compression ratio",
-                    "Storage bandwidth",
-                    "IOPS",
                 ]
                 diagnostics = page.locator(".diagnostics")
                 assert diagnostics.get_attribute("open") is None
@@ -872,6 +907,8 @@ def check(assets, output, actual):
                 )
                 diagnostics.locator("summary").click()
                 assert "File read bandwidth" in diagnostics.inner_text()
+                assert "Device IOPS" in diagnostics.inner_text()
+                assert "Storage bandwidth" in diagnostics.inner_text()
                 assert "Revision" in diagnostics.inner_text()
                 page.select_option("#view", "device")
                 assert diagnostics.get_attribute("open") is not None
@@ -909,7 +946,7 @@ def check(assets, output, actual):
                         float(row["compression_ratio"]) == original["compression_fold"]
                     )
                     for column, metric in (
-                        ("iops", "device_iops"),
+                        ("device_iops", "device_iops"),
                         ("storage_bandwidth_gib_s", "device_read_gib_s"),
                     ):
                         value = original["metrics"].get(metric)

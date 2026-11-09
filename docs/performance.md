@@ -3,7 +3,8 @@
 The [interactive report](pareto/index.html) leads with the conclusions from two
 cold-read studies: random versus baked samples, sample delivery across crop sizes
 at a fixed encoding, and controlled chunk/block comparisons. The explorer retains
-compression Pareto plots, storage work per sample, all individual measurements,
+compression Pareto plots, file read requests per sample, read amplification,
+all individual measurements,
 and CSV downloads. Select an overview result to inspect its exact configuration.
 
 The studies use an H100 node and an EPYC node, each with its own recorded storage
@@ -14,21 +15,19 @@ dark overrides. The report retains only the two crop studies from November 6, 20
 
 | Name used throughout the report | Meaning |
 | --- | --- |
+| Samples/s | Completed single-plane crops ÷ elapsed seconds |
 | Image throughput (GiB/s) | Requested pixels × source bytes per pixel ÷ elapsed seconds ÷ 2³⁰ |
 | Compression ratio (×) | Uncompressed image bytes in the stored arrays ÷ stored file bytes |
-| Storage bandwidth (GiB/s) | Read bytes recorded by Linux for the storage system ÷ elapsed seconds ÷ 2³⁰ |
-| IOPS (reads/s) | Completed reads recorded by Linux for that storage system ÷ elapsed seconds |
-| Samples/s | Completed single-plane crops ÷ elapsed seconds |
-| Storage bytes / sample (KiB) | Storage bytes ÷ completed crops ÷ 1024, calculated per execution |
-| Storage reads / sample | Completed storage operations ÷ completed crops, calculated per execution |
+| File read requests / sample | Data-file read requests issued by Damacy ÷ delivered crops, calculated per execution |
+| Read amplification (×) | File bytes requested ÷ uncompressed bytes in delivered crops, in the source data type, calculated per execution |
 
-Image throughput measures how quickly the reader delivers the requested pixels.
-Storage bandwidth and IOPS measure the storage work during that time, summed over the
-backing drives. They include metadata, read-ahead, and other processes using those
-drives. They are kernel device counters, not counts of internal SSD flash
-operations. Adjacent idle measurements remain available in **Diagnostics** and
-are not subtracted. The [kernel counter definitions](https://docs.kernel.org/admin-guide/iostats.html)
-describe the completed-read and sector counters used here.
+Samples/s and image throughput measure delivery on the recorded system. File read
+requests and read amplification describe the demand on storage: request count and
+bytes requested. These exclude metadata, operating-system read-ahead, and activity
+from other processes. They depend on the layout and reader, including how it
+combines or aligns requests, and do not alone predict another system's performance.
+A request can serve multiple samples, so requests per sample can be below one.
+Compression can bring read amplification below 1×.
 
 All rates use wall time through completion, including the final GPU work.
 Initialization, warmup, and cache clearing are excluded. One GiB is 2³⁰ bytes.
@@ -41,15 +40,21 @@ larger than the uncompressed image bytes.
 
 ## Reader diagnostics
 
-**Diagnostics** retains file read requests, bytes read before decompression,
-bytes decoded per requested image byte, stage timings, metadata activity, and
-idle storage measurements. These help explain behavior without adding more rate
-names to the main plots. Stage timings overlap and cannot be added into elapsed time.
+**Diagnostics** retains file request rates, file read bandwidth, bytes decoded per
+requested image byte, stage timings, metadata activity, and storage measurements.
+Stage timings overlap and cannot be added into elapsed time.
+
+**Storage bandwidth (GiB/s)** is bytes read per second, and **Device IOPS (reads/s)**
+is completed reads per second, both recorded by Linux and summed across the backing
+drives. They include metadata, read-ahead, and other processes using those drives.
+These are kernel device counters, not internal SSD flash operations. Adjacent idle
+measurements are not subtracted. The [kernel counter definitions](https://docs.kernel.org/admin-guide/iostats.html)
+describe the completed-read and sector counters used here.
 
 One file read request can become several storage operations; cached reads can
 avoid storage operations; read-ahead can fetch extra bytes. The JSON retains both
-reader and storage counters. CSV exports and configuration details retain storage
-bandwidth and IOPS alongside image throughput and compression.
+reader and storage counters. CSV exports include the plotted file-read metrics and
+retain storage bandwidth and explicitly named device IOPS as diagnostics.
 
 ## Crop results
 
@@ -109,17 +114,18 @@ random medians are about **16,289, 10,127, and 7,804 samples/s** at 128², 192²
 256²; its best baked medians are **69,914, 83,309, and 71,263 samples/s**. More image
 bytes per second can accompany fewer completed samples.
 
-Lower IOPS can accompany faster sample delivery. Holding the codec uncompressed
-at 128² on H100 CUDA, random crops use about **420.9 kB of storage reads and 3.217
-storage operations per sample**, versus **36.1 kB and 0.275 operations** for baked
-samples. Image throughput rises from 0.366 to 2.286 GiB/s. This compares complete
-layouts, including different chunk shapes and file counts.
+Holding the codec uncompressed at 128² on H100 CUDA, random crops issue about
+**1.76 file read requests per sample with 13.2× read amplification**, versus
+**0.028 requests per sample and 1.0×** for baked samples. Image throughput rises
+from 0.366 to 2.286 GiB/s. This compares complete layouts, including different
+chunk shapes and file counts; the reduction in file reads is not a predicted
+speedup for other storage systems.
 
-The storage view divides each execution's bytes and operations by its completed
-samples, then summarizes the resulting values. It does not divide independently
-aggregated rate medians. Operations per sample can be below one because one
-storage operation can serve multiple samples. The table and sidebar retain
-storage bandwidth and IOPS for inspecting the measured rate.
+The file reads view calculates requests per delivered sample and requested file
+bytes per uncompressed crop byte within each execution, then summarizes those
+ratios. It does not divide independently aggregated rate medians. The plots,
+table, sidebar, and CSV use the same definitions. Device IOPS and storage
+bandwidth remain in Diagnostics for inspecting the measured hardware activity.
 
 The paired H100 run contains **62 settings and 258 executions**. It used one H100
 80 GB GPU, an Intel Xeon Platinum 8462Y+, 32 allowed logical CPUs, 16 CPU decode

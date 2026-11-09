@@ -1,10 +1,7 @@
-import {storagePerSample} from "./comparisons.mjs";
+import {fileReadMetrics} from "./comparisons.mjs";
 
 export const plottable = row => Number.isFinite(row.compression_fold) && row.compression_fold > 0
   && Number.isFinite(row.metrics.useful_gib_s.median) && row.metrics.useful_gib_s.median > 0;
-
-export const devicePlottable = row => ["device_iops", "device_read_gib_s"].every(key =>
-  Number.isFinite(row.metrics[key]?.median) && row.metrics[key].median > 0);
 
 export function dominates(a, b) {
   return a.condition_id === b.condition_id && plottable(a) && plottable(b)
@@ -80,12 +77,12 @@ export function csv(rows, context = {}) {
   const columns = ["cache_policy", "host", "input", "backend", "workload", "codec", "chunk_bytes", "block_request_bytes",
     "chunk_shape", "shard_shape", "compression_ratio", "image_throughput_gib_s_median", "image_throughput_gib_s_min",
     "image_throughput_gib_s_max", "repeats", "storage_bandwidth_gib_s_median", "storage_bandwidth_gib_s_min", "storage_bandwidth_gib_s_max",
-    "iops_median", "iops_min", "iops_max", "speed_vs_uncompressed", "source_ids", "source_samples_per_pass",
+    "device_iops_median", "device_iops_min", "device_iops_max", "speed_vs_uncompressed", "source_ids", "source_samples_per_pass",
     "distinct_shards_per_pass", "peak_simultaneous_file_reads", "access_pattern", "crop_size", "chunk_mode", "block_mode",
     "samples_per_second_median", "samples_per_second_min", "samples_per_second_max", "source_query_id",
-    "storage_bytes_per_sample_median", "storage_bytes_per_sample_min", "storage_bytes_per_sample_max",
-    "storage_reads_per_sample_median", "storage_reads_per_sample_min", "storage_reads_per_sample_max", "condition_id", "setting_id"];
-  const work = row => context.document ? storagePerSample(context.document, row) : null;
+    "file_read_requests_per_sample_median", "file_read_requests_per_sample_min", "file_read_requests_per_sample_max",
+    "read_amplification_median", "read_amplification_min", "read_amplification_max", "condition_id", "setting_id"];
+  const work = row => context.document ? fileReadMetrics(context.document, row) : null;
   const values = rows.map(row => [context.cache_policy, context.host, row.input_id, row.backend, row.workload, row.setting.codec,
     row.setting.chunk_bytes, row.setting.block_bytes, layoutShapes(row.setting, "chunk_shape"), layoutShapes(row.setting, "shard_shape"),
     row.compression_fold, row.metrics.useful_gib_s.median, row.metrics.useful_gib_s.min, row.metrics.useful_gib_s.max,
@@ -97,8 +94,8 @@ export function csv(rows, context = {}) {
     row.query_summary?.distinct_shards, row.metrics.peak_active_reads?.max, row.access_pattern, row.crop_size,
     row.setting.chunk_mode, row.setting.block_mode, samplesPerSecond(row)?.median, samplesPerSecond(row)?.min,
     samplesPerSecond(row)?.max, row.query_summary?.source_query_id,
-    work(row)?.bytes.median, work(row)?.bytes.min, work(row)?.bytes.max,
-    work(row)?.reads.median, work(row)?.reads.min, work(row)?.reads.max, row.condition_id, row.id]);
+    work(row)?.requests.median, work(row)?.requests.min, work(row)?.requests.max,
+    work(row)?.amplification.median, work(row)?.amplification.min, work(row)?.amplification.max, row.condition_id, row.id]);
   const quote = value => `"${String(value ?? "").replaceAll('"', '""')}"`;
   return [columns, ...values].map(row => row.map(quote).join(",")).join("\r\n") + "\r\n";
 }
