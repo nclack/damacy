@@ -15,6 +15,7 @@ from playwright.sync_api import sync_playwright
 
 
 def verify_storage(page, document, rows):
+    assert page.locator("#view option:checked").inner_text() == "File reads"
     observations = {value["task"]["id"]: value for value in document["observations"]}
     plotted = page.locator("svg.storage-work").evaluate_all(
         "nodes => nodes.map(node => ({...node.dataset, x: +node.querySelector('circle').getAttribute('cx')}))"
