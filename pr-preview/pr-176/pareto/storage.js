@@ -1,4 +1,4 @@
-import {metricStrings, recipeLabel, storagePerSample} from "./comparisons.mjs?v=dc1b0eb38b2f";
+import {metricStrings, recipeLabel, storagePerSample} from "./comparisons.mjs?v=74e63ec5e1a3";
 
 export function storagePanel(target, document, rows, scales, select, selected) {
   const wrapper = window.document.createElement("section");

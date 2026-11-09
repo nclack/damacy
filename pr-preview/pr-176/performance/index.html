@@ -1013,9 +1013,7 @@ crop sizes. The following best observed medians are separate selections, not a
 fixed-recipe curve: H100 CUDA's best
 random medians are about <strong>16,289, 10,127, and 7,804 samples/s</strong> at 128², 192², and
 256²; its best baked medians are <strong>69,914, 83,309, and 71,263 samples/s</strong>. More image
-bytes per second can accompany fewer completed samples. The
-<a href="#random-crops-and-baked-samples">crop protocol</a> also explains the fixed CPU
-input-buffer limit and the extra read/decode groups at 128².</p>
+bytes per second can accompany fewer completed samples.</p>
 <p>Lower IOPS can accompany faster sample delivery. Holding the codec uncompressed
 at 128² on H100 CUDA, random crops use about <strong>420.9 kB of storage reads and 3.217
 storage operations per sample</strong>, versus <strong>36.1 kB and 0.275 operations</strong> for baked
